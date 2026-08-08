@@ -1,0 +1,39 @@
+[package]
+name = "tauri-app"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "tauri_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+pdfium-render = "0.8"
+image = "0.25"
+base64 = "0.22"
+# firma digital (paso 7): PKCS#7 detached sobre ByteRange
+lopdf = "0.34"
+cms = { version = "0.2", features = ["builder"] }
+rsa = { version = "0.9", features = ["sha2"] }
+sha2 = "0.10"
+x509-cert = { version = "0.2", features = ["pem"] }
+der = "0.7"
+const-oid = { version = "0.9", features = ["db"] }
+chrono = "0.4"
+p12-keystore = "0.3"
+

@@ -1,0 +1,426 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 12px;
+  background: #2b2b2e;
+  color: #e8e8ea;
+  flex-shrink: 0;
+}
+
+.toolbar button {
+  background: #46464a;
+  color: #e8e8ea;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.toolbar button:hover:not(:disabled) {
+  background: #57575c;
+}
+
+.toolbar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.filename {
+  color: #b8b8bc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
+}
+
+.status {
+  color: #9a9aa0;
+  font-size: 12px;
+}
+
+.toolbar {
+  flex-wrap: wrap;
+}
+
+.body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.sidebar {
+  width: 168px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  background: #38383c;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.thumb {
+  position: relative;
+  cursor: pointer;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  background: white;
+}
+
+.thumb.active {
+  border-color: #4a9eff;
+}
+
+.thumb img {
+  width: 100%;
+  display: block;
+  border-radius: 2px;
+}
+
+.thumb-placeholder {
+  width: 100%;
+  aspect-ratio: 0.707;
+  background: #e4e4e6;
+  border-radius: 2px;
+}
+
+.thumb-num {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
+.thumb-actions {
+  display: none;
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  gap: 2px;
+}
+
+.thumb:hover .thumb-actions {
+  display: flex;
+}
+
+.thumb-actions button {
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.thumb-actions button:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.85);
+}
+
+.thumb-actions button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.viewer {
+  flex: 1;
+  overflow: auto;
+  background: #545458;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24px;
+}
+
+.page-wrap {
+  position: relative;
+  flex-shrink: 0;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+  background: white;
+}
+
+.page {
+  display: block;
+  width: 100%;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.textlayer {
+  position: absolute;
+  inset: 0;
+  cursor: text;
+}
+
+.textlayer.mode-draw {
+  cursor: crosshair;
+}
+
+.textlayer.mode-note {
+  cursor: copy;
+}
+
+.toolbar button.active {
+  background: #4a9eff;
+  color: #fff;
+}
+
+.toolbar button.accent {
+  background: #e6c211;
+  color: #222;
+}
+
+.textlayer.mode-edit {
+  cursor: default;
+}
+
+.text-block {
+  position: absolute;
+  cursor: pointer;
+  border-radius: 2px;
+  outline: 1px dashed rgba(74, 158, 255, 0.55);
+}
+
+.text-block:hover {
+  outline: 2px dashed #4a9eff;
+  background: rgba(74, 158, 255, 0.1);
+}
+
+.block-editor textarea {
+  min-height: 40px;
+}
+
+.form-field {
+  position: absolute;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.form-field:hover {
+  outline: 2px dashed #4a9eff;
+  background: rgba(74, 158, 255, 0.08);
+}
+
+.annot-highlight {
+  position: absolute;
+  background: rgba(255, 220, 0, 0.55);
+  mix-blend-mode: multiply;
+  pointer-events: none;
+  border-radius: 2px;
+}
+
+.stroke-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.stroke-preview polyline {
+  fill: none;
+  stroke: #e23d3d;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.note-icon {
+  position: absolute;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.4));
+}
+
+.note-popover,
+.note-editor {
+  position: absolute;
+  z-index: 10;
+  background: #fffbe8;
+  border: 1px solid #d8c66a;
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  padding: 8px;
+  width: 220px;
+}
+
+.note-popover p {
+  font-size: 13px;
+  color: #333;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-bottom: 8px;
+}
+
+.note-popover-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.note-popover-actions button {
+  background: #eadf9e;
+  border: none;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  color: #333;
+}
+
+.note-editor textarea {
+  width: 100%;
+  min-height: 60px;
+  border: none;
+  background: transparent;
+  resize: vertical;
+  outline: none;
+  font-size: 13px;
+  font-family: inherit;
+  color: #333;
+}
+
+.textlayer .sel {
+  position: absolute;
+  background: rgba(0, 122, 255, 0.3);
+  pointer-events: none;
+}
+
+.textlayer .hit {
+  position: absolute;
+  background: rgba(255, 214, 0, 0.4);
+  pointer-events: none;
+}
+
+.textlayer .hit.current {
+  background: rgba(255, 140, 0, 0.55);
+}
+
+.search input {
+  background: #46464a;
+  color: #e8e8ea;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 13px;
+  width: 160px;
+  outline: none;
+}
+
+.search input::placeholder {
+  color: #9a9aa0;
+}
+
+.match-count {
+  color: #9a9aa0;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  background: #fff;
+  border-radius: 10px;
+  padding: 18px;
+  width: 320px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: #222;
+}
+
+.modal h3 {
+  font-size: 15px;
+}
+
+.modal-file {
+  font-size: 12px;
+  color: #777;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modal input {
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 13px;
+  outline: none;
+}
+
+.modal input:focus {
+  border-color: #4a9eff;
+}
+
+.modal .accent {
+  background: #4a9eff;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+
+.placeholder,
+.error {
+  margin-top: 40vh;
+  color: #d0d0d4;
+}
+
+.error {
+  color: #ff8a80;
+  max-width: 600px;
+}

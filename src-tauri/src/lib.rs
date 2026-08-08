@@ -1,0 +1,1994 @@
+use base64::Engine;
+use pdfium_render::prelude::*;
+use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+use std::io::Cursor;
+use std::sync::{mpsc, OnceLock};
+
+type Job = Box<dyn FnOnce() + Send>;
+
+static PDFIUM_TX: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
+
+/// Directorio `lib/` dentro de los resources del bundle (solo en producción;
+/// lo fija el setup de Tauri antes de usar PDFium).
+static RESOURCE_LIB_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+
+/// Ejecuta `f` en el hilo dedicado de PDFium y devuelve su resultado.
+///
+/// PDFium se cuelga (deadlock, sin error) si se inicializa una segunda
+/// instancia mientras otra sigue viva en el proceso, y sus tipos no son
+/// `Send`. Un único hilo propietario garantiza por construcción una sola
+/// instancia y serializa todo el acceso, venga de donde venga la llamada
+/// (comandos de Tauri o tests).
+fn on_pdfium_thread<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static) -> R {
+    let tx = PDFIUM_TX.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<Job>();
+        std::thread::Builder::new()
+            .name("pdfium".into())
+            .spawn(move || {
+                for job in rx {
+                    job();
+                }
+            })
+            .expect("no se pudo crear el hilo de PDFium");
+        tx
+    });
+    let (rtx, rrx) = mpsc::channel();
+    tx.send(Box::new(move || {
+        let _ = rtx.send(f());
+    }))
+    .expect("el hilo de PDFium ha muerto");
+    rrx.recv().expect("el hilo de PDFium ha muerto")
+}
+
+thread_local! {
+    static PDFIUM: RefCell<Option<&'static Pdfium>> = const { RefCell::new(None) };
+    static DOC_CACHE: RefCell<Option<(String, PdfDocument<'static>)>> = const { RefCell::new(None) };
+}
+
+/// Instancia única de PDFium, creada una sola vez y viva todo el proceso.
+/// Solo debe llamarse desde el hilo de PDFium (dentro de `on_pdfium_thread`).
+/// Orden de búsqueda: resources del bundle (producción) → src-tauri/lib/
+/// (dev y tests, donde el cwd es src-tauri) → librería del sistema.
+fn pdfium() -> Result<&'static Pdfium, String> {
+    PDFIUM.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if let Some(p) = *slot {
+            return Ok(p);
+        }
+        let from_resources = RESOURCE_LIB_DIR.get().and_then(|dir| {
+            Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(&format!(
+                "{}/",
+                dir.display()
+            )))
+            .ok()
+        });
+        let bindings = match from_resources {
+            Some(b) => b,
+            None => Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./lib/"))
+                .or_else(|_| Pdfium::bind_to_system_library())
+                .map_err(|e| format!("No se pudo cargar libpdfium: {e}"))?,
+        };
+        let leaked: &'static Pdfium = Box::leak(Box::new(Pdfium::new(bindings)));
+        *slot = Some(leaked);
+        Ok(leaked)
+    })
+}
+
+/// Ejecuta `f` con el documento cacheado para `path`, recargándolo del disco
+/// solo si el caché apunta a otro fichero. Solo debe llamarse desde el hilo
+/// de PDFium.
+fn with_doc<R>(
+    path: &str,
+    f: impl FnOnce(&PdfDocument<'static>) -> Result<R, String>,
+) -> Result<R, String> {
+    DOC_CACHE.with(|cell| {
+        let mut cache = cell.borrow_mut();
+        let stale = !matches!(cache.as_ref(), Some((p, _)) if p == path);
+        if stale {
+            let doc = pdfium()?
+                .load_pdf_from_file(path, None)
+                .map_err(|e| e.to_string())?;
+            *cache = Some((path.to_string(), doc));
+        }
+        f(&cache.as_ref().unwrap().1)
+    })
+}
+
+/// Descarta el documento cacheado. Llamar tras cualquier mutación en disco.
+fn invalidate_doc_cache() {
+    DOC_CACHE.with(|cell| *cell.borrow_mut() = None);
+}
+
+#[derive(Serialize)]
+struct DocumentInfo {
+    page_count: u16,
+    work_path: String,
+}
+
+/// Ruta única en temp para la copia de trabajo del documento.
+fn work_copy_path(original: &str) -> std::path::PathBuf {
+    let name = std::path::Path::new(original)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("documento");
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!("editor-pdf-{name}-{nanos}.pdf"))
+}
+
+/// Guarda el documento sobre `path` de forma segura: PDFium lee el fichero
+/// original de forma perezosa mientras el documento está abierto, así que se
+/// escribe a un temporal y se renombra encima.
+fn save_over(doc: &PdfDocument, path: &str) -> Result<(), String> {
+    let tmp = format!("{path}.tmp");
+    doc.save_to_file(&tmp).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+/// Abre un PDF creando una copia de trabajo en temp. Todas las mutaciones
+/// operan sobre la copia; el original solo se toca al guardar.
+#[tauri::command]
+fn open_pdf(path: String) -> Result<DocumentInfo, String> {
+    let work = work_copy_path(&path);
+    std::fs::copy(&path, &work)
+        .map_err(|e| format!("No se pudo crear la copia de trabajo: {e}"))?;
+    let work_path = work.to_string_lossy().into_owned();
+    on_pdfium_thread(move || {
+        let page_count = with_doc(&work_path, |doc| Ok(doc.pages().len()))?;
+        Ok(DocumentInfo {
+            page_count,
+            work_path,
+        })
+    })
+}
+
+/// Renderiza una página a PNG (base64) con el ancho pedido en píxeles.
+#[tauri::command]
+fn render_page(path: String, page_index: u16, width: i32) -> Result<String, String> {
+    on_pdfium_thread(move || {
+        with_doc(&path, |doc| {
+            let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            let bitmap = page
+                .render_with_config(
+                    &PdfRenderConfig::new()
+                        .set_target_width(width)
+                        .render_form_data(true)
+                        .render_annotations(true),
+                )
+                .map_err(|e| e.to_string())?;
+            let mut png = Vec::new();
+            bitmap
+                .as_image()
+                .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+                .map_err(|e| e.to_string())?;
+            Ok(base64::engine::general_purpose::STANDARD.encode(png))
+        })
+    })
+}
+
+#[derive(Serialize, Clone)]
+struct CharBox {
+    ch: String,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+#[derive(Serialize)]
+struct PageText {
+    width: f32,
+    height: f32,
+    chars: Vec<CharBox>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct Rect {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+#[derive(Serialize)]
+struct SearchMatch {
+    page_index: u16,
+    rects: Vec<Rect>,
+}
+
+/// Extrae los caracteres de una página con sus cajas de glifos, en puntos PDF
+/// y con origen arriba-izquierda (PDFium usa origen abajo-izquierda).
+fn extract_chars(page: &PdfPage) -> Result<PageText, String> {
+    let text = page.text().map_err(|e| e.to_string())?;
+    let page_h = page.height().value;
+    let mut chars = Vec::new();
+    for c in text.chars().iter() {
+        let ch = c.unicode_char().unwrap_or('\u{fffd}');
+        let b = match c.loose_bounds() {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        chars.push(CharBox {
+            ch: ch.to_string(),
+            x: b.left().value,
+            y: page_h - b.top().value,
+            w: b.right().value - b.left().value,
+            h: b.top().value - b.bottom().value,
+        });
+    }
+    Ok(PageText {
+        width: page.width().value,
+        height: page_h,
+        chars,
+    })
+}
+
+#[tauri::command]
+fn get_page_text(path: String, page_index: u16) -> Result<PageText, String> {
+    on_pdfium_thread(move || {
+        with_doc(&path, |doc| {
+            let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            extract_chars(&page)
+        })
+    })
+}
+
+/// Normaliza para búsqueda sin distinción de mayúsculas; todo espacio en
+/// blanco (incl. \r\n que PDFium intercala) se trata como espacio simple.
+fn normalize(c: char) -> char {
+    let c = c.to_lowercase().next().unwrap_or(c);
+    if c.is_whitespace() {
+        ' '
+    } else {
+        c
+    }
+}
+
+/// Une cajas de caracteres consecutivos en rectángulos por línea.
+fn merge_line_rects(boxes: &[CharBox]) -> Vec<Rect> {
+    let mut out: Vec<Rect> = Vec::new();
+    for b in boxes {
+        if b.w <= 0.0 || b.h <= 0.0 {
+            continue;
+        }
+        if let Some(last) = out.last_mut() {
+            let same_line = (b.y - last.y).abs() < last.h.max(b.h) * 0.7;
+            if same_line {
+                let right = (last.x + last.w).max(b.x + b.w);
+                let bottom = (last.y + last.h).max(b.y + b.h);
+                last.x = last.x.min(b.x);
+                last.y = last.y.min(b.y);
+                last.w = right - last.x;
+                last.h = bottom - last.y;
+                continue;
+            }
+        }
+        out.push(Rect {
+            x: b.x,
+            y: b.y,
+            w: b.w,
+            h: b.h,
+        });
+    }
+    out
+}
+
+/// Normaliza una secuencia colapsando rachas de espacios en uno solo.
+/// Devuelve pares (carácter normalizado, índice original).
+fn normaliza_colapsando(chars: impl Iterator<Item = char>) -> Vec<(char, usize)> {
+    let mut out: Vec<(char, usize)> = Vec::new();
+    for (i, c) in chars.enumerate() {
+        let n = normalize(c);
+        if n == ' ' && matches!(out.last(), Some((' ', _))) {
+            continue;
+        }
+        out.push((n, i));
+    }
+    out
+}
+
+/// Busca `query` en todas las páginas (sin distinguir mayúsculas, sin
+/// solapamientos, y tratando cualquier racha de espacios/saltos de línea como
+/// un espacio) y devuelve los rectángulos de cada coincidencia.
+#[tauri::command]
+fn search_pdf(path: String, query: String) -> Result<Vec<SearchMatch>, String> {
+    let needle: Vec<char> = normaliza_colapsando(query.trim().chars())
+        .into_iter()
+        .map(|(c, _)| c)
+        .collect();
+    if needle.is_empty() {
+        return Ok(Vec::new());
+    }
+    on_pdfium_thread(move || {
+        with_doc(&path, |doc| {
+            let mut results = Vec::new();
+            for (page_index, page) in doc.pages().iter().enumerate() {
+                let page_text = extract_chars(&page)?;
+                let hay = normaliza_colapsando(
+                    page_text
+                        .chars
+                        .iter()
+                        .map(|c| c.ch.chars().next().unwrap_or(' ')),
+                );
+                if hay.len() < needle.len() {
+                    continue;
+                }
+                let mut start = 0;
+                while start + needle.len() <= hay.len() {
+                    if hay[start..start + needle.len()]
+                        .iter()
+                        .map(|(c, _)| *c)
+                        .eq(needle.iter().copied())
+                    {
+                        let from = hay[start].1;
+                        let to = hay[start + needle.len() - 1].1;
+                        let rects = merge_line_rects(&page_text.chars[from..=to]);
+                        if !rects.is_empty() {
+                            results.push(SearchMatch {
+                                page_index: page_index as u16,
+                                rects,
+                            });
+                        }
+                        start += needle.len();
+                    } else {
+                        start += 1;
+                    }
+                }
+            }
+            Ok(results)
+        })
+    })
+}
+
+/// Borra una página y devuelve el nuevo número de páginas.
+#[tauri::command]
+fn delete_page(work_path: String, page_index: u16) -> Result<u16, String> {
+    on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| e.to_string())?;
+        let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+        page.delete().map_err(|e| e.to_string())?;
+        let count = doc.pages().len();
+        save_over(&doc, &work_path)?;
+        drop(doc);
+        invalidate_doc_cache();
+        Ok(count)
+    })
+}
+
+/// Rota una página 90° en sentido horario (acumulativo).
+#[tauri::command]
+fn rotate_page(work_path: String, page_index: u16) -> Result<(), String> {
+    on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| e.to_string())?;
+        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+        let next = match page.rotation().unwrap_or(PdfPageRenderRotation::None) {
+            PdfPageRenderRotation::None => PdfPageRenderRotation::Degrees90,
+            PdfPageRenderRotation::Degrees90 => PdfPageRenderRotation::Degrees180,
+            PdfPageRenderRotation::Degrees180 => PdfPageRenderRotation::Degrees270,
+            PdfPageRenderRotation::Degrees270 => PdfPageRenderRotation::None,
+        };
+        page.set_rotation(next);
+        drop(page);
+        save_over(&doc, &work_path)?;
+        drop(doc);
+        invalidate_doc_cache();
+        Ok(())
+    })
+}
+
+/// Mueve una página a otra posición reconstruyendo el documento en el nuevo
+/// orden (FPDF_ImportPages respeta el orden del rango dado).
+#[tauri::command]
+fn move_page(work_path: String, from_index: u16, to_index: u16) -> Result<(), String> {
+    if from_index == to_index {
+        return Ok(());
+    }
+    on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| e.to_string())?;
+        let count = doc.pages().len();
+        if from_index >= count || to_index >= count {
+            return Err("Índice de página fuera de rango".into());
+        }
+        let mut order: Vec<u16> = (0..count).collect();
+        let moved = order.remove(from_index as usize);
+        order.insert(to_index as usize, moved);
+        let range = order
+            .iter()
+            .map(|i| (i + 1).to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut new_doc = pdfium.create_new_pdf().map_err(|e| e.to_string())?;
+        new_doc
+            .pages_mut()
+            .copy_pages_from_document(&doc, &range, 0)
+            .map_err(|e| e.to_string())?;
+        save_over(&new_doc, &work_path)?;
+        drop(new_doc);
+        drop(doc);
+        invalidate_doc_cache();
+        Ok(())
+    })
+}
+
+/// Añade todas las páginas de otro PDF al final y devuelve el nuevo total.
+#[tauri::command]
+fn merge_pdf(work_path: String, other_path: String) -> Result<u16, String> {
+    on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let mut doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| e.to_string())?;
+        let other = pdfium
+            .load_pdf_from_file(&other_path, None)
+            .map_err(|e| e.to_string())?;
+        doc.pages_mut().append(&other).map_err(|e| e.to_string())?;
+        let count = doc.pages().len();
+        save_over(&doc, &work_path)?;
+        drop(other);
+        drop(doc);
+        invalidate_doc_cache();
+        Ok(count)
+    })
+}
+
+/// Extrae las páginas indicadas (índices base 0) a un PDF nuevo.
+#[tauri::command]
+fn extract_pages(
+    work_path: String,
+    page_indices: Vec<u16>,
+    dest_path: String,
+) -> Result<(), String> {
+    if page_indices.is_empty() {
+        return Err("No hay páginas que extraer".into());
+    }
+    let range = page_indices
+        .iter()
+        .map(|i| (i + 1).to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    on_pdfium_thread(move || {
+        with_doc(&work_path, |doc| {
+            let mut new_doc = pdfium()?.create_new_pdf().map_err(|e| e.to_string())?;
+            new_doc
+                .pages_mut()
+                .copy_pages_from_document(doc, &range, 0)
+                .map_err(|e| e.to_string())?;
+            new_doc.save_to_file(&dest_path).map_err(|e| e.to_string())
+        })
+    })
+}
+
+/// Convierte un rect en coords de UI (origen arriba-izquierda) a PdfRect
+/// (origen abajo-izquierda).
+fn ui_rect_to_pdf(r: &Rect, page_h: f32) -> PdfRect {
+    PdfRect::new(
+        PdfPoints::new(page_h - r.y - r.h),
+        PdfPoints::new(r.x),
+        PdfPoints::new(page_h - r.y),
+        PdfPoints::new(r.x + r.w),
+    )
+}
+
+/// Crea una anotación de resaltado amarillo sobre los rects dados
+/// (coords de UI en puntos PDF).
+#[tauri::command]
+fn add_highlight(work_path: String, page_index: u16, rects: Vec<Rect>) -> Result<(), String> {
+    if rects.is_empty() {
+        return Err("No hay nada que resaltar".into());
+    }
+    on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| e.to_string())?;
+        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+        let page_h = page.height().value;
+        let mut annot = page
+            .annotations_mut()
+            .create_highlight_annotation()
+            .map_err(|e| e.to_string())?;
+        annot
+            .set_stroke_color(PdfColor::new(255, 220, 0, 140))
+            .map_err(|e| e.to_string())?;
+        let left = rects.iter().map(|r| r.x).fold(f32::MAX, f32::min);
+        let top = rects.iter().map(|r| r.y).fold(f32::MAX, f32::min);
+        let right = rects.iter().map(|r| r.x + r.w).fold(f32::MIN, f32::max);
+        let bottom = rects.iter().map(|r| r.y + r.h).fold(f32::MIN, f32::max);
+        let envelope = Rect {
+            x: left,
+            y: top,
+            w: right - left,
+            h: bottom - top,
+        };
+        annot
+            .set_bounds(ui_rect_to_pdf(&envelope, page_h))
+            .map_err(|e| e.to_string())?;
+        for r in &rects {
+            let pr = ui_rect_to_pdf(r, page_h);
+            // Orden del spec (UL, UR, LL, LR): otros visores generan la
+            // apariencia a partir de los quads y el orden importa.
+            let quad = PdfQuadPoints::new(
+                pr.left(),
+                pr.top(),
+                pr.right(),
+                pr.top(),
+                pr.left(),
+                pr.bottom(),
+                pr.right(),
+                pr.bottom(),
+            );
+            annot
+                .attachment_points_mut()
+                .create_attachment_point_at_end(quad)
+                .map_err(|e| e.to_string())?;
+        }
+        drop(annot);
+        drop(page);
+        save_over(&doc, &work_path)?;
+        drop(doc);
+        invalidate_doc_cache();
+        Ok(())
+    })
+}
+
+/// Añade un trazo a mano alzada como anotación Ink con su apariencia
+/// (un path dentro de la anotación), de modo que se puede borrar
+/// individualmente. Los puntos vienen en coords de UI (puntos PDF,
+/// origen arriba-izquierda).
+#[tauri::command]
+fn add_stroke(work_path: String, page_index: u16, points: Vec<[f32; 2]>) -> Result<(), String> {
+    if points.len() < 2 {
+        return Err("Trazo demasiado corto".into());
+    }
+    on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| e.to_string())?;
+        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+        let page_h = page.height().value;
+        let mut annot = page
+            .annotations_mut()
+            .create_ink_annotation()
+            .map_err(|e| e.to_string())?;
+        const MARGIN: f32 = 3.0;
+        let min_x = points.iter().map(|p| p[0]).fold(f32::MAX, f32::min) - MARGIN;
+        let max_x = points.iter().map(|p| p[0]).fold(f32::MIN, f32::max) + MARGIN;
+        let min_y = points.iter().map(|p| p[1]).fold(f32::MAX, f32::min) - MARGIN;
+        let max_y = points.iter().map(|p| p[1]).fold(f32::MIN, f32::max) + MARGIN;
+        annot
+            .set_bounds(PdfRect::new(
+                PdfPoints::new(page_h - max_y),
+                PdfPoints::new(min_x),
+                PdfPoints::new(page_h - min_y),
+                PdfPoints::new(max_x),
+            ))
+            .map_err(|e| e.to_string())?;
+        let mut path = PdfPagePathObject::new(
+            &doc,
+            PdfPoints::new(points[0][0]),
+            PdfPoints::new(page_h - points[0][1]),
+            Some(PdfColor::new(226, 61, 61, 255)),
+            Some(PdfPoints::new(2.0)),
+            None,
+        )
+        .map_err(|e| e.to_string())?;
+        for p in &points[1..] {
+            path.line_to(PdfPoints::new(p[0]), PdfPoints::new(page_h - p[1]))
+                .map_err(|e| e.to_string())?;
+        }
+        annot
+            .objects_mut()
+            .add_path_object(path)
+            .map_err(|e| e.to_string())?;
+        drop(annot);
+        drop(page);
+        save_over(&doc, &work_path)?;
+        drop(doc);
+        invalidate_doc_cache();
+        Ok(())
+    })
+}
+
+/// Crea una nota (anotación de texto) en el punto dado (coords de UI).
+#[tauri::command]
+fn add_note(
+    work_path: String,
+    page_index: u16,
+    x: f32,
+    y: f32,
+    text: String,
+) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Err("La nota está vacía".into());
+    }
+    on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| e.to_string())?;
+        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+        let page_h = page.height().value;
+        let mut annot = page
+            .annotations_mut()
+            .create_text_annotation(&text)
+            .map_err(|e| e.to_string())?;
+        const ICON: f32 = 22.0;
+        annot
+            .set_bounds(ui_rect_to_pdf(
+                &Rect {
+                    x,
+                    y,
+                    w: ICON,
+                    h: ICON,
+                },
+                page_h,
+            ))
+            .map_err(|e| e.to_string())?;
+        drop(annot);
+        drop(page);
+        save_over(&doc, &work_path)?;
+        drop(doc);
+        invalidate_doc_cache();
+        Ok(())
+    })
+}
+
+#[derive(Serialize)]
+struct AnnotationInfo {
+    index: u16,
+    kind: String,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    contents: String,
+    /// Para resaltados: un rect por línea (los quads), en coords de UI.
+    rects: Vec<Rect>,
+}
+
+/// Lista las anotaciones de una página (bounds en coords de UI). La UI las
+/// usa para pintar los iconos de nota, los rects de los resaltados (PDFium no
+/// genera apariencia automática para Text ni Highlight) y para borrar con clic.
+#[tauri::command]
+fn get_annotations(path: String, page_index: u16) -> Result<Vec<AnnotationInfo>, String> {
+    on_pdfium_thread(move || {
+        with_doc(&path, |doc| {
+            let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            let page_h = page.height().value;
+            let annotations = page.annotations();
+            let mut out = Vec::new();
+            for i in 0..annotations.len() {
+                let Ok(mut a) = annotations.get(i) else {
+                    continue;
+                };
+                let Ok(b) = a.bounds() else { continue };
+                let mut rects = Vec::new();
+                if let Some(hl) = a.as_highlight_annotation_mut() {
+                    let points = hl.attachment_points_mut();
+                    for j in 0..points.len() {
+                        if let Ok(q) = points.get(j) {
+                            rects.push(Rect {
+                                x: q.left().value,
+                                y: page_h - q.top().value,
+                                w: q.right().value - q.left().value,
+                                h: q.top().value - q.bottom().value,
+                            });
+                        }
+                    }
+                }
+                out.push(AnnotationInfo {
+                    index: i as u16,
+                    kind: format!("{:?}", a.annotation_type()),
+                    x: b.left().value,
+                    y: page_h - b.top().value,
+                    w: b.right().value - b.left().value,
+                    h: b.top().value - b.bottom().value,
+                    contents: a.contents().unwrap_or_default(),
+                    rects,
+                });
+            }
+            Ok(out)
+        })
+    })
+}
+
+/// Elimina la anotación con el índice dado.
+#[tauri::command]
+fn remove_annotation(work_path: String, page_index: u16, annot_index: u16) -> Result<(), String> {
+    on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| e.to_string())?;
+        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+        let annotations = page.annotations_mut();
+        let annot = annotations
+            .get(annot_index as usize)
+            .map_err(|e| e.to_string())?;
+        annotations
+            .delete_annotation(annot)
+            .map_err(|e| e.to_string())?;
+        drop(page);
+        save_over(&doc, &work_path)?;
+        drop(doc);
+        invalidate_doc_cache();
+        Ok(())
+    })
+}
+
+#[derive(Serialize)]
+struct FormFieldInfo {
+    annot_index: u16,
+    name: String,
+    kind: String,
+    value: String,
+    checked: bool,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+/// Lista los campos de formulario (widgets) de una página, con bounds en
+/// coords de UI.
+#[tauri::command]
+fn get_form_fields(path: String, page_index: u16) -> Result<Vec<FormFieldInfo>, String> {
+    on_pdfium_thread(move || {
+        with_doc(&path, |doc| {
+            let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            let page_h = page.height().value;
+            let annotations = page.annotations();
+            let mut out = Vec::new();
+            for i in 0..annotations.len() {
+                let Ok(a) = annotations.get(i) else { continue };
+                let Some(widget) = a.as_widget_annotation() else {
+                    continue;
+                };
+                let Some(field) = widget.form_field() else {
+                    continue;
+                };
+                let Ok(b) = a.bounds() else { continue };
+                let kind = format!("{:?}", field.field_type());
+                let (value, checked) = match field.field_type() {
+                    PdfFormFieldType::Checkbox => (
+                        String::new(),
+                        field
+                            .as_checkbox_field()
+                            .and_then(|c| c.is_checked().ok())
+                            .unwrap_or(false),
+                    ),
+                    PdfFormFieldType::RadioButton => (
+                        String::new(),
+                        field
+                            .as_radio_button_field()
+                            .and_then(|r| r.is_checked().ok())
+                            .unwrap_or(false),
+                    ),
+                    PdfFormFieldType::Text => (
+                        field
+                            .as_text_field()
+                            .and_then(|t| t.value())
+                            .unwrap_or_default(),
+                        false,
+                    ),
+                    _ => (String::new(), false),
+                };
+                out.push(FormFieldInfo {
+                    annot_index: i as u16,
+                    name: field.name().unwrap_or_default(),
+                    kind,
+                    value,
+                    checked,
+                    x: b.left().value,
+                    y: page_h - b.top().value,
+                    w: b.right().value - b.left().value,
+                    h: b.top().value - b.bottom().value,
+                });
+            }
+            Ok(out)
+        })
+    })
+}
+
+/// Escribe el valor de un campo de texto de formulario.
+#[tauri::command]
+fn set_form_text(
+    work_path: String,
+    page_index: u16,
+    annot_index: u16,
+    value: String,
+) -> Result<(), String> {
+    on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| e.to_string())?;
+        let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+        let mut annot = page
+            .annotations()
+            .get(annot_index as usize)
+            .map_err(|e| e.to_string())?;
+        annot
+            .as_widget_annotation_mut()
+            .and_then(|w| w.form_field_mut())
+            .and_then(|f| f.as_text_field_mut())
+            .ok_or("No es un campo de texto")?
+            .set_value(&value)
+            .map_err(|e| e.to_string())?;
+        drop(annot);
+        drop(page);
+        save_over(&doc, &work_path)?;
+        drop(doc);
+        invalidate_doc_cache();
+        Ok(())
+    })
+}
+
+/// Marca o desmarca una casilla (o selecciona un radio button).
+#[tauri::command]
+fn set_form_checked(
+    work_path: String,
+    page_index: u16,
+    annot_index: u16,
+    checked: bool,
+) -> Result<(), String> {
+    on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| e.to_string())?;
+        let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+        let mut annot = page
+            .annotations()
+            .get(annot_index as usize)
+            .map_err(|e| e.to_string())?;
+        let field = annot
+            .as_widget_annotation_mut()
+            .and_then(|w| w.form_field_mut())
+            .ok_or("No es un campo de formulario")?;
+        if let Some(cb) = field.as_checkbox_field_mut() {
+            cb.set_checked(checked).map_err(|e| e.to_string())?;
+        } else if let Some(rb) = field.as_radio_button_field_mut() {
+            if checked {
+                rb.set_checked().map_err(|e| e.to_string())?;
+            }
+        } else {
+            return Err("No es una casilla".into());
+        }
+        drop(annot);
+        drop(page);
+        save_over(&doc, &work_path)?;
+        drop(doc);
+        invalidate_doc_cache();
+        Ok(())
+    })
+}
+
+#[derive(Serialize)]
+struct TextBlock {
+    object_index: u32,
+    text: String,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    font_size: f32,
+}
+
+/// Lista los objetos de texto de una página (bloques editables), con bounds
+/// en coords de UI.
+#[tauri::command]
+fn get_text_blocks(path: String, page_index: u16) -> Result<Vec<TextBlock>, String> {
+    on_pdfium_thread(move || {
+        with_doc(&path, |doc| {
+            let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            let page_h = page.height().value;
+            let objects = page.objects();
+            let mut out = Vec::new();
+            for i in 0..objects.len() {
+                let Ok(obj) = objects.get(i) else { continue };
+                let Some(t) = obj.as_text_object() else {
+                    continue;
+                };
+                let text = t.text();
+                if text.trim().is_empty() {
+                    continue;
+                }
+                let Ok(b) = obj.bounds() else { continue };
+                out.push(TextBlock {
+                    object_index: i as u32,
+                    text,
+                    x: b.left().value,
+                    y: page_h - b.top().value,
+                    w: b.right().value - b.left().value,
+                    h: b.top().value - b.bottom().value,
+                    font_size: t.unscaled_font_size().value,
+                });
+            }
+            Ok(out)
+        })
+    })
+}
+
+/// Edición real de texto: reescribe el objeto de texto del content stream.
+/// Mantiene la fuente del objeto (si la fuente embebida no tiene los glifos
+/// del texto nuevo, esos caracteres no se verán). Si el texto nuevo tiene
+/// varias líneas, la primera reemplaza al objeto original y las demás se
+/// insertan como objetos nuevos con la misma fuente, colocados debajo.
+#[tauri::command]
+fn edit_text_block(
+    work_path: String,
+    page_index: u16,
+    object_index: u32,
+    new_text: String,
+) -> Result<(), String> {
+    on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let mut doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| e.to_string())?;
+        let mut lineas = new_text.lines();
+        let primera = lineas.next().unwrap_or("").to_string();
+        let resto: Vec<String> = lineas.map(|l| l.to_string()).collect();
+
+        // 1) reescribir la primera línea y leer familia/tamaño/posición
+        let (familia, font_size, base_x, base_y) = {
+            let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            let mut obj = page
+                .objects_mut()
+                .get(object_index as usize)
+                .map_err(|e| e.to_string())?;
+            let bounds = obj.bounds().map_err(|e| e.to_string())?;
+            let t = obj.as_text_object_mut().ok_or("No es un bloque de texto")?;
+            let info = (
+                t.font().family().to_lowercase(),
+                t.unscaled_font_size(),
+                bounds.left(),
+                bounds.bottom(),
+            );
+            t.set_text(&primera).map_err(|e| e.to_string())?;
+            drop(obj);
+            page.regenerate_content().map_err(|e| e.to_string())?;
+            info
+        };
+
+        // Fuente para las líneas nuevas: se carga una estándar aproximada por
+        // familia y estilo. Reutilizar el handle de FPDFTextObj_GetFont sería
+        // más fiel, pero queda ligado a la página ya cerrada y PDFium no
+        // perdona los handles colgantes (SIGSEGV).
+        let font_token = if !resto.is_empty() {
+            let bold = familia.contains("bold");
+            let italic = familia.contains("italic") || familia.contains("oblique");
+            let fonts = doc.fonts_mut();
+            Some(if familia.contains("times") {
+                match (bold, italic) {
+                    (true, true) => fonts.times_bold_italic(),
+                    (true, false) => fonts.times_bold(),
+                    (false, true) => fonts.times_italic(),
+                    (false, false) => fonts.times_roman(),
+                }
+            } else if familia.contains("courier") || familia.contains("mono") {
+                match (bold, italic) {
+                    (true, true) => fonts.courier_bold_oblique(),
+                    (true, false) => fonts.courier_bold(),
+                    (false, true) => fonts.courier_oblique(),
+                    (false, false) => fonts.courier(),
+                }
+            } else {
+                match (bold, italic) {
+                    (true, true) => fonts.helvetica_bold_oblique(),
+                    (true, false) => fonts.helvetica_bold(),
+                    (false, true) => fonts.helvetica_oblique(),
+                    (false, false) => fonts.helvetica(),
+                }
+            })
+        } else {
+            None
+        };
+
+        // líneas adicionales: objetos nuevos, colocados debajo
+        if let Some(token) = font_token {
+            let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            let line_h = font_size.value * 1.2;
+            for (i, linea) in resto.iter().enumerate() {
+                if linea.trim().is_empty() {
+                    continue;
+                }
+                let mut nuevo = PdfPageTextObject::new(&doc, linea, token, font_size)
+                    .map_err(|e| e.to_string())?;
+                nuevo
+                    .translate(
+                        base_x,
+                        PdfPoints::new(base_y.value - line_h * (i as f32 + 1.0)),
+                    )
+                    .map_err(|e| e.to_string())?;
+                page.objects_mut()
+                    .add_text_object(nuevo)
+                    .map_err(|e| e.to_string())?;
+            }
+            page.regenerate_content().map_err(|e| e.to_string())?;
+            drop(page);
+        }
+        save_over(&doc, &work_path)?;
+        drop(doc);
+        invalidate_doc_cache();
+        Ok(())
+    })
+}
+
+/// Borra un bloque de texto del content stream.
+#[tauri::command]
+fn delete_text_block(work_path: String, page_index: u16, object_index: u32) -> Result<(), String> {
+    on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| e.to_string())?;
+        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+        let removed = page
+            .objects_mut()
+            .remove_object_at_index(object_index as usize)
+            .map_err(|e| e.to_string())?;
+        // Su Drop llamaría a FPDFPageObj_Destroy y PDFium casca (SIGSEGV) con
+        // objetos de documentos reabiertos; fuga puntual asumida.
+        std::mem::forget(removed);
+        page.regenerate_content().map_err(|e| e.to_string())?;
+        drop(page);
+        save_over(&doc, &work_path)?;
+        drop(doc);
+        invalidate_doc_cache();
+        Ok(())
+    })
+}
+
+/// Firma digital (PAdES básico): inserta un campo de firma invisible con
+/// ByteRange y firma PKCS#7 detached (RSA + SHA-256). PDFium no firma, así
+/// que la cirugía del documento se hace con lopdf y la criptografía con
+/// RustCrypto. No usa PDFium: no necesita el hilo dedicado.
+mod firma {
+    use cms::builder::{SignedDataBuilder, SignerInfoBuilder};
+    use cms::cert::{CertificateChoices, IssuerAndSerialNumber};
+    use cms::signed_data::{EncapsulatedContentInfo, SignerIdentifier};
+    use der::{DecodePem, Encode};
+    use lopdf::{Dictionary, Document as LoDoc, Object, StringFormat};
+    use rsa::pkcs8::DecodePrivateKey;
+    use sha2::{Digest, Sha256};
+    use x509_cert::spki::AlgorithmIdentifierOwned;
+
+    /// Hueco reservado para la firma DER dentro de /Contents (en bytes).
+    const SIG_LEN: usize = 8192;
+
+    fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack.windows(needle.len()).position(|w| w == needle)
+    }
+
+    /// Certificado y clave privada listos para firmar.
+    pub struct Credenciales {
+        cert: x509_cert::Certificate,
+        key: rsa::RsaPrivateKey,
+    }
+
+    /// Credenciales desde certificado + clave en PEM (RSA sin cifrar).
+    pub fn credenciales_pem(cert_pem: &str, key_pem: &str) -> Result<Credenciales, String> {
+        let cert = x509_cert::Certificate::from_pem(cert_pem)
+            .map_err(|e| format!("Certificado PEM inválido: {e}"))?;
+        let key = rsa::RsaPrivateKey::from_pkcs8_pem(key_pem)
+            .or_else(|_| {
+                use rsa::pkcs1::DecodeRsaPrivateKey;
+                rsa::RsaPrivateKey::from_pkcs1_pem(key_pem)
+            })
+            .map_err(|e| format!("Clave privada PEM inválida (RSA sin cifrar): {e}"))?;
+        Ok(Credenciales { cert, key })
+    }
+
+    /// Credenciales desde un contenedor PKCS#12 (.p12/.pfx) con contraseña.
+    pub fn credenciales_p12(p12_bytes: &[u8], password: &str) -> Result<Credenciales, String> {
+        use der::Decode;
+        let store = p12_keystore::KeyStore::from_pkcs12(
+            p12_bytes,
+            password,
+            p12_keystore::Pkcs12ImportPolicy::default(),
+        )
+        .map_err(|e| format!("No se pudo abrir el .p12 (¿contraseña incorrecta?): {e}"))?;
+        let (_alias, chain) = store
+            .private_key_chain()
+            .ok_or("El .p12 no contiene ninguna clave privada")?;
+        let key = rsa::RsaPrivateKey::from_pkcs8_der(chain.key().as_der())
+            .map_err(|e| format!("La clave del .p12 no es RSA sin cifrar: {e}"))?;
+        let cert_der = chain
+            .certs()
+            .first()
+            .ok_or("El .p12 no contiene certificado")?
+            .as_der();
+        let cert = x509_cert::Certificate::from_der(cert_der)
+            .map_err(|e| format!("Certificado del .p12 inválido: {e}"))?;
+        Ok(Credenciales { cert, key })
+    }
+
+    /// Construye el CMS SignedData detached sobre el digest dado.
+    fn build_cms(cred: &Credenciales, digest: &[u8]) -> Result<Vec<u8>, String> {
+        let cert = cred.cert.clone();
+        let key = cred.key.clone();
+        let signer_id = SignerIdentifier::IssuerAndSerialNumber(IssuerAndSerialNumber {
+            issuer: cert.tbs_certificate.issuer.clone(),
+            serial_number: cert.tbs_certificate.serial_number.clone(),
+        });
+        let digest_alg = AlgorithmIdentifierOwned {
+            oid: const_oid::db::rfc5912::ID_SHA_256,
+            parameters: None,
+        };
+        let content = EncapsulatedContentInfo {
+            econtent_type: const_oid::db::rfc5911::ID_DATA,
+            econtent: None,
+        };
+        let signing_key = rsa::pkcs1v15::SigningKey::<Sha256>::new(key);
+        let si_builder = SignerInfoBuilder::new(
+            &signing_key,
+            signer_id,
+            digest_alg.clone(),
+            &content,
+            Some(digest),
+        )
+        .map_err(|e| format!("SignerInfo: {e}"))?;
+        let mut builder = SignedDataBuilder::new(&content);
+        let signed = builder
+            .add_digest_algorithm(digest_alg)
+            .map_err(|e| e.to_string())?
+            .add_certificate(CertificateChoices::Certificate(cert))
+            .map_err(|e| e.to_string())?
+            .add_signer_info::<rsa::pkcs1v15::SigningKey<Sha256>, rsa::pkcs1v15::Signature>(
+                si_builder,
+            )
+            .map_err(|e| e.to_string())?
+            .build()
+            .map_err(|e| e.to_string())?;
+        signed.to_der().map_err(|e| e.to_string())
+    }
+
+    /// Firma el PDF de `src_path` y escribe el resultado en `dest_path`.
+    pub fn sign(
+        src_path: &str,
+        dest_path: &str,
+        cred: &Credenciales,
+        reason: Option<String>,
+    ) -> Result<(), String> {
+        let mut doc = LoDoc::load(src_path).map_err(|e| format!("No se pudo leer el PDF: {e}"))?;
+        let page_id = *doc.get_pages().get(&1).ok_or("El PDF no tiene páginas")?;
+
+        // diccionario de firma con huecos para ByteRange y Contents
+        let mut sig = Dictionary::new();
+        sig.set("Type", Object::Name(b"Sig".to_vec()));
+        sig.set("Filter", Object::Name(b"Adobe.PPKLite".to_vec()));
+        sig.set("SubFilter", Object::Name(b"adbe.pkcs7.detached".to_vec()));
+        sig.set(
+            "Contents",
+            Object::String(vec![0u8; SIG_LEN], StringFormat::Hexadecimal),
+        );
+        sig.set(
+            "ByteRange",
+            Object::Array(vec![
+                0i64.into(),
+                1_000_000_000_000i64.into(),
+                1_000_000_000_000i64.into(),
+                1_000_000_000_000i64.into(),
+            ]),
+        );
+        let fecha = chrono::Utc::now().format("D:%Y%m%d%H%M%SZ").to_string();
+        sig.set("M", Object::string_literal(fecha));
+        if let Some(r) = reason {
+            sig.set("Reason", Object::string_literal(r));
+        }
+        let sig_id = doc.add_object(sig);
+
+        // widget de firma invisible en la primera página
+        let mut widget = Dictionary::new();
+        widget.set("Type", Object::Name(b"Annot".to_vec()));
+        widget.set("Subtype", Object::Name(b"Widget".to_vec()));
+        widget.set("FT", Object::Name(b"Sig".to_vec()));
+        widget.set("T", Object::string_literal("Firma1"));
+        widget.set(
+            "Rect",
+            Object::Array(vec![0.into(), 0.into(), 0.into(), 0.into()]),
+        );
+        widget.set("F", 132i64);
+        widget.set("V", Object::Reference(sig_id));
+        widget.set("P", Object::Reference(page_id));
+        let widget_id = doc.add_object(widget);
+
+        // añadir el widget a los Annots de la página (array directo o referencia)
+        let annots_target = {
+            let page = doc
+                .get_object(page_id)
+                .and_then(|o| o.as_dict())
+                .map_err(|e| e.to_string())?;
+            match page.get(b"Annots") {
+                Ok(Object::Reference(rid)) => Some(*rid),
+                _ => None,
+            }
+        };
+        if let Some(rid) = annots_target {
+            let arr = doc
+                .get_object_mut(rid)
+                .and_then(|o| o.as_array_mut())
+                .map_err(|e| e.to_string())?;
+            arr.push(Object::Reference(widget_id));
+        } else {
+            let page = doc
+                .get_object_mut(page_id)
+                .and_then(|o| o.as_dict_mut())
+                .map_err(|e| e.to_string())?;
+            match page.get_mut(b"Annots") {
+                Ok(Object::Array(arr)) => arr.push(Object::Reference(widget_id)),
+                _ => page.set("Annots", Object::Array(vec![Object::Reference(widget_id)])),
+            }
+        }
+
+        // AcroForm del catálogo: crear o fusionar, con SigFlags 3
+        let catalog_id = doc
+            .trailer
+            .get(b"Root")
+            .and_then(|o| o.as_reference())
+            .map_err(|e| e.to_string())?;
+        let existing_form: Option<Dictionary> = {
+            let catalog = doc
+                .get_object(catalog_id)
+                .and_then(|o| o.as_dict())
+                .map_err(|e| e.to_string())?;
+            match catalog.get(b"AcroForm") {
+                Ok(Object::Dictionary(d)) => Some(d.clone()),
+                Ok(Object::Reference(rid)) => doc
+                    .get_object(*rid)
+                    .ok()
+                    .and_then(|o| o.as_dict().ok())
+                    .cloned(),
+                _ => None,
+            }
+        };
+        let mut form = existing_form.unwrap_or_default();
+        match form.get_mut(b"Fields") {
+            Ok(Object::Array(arr)) => arr.push(Object::Reference(widget_id)),
+            _ => form.set("Fields", Object::Array(vec![Object::Reference(widget_id)])),
+        }
+        form.set("SigFlags", 3i64);
+        let catalog = doc
+            .get_object_mut(catalog_id)
+            .and_then(|o| o.as_dict_mut())
+            .map_err(|e| e.to_string())?;
+        catalog.set("AcroForm", Object::Dictionary(form));
+
+        // serializar y localizar el hueco de /Contents
+        let mut out = Vec::new();
+        doc.save_to(&mut out)
+            .map_err(|e| format!("No se pudo serializar: {e}"))?;
+        let marker: Vec<u8> = {
+            let mut v = vec![b'<'];
+            v.extend(std::iter::repeat(b'0').take(SIG_LEN * 2));
+            v.push(b'>');
+            v
+        };
+        let contents_start =
+            find_subslice(&out, &marker).ok_or("No se encontró el hueco de la firma")?;
+        let contents_end = contents_start + marker.len();
+
+        // parchear ByteRange manteniendo la longitud del hueco
+        let br_pos = find_subslice(&out, b"/ByteRange").ok_or("No se encontró /ByteRange")?;
+        let open = br_pos
+            + out[br_pos..]
+                .iter()
+                .position(|&c| c == b'[')
+                .ok_or("ByteRange sin '['")?;
+        let close = open
+            + out[open..]
+                .iter()
+                .position(|&c| c == b']')
+                .ok_or("ByteRange sin ']'")?;
+        let hueco = close - open - 1;
+        let a = contents_start as i64;
+        let b = contents_end as i64;
+        let total = out.len() as i64;
+        let nuevo = format!("0 {a} {} {}", b, total - b);
+        if nuevo.len() > hueco {
+            return Err("El ByteRange no cabe en el hueco reservado".into());
+        }
+        let relleno = format!("{nuevo:<hueco$}");
+        out[open + 1..close].copy_from_slice(relleno.as_bytes());
+
+        // digest sobre todo menos el hueco de Contents, y firma CMS
+        let mut hasher = Sha256::new();
+        hasher.update(&out[..contents_start]);
+        hasher.update(&out[contents_end..]);
+        let digest = hasher.finalize();
+        let der = build_cms(cred, &digest)?;
+        if der.len() > SIG_LEN {
+            return Err("La firma no cabe en el hueco reservado".into());
+        }
+        let hex: String = der.iter().map(|byte| format!("{byte:02X}")).collect();
+        out[contents_start + 1..contents_start + 1 + hex.len()].copy_from_slice(hex.as_bytes());
+
+        std::fs::write(dest_path, &out).map_err(|e| format!("No se pudo escribir: {e}"))
+    }
+}
+
+/// Firma digitalmente la copia de trabajo y escribe el PDF firmado en
+/// `dest_path`. Certificado y clave privada en PEM (RSA sin cifrar).
+#[tauri::command]
+fn sign_pdf(
+    work_path: String,
+    dest_path: String,
+    cert_pem_path: String,
+    key_pem_path: String,
+    reason: Option<String>,
+) -> Result<(), String> {
+    let cert_pem = std::fs::read_to_string(&cert_pem_path)
+        .map_err(|e| format!("No se pudo leer el certificado: {e}"))?;
+    let key_pem = std::fs::read_to_string(&key_pem_path)
+        .map_err(|e| format!("No se pudo leer la clave: {e}"))?;
+    let cred = firma::credenciales_pem(&cert_pem, &key_pem)?;
+    firma::sign(&work_path, &dest_path, &cred, reason)
+}
+
+/// Igual que `sign_pdf` pero con un contenedor PKCS#12 (.p12/.pfx).
+#[tauri::command]
+fn sign_pdf_p12(
+    work_path: String,
+    dest_path: String,
+    p12_path: String,
+    password: String,
+    reason: Option<String>,
+) -> Result<(), String> {
+    let bytes = std::fs::read(&p12_path).map_err(|e| format!("No se pudo leer el .p12: {e}"))?;
+    let cred = firma::credenciales_p12(&bytes, &password)?;
+    firma::sign(&work_path, &dest_path, &cred, reason)
+}
+
+/// Vuelca la copia de trabajo en el destino (guardar / guardar como).
+#[tauri::command]
+fn save_pdf(work_path: String, dest_path: String) -> Result<(), String> {
+    std::fs::copy(&work_path, &dest_path)
+        .map(|_| ())
+        .map_err(|e| format!("No se pudo guardar: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Crea un PDF de prueba con una página de texto por cada entrada.
+    fn crea_pdf(textos: &[&str], dest: &std::path::Path) {
+        let textos: Vec<String> = textos.iter().map(|t| t.to_string()).collect();
+        let dest = dest.to_path_buf();
+        on_pdfium_thread(move || {
+            let pdfium = pdfium().expect("no cargó libpdfium");
+            let mut doc = pdfium.create_new_pdf().expect("crear documento");
+            let font = doc.fonts_mut().helvetica();
+            for texto in &textos {
+                let mut page = doc
+                    .pages_mut()
+                    .create_page_at_end(PdfPagePaperSize::a4())
+                    .expect("crear página");
+                let mut obj = PdfPageTextObject::new(&doc, texto, font, PdfPoints::new(14.0))
+                    .expect("crear objeto de texto");
+                // posición realista (no en la esquina 0,0)
+                obj.translate(PdfPoints::new(50.0), PdfPoints::new(700.0))
+                    .expect("posicionar texto");
+                page.objects_mut()
+                    .add_text_object(obj)
+                    .expect("añadir texto");
+            }
+            doc.save_to_file(&dest).expect("guardar PDF de prueba");
+        })
+    }
+
+    /// Texto plano de cada página de un PDF, para verificar orden y contenido.
+    fn textos_de(path: &std::path::Path) -> Vec<String> {
+        let path = path.to_path_buf();
+        on_pdfium_thread(move || {
+            let pdfium = pdfium().expect("no cargó libpdfium");
+            let doc = pdfium.load_pdf_from_file(&path, None).expect("abrir PDF");
+            doc.pages()
+                .iter()
+                .map(|p| p.text().map(|t| t.all()).unwrap_or_default())
+                .collect()
+        })
+    }
+
+    #[test]
+    fn renderiza_pagina() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_render.pdf");
+        crea_pdf(&["Hola"], &tmp);
+        let png_b64 = render_page(tmp.to_string_lossy().into_owned(), 0, 200).expect("render");
+        std::fs::remove_file(&tmp).ok();
+        let png = base64::engine::general_purpose::STANDARD
+            .decode(&png_b64)
+            .expect("base64 válido");
+        assert!(png.len() > 100, "PNG sospechosamente pequeño");
+        assert_eq!(&png[1..4], b"PNG");
+    }
+
+    #[test]
+    fn extrae_texto_con_cajas() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_texto.pdf");
+        crea_pdf(&["Hola Mundo"], &tmp);
+        let extracted = get_page_text(tmp.to_string_lossy().into_owned(), 0).expect("extraer");
+        std::fs::remove_file(&tmp).ok();
+        let joined: String = extracted.chars.iter().map(|c| c.ch.as_str()).collect();
+        assert!(joined.contains("Hola"), "texto extraído: {joined:?}");
+        assert!(extracted.chars.iter().any(|c| c.w > 0.0 && c.h > 0.0));
+        assert!(extracted.width > 0.0 && extracted.height > 0.0);
+    }
+
+    #[test]
+    fn busca_sin_distinguir_mayusculas() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_busqueda.pdf");
+        crea_pdf(&["Hola Mundo"], &tmp);
+        let matches =
+            search_pdf(tmp.to_string_lossy().into_owned(), "mundo".into()).expect("buscar");
+        std::fs::remove_file(&tmp).ok();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].page_index, 0);
+        assert!(!matches[0].rects.is_empty());
+    }
+
+    #[test]
+    fn gestion_de_paginas() {
+        let dir = std::env::temp_dir();
+        let doc_a = dir.join("editor_pdf_test_paginas_a.pdf");
+        let doc_b = dir.join("editor_pdf_test_paginas_b.pdf");
+        let extraido = dir.join("editor_pdf_test_paginas_extra.pdf");
+        crea_pdf(&["Uno", "Dos", "Tres"], &doc_a);
+        crea_pdf(&["Cuatro"], &doc_b);
+        let work = doc_a.to_string_lossy().into_owned();
+
+        // mover: [Uno, Dos, Tres] -> [Dos, Uno, Tres]
+        move_page(work.clone(), 0, 1).expect("mover página");
+        let t = textos_de(&doc_a);
+        assert!(t[0].contains("Dos") && t[1].contains("Uno"), "orden: {t:?}");
+
+        // borrar la primera: -> [Uno, Tres]
+        let count = delete_page(work.clone(), 0).expect("borrar página");
+        assert_eq!(count, 2);
+
+        // unir doc_b: -> [Uno, Tres, Cuatro]
+        let count =
+            merge_pdf(work.clone(), doc_b.to_string_lossy().into_owned()).expect("unir PDFs");
+        assert_eq!(count, 3);
+        let t = textos_de(&doc_a);
+        assert!(t[2].contains("Cuatro"), "tras unir: {t:?}");
+
+        // rotar la primera página 90°
+        rotate_page(work.clone(), 0).expect("rotar página");
+
+        // extraer la última a un PDF nuevo
+        extract_pages(
+            work.clone(),
+            vec![2],
+            extraido.to_string_lossy().into_owned(),
+        )
+        .expect("extraer página");
+        let t = textos_de(&extraido);
+        assert_eq!(t.len(), 1);
+        assert!(t[0].contains("Cuatro"), "extraído: {t:?}");
+
+        for f in [&doc_a, &doc_b, &extraido] {
+            std::fs::remove_file(f).ok();
+        }
+    }
+
+    #[test]
+    fn cuenta_coincidencias() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_contador.pdf");
+        crea_pdf(&["banana banana — Hola hola HOLA — Hola  Mundo"], &tmp);
+        let path = tmp.to_string_lossy().into_owned();
+
+        // no solapadas: una por "banana", no dos dentro de la misma palabra
+        let m = search_pdf(path.clone(), "ana".into()).expect("buscar ana");
+        assert_eq!(m.len(), 2, "'ana' en 'banana banana'");
+
+        // sin distinguir mayúsculas
+        let m = search_pdf(path.clone(), "hola".into()).expect("buscar hola");
+        assert_eq!(m.len(), 4, "'hola' aparece 4 veces");
+
+        // rachas de espacios en el documento cuentan como un espacio
+        let m = search_pdf(path.clone(), "hola mundo".into()).expect("buscar frase");
+        assert_eq!(m.len(), 1, "'Hola  Mundo' con doble espacio");
+
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn trazo_es_visible() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_trazo_vis.pdf");
+        crea_pdf(&["Hola"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        let decode = |b64: String| {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .unwrap();
+            image::load_from_memory(&bytes).unwrap().to_rgba8()
+        };
+        let antes = decode(render_page(work.clone(), 0, 200).unwrap());
+        // trazo horizontal que pasa por (150, 120) pt
+        add_stroke(work.clone(), 0, vec![[50.0, 120.0], [250.0, 120.0]]).expect("trazo");
+        let despues = decode(render_page(work.clone(), 0, 200).unwrap());
+        let px = (150.0f32 * 200.0 / 595.0) as u32;
+        let py = (120.0f32 * 200.0 / 595.0) as u32;
+        let mut cambiado = false;
+        for dy in 0..3 {
+            if antes.get_pixel(px, py + dy) != despues.get_pixel(px, py + dy) {
+                cambiado = true;
+            }
+        }
+        assert!(cambiado, "el trazo no cambió ningún píxel");
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn resaltado_devuelve_sus_rects() {
+        // PDFium no genera apariencia para Highlight: la UI lo pinta con los
+        // rects que devuelve get_annotations. Verificamos ese contrato.
+        let tmp = std::env::temp_dir().join("editor_pdf_test_resaltado_rects.pdf");
+        crea_pdf(&["Hola"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        add_highlight(
+            work.clone(),
+            0,
+            vec![
+                Rect {
+                    x: 50.0,
+                    y: 100.0,
+                    w: 200.0,
+                    h: 14.0,
+                },
+                Rect {
+                    x: 50.0,
+                    y: 118.0,
+                    w: 120.0,
+                    h: 14.0,
+                },
+            ],
+        )
+        .expect("resaltar");
+        let annots = get_annotations(work.clone(), 0).expect("listar");
+        let hl = annots
+            .iter()
+            .find(|a| a.kind == "Highlight")
+            .expect("hay un resaltado");
+        assert_eq!(hl.rects.len(), 2, "un rect por línea");
+        assert!((hl.rects[0].x - 50.0).abs() < 0.5, "x: {}", hl.rects[0].x);
+        assert!((hl.rects[0].y - 100.0).abs() < 0.5, "y: {}", hl.rects[0].y);
+        assert!((hl.rects[0].w - 200.0).abs() < 0.5, "w: {}", hl.rects[0].w);
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn anotaciones() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_anotaciones.pdf");
+        crea_pdf(&["Hola Mundo"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+
+        // resaltado + nota
+        add_highlight(
+            work.clone(),
+            0,
+            vec![Rect {
+                x: 50.0,
+                y: 700.0,
+                w: 100.0,
+                h: 14.0,
+            }],
+        )
+        .expect("resaltar");
+        add_note(work.clone(), 0, 200.0, 100.0, "Una nota".into()).expect("añadir nota");
+        let annots = get_annotations(work.clone(), 0).expect("listar anotaciones");
+        assert_eq!(annots.len(), 2, "anotaciones: {:?}", annots.len());
+        let nota = annots.iter().find(|a| a.kind == "Text").expect("nota");
+        assert_eq!(nota.contents, "Una nota");
+
+        // trazo como anotación Ink
+        add_stroke(
+            work.clone(),
+            0,
+            vec![[10.0, 10.0], [50.0, 40.0], [90.0, 10.0]],
+        )
+        .expect("añadir trazo");
+        let annots = get_annotations(work.clone(), 0).expect("listar con trazo");
+        assert_eq!(annots.len(), 3);
+        let trazo = annots.iter().find(|a| a.kind == "Ink").expect("trazo");
+
+        // borrar la nota y el trazo individualmente
+        remove_annotation(work.clone(), 0, nota.index).expect("borrar nota");
+        let annots = get_annotations(work.clone(), 0).expect("listar tras borrar");
+        assert_eq!(annots.len(), 2);
+        let trazo_idx = annots
+            .iter()
+            .find(|a| a.kind == "Ink")
+            .map(|a| a.index)
+            .unwrap_or(trazo.index);
+        remove_annotation(work.clone(), 0, trazo_idx).expect("borrar trazo");
+        assert_eq!(get_annotations(work.clone(), 0).expect("listar").len(), 1);
+
+        // el render con anotaciones no debe fallar
+        render_page(work.clone(), 0, 200).expect("render con anotaciones");
+
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// Construye un PDF mínimo con AcroForm: un campo de texto y una casilla.
+    /// PDFium no puede crear campos de formulario, así que se escribe a mano.
+    fn crea_pdf_formulario(dest: &std::path::Path) {
+        let ap_si = "q 0 0 1 RG 2 2 m 18 18 l S 2 18 m 18 2 l S Q";
+        let ap_no = "q 0.5 w 0 0 20 20 re S Q";
+        let objs: Vec<(u32, String)> = vec![
+            (
+                1,
+                "<</Type/Catalog/Pages 2 0 R/AcroForm<</Fields[4 0 R 5 0 R]\
+                 /DA(/Helv 0 Tf 0 g)/DR<</Font<</Helv 6 0 R>>>>>>>>"
+                    .into(),
+            ),
+            (2, "<</Type/Pages/Kids[3 0 R]/Count 1>>".into()),
+            (
+                3,
+                "<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]\
+                 /Annots[4 0 R 5 0 R]/Resources<</Font<</Helv 6 0 R>>>>>>"
+                    .into(),
+            ),
+            (
+                4,
+                "<</Type/Annot/Subtype/Widget/FT/Tx/T(nombre)\
+                 /Rect[50 700 250 720]/F 4/DA(/Helv 12 Tf 0 g)>>"
+                    .into(),
+            ),
+            (
+                5,
+                "<</Type/Annot/Subtype/Widget/FT/Btn/T(acepto)\
+                 /Rect[50 650 70 670]/F 4/V/Off/AS/Off\
+                 /AP<</N<</Yes 7 0 R/Off 8 0 R>>>>>>"
+                    .into(),
+            ),
+            (6, "<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>".into()),
+            (
+                7,
+                format!(
+                    "<</BBox[0 0 20 20]/Length {}>>\nstream\n{}\nendstream",
+                    ap_si.len(),
+                    ap_si
+                ),
+            ),
+            (
+                8,
+                format!(
+                    "<</BBox[0 0 20 20]/Length {}>>\nstream\n{}\nendstream",
+                    ap_no.len(),
+                    ap_no
+                ),
+            ),
+        ];
+        let mut out: Vec<u8> = b"%PDF-1.7\n".to_vec();
+        let mut offsets = vec![0usize; objs.len() + 1];
+        for (num, body) in &objs {
+            offsets[*num as usize] = out.len();
+            out.extend_from_slice(format!("{num} 0 obj\n{body}\nendobj\n").as_bytes());
+        }
+        let xref_pos = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n", objs.len() + 1).as_bytes());
+        out.extend_from_slice(b"0000000000 65535 f \n");
+        for i in 1..=objs.len() {
+            out.extend_from_slice(format!("{:010} 00000 n \n", offsets[i]).as_bytes());
+        }
+        out.extend_from_slice(
+            format!(
+                "trailer\n<</Size {}/Root 1 0 R>>\nstartxref\n{}\n%%EOF",
+                objs.len() + 1,
+                xref_pos
+            )
+            .as_bytes(),
+        );
+        std::fs::write(dest, out).expect("escribir PDF de formulario");
+    }
+
+    #[test]
+    fn formularios() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_formulario.pdf");
+        crea_pdf_formulario(&tmp);
+        let work = tmp.to_string_lossy().into_owned();
+
+        let fields = get_form_fields(work.clone(), 0).expect("listar campos");
+        assert_eq!(fields.len(), 2, "campos: {}", fields.len());
+        let nombre = fields.iter().find(|f| f.name == "nombre").expect("texto");
+        assert_eq!(nombre.kind, "Text");
+        assert_eq!(nombre.value, "");
+        let acepto = fields.iter().find(|f| f.name == "acepto").expect("casilla");
+        assert_eq!(acepto.kind, "Checkbox");
+        assert!(!acepto.checked);
+
+        set_form_text(work.clone(), 0, nombre.annot_index, "Jorge".into()).expect("escribir texto");
+        set_form_checked(work.clone(), 0, acepto.annot_index, true).expect("marcar");
+
+        let fields = get_form_fields(work.clone(), 0).expect("relistar");
+        assert_eq!(
+            fields.iter().find(|f| f.name == "nombre").unwrap().value,
+            "Jorge"
+        );
+        assert!(fields.iter().find(|f| f.name == "acepto").unwrap().checked);
+
+        render_page(work.clone(), 0, 200).expect("render con formulario");
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn edicion_de_texto() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_edicion.pdf");
+        crea_pdf(&["Texto original"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+
+        let blocks = get_text_blocks(work.clone(), 0).expect("listar bloques");
+        assert_eq!(blocks.len(), 1, "bloques: {}", blocks.len());
+        assert!(
+            blocks[0].text.contains("Texto original"),
+            "texto: {:?}",
+            blocks[0].text
+        );
+        assert!(blocks[0].w > 0.0 && blocks[0].h > 0.0);
+
+        // reescribir el content stream
+        edit_text_block(
+            work.clone(),
+            0,
+            blocks[0].object_index,
+            "Texto editado".into(),
+        )
+        .expect("editar bloque");
+        let t = textos_de(&tmp);
+        assert!(t[0].contains("Texto editado"), "tras editar: {t:?}");
+        assert!(!t[0].contains("original"), "no debe quedar el texto viejo");
+
+        // borrar el bloque
+        let blocks = get_text_blocks(work.clone(), 0).expect("relistar");
+        delete_text_block(work.clone(), 0, blocks[0].object_index).expect("borrar bloque");
+        let blocks = get_text_blocks(work.clone(), 0).expect("listar tras borrar");
+        assert!(blocks.is_empty(), "quedan {} bloques", blocks.len());
+
+        render_page(work.clone(), 0, 200).expect("render tras editar");
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn edicion_multilinea() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_multilinea.pdf");
+        crea_pdf(&["Una línea"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+
+        let blocks = get_text_blocks(work.clone(), 0).expect("listar");
+        edit_text_block(
+            work.clone(),
+            0,
+            blocks[0].object_index,
+            "Primera línea\nSegunda línea\nTercera".into(),
+        )
+        .expect("editar multilínea");
+
+        let t = textos_de(&tmp).join(" ");
+        assert!(t.contains("Primera línea"), "texto: {t:?}");
+        assert!(t.contains("Segunda línea"), "texto: {t:?}");
+        assert!(t.contains("Tercera"), "texto: {t:?}");
+
+        // deben existir tres bloques, apilados en vertical
+        let blocks = get_text_blocks(work.clone(), 0).expect("relistar");
+        assert_eq!(blocks.len(), 3, "bloques: {}", blocks.len());
+        let primera = blocks.iter().find(|b| b.text.contains("Primera")).unwrap();
+        let segunda = blocks.iter().find(|b| b.text.contains("Segunda")).unwrap();
+        assert!(
+            segunda.y > primera.y,
+            "la segunda línea debe quedar debajo ({} > {})",
+            segunda.y,
+            primera.y
+        );
+
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn firma_digital() {
+        use der::Decode;
+        use sha2::{Digest, Sha256};
+
+        let dir = std::env::temp_dir();
+        let src = dir.join("editor_pdf_test_firma_src.pdf");
+        let dest = dir.join("editor_pdf_test_firma_out.pdf");
+        crea_pdf(&["Documento importante"], &src);
+
+        let cert_pem = include_str!("../fixtures/test_cert.pem");
+        let key_pem = include_str!("../fixtures/test_key.pem");
+        let cred = firma::credenciales_pem(cert_pem, key_pem).expect("credenciales PEM");
+        firma::sign(
+            &src.to_string_lossy(),
+            &dest.to_string_lossy(),
+            &cred,
+            Some("Prueba".into()),
+        )
+        .expect("firmar");
+
+        let bytes = std::fs::read(&dest).expect("leer PDF firmado");
+
+        // extraer ByteRange [a b c d]
+        let txt = String::from_utf8_lossy(&bytes);
+        let br_start = txt.find("/ByteRange").expect("ByteRange presente");
+        let open = txt[br_start..].find('[').unwrap() + br_start + 1;
+        let close = txt[open..].find(']').unwrap() + open;
+        let nums: Vec<usize> = txt[open..close]
+            .split_whitespace()
+            .map(|n| n.parse().expect("número en ByteRange"))
+            .collect();
+        assert_eq!(nums.len(), 4, "ByteRange: {:?}", nums);
+        assert_eq!(nums[0], 0);
+        assert_eq!(
+            nums[2] + nums[3],
+            bytes.len(),
+            "el ByteRange debe cubrir hasta el final del fichero"
+        );
+
+        // digest sobre los dos rangos
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes[nums[0]..nums[0] + nums[1]]);
+        hasher.update(&bytes[nums[2]..nums[2] + nums[3]]);
+        let digest = hasher.finalize();
+
+        // el hueco entre rangos es <hex de la firma>
+        let gap = &bytes[nums[0] + nums[1]..nums[2]];
+        assert_eq!(gap[0], b'<');
+        assert_eq!(gap[gap.len() - 1], b'>');
+        let hex: String = String::from_utf8_lossy(&gap[1..gap.len() - 1]).into_owned();
+        let der_bytes: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex válido"))
+            .collect();
+
+        // parsear el CMS (el hueco lleva ceros de relleno tras el DER, así
+        // que no se puede exigir consumo exacto) y comparar el messageDigest
+        let ci: cms::content_info::ContentInfo = {
+            use der::Reader;
+            let mut reader = der::SliceReader::new(&der_bytes).unwrap();
+            reader.decode().expect("ContentInfo DER válido")
+        };
+        assert_eq!(ci.content_type, const_oid::db::rfc5911::ID_SIGNED_DATA);
+        let sd: cms::signed_data::SignedData = ci.content.decode_as().expect("SignedData válido");
+        let signer = sd.signer_infos.0.iter().next().expect("un firmante");
+        let attrs = signer.signed_attrs.as_ref().expect("atributos firmados");
+        let md_attr = attrs
+            .iter()
+            .find(|a| a.oid == const_oid::db::rfc5911::ID_MESSAGE_DIGEST)
+            .expect("atributo messageDigest");
+        let md_der = {
+            use der::Encode;
+            md_attr
+                .values
+                .iter()
+                .next()
+                .expect("valor")
+                .to_der()
+                .unwrap()
+        };
+        // el valor es un OCTET STRING: 0x04, len, bytes
+        assert_eq!(
+            &md_der[md_der.len() - 32..],
+            digest.as_slice(),
+            "el messageDigest firmado debe coincidir con el hash del ByteRange"
+        );
+
+        std::fs::remove_file(&src).ok();
+        std::fs::remove_file(&dest).ok();
+    }
+
+    #[test]
+    fn firma_con_p12() {
+        let dir = std::env::temp_dir();
+        let src = dir.join("editor_pdf_test_p12_src.pdf");
+        let dest = dir.join("editor_pdf_test_p12_out.pdf");
+        crea_pdf(&["Firmado con p12"], &src);
+
+        let p12 = include_bytes!("../fixtures/test_bundle.p12");
+        let cred = firma::credenciales_p12(p12, "test1234").expect("abrir p12");
+        firma::sign(&src.to_string_lossy(), &dest.to_string_lossy(), &cred, None)
+            .expect("firmar con p12");
+        let bytes = std::fs::read(&dest).expect("leer firmado");
+        assert!(
+            find_in(&bytes, b"/SubFilter/adbe.pkcs7.detached")
+                || find_in(&bytes, b"/SubFilter /adbe.pkcs7.detached"),
+            "el PDF firmado debe llevar el SubFilter"
+        );
+
+        // contraseña incorrecta debe fallar con error, no colgarse ni abrir
+        assert!(firma::credenciales_p12(p12, "mala").is_err());
+
+        std::fs::remove_file(&src).ok();
+        std::fs::remove_file(&dest).ok();
+    }
+
+    fn find_in(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    #[test]
+    fn merge_line_rects_une_por_linea() {
+        let boxes = vec![
+            CharBox {
+                ch: "a".into(),
+                x: 0.0,
+                y: 10.0,
+                w: 5.0,
+                h: 10.0,
+            },
+            CharBox {
+                ch: "b".into(),
+                x: 5.0,
+                y: 10.0,
+                w: 5.0,
+                h: 10.0,
+            },
+            CharBox {
+                ch: "c".into(),
+                x: 0.0,
+                y: 30.0,
+                w: 5.0,
+                h: 10.0,
+            },
+        ];
+        let rects = merge_line_rects(&boxes);
+        assert_eq!(rects.len(), 2);
+        assert_eq!(rects[0].w, 10.0);
+    }
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .setup(|app| {
+            use tauri::Manager;
+            if let Ok(dir) = app.path().resource_dir() {
+                let _ = RESOURCE_LIB_DIR.set(dir.join("lib"));
+            }
+            Ok(())
+        })
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![
+            open_pdf,
+            render_page,
+            get_page_text,
+            search_pdf,
+            delete_page,
+            rotate_page,
+            move_page,
+            merge_pdf,
+            extract_pages,
+            save_pdf,
+            add_highlight,
+            add_stroke,
+            add_note,
+            get_annotations,
+            remove_annotation,
+            get_form_fields,
+            set_form_text,
+            set_form_checked,
+            get_text_blocks,
+            edit_text_block,
+            delete_text_block,
+            sign_pdf,
+            sign_pdf_p12
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
