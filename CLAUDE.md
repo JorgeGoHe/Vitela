@@ -11,9 +11,14 @@ y firma digital.
 - **React + TypeScript + Vite** — UI (`src/`), gestor de paquetes `bun`
 - **Rust** — core (`src-tauri/`)
 - **PDFium** — motor PDF (render, texto, páginas, formularios), vía el crate
-  `pdfium-render`. Binario dinámico en `src-tauri/lib/libpdfium.dylib`
-  (mac-arm64, descargado de `bblanchon/pdfium-binaries`; no es código fuente,
-  no editarlo)
+  `pdfium-render`. Binario dinámico en `src-tauri/lib/` (descargado de
+  `bblanchon/pdfium-binaries`; no es código fuente, no editarlo):
+  `libpdfium.dylib` (mac-arm64) o `pdfium.dll` (win-x64). El bundle empaqueta
+  el directorio `lib/` entero como resource, así que cada plataforma lleva el
+  suyo. Para compilar el instalador de Windows: workflow de GitHub Actions en
+  `.github/workflows/build.yml` (descarga PDFium y compila en
+  windows-latest), o en una máquina Windows: descargar `pdfium-win-x64.tgz`,
+  copiar `bin/pdfium.dll` a `src-tauri/lib/` y `bun run tauri build`.
 
 ## Comandos
 
@@ -34,8 +39,9 @@ cd src-tauri && cargo check   # compilar solo el core Rust
   `{ page_count, work_path }`. Todos los demás comandos operan sobre
   `work_path`; el original solo se toca con `save_pdf(work_path, dest_path)`
   (Guardar / Guardar como). Las mutaciones guardan sobre la copia vía
-  `save_over` (escribe a `.tmp` y renombra, porque PDFium lee el fichero
-  abierto de forma perezosa).
+  `save_and_close(doc, path)`: escribe a `.tmp`, **cierra el documento y el
+  caché, y solo entonces renombra** — PDFium lee el fichero abierto de forma
+  perezosa y en Windows no se puede renombrar encima de un fichero abierto.
 - Comandos: `open_pdf`, `render_page(path, page_index, width)` → PNG base64,
   `get_page_text(path, page_index)` → caracteres con cajas de glifos (puntos
   PDF, origen arriba-izquierda), `search_pdf(path, query)` → coincidencias con

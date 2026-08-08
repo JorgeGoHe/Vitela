@@ -1,0 +1,50 @@
+# Compila los instaladores de Windows y macOS.
+# Se lanza a mano (workflow_dispatch) o al etiquetar una versión (v*).
+name: Compilar instaladores
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            pdfium: win-x64
+            origen: bin/pdfium.dll
+          - os: macos-latest
+            pdfium: mac-arm64
+            origen: lib/libpdfium.dylib
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Descargar PDFium
+        shell: bash
+        run: |
+          curl -sL -o pdfium.tgz "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-${{ matrix.pdfium }}.tgz"
+          mkdir -p pdfium-extraido src-tauri/lib
+          tar -xzf pdfium.tgz -C pdfium-extraido
+          cp "pdfium-extraido/${{ matrix.origen }}" src-tauri/lib/
+
+      - name: Instalar dependencias
+        run: bun install
+
+      - name: Compilar
+        run: bun run tauri build
+
+      - name: Subir artefactos
+        uses: actions/upload-artifact@v4
+        with:
+          name: editor-pdf-${{ matrix.pdfium }}
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: warn

@@ -119,12 +119,16 @@ fn work_copy_path(original: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("editor-pdf-{name}-{nanos}.pdf"))
 }
 
-/// Guarda el documento sobre `path` de forma segura: PDFium lee el fichero
-/// original de forma perezosa mientras el documento está abierto, así que se
-/// escribe a un temporal y se renombra encima.
-fn save_over(doc: &PdfDocument, path: &str) -> Result<(), String> {
+/// Guarda el documento sobre `path` y lo cierra. PDFium lee el fichero de
+/// forma perezosa mientras el documento está abierto, y en Windows no se
+/// puede renombrar encima de un fichero abierto, así que el orden importa:
+/// escribir a un temporal, cerrar el documento (y el caché, que puede tener
+/// otro handle del mismo fichero) y solo entonces renombrar.
+fn save_and_close(doc: PdfDocument<'static>, path: &str) -> Result<(), String> {
     let tmp = format!("{path}.tmp");
     doc.save_to_file(&tmp).map_err(|e| e.to_string())?;
+    drop(doc);
+    invalidate_doc_cache();
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
@@ -354,9 +358,7 @@ fn delete_page(work_path: String, page_index: u16) -> Result<u16, String> {
         let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
         page.delete().map_err(|e| e.to_string())?;
         let count = doc.pages().len();
-        save_over(&doc, &work_path)?;
-        drop(doc);
-        invalidate_doc_cache();
+        save_and_close(doc, &work_path)?;
         Ok(count)
     })
 }
@@ -378,9 +380,7 @@ fn rotate_page(work_path: String, page_index: u16) -> Result<(), String> {
         };
         page.set_rotation(next);
         drop(page);
-        save_over(&doc, &work_path)?;
-        drop(doc);
-        invalidate_doc_cache();
+        save_and_close(doc, &work_path)?;
         Ok(())
     })
 }
@@ -414,10 +414,8 @@ fn move_page(work_path: String, from_index: u16, to_index: u16) -> Result<(), St
             .pages_mut()
             .copy_pages_from_document(&doc, &range, 0)
             .map_err(|e| e.to_string())?;
-        save_over(&new_doc, &work_path)?;
-        drop(new_doc);
         drop(doc);
-        invalidate_doc_cache();
+        save_and_close(new_doc, &work_path)?;
         Ok(())
     })
 }
@@ -435,10 +433,8 @@ fn merge_pdf(work_path: String, other_path: String) -> Result<u16, String> {
             .map_err(|e| e.to_string())?;
         doc.pages_mut().append(&other).map_err(|e| e.to_string())?;
         let count = doc.pages().len();
-        save_over(&doc, &work_path)?;
         drop(other);
-        drop(doc);
-        invalidate_doc_cache();
+        save_and_close(doc, &work_path)?;
         Ok(count)
     })
 }
@@ -536,9 +532,7 @@ fn add_highlight(work_path: String, page_index: u16, rects: Vec<Rect>) -> Result
         }
         drop(annot);
         drop(page);
-        save_over(&doc, &work_path)?;
-        drop(doc);
-        invalidate_doc_cache();
+        save_and_close(doc, &work_path)?;
         Ok(())
     })
 }
@@ -595,9 +589,7 @@ fn add_stroke(work_path: String, page_index: u16, points: Vec<[f32; 2]>) -> Resu
             .map_err(|e| e.to_string())?;
         drop(annot);
         drop(page);
-        save_over(&doc, &work_path)?;
-        drop(doc);
-        invalidate_doc_cache();
+        save_and_close(doc, &work_path)?;
         Ok(())
     })
 }
@@ -639,9 +631,7 @@ fn add_note(
             .map_err(|e| e.to_string())?;
         drop(annot);
         drop(page);
-        save_over(&doc, &work_path)?;
-        drop(doc);
-        invalidate_doc_cache();
+        save_and_close(doc, &work_path)?;
         Ok(())
     })
 }
@@ -722,9 +712,7 @@ fn remove_annotation(work_path: String, page_index: u16, annot_index: u16) -> Re
             .delete_annotation(annot)
             .map_err(|e| e.to_string())?;
         drop(page);
-        save_over(&doc, &work_path)?;
-        drop(doc);
-        invalidate_doc_cache();
+        save_and_close(doc, &work_path)?;
         Ok(())
     })
 }
@@ -830,9 +818,7 @@ fn set_form_text(
             .map_err(|e| e.to_string())?;
         drop(annot);
         drop(page);
-        save_over(&doc, &work_path)?;
-        drop(doc);
-        invalidate_doc_cache();
+        save_and_close(doc, &work_path)?;
         Ok(())
     })
 }
@@ -870,9 +856,7 @@ fn set_form_checked(
         }
         drop(annot);
         drop(page);
-        save_over(&doc, &work_path)?;
-        drop(doc);
-        invalidate_doc_cache();
+        save_and_close(doc, &work_path)?;
         Ok(())
     })
 }
@@ -889,9 +873,29 @@ struct TextBlock {
     font_family: String,
 }
 
+/// Directorios de fuentes TTF del sistema, por plataforma.
+fn directorios_de_fuentes() -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        dirs.push("/System/Library/Fonts/Supplemental".into());
+        dirs.push("/Library/Fonts".into());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into());
+        dirs.push(std::path::Path::new(&windir).join("Fonts"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        dirs.push("/usr/share/fonts/truetype".into());
+    }
+    dirs
+}
+
 /// Resuelve un nombre de familia a un token de fuente utilizable: estándar
-/// aproximada por subcadenas, TTF real del sistema si existe en
-/// /System/Library/Fonts/Supplemental, o Helvetica como último recurso.
+/// aproximada por subcadenas, TTF real del sistema si existe (directorios
+/// por plataforma), o Helvetica como último recurso.
 /// (No se puede reutilizar una fuente embebida del PDF para objetos nuevos:
 /// el handle de FPDFTextObj_GetFont queda ligado a su página.)
 fn fuente_por_nombre(doc: &mut PdfDocument<'static>, nombre: &str) -> PdfFontToken {
@@ -932,11 +936,12 @@ fn fuente_por_nombre(doc: &mut PdfDocument<'static>, nombre: &str) -> PdfFontTok
             format!("{base}.ttf"),
             format!("{}.ttf", base.replace(' ', "")),
         ] {
-            let path =
-                std::path::Path::new("/System/Library/Fonts/Supplemental").join(&nombre_fichero);
-            if path.exists() {
-                if let Ok(token) = doc.fonts_mut().load_true_type_from_file(&path, false) {
-                    return token;
+            for dir in directorios_de_fuentes() {
+                let path = dir.join(&nombre_fichero);
+                if path.exists() {
+                    if let Ok(token) = doc.fonts_mut().load_true_type_from_file(&path, false) {
+                        return token;
+                    }
                 }
             }
         }
@@ -1082,9 +1087,7 @@ fn edit_text_block(
             page.regenerate_content().map_err(|e| e.to_string())?;
             drop(page);
         }
-        save_over(&doc, &work_path)?;
-        drop(doc);
-        invalidate_doc_cache();
+        save_and_close(doc, &work_path)?;
         Ok(())
     })
 }
@@ -1138,9 +1141,7 @@ fn add_text_block(
         }
         page.regenerate_content().map_err(|e| e.to_string())?;
         drop(page);
-        save_over(&doc, &work_path)?;
-        drop(doc);
-        invalidate_doc_cache();
+        save_and_close(doc, &work_path)?;
         Ok(())
     })
 }
@@ -1226,9 +1227,7 @@ fn add_image(
             .map_err(|e| e.to_string())?;
         page.regenerate_content().map_err(|e| e.to_string())?;
         drop(page);
-        save_over(&doc, &work_path)?;
-        drop(doc);
-        invalidate_doc_cache();
+        save_and_close(doc, &work_path)?;
         Ok(())
     })
 }
@@ -1276,9 +1275,7 @@ fn transform_image(
         drop(obj);
         page.regenerate_content().map_err(|e| e.to_string())?;
         drop(page);
-        save_over(&doc, &work_path)?;
-        drop(doc);
-        invalidate_doc_cache();
+        save_and_close(doc, &work_path)?;
         Ok(())
     })
 }
@@ -1331,9 +1328,7 @@ fn replace_image(
             .map_err(|e| e.to_string())?;
         page.regenerate_content().map_err(|e| e.to_string())?;
         drop(page);
-        save_over(&doc, &work_path)?;
-        drop(doc);
-        invalidate_doc_cache();
+        save_and_close(doc, &work_path)?;
         Ok(())
     })
 }
@@ -1364,9 +1359,7 @@ fn delete_image(work_path: String, page_index: u16, object_index: u32) -> Result
         std::mem::forget(removed);
         page.regenerate_content().map_err(|e| e.to_string())?;
         drop(page);
-        save_over(&doc, &work_path)?;
-        drop(doc);
-        invalidate_doc_cache();
+        save_and_close(doc, &work_path)?;
         Ok(())
     })
 }
@@ -1389,9 +1382,7 @@ fn delete_text_block(work_path: String, page_index: u16, object_index: u32) -> R
         std::mem::forget(removed);
         page.regenerate_content().map_err(|e| e.to_string())?;
         drop(page);
-        save_over(&doc, &work_path)?;
-        drop(doc);
-        invalidate_doc_cache();
+        save_and_close(doc, &work_path)?;
         Ok(())
     })
 }

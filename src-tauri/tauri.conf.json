@@ -25,7 +25,7 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "lib/libpdfium.dylib": "lib/libpdfium.dylib"
+      "lib": "lib"
     },
     "icon": [
       "icons/32x32.png",

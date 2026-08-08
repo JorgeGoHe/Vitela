@@ -1143,7 +1143,8 @@ function App() {
       ? selectionRects[selectionRects.length - 1]
       : null;
 
-  const fileName = originalPath?.split("/").pop() ?? null;
+  // separador de ruta multiplataforma (macOS "/" y Windows "\")
+  const fileName = originalPath?.split(/[\\/]/).pop() ?? null;
 
   const MODES: { id: Mode; icon: string; label: string; hint: string }[] = [
     { id: "select", icon: "select", label: "Seleccionar", hint: "Seleccionar texto" },
@@ -1334,7 +1335,7 @@ function App() {
         <div className="modal-backdrop" onClick={() => setP12Draft(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h3>Contraseña del .p12</h3>
-            <p className="modal-file">{p12Draft.path.split("/").pop()}</p>
+            <p className="modal-file">{p12Draft.path.split(/[\\/]/).pop()}</p>
             <input
               type="password"
               autoFocus

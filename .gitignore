@@ -17,6 +17,8 @@ src-tauri/target
 
 # binario de PDFium (descargar de bblanchon/pdfium-binaries, ver CLAUDE.md)
 src-tauri/lib/*.dylib
+src-tauri/lib/*.dll
+src-tauri/lib/*.so
 
 # Editor directories and files
 .vscode/*
