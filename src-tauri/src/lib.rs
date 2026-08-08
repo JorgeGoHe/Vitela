@@ -1029,6 +1029,55 @@ fn edit_text_block(
     })
 }
 
+/// Añade un bloque de texto nuevo en el punto dado (coords de UI, el punto
+/// es la esquina superior izquierda de la primera línea). Cada línea del
+/// texto se inserta como un objeto propio, con Helvetica.
+#[tauri::command]
+fn add_text_block(
+    work_path: String,
+    page_index: u16,
+    x: f32,
+    y: f32,
+    text: String,
+    font_size: f32,
+) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Err("El texto está vacío".into());
+    }
+    let font_size = font_size.clamp(6.0, 96.0);
+    on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let mut doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| e.to_string())?;
+        let font = doc.fonts_mut().helvetica();
+        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+        let page_h = page.height().value;
+        let line_h = font_size * 1.2;
+        for (i, linea) in text.lines().enumerate() {
+            if linea.trim().is_empty() {
+                continue;
+            }
+            let mut obj = PdfPageTextObject::new(&doc, linea, font, PdfPoints::new(font_size))
+                .map_err(|e| e.to_string())?;
+            // el clic marca la parte superior de la primera línea; el objeto
+            // se coloca por su baseline aproximada
+            let baseline = page_h - y - font_size - line_h * i as f32;
+            obj.translate(PdfPoints::new(x), PdfPoints::new(baseline))
+                .map_err(|e| e.to_string())?;
+            page.objects_mut()
+                .add_text_object(obj)
+                .map_err(|e| e.to_string())?;
+        }
+        page.regenerate_content().map_err(|e| e.to_string())?;
+        drop(page);
+        save_over(&doc, &work_path)?;
+        drop(doc);
+        invalidate_doc_cache();
+        Ok(())
+    })
+}
+
 /// Borra un bloque de texto del content stream.
 #[tauri::command]
 fn delete_text_block(work_path: String, page_index: u16, object_index: u32) -> Result<(), String> {
@@ -1766,6 +1815,47 @@ mod tests {
     }
 
     #[test]
+    fn anadir_texto_nuevo() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_texto_nuevo.pdf");
+        crea_pdf(&["Contenido previo"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+
+        add_text_block(
+            work.clone(),
+            0,
+            100.0,
+            300.0,
+            "Añadido a mano\nSegunda línea".into(),
+            12.0,
+        )
+        .expect("añadir texto");
+
+        let t = textos_de(&tmp).join(" ");
+        assert!(t.contains("Contenido previo"), "texto: {t:?}");
+        assert!(t.contains("Añadido a mano"), "texto: {t:?}");
+        assert!(t.contains("Segunda línea"), "texto: {t:?}");
+
+        // dos bloques nuevos + el previo, y el nuevo cerca del punto pedido
+        let blocks = get_text_blocks(work.clone(), 0).expect("listar");
+        assert_eq!(blocks.len(), 3, "bloques: {}", blocks.len());
+        let nuevo = blocks
+            .iter()
+            .find(|b| b.text.contains("Añadido"))
+            .expect("bloque nuevo");
+        assert!(
+            (nuevo.x - 100.0).abs() < 3.0 && (nuevo.y - 300.0).abs() < 8.0,
+            "posición: ({}, {})",
+            nuevo.x,
+            nuevo.y
+        );
+
+        // el texto vacío debe rechazarse
+        assert!(add_text_block(work.clone(), 0, 0.0, 0.0, "  ".into(), 12.0).is_err());
+
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
     fn edicion_multilinea() {
         let tmp = std::env::temp_dir().join("editor_pdf_test_multilinea.pdf");
         crea_pdf(&["Una línea"], &tmp);
@@ -1985,6 +2075,7 @@ pub fn run() {
             set_form_checked,
             get_text_blocks,
             edit_text_block,
+            add_text_block,
             delete_text_block,
             sign_pdf,
             sign_pdf_p12

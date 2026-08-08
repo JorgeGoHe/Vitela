@@ -50,6 +50,80 @@ const KIND_LABELS: Record<string, string> = {
   Ink: "Dibujo",
 };
 
+const ICONS: Record<string, string[]> = {
+  open: [
+    "M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z",
+  ],
+  save: [
+    "M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z",
+    "M17 21v-8H7v8",
+    "M7 3v5h8",
+  ],
+  chevLeft: ["m15 18-6-6 6-6"],
+  chevRight: ["m9 18 6-6-6-6"],
+  minus: ["M5 12h14"],
+  plus: ["M12 5v14", "M5 12h14"],
+  search: ["M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16Z", "m21 21-4.35-4.35"],
+  select: ["m3 3 7.07 16.97 2.51-7.39 7.39-2.51L3 3Z"],
+  pen: ["M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3Z"],
+  note: [
+    "M15.5 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z",
+    "M15 3v6h6",
+  ],
+  textedit: ["M4 7V5h16v2", "M9 20h6", "M12 5v15"],
+  undo: ["M3 7v6h6", "M21 17a9 9 0 0 0-15-6.7L3 13"],
+  highlight: [
+    "m9 11-6 6v3h9l3-3",
+    "m22 12-4.6 4.6a2 2 0 0 1-2.83 0l-5.17-5.17a2 2 0 0 1 0-2.83L14 4",
+  ],
+  trash: [
+    "M3 6h18",
+    "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6",
+    "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2",
+  ],
+  rotate: ["M21 3v5h-5", "M21 8a9 9 0 1 0-2.34 8.66"],
+  up: ["m18 15-6-6-6 6"],
+  down: ["m6 9 6 6 6-6"],
+  copy: [
+    "M20 8H10a2 2 0 0 0-2 2v10c0 1.1.9 2 2 2h10a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2Z",
+    "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2",
+  ],
+  close: ["M18 6 6 18", "m6 6 12 12"],
+  sign: ["M3 17c3-6 6-6 8 0s5 6 8 0", "M3 21h18"],
+  merge: ["M14 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V8l-6-6Z", "M12 11v6", "M9 14h6"],
+  extract: [
+    "M14 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V8l-6-6Z",
+    "M14 2v6h6",
+    "M12 18v-6",
+    "m9 15 3 3 3-3",
+  ],
+  doc: [
+    "M14 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V8l-6-6Z",
+    "M14 2v6h6",
+  ],
+  sticky: ["M12 3v10", "M12 13l-3-3", "M12 13l3-3"],
+};
+
+function Icon({ name, size = 16 }: { name: string; size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      {ICONS[name]?.map((d, i) => (
+        <path key={i} d={d} />
+      ))}
+    </svg>
+  );
+}
+
 /** Une cajas de caracteres consecutivos en rectángulos por línea. */
 function mergeLineRects(boxes: CharBox[]): Rect[] {
   const out: Rect[] = [];
@@ -110,9 +184,11 @@ function App() {
   const [thumbs, setThumbs] = useState<(string | null)[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const [pageText, setPageText] = useState<PageText | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
+  const [dragging, setDragging] = useState(false);
   const anchorRef = useRef<number | null>(null);
   const pageCacheRef = useRef<Map<string, string>>(new Map());
 
@@ -136,6 +212,12 @@ function App() {
   const [blockDraft, setBlockDraft] = useState<{
     block: TextBlock;
     text: string;
+  } | null>(null);
+  const [newTextDraft, setNewTextDraft] = useState<{
+    x: number;
+    y: number;
+    text: string;
+    size: number;
   } | null>(null);
   const [p12Draft, setP12Draft] = useState<{
     path: string;
@@ -177,16 +259,6 @@ function App() {
     }
   }
 
-  /** Guarda un render en el caché de páginas, con tope de entradas. */
-  function cachePut(key: string, src: string) {
-    const cache = pageCacheRef.current;
-    cache.set(key, src);
-    if (cache.size > 30) {
-      const oldest = cache.keys().next().value;
-      if (oldest) cache.delete(oldest);
-    }
-  }
-
   // Anotaciones de la página actual (para iconos de nota y popovers)
   useEffect(() => {
     if (!workPath) return;
@@ -223,6 +295,7 @@ function App() {
 
   // Bloques de texto (solo en modo edición)
   useEffect(() => {
+    setNewTextDraft(null);
     if (!workPath || mode !== "edit") {
       setTextBlocks([]);
       setBlockDraft(null);
@@ -240,6 +313,16 @@ function App() {
       cancelled = true;
     };
   }, [workPath, pageIndex, docVersion, mode]);
+
+  /** Guarda un render en el caché de páginas, con tope de entradas. */
+  function cachePut(key: string, src: string) {
+    const cache = pageCacheRef.current;
+    cache.set(key, src);
+    if (cache.size > 30) {
+      const oldest = cache.keys().next().value;
+      if (oldest) cache.delete(oldest);
+    }
+  }
 
   // Render de la página actual (instantáneo si ya está en caché)
   useEffect(() => {
@@ -334,34 +417,27 @@ function App() {
     };
   }, [workPath, pageCount, docVersion]);
 
+  function copySelection() {
+    if (!selection || !pageText) return;
+    const text = pageText.chars
+      .slice(selection.start, selection.end + 1)
+      .map((c) => c.ch)
+      .join("");
+    copyToClipboard(text);
+  }
+
   // Copiar selección con ⌘C / Ctrl+C
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key === "c" && selection && pageText) {
-        const text = pageText.chars
-          .slice(selection.start, selection.end + 1)
-          .map((c) => c.ch)
-          .join("");
-        copyToClipboard(text);
+        copySelection();
         e.preventDefault();
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selection, pageText]);
-
-  /** Tras mutar el documento: refrescar render, miniaturas y limpiar búsqueda. */
-  function afterMutation(newCount: number, nextPage?: number) {
-    setPageCount(newCount);
-    setModified(true);
-    setMatches([]);
-    setSearched(false);
-    setLastQuery("");
-    setPageIndex((p) =>
-      Math.max(0, Math.min(nextPage ?? p, newCount - 1)),
-    );
-    setDocVersion((v) => v + 1);
-  }
 
   /** Refresca solo la miniatura de una página (tras anotar). */
   async function refreshThumb(page: number) {
@@ -476,6 +552,46 @@ function App() {
     }
   }
 
+  /** Clic simple en modo selección: abre el popover de la anotación pulsada. */
+  function onClickLayer(e: React.MouseEvent<HTMLDivElement>) {
+    if (mode !== "select" || selection) return;
+    const { x, y } = pagePoint(e);
+    const hit = annots.find((a) => {
+      if (a.kind === "Highlight") {
+        return a.rects.some(
+          (r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h,
+        );
+      }
+      if (a.kind === "Ink") {
+        return x >= a.x && x <= a.x + a.w && y >= a.y && y <= a.y + a.h;
+      }
+      return false;
+    });
+    if (hit) setNotePopover(hit);
+  }
+
+  async function submitNewText() {
+    if (!workPath || !newTextDraft) return;
+    if (!newTextDraft.text.trim()) {
+      setNewTextDraft(null);
+      return;
+    }
+    try {
+      await invoke("add_text_block", {
+        workPath,
+        pageIndex,
+        x: newTextDraft.x,
+        y: newTextDraft.y,
+        text: newTextDraft.text,
+        fontSize: newTextDraft.size,
+      });
+      setNewTextDraft(null);
+      afterMutation(pageCount);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function submitBlockDraft() {
     if (!workPath || !blockDraft) return;
     try {
@@ -546,22 +662,15 @@ function App() {
     }
   }
 
-  /** Clic simple en modo selección: abre el popover de la anotación pulsada. */
-  function onClickLayer(e: React.MouseEvent<HTMLDivElement>) {
-    if (mode !== "select" || selection) return;
-    const { x, y } = pagePoint(e);
-    const hit = annots.find((a) => {
-      if (a.kind === "Highlight") {
-        return a.rects.some(
-          (r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h,
-        );
-      }
-      if (a.kind === "Ink") {
-        return x >= a.x && x <= a.x + a.w && y >= a.y && y <= a.y + a.h;
-      }
-      return false;
-    });
-    if (hit) setNotePopover(hit);
+  /** Tras mutar el documento: refrescar render, miniaturas y limpiar búsqueda. */
+  function afterMutation(newCount: number, nextPage?: number) {
+    setPageCount(newCount);
+    setModified(true);
+    setMatches([]);
+    setSearched(false);
+    setLastQuery("");
+    setPageIndex((p) => Math.max(0, Math.min(nextPage ?? p, newCount - 1)));
+    setDocVersion((v) => v + 1);
   }
 
   async function rotatePage(i: number) {
@@ -645,6 +754,23 @@ function App() {
     }
   }
 
+  async function saveFileAs() {
+    if (!workPath) return;
+    const dest = await save({
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+      defaultPath: originalPath ?? "documento.pdf",
+      title: "Guardar como",
+    });
+    if (!dest) return;
+    try {
+      await invoke("save_pdf", { workPath, destPath: dest });
+      setOriginalPath(dest);
+      setModified(false);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function pickSignedDest(): Promise<string | null> {
     return await save({
       filters: [{ name: "PDF", extensions: ["pdf"] }],
@@ -712,23 +838,6 @@ function App() {
     }
   }
 
-  async function saveFileAs() {
-    if (!workPath) return;
-    const dest = await save({
-      filters: [{ name: "PDF", extensions: ["pdf"] }],
-      defaultPath: originalPath ?? "documento.pdf",
-      title: "Guardar como",
-    });
-    if (!dest) return;
-    try {
-      await invoke("save_pdf", { workPath, destPath: dest });
-      setOriginalPath(dest);
-      setModified(false);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
   async function runSearch() {
     if (!workPath) return;
     if (!query.trim()) {
@@ -789,9 +898,16 @@ function App() {
       setNoteDraft({ x, y, text: "" });
       return;
     }
-    if (mode === "edit") return;
+    if (mode === "edit") {
+      // clic en zona libre: añadir texto nuevo ahí (los bloques existentes
+      // capturan su propio clic con stopPropagation)
+      setBlockDraft(null);
+      setNewTextDraft({ x, y, text: "", size: 12 });
+      return;
+    }
     if (!pageText) return;
     anchorRef.current = charIndexAt(pageText, x, y);
+    setDragging(true);
     setSelection(null);
     setNotePopover(null);
   }
@@ -814,6 +930,7 @@ function App() {
 
   function onMouseUp() {
     anchorRef.current = null;
+    setDragging(false);
     if (mode === "draw" && strokePts.length > 0) finishStroke();
   }
 
@@ -821,152 +938,191 @@ function App() {
     selection && pageText
       ? mergeLineRects(pageText.chars.slice(selection.start, selection.end + 1))
       : [];
+  const lastSelRect =
+    selectionRects.length > 0
+      ? selectionRects[selectionRects.length - 1]
+      : null;
 
   const fileName = originalPath?.split("/").pop() ?? null;
+
+  const MODES: { id: Mode; icon: string; label: string; hint: string }[] = [
+    { id: "select", icon: "select", label: "Seleccionar", hint: "Seleccionar texto" },
+    { id: "draw", icon: "pen", label: "Dibujar", hint: "Dibujar a mano alzada" },
+    { id: "note", icon: "note", label: "Nota", hint: "Añadir una nota (clic en la página)" },
+    {
+      id: "edit",
+      icon: "textedit",
+      label: "Editar",
+      hint: "Editar un bloque de texto o añadir texto nuevo (clic en zona libre)",
+    },
+  ];
+
+  function selectMode(m: Mode) {
+    setMode((cur) => (cur === m ? "select" : m));
+    setSelection(null);
+    setStrokePts([]);
+    setNoteDraft(null);
+  }
 
   return (
     <div className="app">
       <header className="toolbar">
-        <button onClick={openFile}>Abrir PDF…</button>
-        {fileName && (
-          <span className="filename">
-            {fileName}
-            {modified ? " •" : ""}
-          </span>
-        )}
+        <div className="toolbar-left">
+          <button className="btn" onClick={openFile}>
+            <Icon name="open" />
+            Abrir
+          </button>
+          {fileName && (
+            <span className="filename" title={originalPath ?? undefined}>
+              {fileName}
+              {modified ? " •" : ""}
+            </span>
+          )}
+          {loading && <span className="status">Renderizando…</span>}
+        </div>
+
         {pageCount > 0 && (
-          <>
-            <div className="group">
+          <div className="segmented">
+            {MODES.map((m) => (
               <button
-                disabled={pageIndex === 0}
-                onClick={() => setPageIndex((i) => i - 1)}
+                key={m.id}
+                className={`btn${mode === m.id ? " on" : ""}`}
+                title={m.hint}
+                onClick={() => selectMode(m.id)}
               >
-                ◀
+                <Icon name={m.icon} size={14} />
+                {m.label}
               </button>
-              <span>
-                {pageIndex + 1} / {pageCount}
-              </span>
+            ))}
+          </div>
+        )}
+
+        <div className="toolbar-right">
+          {pageCount > 0 && (
+            <>
+              <div className="search">
+                <Icon name="search" size={13} />
+                <input
+                  type="text"
+                  placeholder="Buscar"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter") return;
+                    if (searched && matches.length > 0 && query === lastQuery) {
+                      gotoMatch(e.shiftKey ? -1 : 1);
+                    } else {
+                      runSearch();
+                    }
+                  }}
+                />
+                {searched && (
+                  <>
+                    <span className="match-count">
+                      {matches.length > 0
+                        ? `${matchIdx + 1}/${matches.length}`
+                        : "0"}
+                    </span>
+                    {matches.length > 0 && (
+                      <>
+                        <button className="btn btn-icon" onClick={() => gotoMatch(-1)}>
+                          <Icon name="up" size={13} />
+                        </button>
+                        <button className="btn btn-icon" onClick={() => gotoMatch(1)}>
+                          <Icon name="down" size={13} />
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
               <button
-                disabled={pageIndex >= pageCount - 1}
-                onClick={() => setPageIndex((i) => i + 1)}
-              >
-                ▶
-              </button>
-            </div>
-            <div className="group">
-              <button onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))}>
-                −
-              </button>
-              <span>{Math.round(zoom * 100)}%</span>
-              <button onClick={() => setZoom((z) => Math.min(4, z + 0.25))}>
-                +
-              </button>
-            </div>
-            <div className="group search">
-              <input
-                type="text"
-                placeholder="Buscar…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter") return;
-                  if (searched && matches.length > 0 && query === lastQuery) {
-                    gotoMatch(e.shiftKey ? -1 : 1);
-                  } else {
-                    runSearch();
-                  }
-                }}
-              />
-              {searched && (
-                <>
-                  <span className="match-count">
-                    {matches.length > 0
-                      ? `${matchIdx + 1} / ${matches.length}`
-                      : "Sin resultados"}
-                  </span>
-                  {matches.length > 0 && (
-                    <>
-                      <button onClick={() => gotoMatch(-1)}>↑</button>
-                      <button onClick={() => gotoMatch(1)}>↓</button>
-                    </>
-                  )}
-                </>
-              )}
-            </div>
-            <div className="group">
-              {selection && (
-                <button className="accent" onClick={highlightSelection}>
-                  Resaltar
-                </button>
-              )}
-              <button
-                className={mode === "draw" ? "active" : ""}
-                title="Dibujar a mano alzada"
-                onClick={() => {
-                  setMode((m) => (m === "draw" ? "select" : "draw"));
-                  setSelection(null);
-                  setNoteDraft(null);
-                }}
-              >
-                ✏️ Dibujar
-              </button>
-              <button
-                className={mode === "note" ? "active" : ""}
-                title="Añadir una nota (clic en la página)"
-                onClick={() => {
-                  setMode((m) => (m === "note" ? "select" : "note"));
-                  setSelection(null);
-                  setStrokePts([]);
-                }}
-              >
-                📝 Nota
-              </button>
-              <button
-                className={mode === "edit" ? "active" : ""}
-                title="Editar el texto del documento (clic en un bloque)"
-                onClick={() => {
-                  setMode((m) => (m === "edit" ? "select" : "edit"));
-                  setSelection(null);
-                  setStrokePts([]);
-                  setNoteDraft(null);
-                }}
-              >
-                Aa Editar
-              </button>
-              <button
+                className="btn btn-icon"
                 title="Deshacer la última anotación"
                 onClick={undoAnnotation}
               >
-                ↩ Deshacer
-              </button>
-            </div>
-            <div className="group">
-              <button onClick={addPdf} title="Añadir las páginas de otro PDF al final">
-                Añadir PDF…
+                <Icon name="undo" />
               </button>
               <button
-                onClick={extractCurrentPage}
-                title="Guardar la página actual como PDF nuevo"
+                className="btn btn-primary"
+                disabled={!modified}
+                onClick={saveFile}
               >
-                Extraer página…
-              </button>
-            </div>
-            <div className="group">
-              <button disabled={!modified} onClick={saveFile}>
+                <Icon name="save" size={14} />
                 Guardar
               </button>
-              <button onClick={saveFileAs}>Guardar como…</button>
-              <button
-                onClick={signPdf}
-                title="Firmar digitalmente con certificado y clave PEM"
-              >
-                🔏 Firmar…
-              </button>
-            </div>
-          </>
-        )}
-        {loading && <span className="status">Renderizando…</span>}
+              <div className="menu-wrap">
+                <button
+                  className="btn btn-icon"
+                  title="Más acciones"
+                  onClick={() => setMenuOpen((o) => !o)}
+                >
+                  ⋯
+                </button>
+                {menuOpen && (
+                  <>
+                    <div
+                      className="menu-backdrop"
+                      onClick={() => setMenuOpen(false)}
+                    />
+                    <div className="menu">
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          saveFileAs();
+                        }}
+                      >
+                        <Icon name="save" size={14} />
+                        Guardar como…
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          signPdf();
+                        }}
+                      >
+                        <Icon name="sign" size={14} />
+                        Firmar…
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          addPdf();
+                        }}
+                      >
+                        <Icon name="merge" size={14} />
+                        Añadir PDF…
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          extractCurrentPage();
+                        }}
+                      >
+                        <Icon name="extract" size={14} />
+                        Extraer página…
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </>
+          )}
+        </div>
       </header>
+
+      {error && (
+        <div className="banner-error">
+          <p title={error}>{error}</p>
+          <button className="btn btn-icon" onClick={() => setError(null)}>
+            <Icon name="close" size={13} />
+          </button>
+        </div>
+      )}
 
       {p12Draft && (
         <div className="modal-backdrop" onClick={() => setP12Draft(null)}>
@@ -986,9 +1142,11 @@ function App() {
                 if (e.key === "Escape") setP12Draft(null);
               }}
             />
-            <div className="note-popover-actions">
-              <button onClick={() => setP12Draft(null)}>Cancelar</button>
-              <button className="accent" onClick={signWithP12}>
+            <div className="card-actions">
+              <button className="btn" onClick={() => setP12Draft(null)}>
+                Cancelar
+              </button>
+              <button className="btn btn-primary" onClick={signWithP12}>
                 Firmar
               </button>
             </div>
@@ -1020,7 +1178,7 @@ function App() {
                       movePage(i, i - 1);
                     }}
                   >
-                    ↑
+                    <Icon name="up" size={13} />
                   </button>
                   <button
                     title="Bajar"
@@ -1030,7 +1188,7 @@ function App() {
                       movePage(i, i + 1);
                     }}
                   >
-                    ↓
+                    <Icon name="down" size={13} />
                   </button>
                   <button
                     title="Rotar 90°"
@@ -1039,7 +1197,7 @@ function App() {
                       rotatePage(i);
                     }}
                   >
-                    ⟳
+                    <Icon name="rotate" size={13} />
                   </button>
                   <button
                     title="Eliminar página"
@@ -1049,7 +1207,7 @@ function App() {
                       deletePage(i);
                     }}
                   >
-                    ✕
+                    <Icon name="trash" size={13} />
                   </button>
                 </div>
               </div>
@@ -1057,233 +1215,40 @@ function App() {
           </aside>
         )}
 
-        <main className="viewer">
-          {error && <p className="error">{error}</p>}
-          {!workPath && !error && (
-            <p className="placeholder">Abre un PDF para empezar</p>
-          )}
-          {imgSrc && (
-            <div className="page-wrap" style={{ width: displayWidth }}>
-              <img
-                className="page"
-                src={imgSrc}
-                draggable={false}
-                alt={`Página ${pageIndex + 1}`}
-              />
-              <div
-                className={`textlayer mode-${mode}`}
-                onMouseDown={onMouseDown}
-                onMouseMove={onMouseMove}
-                onMouseUp={onMouseUp}
-                onClick={onClickLayer}
-              >
-                {annots
-                  .filter((a) => a.kind === "Highlight")
-                  .flatMap((a) =>
-                    a.rects.map((r, j) => (
-                      <div
-                        key={`h${a.index}-${j}`}
-                        className="annot-highlight"
-                        style={{
-                          left: r.x * scale,
-                          top: r.y * scale,
-                          width: r.w * scale,
-                          height: r.h * scale,
-                        }}
-                      />
-                    )),
-                  )}
-                {strokePts.length > 1 && (
-                  <svg className="stroke-preview">
-                    <polyline
-                      points={strokePts
-                        .map((p) => `${p[0] * scale},${p[1] * scale}`)
-                        .join(" ")}
-                    />
-                  </svg>
-                )}
-                {mode === "edit" &&
-                  textBlocks.map((b) => (
-                    <div
-                      key={`b${b.object_index}`}
-                      className="text-block"
-                      style={{
-                        left: b.x * scale,
-                        top: b.y * scale,
-                        width: b.w * scale,
-                        height: b.h * scale,
-                      }}
-                      onMouseDown={(e) => e.stopPropagation()}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setBlockDraft({ block: b, text: b.text });
-                      }}
-                    />
-                  ))}
-                {blockDraft && (
-                  <div
-                    className="note-editor block-editor"
-                    style={{
-                      left: blockDraft.block.x * scale,
-                      top:
-                        (blockDraft.block.y + blockDraft.block.h) * scale + 4,
-                      width: Math.max(240, blockDraft.block.w * scale),
-                    }}
-                    onMouseDown={(e) => e.stopPropagation()}
-                  >
-                    <textarea
-                      autoFocus
-                      value={blockDraft.text}
-                      onChange={(e) =>
-                        setBlockDraft({ ...blockDraft, text: e.target.value })
-                      }
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault();
-                          submitBlockDraft();
-                        }
-                        if (e.key === "Escape") setBlockDraft(null);
-                      }}
-                    />
-                    <div className="note-popover-actions">
-                      <button onClick={deleteBlock}>Eliminar bloque</button>
-                      <button onClick={submitBlockDraft}>Guardar</button>
-                      <button onClick={() => setBlockDraft(null)}>
-                        Cancelar
-                      </button>
-                    </div>
-                  </div>
-                )}
-                {mode === "select" &&
-                  formFields.map((f) => (
-                    <div
-                      key={`f${f.annot_index}`}
-                      className={`form-field${
-                        f.kind === "Checkbox" || f.kind === "RadioButton"
-                          ? " form-check"
-                          : ""
-                      }`}
-                      title={f.name}
-                      style={{
-                        left: f.x * scale,
-                        top: f.y * scale,
-                        width: f.w * scale,
-                        height: f.h * scale,
-                      }}
-                      onMouseDown={(e) => e.stopPropagation()}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onFieldClick(f);
-                      }}
-                    />
-                  ))}
-                {fieldDraft && (
-                  <div
-                    className="note-editor"
-                    style={{
-                      left: fieldDraft.field.x * scale,
-                      top: (fieldDraft.field.y + fieldDraft.field.h) * scale + 4,
-                    }}
-                    onMouseDown={(e) => e.stopPropagation()}
-                  >
-                    <textarea
-                      autoFocus
-                      placeholder={`${fieldDraft.field.name}…`}
-                      value={fieldDraft.text}
-                      onChange={(e) =>
-                        setFieldDraft({ ...fieldDraft, text: e.target.value })
-                      }
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault();
-                          submitFieldDraft();
-                        }
-                        if (e.key === "Escape") setFieldDraft(null);
-                      }}
-                    />
-                  </div>
-                )}
-                {annots
-                  .filter((a) => a.kind === "Text")
-                  .map((a) => (
-                    <button
-                      key={`n${a.index}`}
-                      className="note-icon"
-                      style={{
-                        left: a.x * scale,
-                        top: a.y * scale,
-                        width: Math.max(18, a.w * scale),
-                        height: Math.max(18, a.h * scale),
-                      }}
-                      title={a.contents}
-                      onMouseDown={(e) => e.stopPropagation()}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setNotePopover((p) =>
-                          p?.index === a.index ? null : a,
-                        );
-                      }}
-                    >
-                      📝
-                    </button>
-                  ))}
-                {notePopover && (
-                  <div
-                    className="note-popover"
-                    style={{
-                      left: notePopover.x * scale,
-                      top: (notePopover.y + notePopover.h) * scale + 6,
-                    }}
-                    onMouseDown={(e) => e.stopPropagation()}
-                  >
-                    <p>
-                      {notePopover.contents ||
-                        KIND_LABELS[notePopover.kind] ||
-                        notePopover.kind}
-                    </p>
-                    <div className="note-popover-actions">
-                      <button onClick={() => deleteAnnotation(notePopover)}>
-                        Eliminar
-                      </button>
-                      <button onClick={() => setNotePopover(null)}>
-                        Cerrar
-                      </button>
-                    </div>
-                  </div>
-                )}
-                {noteDraft && (
-                  <div
-                    className="note-editor"
-                    style={{
-                      left: noteDraft.x * scale,
-                      top: noteDraft.y * scale,
-                    }}
-                    onMouseDown={(e) => e.stopPropagation()}
-                  >
-                    <textarea
-                      autoFocus
-                      placeholder="Escribe la nota y pulsa Enter…"
-                      value={noteDraft.text}
-                      onChange={(e) =>
-                        setNoteDraft({ ...noteDraft, text: e.target.value })
-                      }
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault();
-                          submitNote();
-                        }
-                        if (e.key === "Escape") setNoteDraft(null);
-                      }}
-                    />
-                  </div>
-                )}
-                {matches.map((m, i) =>
-                  m.page_index === pageIndex
-                    ? m.rects.map((r, j) => (
+        <div className="viewer-wrap">
+          <main className="viewer">
+            {!workPath && (
+              <div className="placeholder">
+                <Icon name="doc" size={56} />
+                <p>Abre un PDF para empezar</p>
+                <button className="btn btn-primary" onClick={openFile}>
+                  <Icon name="open" size={14} />
+                  Abrir PDF
+                </button>
+              </div>
+            )}
+            {imgSrc && (
+              <div className="page-wrap" style={{ width: displayWidth }}>
+                <img
+                  className="page"
+                  src={imgSrc}
+                  draggable={false}
+                  alt={`Página ${pageIndex + 1}`}
+                />
+                <div
+                  className={`textlayer mode-${mode}`}
+                  onMouseDown={onMouseDown}
+                  onMouseMove={onMouseMove}
+                  onMouseUp={onMouseUp}
+                  onClick={onClickLayer}
+                >
+                  {annots
+                    .filter((a) => a.kind === "Highlight")
+                    .flatMap((a) =>
+                      a.rects.map((r, j) => (
                         <div
-                          key={`m${i}-${j}`}
-                          ref={i === matchIdx && j === 0 ? currentHitRef : null}
-                          className={`hit${i === matchIdx ? " current" : ""}`}
+                          key={`h${a.index}-${j}`}
+                          className="annot-highlight"
                           style={{
                             left: r.x * scale,
                             top: r.y * scale,
@@ -1291,25 +1256,354 @@ function App() {
                             height: r.h * scale,
                           }}
                         />
-                      ))
-                    : null,
-                )}
-                {selectionRects.map((r, i) => (
-                  <div
-                    key={`s${i}`}
-                    className="sel"
-                    style={{
-                      left: r.x * scale,
-                      top: r.y * scale,
-                      width: r.w * scale,
-                      height: r.h * scale,
-                    }}
-                  />
-                ))}
+                      )),
+                    )}
+                  {mode === "edit" &&
+                    textBlocks.map((b) => (
+                      <div
+                        key={`b${b.object_index}`}
+                        className="text-block"
+                        style={{
+                          left: b.x * scale,
+                          top: b.y * scale,
+                          width: b.w * scale,
+                          height: b.h * scale,
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setBlockDraft({ block: b, text: b.text });
+                        }}
+                      />
+                    ))}
+                  {newTextDraft && (
+                    <div
+                      className="card"
+                      style={{
+                        left: newTextDraft.x * scale,
+                        top: newTextDraft.y * scale,
+                        width: 280,
+                      }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      <textarea
+                        autoFocus
+                        placeholder="Texto nuevo… (Enter añade, Esc cancela)"
+                        value={newTextDraft.text}
+                        onChange={(e) =>
+                          setNewTextDraft({
+                            ...newTextDraft,
+                            text: e.target.value,
+                          })
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            submitNewText();
+                          }
+                          if (e.key === "Escape") setNewTextDraft(null);
+                        }}
+                      />
+                      <div className="card-actions">
+                        <select
+                          className="size-select"
+                          value={newTextDraft.size}
+                          onChange={(e) =>
+                            setNewTextDraft({
+                              ...newTextDraft,
+                              size: Number(e.target.value),
+                            })
+                          }
+                        >
+                          {[8, 10, 12, 14, 18, 24, 32].map((s) => (
+                            <option key={s} value={s}>
+                              {s} pt
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          className="btn"
+                          onClick={() => setNewTextDraft(null)}
+                        >
+                          Cancelar
+                        </button>
+                        <button className="btn btn-primary" onClick={submitNewText}>
+                          Añadir
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {blockDraft && (
+                    <div
+                      className="card"
+                      style={{
+                        left: blockDraft.block.x * scale,
+                        top: (blockDraft.block.y + blockDraft.block.h) * scale + 6,
+                        width: Math.max(260, blockDraft.block.w * scale),
+                      }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      <textarea
+                        autoFocus
+                        value={blockDraft.text}
+                        onChange={(e) =>
+                          setBlockDraft({ ...blockDraft, text: e.target.value })
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            submitBlockDraft();
+                          }
+                          if (e.key === "Escape") setBlockDraft(null);
+                        }}
+                      />
+                      <div className="card-actions">
+                        <button className="btn btn-danger" onClick={deleteBlock}>
+                          <Icon name="trash" size={13} />
+                          Eliminar
+                        </button>
+                        <button className="btn" onClick={() => setBlockDraft(null)}>
+                          Cancelar
+                        </button>
+                        <button className="btn btn-primary" onClick={submitBlockDraft}>
+                          Guardar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {mode === "select" &&
+                    formFields.map((f) => (
+                      <div
+                        key={`f${f.annot_index}`}
+                        className="form-field"
+                        title={f.name}
+                        style={{
+                          left: f.x * scale,
+                          top: f.y * scale,
+                          width: f.w * scale,
+                          height: f.h * scale,
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onFieldClick(f);
+                        }}
+                      />
+                    ))}
+                  {fieldDraft && (
+                    <div
+                      className="card"
+                      style={{
+                        left: fieldDraft.field.x * scale,
+                        top: (fieldDraft.field.y + fieldDraft.field.h) * scale + 6,
+                      }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      <textarea
+                        autoFocus
+                        placeholder={`${fieldDraft.field.name}…`}
+                        value={fieldDraft.text}
+                        onChange={(e) =>
+                          setFieldDraft({ ...fieldDraft, text: e.target.value })
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            submitFieldDraft();
+                          }
+                          if (e.key === "Escape") setFieldDraft(null);
+                        }}
+                      />
+                      <div className="card-actions">
+                        <button className="btn" onClick={() => setFieldDraft(null)}>
+                          Cancelar
+                        </button>
+                        <button className="btn btn-primary" onClick={submitFieldDraft}>
+                          Guardar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {annots
+                    .filter((a) => a.kind === "Text")
+                    .map((a) => (
+                      <button
+                        key={`n${a.index}`}
+                        className="note-icon"
+                        style={{
+                          left: a.x * scale,
+                          top: a.y * scale,
+                          width: Math.max(18, a.w * scale),
+                          height: Math.max(18, a.h * scale),
+                        }}
+                        title={a.contents}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setNotePopover((p) => (p?.index === a.index ? null : a));
+                        }}
+                      >
+                        <Icon name="note" size={12} />
+                      </button>
+                    ))}
+                  {notePopover && (
+                    <div
+                      className="card"
+                      style={{
+                        left: notePopover.x * scale,
+                        top: (notePopover.y + notePopover.h) * scale + 6,
+                      }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      <p>
+                        {notePopover.contents ||
+                          KIND_LABELS[notePopover.kind] ||
+                          notePopover.kind}
+                      </p>
+                      <div className="card-actions">
+                        <button
+                          className="btn btn-danger"
+                          onClick={() => deleteAnnotation(notePopover)}
+                        >
+                          <Icon name="trash" size={13} />
+                          Eliminar
+                        </button>
+                        <button className="btn" onClick={() => setNotePopover(null)}>
+                          Cerrar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {noteDraft && (
+                    <div
+                      className="card"
+                      style={{
+                        left: noteDraft.x * scale,
+                        top: noteDraft.y * scale,
+                      }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      <textarea
+                        autoFocus
+                        placeholder="Escribe la nota y pulsa Enter…"
+                        value={noteDraft.text}
+                        onChange={(e) =>
+                          setNoteDraft({ ...noteDraft, text: e.target.value })
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            submitNote();
+                          }
+                          if (e.key === "Escape") setNoteDraft(null);
+                        }}
+                      />
+                    </div>
+                  )}
+                  {strokePts.length > 1 && (
+                    <svg className="stroke-preview">
+                      <polyline
+                        points={strokePts
+                          .map((p) => `${p[0] * scale},${p[1] * scale}`)
+                          .join(" ")}
+                      />
+                    </svg>
+                  )}
+                  {matches.map((m, i) =>
+                    m.page_index === pageIndex
+                      ? m.rects.map((r, j) => (
+                          <div
+                            key={`m${i}-${j}`}
+                            ref={i === matchIdx && j === 0 ? currentHitRef : null}
+                            className={`hit${i === matchIdx ? " current" : ""}`}
+                            style={{
+                              left: r.x * scale,
+                              top: r.y * scale,
+                              width: r.w * scale,
+                              height: r.h * scale,
+                            }}
+                          />
+                        ))
+                      : null,
+                  )}
+                  {selectionRects.map((r, i) => (
+                    <div
+                      key={`s${i}`}
+                      className="sel"
+                      style={{
+                        left: r.x * scale,
+                        top: r.y * scale,
+                        width: r.w * scale,
+                        height: r.h * scale,
+                      }}
+                    />
+                  ))}
+                  {lastSelRect && !dragging && (
+                    <div
+                      className="card sel-popover"
+                      style={{
+                        left: lastSelRect.x * scale,
+                        top: (lastSelRect.y + lastSelRect.h) * scale + 6,
+                      }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      <button className="btn" onClick={highlightSelection}>
+                        <Icon name="highlight" size={13} />
+                        Resaltar
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          copySelection();
+                          setSelection(null);
+                        }}
+                      >
+                        <Icon name="copy" size={13} />
+                        Copiar
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
+            )}
+          </main>
+
+          {pageCount > 0 && (
+            <div className="nav-pill">
+              <button
+                className="btn btn-icon"
+                disabled={pageIndex === 0}
+                onClick={() => setPageIndex((i) => i - 1)}
+              >
+                <Icon name="chevLeft" size={14} />
+              </button>
+              <span>
+                {pageIndex + 1} / {pageCount}
+              </span>
+              <button
+                className="btn btn-icon"
+                disabled={pageIndex >= pageCount - 1}
+                onClick={() => setPageIndex((i) => i + 1)}
+              >
+                <Icon name="chevRight" size={14} />
+              </button>
+              <div className="sep" />
+              <button
+                className="btn btn-icon"
+                onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))}
+              >
+                <Icon name="minus" size={14} />
+              </button>
+              <span>{Math.round(zoom * 100)}%</span>
+              <button
+                className="btn btn-icon"
+                onClick={() => setZoom((z) => Math.min(4, z + 0.25))}
+              >
+                <Icon name="plus" size={14} />
+              </button>
             </div>
           )}
-        </main>
+        </div>
       </div>
     </div>
   );

@@ -48,7 +48,8 @@ cd src-tauri && cargo check   # compilar solo el core Rust
   `add_note` (anotación Text), `get_annotations` (incluye los quads de los
   resaltados como `rects`), `remove_annotation`,
   `get_form_fields` / `set_form_text` / `set_form_checked` (formularios),
-  `get_text_blocks` / `edit_text_block` / `delete_text_block` (edición real;
+  `get_text_blocks` / `edit_text_block` / `add_text_block` (texto nuevo en un
+  punto, Helvetica, una línea por objeto) / `delete_text_block` (edición real;
   `set_text` requiere `page.regenerate_content()` antes de guardar),
   `sign_pdf(work, dest, cert_pem, key_pem, reason)` (módulo `firma`, no usa
   PDFium; test con fixtures en `src-tauri/fixtures/`).
