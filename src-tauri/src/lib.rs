@@ -886,6 +886,89 @@ struct TextBlock {
     w: f32,
     h: f32,
     font_size: f32,
+    font_family: String,
+}
+
+/// Resuelve un nombre de familia a un token de fuente utilizable: estándar
+/// aproximada por subcadenas, TTF real del sistema si existe en
+/// /System/Library/Fonts/Supplemental, o Helvetica como último recurso.
+/// (No se puede reutilizar una fuente embebida del PDF para objetos nuevos:
+/// el handle de FPDFTextObj_GetFont queda ligado a su página.)
+fn fuente_por_nombre(doc: &mut PdfDocument<'static>, nombre: &str) -> PdfFontToken {
+    let n = nombre.to_lowercase();
+    let bold = n.contains("bold") || n.contains("negrita");
+    let italic = n.contains("italic") || n.contains("oblique") || n.contains("cursiva");
+    if n.contains("times") {
+        let fonts = doc.fonts_mut();
+        return match (bold, italic) {
+            (true, true) => fonts.times_bold_italic(),
+            (true, false) => fonts.times_bold(),
+            (false, true) => fonts.times_italic(),
+            (false, false) => fonts.times_roman(),
+        };
+    }
+    if n.contains("courier") || n.contains("mono") {
+        let fonts = doc.fonts_mut();
+        return match (bold, italic) {
+            (true, true) => fonts.courier_bold_oblique(),
+            (true, false) => fonts.courier_bold(),
+            (false, true) => fonts.courier_oblique(),
+            (false, false) => fonts.courier(),
+        };
+    }
+    // Arial es métricamente equivalente a Helvetica (y la Helvetica builtin
+    // de PDFium se identifica como "Arial"): usar la estándar, que además
+    // extrae bien los acentos (los TTF cargados con FPDFText_LoadFont no
+    // llevan ToUnicode y la extracción pierde los no-ASCII).
+    if !n.contains("helvetica") && !n.contains("arial") && !n.is_empty() {
+        // best effort: TTF del sistema con ese nombre (Georgia, Verdana…)
+        let base = nombre
+            .split(['-', ','])
+            .next()
+            .unwrap_or(nombre)
+            .trim()
+            .to_string();
+        for nombre_fichero in [
+            format!("{base}.ttf"),
+            format!("{}.ttf", base.replace(' ', "")),
+        ] {
+            let path =
+                std::path::Path::new("/System/Library/Fonts/Supplemental").join(&nombre_fichero);
+            if path.exists() {
+                if let Ok(token) = doc.fonts_mut().load_true_type_from_file(&path, false) {
+                    return token;
+                }
+            }
+        }
+    }
+    let fonts = doc.fonts_mut();
+    match (bold, italic) {
+        (true, true) => fonts.helvetica_bold_oblique(),
+        (true, false) => fonts.helvetica_bold(),
+        (false, true) => fonts.helvetica_oblique(),
+        (false, false) => fonts.helvetica(),
+    }
+}
+
+/// Familia de fuente más usada por los objetos de texto de una página.
+fn familia_dominante(doc: &PdfDocument<'static>, page_index: u16) -> Option<String> {
+    let page = doc.pages().get(page_index).ok()?;
+    let objects = page.objects();
+    let mut cuentas: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for i in 0..objects.len() {
+        if let Ok(obj) = objects.get(i) {
+            if let Some(t) = obj.as_text_object() {
+                let familia = t.font().family();
+                if !familia.is_empty() {
+                    *cuentas.entry(familia).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    cuentas
+        .into_iter()
+        .max_by_key(|(_, c)| *c)
+        .map(|(familia, _)| familia)
 }
 
 /// Lista los objetos de texto de una página (bloques editables), con bounds
@@ -916,6 +999,7 @@ fn get_text_blocks(path: String, page_index: u16) -> Result<Vec<TextBlock>, Stri
                     w: b.right().value - b.left().value,
                     h: b.top().value - b.bottom().value,
                     font_size: t.unscaled_font_size().value,
+                    font_family: t.font().family(),
                 });
             }
             Ok(out)
@@ -965,36 +1049,12 @@ fn edit_text_block(
             info
         };
 
-        // Fuente para las líneas nuevas: se carga una estándar aproximada por
-        // familia y estilo. Reutilizar el handle de FPDFTextObj_GetFont sería
-        // más fiel, pero queda ligado a la página ya cerrada y PDFium no
-        // perdona los handles colgantes (SIGSEGV).
+        // Fuente para las líneas nuevas: se aproxima la del bloque original.
+        // Reutilizar el handle de FPDFTextObj_GetFont sería más fiel, pero
+        // queda ligado a la página ya cerrada y PDFium no perdona los handles
+        // colgantes (SIGSEGV).
         let font_token = if !resto.is_empty() {
-            let bold = familia.contains("bold");
-            let italic = familia.contains("italic") || familia.contains("oblique");
-            let fonts = doc.fonts_mut();
-            Some(if familia.contains("times") {
-                match (bold, italic) {
-                    (true, true) => fonts.times_bold_italic(),
-                    (true, false) => fonts.times_bold(),
-                    (false, true) => fonts.times_italic(),
-                    (false, false) => fonts.times_roman(),
-                }
-            } else if familia.contains("courier") || familia.contains("mono") {
-                match (bold, italic) {
-                    (true, true) => fonts.courier_bold_oblique(),
-                    (true, false) => fonts.courier_bold(),
-                    (false, true) => fonts.courier_oblique(),
-                    (false, false) => fonts.courier(),
-                }
-            } else {
-                match (bold, italic) {
-                    (true, true) => fonts.helvetica_bold_oblique(),
-                    (true, false) => fonts.helvetica_bold(),
-                    (false, true) => fonts.helvetica_oblique(),
-                    (false, false) => fonts.helvetica(),
-                }
-            })
+            Some(fuente_por_nombre(&mut doc, &familia))
         } else {
             None
         };
@@ -1031,7 +1091,9 @@ fn edit_text_block(
 
 /// Añade un bloque de texto nuevo en el punto dado (coords de UI, el punto
 /// es la esquina superior izquierda de la primera línea). Cada línea del
-/// texto se inserta como un objeto propio, con Helvetica.
+/// texto se inserta como un objeto propio. La fuente puede elegirse por
+/// nombre; sin nombre (o "auto") se detecta la familia dominante de la
+/// página y se aproxima.
 #[tauri::command]
 fn add_text_block(
     work_path: String,
@@ -1040,6 +1102,7 @@ fn add_text_block(
     y: f32,
     text: String,
     font_size: f32,
+    font: Option<String>,
 ) -> Result<(), String> {
     if text.trim().is_empty() {
         return Err("El texto está vacío".into());
@@ -1050,7 +1113,11 @@ fn add_text_block(
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
-        let font = doc.fonts_mut().helvetica();
+        let familia = match font.as_deref() {
+            Some(nombre) if !nombre.is_empty() && nombre != "auto" => nombre.to_string(),
+            _ => familia_dominante(&doc, page_index).unwrap_or_else(|| "helvetica".into()),
+        };
+        let font = fuente_por_nombre(&mut doc, &familia);
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
         let page_h = page.height().value;
         let line_h = font_size * 1.2;
@@ -1069,6 +1136,232 @@ fn add_text_block(
                 .add_text_object(obj)
                 .map_err(|e| e.to_string())?;
         }
+        page.regenerate_content().map_err(|e| e.to_string())?;
+        drop(page);
+        save_over(&doc, &work_path)?;
+        drop(doc);
+        invalidate_doc_cache();
+        Ok(())
+    })
+}
+
+#[derive(Serialize)]
+struct ImageInfo {
+    object_index: u32,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+/// Lista los objetos de imagen de una página (bounds en coords de UI).
+#[tauri::command]
+fn get_images(path: String, page_index: u16) -> Result<Vec<ImageInfo>, String> {
+    on_pdfium_thread(move || {
+        with_doc(&path, |doc| {
+            let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            let page_h = page.height().value;
+            let objects = page.objects();
+            let mut out = Vec::new();
+            for i in 0..objects.len() {
+                let Ok(obj) = objects.get(i) else { continue };
+                if obj.as_image_object().is_none() {
+                    continue;
+                }
+                let Ok(b) = obj.bounds() else { continue };
+                out.push(ImageInfo {
+                    object_index: i as u32,
+                    x: b.left().value,
+                    y: page_h - b.top().value,
+                    w: b.right().value - b.left().value,
+                    h: b.top().value - b.bottom().value,
+                });
+            }
+            Ok(out)
+        })
+    })
+}
+
+/// Inserta una imagen (png/jpg/webp…) con su tamaño natural a 72 dpi,
+/// limitado a caber en la página. El punto dado (coords de UI) es la esquina
+/// superior izquierda.
+#[tauri::command]
+fn add_image(
+    work_path: String,
+    page_index: u16,
+    image_path: String,
+    x: f32,
+    y: f32,
+) -> Result<(), String> {
+    on_pdfium_thread(move || {
+        let img =
+            image::open(&image_path).map_err(|e| format!("No se pudo leer la imagen: {e}"))?;
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| e.to_string())?;
+        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+        let page_w = page.width().value;
+        let page_h = page.height().value;
+        let mut w = img.width() as f32;
+        let mut h = img.height() as f32;
+        let max_w = page_w * 0.6;
+        if w > max_w {
+            let f = max_w / w;
+            w *= f;
+            h *= f;
+        }
+        if h > page_h * 0.8 {
+            let f = page_h * 0.8 / h;
+            w *= f;
+            h *= f;
+        }
+        let mut obj =
+            PdfPageImageObject::new_with_size(&doc, &img, PdfPoints::new(w), PdfPoints::new(h))
+                .map_err(|e| e.to_string())?;
+        obj.translate(PdfPoints::new(x), PdfPoints::new(page_h - y - h))
+            .map_err(|e| e.to_string())?;
+        page.objects_mut()
+            .add_image_object(obj)
+            .map_err(|e| e.to_string())?;
+        page.regenerate_content().map_err(|e| e.to_string())?;
+        drop(page);
+        save_over(&doc, &work_path)?;
+        drop(doc);
+        invalidate_doc_cache();
+        Ok(())
+    })
+}
+
+/// Mueve y/o redimensiona una imagen a los bounds dados (coords de UI).
+/// Válido para imágenes sin rotación.
+#[tauri::command]
+fn transform_image(
+    work_path: String,
+    page_index: u16,
+    object_index: u32,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+) -> Result<(), String> {
+    if w <= 1.0 || h <= 1.0 {
+        return Err("Tamaño de imagen inválido".into());
+    }
+    on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| e.to_string())?;
+        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+        let page_h = page.height().value;
+        let mut obj = page
+            .objects_mut()
+            .get(object_index as usize)
+            .map_err(|e| e.to_string())?;
+        if obj.as_image_object().is_none() {
+            return Err("No es una imagen".into());
+        }
+        let b = obj.bounds().map_err(|e| e.to_string())?;
+        let old_w = b.right().value - b.left().value;
+        let old_h = b.top().value - b.bottom().value;
+        if old_w > 0.0 && old_h > 0.0 {
+            obj.scale(w / old_w, h / old_h).map_err(|e| e.to_string())?;
+        }
+        let b2 = obj.bounds().map_err(|e| e.to_string())?;
+        let dx = x - b2.left().value;
+        let dy = (page_h - y - h) - b2.bottom().value;
+        obj.translate(PdfPoints::new(dx), PdfPoints::new(dy))
+            .map_err(|e| e.to_string())?;
+        drop(obj);
+        page.regenerate_content().map_err(|e| e.to_string())?;
+        drop(page);
+        save_over(&doc, &work_path)?;
+        drop(doc);
+        invalidate_doc_cache();
+        Ok(())
+    })
+}
+
+/// Reemplaza el contenido de una imagen manteniendo posición y tamaño.
+#[tauri::command]
+fn replace_image(
+    work_path: String,
+    page_index: u16,
+    object_index: u32,
+    image_path: String,
+) -> Result<(), String> {
+    on_pdfium_thread(move || {
+        let img =
+            image::open(&image_path).map_err(|e| format!("No se pudo leer la imagen: {e}"))?;
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| e.to_string())?;
+        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+        let (left, bottom, w, h) = {
+            let obj = page
+                .objects()
+                .get(object_index as usize)
+                .map_err(|e| e.to_string())?;
+            if obj.as_image_object().is_none() {
+                return Err("No es una imagen".into());
+            }
+            let b = obj.bounds().map_err(|e| e.to_string())?;
+            (
+                b.left().value,
+                b.bottom().value,
+                b.right().value - b.left().value,
+                b.top().value - b.bottom().value,
+            )
+        };
+        let removed = page
+            .objects_mut()
+            .remove_object_at_index(object_index as usize)
+            .map_err(|e| e.to_string())?;
+        // ver nota en delete_text_block: soltar el objeto extraído casca
+        std::mem::forget(removed);
+        let mut obj =
+            PdfPageImageObject::new_with_size(&doc, &img, PdfPoints::new(w), PdfPoints::new(h))
+                .map_err(|e| e.to_string())?;
+        obj.translate(PdfPoints::new(left), PdfPoints::new(bottom))
+            .map_err(|e| e.to_string())?;
+        page.objects_mut()
+            .add_image_object(obj)
+            .map_err(|e| e.to_string())?;
+        page.regenerate_content().map_err(|e| e.to_string())?;
+        drop(page);
+        save_over(&doc, &work_path)?;
+        drop(doc);
+        invalidate_doc_cache();
+        Ok(())
+    })
+}
+
+/// Elimina una imagen de la página.
+#[tauri::command]
+fn delete_image(work_path: String, page_index: u16, object_index: u32) -> Result<(), String> {
+    on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| e.to_string())?;
+        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+        {
+            let obj = page
+                .objects()
+                .get(object_index as usize)
+                .map_err(|e| e.to_string())?;
+            if obj.as_image_object().is_none() {
+                return Err("No es una imagen".into());
+            }
+        }
+        let removed = page
+            .objects_mut()
+            .remove_object_at_index(object_index as usize)
+            .map_err(|e| e.to_string())?;
+        // ver nota en delete_text_block: soltar el objeto extraído casca
+        std::mem::forget(removed);
         page.regenerate_content().map_err(|e| e.to_string())?;
         drop(page);
         save_over(&doc, &work_path)?;
@@ -1827,6 +2120,7 @@ mod tests {
             300.0,
             "Añadido a mano\nSegunda línea".into(),
             12.0,
+            None,
         )
         .expect("añadir texto");
 
@@ -1850,9 +2144,145 @@ mod tests {
         );
 
         // el texto vacío debe rechazarse
-        assert!(add_text_block(work.clone(), 0, 0.0, 0.0, "  ".into(), 12.0).is_err());
+        assert!(add_text_block(work.clone(), 0, 0.0, 0.0, "  ".into(), 12.0, None).is_err());
 
         std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn fuente_elegida_y_detectada() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_fuentes.pdf");
+        crea_pdf(&["Texto base"], &tmp); // crea_pdf usa Helvetica
+        let work = tmp.to_string_lossy().into_owned();
+
+        // fuente automática primero (solo hay Helvetica en la página, sin
+        // empates): debe detectar la dominante
+        add_text_block(work.clone(), 0, 60.0, 400.0, "Detectada".into(), 12.0, None)
+            .expect("añadir automática");
+        let blocks = get_text_blocks(work.clone(), 0).expect("listar");
+        let auto = blocks
+            .iter()
+            .find(|b| b.text.contains("Detectada"))
+            .expect("bloque automático");
+        assert!(
+            auto.font_family.to_lowercase().contains("helvetica")
+                || auto.font_family.to_lowercase().contains("arial"),
+            "familia detectada: {:?}",
+            auto.font_family
+        );
+
+        // fuente elegida a mano
+        add_text_block(
+            work.clone(),
+            0,
+            60.0,
+            200.0,
+            "Con serifa".into(),
+            14.0,
+            Some("Times Bold".into()),
+        )
+        .expect("añadir con Times");
+        let blocks = get_text_blocks(work.clone(), 0).expect("relistar");
+        let serif = blocks
+            .iter()
+            .find(|b| b.text.contains("Con serifa"))
+            .expect("bloque nuevo");
+        assert!(
+            serif.font_family.to_lowercase().contains("times"),
+            "familia: {:?}",
+            serif.font_family
+        );
+
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn imagenes() {
+        let dir = std::env::temp_dir();
+        let tmp = dir.join("editor_pdf_test_imagenes.pdf");
+        let png = dir.join("editor_pdf_test_imagen.png");
+        let png2 = dir.join("editor_pdf_test_imagen2.png");
+        crea_pdf(&["Con imagen"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+
+        // dos PNGs pequeños de colores distintos
+        image::RgbaImage::from_pixel(80, 40, image::Rgba([200, 30, 30, 255]))
+            .save(&png)
+            .expect("crear png");
+        image::RgbaImage::from_pixel(40, 40, image::Rgba([30, 30, 200, 255]))
+            .save(&png2)
+            .expect("crear png2");
+
+        // insertar en (100, 200): tamaño natural 80x40 pt
+        add_image(
+            work.clone(),
+            0,
+            png.to_string_lossy().into_owned(),
+            100.0,
+            200.0,
+        )
+        .expect("añadir imagen");
+        let imgs = get_images(work.clone(), 0).expect("listar imágenes");
+        assert_eq!(imgs.len(), 1, "imágenes: {}", imgs.len());
+        let im = &imgs[0];
+        assert!(
+            (im.x - 100.0).abs() < 2.0 && (im.y - 200.0).abs() < 2.0,
+            "posición: ({}, {})",
+            im.x,
+            im.y
+        );
+        assert!(
+            (im.w - 80.0).abs() < 2.0 && (im.h - 40.0).abs() < 2.0,
+            "tamaño: {}x{}",
+            im.w,
+            im.h
+        );
+
+        // mover y redimensionar
+        transform_image(work.clone(), 0, im.object_index, 50.0, 300.0, 160.0, 80.0)
+            .expect("transformar");
+        let imgs = get_images(work.clone(), 0).expect("relistar");
+        let im = &imgs[0];
+        assert!(
+            (im.x - 50.0).abs() < 2.0 && (im.y - 300.0).abs() < 2.0,
+            "posición tras mover: ({}, {})",
+            im.x,
+            im.y
+        );
+        assert!(
+            (im.w - 160.0).abs() < 2.0 && (im.h - 80.0).abs() < 2.0,
+            "tamaño tras redimensionar: {}x{}",
+            im.w,
+            im.h
+        );
+
+        // reemplazar manteniendo bounds
+        replace_image(
+            work.clone(),
+            0,
+            im.object_index,
+            png2.to_string_lossy().into_owned(),
+        )
+        .expect("reemplazar");
+        let imgs = get_images(work.clone(), 0).expect("listar tras reemplazo");
+        assert_eq!(imgs.len(), 1);
+        assert!(
+            (imgs[0].w - 160.0).abs() < 2.0 && (imgs[0].h - 80.0).abs() < 2.0,
+            "bounds tras reemplazo: {}x{}",
+            imgs[0].w,
+            imgs[0].h
+        );
+
+        // eliminar
+        delete_image(work.clone(), 0, imgs[0].object_index).expect("eliminar");
+        assert!(get_images(work.clone(), 0)
+            .expect("listar final")
+            .is_empty());
+
+        render_page(work.clone(), 0, 200).expect("render tras imágenes");
+        for f in [&tmp, &png, &png2] {
+            std::fs::remove_file(f).ok();
+        }
     }
 
     #[test]
@@ -2077,6 +2507,11 @@ pub fn run() {
             edit_text_block,
             add_text_block,
             delete_text_block,
+            get_images,
+            add_image,
+            transform_image,
+            replace_image,
+            delete_image,
             sign_pdf,
             sign_pdf_p12
         ])

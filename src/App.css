@@ -599,7 +599,6 @@ textarea {
 }
 
 .size-select {
-  margin-right: auto;
   background: transparent;
   color: var(--fg);
   border: 1px solid var(--border);
@@ -608,6 +607,49 @@ textarea {
   font-size: 12px;
   font-family: inherit;
   outline: none;
+}
+
+.card-row {
+  display: flex;
+  gap: 6px;
+}
+
+.card-row .font-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.card-label {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.textlayer.mode-image {
+  cursor: copy;
+}
+
+.image-box {
+  position: absolute;
+  cursor: move;
+  border-radius: 2px;
+  outline: 1px dashed rgba(52, 120, 246, 0.55);
+}
+
+.image-box:hover {
+  outline: 2px dashed var(--accent);
+  background: rgba(52, 120, 246, 0.07);
+}
+
+.image-handle {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  width: 11px;
+  height: 11px;
+  background: var(--accent);
+  border: 2px solid var(--card-bg);
+  border-radius: 3px;
+  cursor: nwse-resize;
 }
 
 .card-actions .btn {

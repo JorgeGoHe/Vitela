@@ -49,8 +49,12 @@ cd src-tauri && cargo check   # compilar solo el core Rust
   resaltados como `rects`), `remove_annotation`,
   `get_form_fields` / `set_form_text` / `set_form_checked` (formularios),
   `get_text_blocks` / `edit_text_block` / `add_text_block` (texto nuevo en un
-  punto, Helvetica, una línea por objeto) / `delete_text_block` (edición real;
+  punto, una línea por objeto; parámetro `font` opcional — sin él se detecta
+  la familia dominante de la página) / `delete_text_block` (edición real;
   `set_text` requiere `page.regenerate_content()` antes de guardar),
+  `get_images` / `add_image` (tamaño natural a 72 dpi, limitado a la página) /
+  `transform_image` (mover/redimensionar por ratio de bounds) /
+  `replace_image` (borra + recrea en los mismos bounds) / `delete_image`,
   `sign_pdf(work, dest, cert_pem, key_pem, reason)` (módulo `firma`, no usa
   PDFium; test con fixtures en `src-tauri/fixtures/`).
 - Anotaciones: **el render de PDFium NO genera apariencia** para las
@@ -96,7 +100,12 @@ cd src-tauri && cargo check   # compilar solo el core Rust
    líneas extra se insertan como objetos nuevos con fuente estándar
    aproximada por familia/estilo, colocados debajo (no se reutiliza el handle
    de `FPDFTextObj_GetFont`: queda ligado a la página y PDFium casca con
-   handles colgantes)
+   handles colgantes). Fuentes (`fuente_por_nombre`): estándar aproximada →
+   TTF de /System/Library/Fonts/Supplemental (best effort; ojo: los TTF
+   cargados con `FPDFText_LoadFont` no llevan ToUnicode y su extracción
+   pierde los no-ASCII) → Helvetica. "Arial" se mapea a Helvetica (la
+   builtin de PDFium se identifica como Arial). Imágenes: insertar, mover,
+   redimensionar, reemplazar y borrar objetos de imagen
 7. ✅ Firma digital: campo de firma + ByteRange + PKCS#7 detached
    (RSA/SHA-256; certificado en PEM o contenedor .p12/.pfx con contraseña —
    `p12-keystore`; PDFium no firma — cirugía con lopdf y criptografía con

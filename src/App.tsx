@@ -40,8 +40,35 @@ type TextBlock = {
   w: number;
   h: number;
   font_size: number;
+  font_family: string;
 };
-type Mode = "select" | "draw" | "note" | "edit";
+type ImageInfo = {
+  object_index: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+type ImgAction = {
+  kind: "move" | "resize";
+  startX: number;
+  startY: number;
+  orig: ImageInfo;
+  moved: boolean;
+};
+type Mode = "select" | "draw" | "note" | "edit" | "image";
+
+const FONT_CHOICES: { value: string; label: string }[] = [
+  { value: "auto", label: "Automática (documento)" },
+  { value: "Helvetica", label: "Helvetica" },
+  { value: "Helvetica Bold", label: "Helvetica Negrita" },
+  { value: "Helvetica Oblique", label: "Helvetica Cursiva" },
+  { value: "Times", label: "Times" },
+  { value: "Times Bold", label: "Times Negrita" },
+  { value: "Times Italic", label: "Times Cursiva" },
+  { value: "Courier", label: "Courier" },
+  { value: "Courier Bold", label: "Courier Negrita" },
+];
 type UndoEntry = { page: number };
 
 const KIND_LABELS: Record<string, string> = {
@@ -100,6 +127,11 @@ const ICONS: Record<string, string[]> = {
   doc: [
     "M14 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V8l-6-6Z",
     "M14 2v6h6",
+  ],
+  image: [
+    "M19 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Z",
+    "M9 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z",
+    "m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21",
   ],
   sticky: ["M12 3v10", "M12 13l-3-3", "M12 13l3-3"],
 };
@@ -218,7 +250,12 @@ function App() {
     y: number;
     text: string;
     size: number;
+    font: string;
   } | null>(null);
+  const [images, setImages] = useState<ImageInfo[]>([]);
+  const [imgDraft, setImgDraft] = useState<ImageInfo | null>(null);
+  const [imagePopover, setImagePopover] = useState<ImageInfo | null>(null);
+  const imgActionRef = useRef<ImgAction | null>(null);
   const [p12Draft, setP12Draft] = useState<{
     path: string;
     password: string;
@@ -305,6 +342,28 @@ function App() {
     invoke<TextBlock[]>("get_text_blocks", { path: workPath, pageIndex })
       .then((b) => {
         if (!cancelled) setTextBlocks(b);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workPath, pageIndex, docVersion, mode]);
+
+  // Imágenes de la página (solo en modo imagen)
+  useEffect(() => {
+    setImagePopover(null);
+    setImgDraft(null);
+    imgActionRef.current = null;
+    if (!workPath || mode !== "image") {
+      setImages([]);
+      return;
+    }
+    let cancelled = false;
+    invoke<ImageInfo[]>("get_images", { path: workPath, pageIndex })
+      .then((i) => {
+        if (!cancelled) setImages(i);
       })
       .catch((e) => {
         if (!cancelled) setError(String(e));
@@ -570,6 +629,108 @@ function App() {
     if (hit) setNotePopover(hit);
   }
 
+  async function insertImageAt(x: number, y: number) {
+    if (!workPath) return;
+    const sel = await open({
+      filters: [
+        {
+          name: "Imagen",
+          extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"],
+        },
+      ],
+      multiple: false,
+      title: "Insertar imagen",
+    });
+    if (typeof sel !== "string") return;
+    try {
+      await invoke("add_image", { workPath, pageIndex, imagePath: sel, x, y });
+      afterMutation(pageCount);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function commitImage(objectIndex: number, b: ImageInfo) {
+    if (!workPath) return;
+    try {
+      await invoke("transform_image", {
+        workPath,
+        pageIndex,
+        objectIndex,
+        x: b.x,
+        y: b.y,
+        w: b.w,
+        h: b.h,
+      });
+      afterMutation(pageCount);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function replaceImagePick(im: ImageInfo) {
+    if (!workPath) return;
+    const sel = await open({
+      filters: [
+        {
+          name: "Imagen",
+          extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"],
+        },
+      ],
+      multiple: false,
+      title: "Imagen de reemplazo",
+    });
+    if (typeof sel !== "string") return;
+    try {
+      await invoke("replace_image", {
+        workPath,
+        pageIndex,
+        objectIndex: im.object_index,
+        imagePath: sel,
+      });
+      setImagePopover(null);
+      afterMutation(pageCount);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function deleteImage(im: ImageInfo) {
+    if (!workPath) return;
+    try {
+      await invoke("delete_image", {
+        workPath,
+        pageIndex,
+        objectIndex: im.object_index,
+      });
+      setImagePopover(null);
+      afterMutation(pageCount);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  function startImgAction(
+    e: React.MouseEvent<HTMLDivElement>,
+    im: ImageInfo,
+    kind: ImgAction["kind"],
+  ) {
+    e.stopPropagation();
+    if (e.button !== 0) return;
+    const rect = (
+      e.currentTarget.closest(".textlayer") as HTMLElement
+    ).getBoundingClientRect();
+    imgActionRef.current = {
+      kind,
+      startX: (e.clientX - rect.left) / scale,
+      startY: (e.clientY - rect.top) / scale,
+      orig: im,
+      moved: false,
+    };
+    setImagePopover(null);
+    setImgDraft(im);
+  }
+
   async function submitNewText() {
     if (!workPath || !newTextDraft) return;
     if (!newTextDraft.text.trim()) {
@@ -584,6 +745,7 @@ function App() {
         y: newTextDraft.y,
         text: newTextDraft.text,
         fontSize: newTextDraft.size,
+        font: newTextDraft.font === "auto" ? null : newTextDraft.font,
       });
       setNewTextDraft(null);
       afterMutation(pageCount);
@@ -902,7 +1064,14 @@ function App() {
       // clic en zona libre: añadir texto nuevo ahí (los bloques existentes
       // capturan su propio clic con stopPropagation)
       setBlockDraft(null);
-      setNewTextDraft({ x, y, text: "", size: 12 });
+      setNewTextDraft({ x, y, text: "", size: 12, font: "auto" });
+      return;
+    }
+    if (mode === "image") {
+      // clic en zona libre: insertar imagen ahí (las cajas de imagen
+      // capturan su propio mousedown con stopPropagation)
+      setImagePopover(null);
+      insertImageAt(x, y);
       return;
     }
     if (!pageText) return;
@@ -914,6 +1083,24 @@ function App() {
 
   function onMouseMove(e: React.MouseEvent<HTMLDivElement>) {
     if (!(e.buttons & 1)) return;
+    if (mode === "image" && imgActionRef.current) {
+      const a = imgActionRef.current;
+      const { x, y } = pagePoint(e);
+      const dx = x - a.startX;
+      const dy = y - a.startY;
+      if (Math.abs(dx) + Math.abs(dy) > 1) a.moved = true;
+      if (a.kind === "move") {
+        setImgDraft({ ...a.orig, x: a.orig.x + dx, y: a.orig.y + dy });
+      } else {
+        let w = Math.max(8, a.orig.w + dx);
+        let h = Math.max(8, a.orig.h + dy);
+        if (!e.shiftKey && a.orig.w > 0) {
+          h = w * (a.orig.h / a.orig.w);
+        }
+        setImgDraft({ ...a.orig, w, h });
+      }
+      return;
+    }
     if (mode === "draw") {
       if (strokePts.length === 0) return;
       const { x, y } = pagePoint(e);
@@ -931,6 +1118,19 @@ function App() {
   function onMouseUp() {
     anchorRef.current = null;
     setDragging(false);
+    if (mode === "image" && imgActionRef.current) {
+      const a = imgActionRef.current;
+      imgActionRef.current = null;
+      const draft = imgDraft;
+      setImgDraft(null);
+      if (!a.moved) {
+        // clic simple: abrir el popover de la imagen
+        setImagePopover(a.orig);
+      } else if (draft) {
+        commitImage(a.orig.object_index, draft);
+      }
+      return;
+    }
     if (mode === "draw" && strokePts.length > 0) finishStroke();
   }
 
@@ -954,6 +1154,12 @@ function App() {
       icon: "textedit",
       label: "Editar",
       hint: "Editar un bloque de texto o añadir texto nuevo (clic en zona libre)",
+    },
+    {
+      id: "image",
+      icon: "image",
+      label: "Imagen",
+      hint: "Insertar imágenes (clic en zona libre) o editar las existentes (arrastrar mueve, tirador redimensiona, clic abre opciones)",
     },
   ];
 
@@ -1276,6 +1482,65 @@ function App() {
                         }}
                       />
                     ))}
+                  {mode === "image" &&
+                    images.map((im) => {
+                      const b =
+                        imgDraft && imgDraft.object_index === im.object_index
+                          ? imgDraft
+                          : im;
+                      return (
+                        <div
+                          key={`im${im.object_index}`}
+                          className="image-box"
+                          style={{
+                            left: b.x * scale,
+                            top: b.y * scale,
+                            width: b.w * scale,
+                            height: b.h * scale,
+                          }}
+                          onMouseDown={(e) => startImgAction(e, im, "move")}
+                        >
+                          <div
+                            className="image-handle"
+                            title="Redimensionar (Shift: libre)"
+                            onMouseDown={(e) => startImgAction(e, im, "resize")}
+                          />
+                        </div>
+                      );
+                    })}
+                  {imagePopover && (
+                    <div
+                      className="card"
+                      style={{
+                        left: imagePopover.x * scale,
+                        top: (imagePopover.y + imagePopover.h) * scale + 6,
+                      }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      <div className="card-actions">
+                        <button
+                          className="btn"
+                          onClick={() => replaceImagePick(imagePopover)}
+                        >
+                          <Icon name="image" size={13} />
+                          Reemplazar…
+                        </button>
+                        <button
+                          className="btn btn-danger"
+                          onClick={() => deleteImage(imagePopover)}
+                        >
+                          <Icon name="trash" size={13} />
+                          Eliminar
+                        </button>
+                        <button
+                          className="btn"
+                          onClick={() => setImagePopover(null)}
+                        >
+                          Cerrar
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   {newTextDraft && (
                     <div
                       className="card"
@@ -1304,9 +1569,27 @@ function App() {
                           if (e.key === "Escape") setNewTextDraft(null);
                         }}
                       />
-                      <div className="card-actions">
+                      <div className="card-row">
+                        <select
+                          className="size-select font-select"
+                          title="Fuente"
+                          value={newTextDraft.font}
+                          onChange={(e) =>
+                            setNewTextDraft({
+                              ...newTextDraft,
+                              font: e.target.value,
+                            })
+                          }
+                        >
+                          {FONT_CHOICES.map((f) => (
+                            <option key={f.value} value={f.value}>
+                              {f.label}
+                            </option>
+                          ))}
+                        </select>
                         <select
                           className="size-select"
+                          title="Tamaño"
                           value={newTextDraft.size}
                           onChange={(e) =>
                             setNewTextDraft({
@@ -1321,6 +1604,8 @@ function App() {
                             </option>
                           ))}
                         </select>
+                      </div>
+                      <div className="card-actions">
                         <button
                           className="btn"
                           onClick={() => setNewTextDraft(null)}
@@ -1343,6 +1628,11 @@ function App() {
                       }}
                       onMouseDown={(e) => e.stopPropagation()}
                     >
+                      <span className="card-label">
+                        {blockDraft.block.font_family || "Fuente del documento"}
+                        {" · "}
+                        {Math.round(blockDraft.block.font_size)} pt
+                      </span>
                       <textarea
                         autoFocus
                         value={blockDraft.text}
