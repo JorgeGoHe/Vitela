@@ -13,7 +13,8 @@ y firma digital.
 - **PDFium** — motor PDF (render, texto, páginas, formularios), vía el crate
   `pdfium-render`. Binario dinámico en `src-tauri/lib/` (descargado de
   `bblanchon/pdfium-binaries`; no es código fuente, no editarlo):
-  `libpdfium.dylib` (mac-arm64) o `pdfium.dll` (win-x64). El bundle empaqueta
+  `libpdfium.dylib` (mac-arm64), `pdfium.dll` (win-x64) o `libpdfium.so`
+  (linux-x64). El bundle empaqueta
   el directorio `lib/` entero como resource, así que cada plataforma lleva el
   suyo. Para compilar el instalador de Windows: workflow de GitHub Actions en
   `.github/workflows/build.yml` (descarga PDFium y compila en

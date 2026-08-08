@@ -1,6 +1,7 @@
 # Editor PDF
 
-Editor de PDF de escritorio, rápido y multiplataforma (macOS y Windows).
+Editor de PDF de escritorio, rápido y multiplataforma (macOS, Windows y
+Linux).
 A diferencia de la mayoría de editores libres, la edición de texto es **real**:
 reescribe el contenido del PDF en lugar de poner parches encima.
 
@@ -53,12 +54,18 @@ PDFium para tu plataforma (de
 ```bash
 # macOS (arm64): libpdfium.dylib de pdfium-mac-arm64.tgz
 # Windows (x64): pdfium.dll (en bin/) de pdfium-win-x64.tgz
+# Linux (x64):   libpdfium.so de pdfium-linux-x64.tgz
 # → copiar a src-tauri/lib/
 
 bun install
 bun run tauri dev     # desarrollo
-bun run tauri build   # instalador (.dmg / .exe)
+bun run tauri build   # instalador (.dmg / .exe / .deb / .rpm / .AppImage)
 ```
+
+En Linux, Tauri necesita además las librerías de sistema de WebKitGTK
+(`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `librsvg2-dev`…); la lista completa
+está en el paso «Dependencias del sistema» de
+[`build.yml`](.github/workflows/build.yml).
 
 También hay un workflow de GitHub Actions
 ([`build.yml`](.github/workflows/build.yml)) que compila los instaladores de
