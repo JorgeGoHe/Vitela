@@ -28,3 +28,6 @@ src-tauri/lib/*.dylib
 *.njsproj
 *.sln
 *.sw?
+
+# config local de Claude
+.claude/
