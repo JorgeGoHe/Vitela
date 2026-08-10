@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   deleteStoredSignature,
+  getImageData,
   importSignatureFile,
   listStoredSignatures,
   saveStoredSignature,
@@ -263,6 +264,7 @@ function App() {
     font: string;
   } | null>(null);
   const [images, setImages] = useState<ImageInfo[]>([]);
+  const [imgPreviews, setImgPreviews] = useState<Record<number, string>>({});
   const [imgDraft, setImgDraft] = useState<ImageInfo | null>(null);
   const [imagePopover, setImagePopover] = useState<ImageInfo | null>(null);
   const imgActionRef = useRef<ImgAction | null>(null);
@@ -369,19 +371,32 @@ function App() {
     };
   }, [workPath, pageIndex, docVersion, mode]);
 
-  // Imágenes de la página (solo en modo imagen)
+  // Imágenes de la página (solo en modo imagen). Se precarga también su
+  // contenido para que al arrastrar se mueva la imagen, no solo el recuadro.
   useEffect(() => {
     setImagePopover(null);
     setImgDraft(null);
     imgActionRef.current = null;
+    setImgPreviews({});
     if (!workPath || mode !== "image") {
       setImages([]);
       return;
     }
     let cancelled = false;
     invoke<ImageInfo[]>("get_images", { path: workPath, pageIndex })
-      .then((i) => {
-        if (!cancelled) setImages(i);
+      .then((list) => {
+        if (cancelled) return;
+        setImages(list);
+        for (const im of list) {
+          getImageData(workPath, pageIndex, im.object_index)
+            .then((b64) => {
+              if (!cancelled)
+                setImgPreviews((p) => ({ ...p, [im.object_index]: b64 }));
+            })
+            .catch(() => {
+              // sin vista previa: al arrastrar se verá solo el recuadro
+            });
+        }
       })
       .catch((e) => {
         if (!cancelled) setError(String(e));
@@ -1668,10 +1683,11 @@ function App() {
                     ))}
                   {mode === "image" &&
                     images.map((im) => {
-                      const b =
-                        imgDraft && imgDraft.object_index === im.object_index
-                          ? imgDraft
-                          : im;
+                      const isDragging =
+                        imgDraft !== null &&
+                        imgDraft.object_index === im.object_index;
+                      const b = isDragging ? imgDraft : im;
+                      const preview = imgPreviews[im.object_index];
                       return (
                         <div
                           key={`im${im.object_index}`}
@@ -1684,6 +1700,14 @@ function App() {
                           }}
                           onMouseDown={(e) => startImgAction(e, im, "move")}
                         >
+                          {isDragging && preview && (
+                            <img
+                              className="image-preview"
+                              src={`data:image/png;base64,${preview}`}
+                              draggable={false}
+                              alt=""
+                            />
+                          )}
                           <div
                             className="image-handle"
                             title="Redimensionar (Shift: libre)"

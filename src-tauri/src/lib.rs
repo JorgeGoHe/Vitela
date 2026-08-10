@@ -1389,6 +1389,7 @@ fn delete_text_block(work_path: String, page_index: u16, object_index: u32) -> R
 
 mod firma;
 mod firmas_visuales;
+mod imagenes;
 
 /// Firma digitalmente la copia de trabajo y escribe el PDF firmado en
 /// `dest_path`. Certificado y clave privada en PEM (RSA sin cifrar).
@@ -2243,7 +2244,8 @@ pub fn run() {
             firmas_visuales::import_signature_file,
             firmas_visuales::save_stored_signature,
             firmas_visuales::list_stored_signatures,
-            firmas_visuales::delete_stored_signature
+            firmas_visuales::delete_stored_signature,
+            imagenes::get_image_data
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

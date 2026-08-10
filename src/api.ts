@@ -26,6 +26,15 @@ export function deleteStoredSignature(id: string): Promise<void> {
   return invoke("delete_stored_signature", { id });
 }
 
+/** Contenido de un objeto de imagen como PNG base64 (para previsualizar). */
+export function getImageData(
+  path: string,
+  pageIndex: number,
+  objectIndex: number,
+): Promise<string> {
+  return invoke("get_image_data", { path, pageIndex, objectIndex });
+}
+
 export function stampSignature(args: {
   workPath: string;
   pageIndex: number;
