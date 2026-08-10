@@ -1388,6 +1388,7 @@ fn delete_text_block(work_path: String, page_index: u16, object_index: u32) -> R
 }
 
 mod firma;
+mod firmas_visuales;
 
 /// Firma digitalmente la copia de trabajo y escribe el PDF firmado en
 /// `dest_path`. Certificado y clave privada en PEM (RSA sin cifrar).
@@ -2047,7 +2048,6 @@ pub(crate) mod tests {
 
     #[test]
     fn firma_digital() {
-        use der::Decode;
         use sha2::{Digest, Sha256};
 
         let dir = std::env::temp_dir();
@@ -2238,7 +2238,12 @@ pub fn run() {
             replace_image,
             delete_image,
             sign_pdf,
-            sign_pdf_p12
+            sign_pdf_p12,
+            firmas_visuales::stamp_signature,
+            firmas_visuales::import_signature_file,
+            firmas_visuales::save_stored_signature,
+            firmas_visuales::list_stored_signatures,
+            firmas_visuales::delete_stored_signature
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

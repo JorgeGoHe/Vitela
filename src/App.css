@@ -628,6 +628,143 @@ textarea {
   cursor: copy;
 }
 
+.textlayer.mode-firmar {
+  cursor: crosshair;
+}
+
+/* damero para ver la transparencia de las firmas, siempre sobre blanco
+   (los trazos oscuros se perderían sobre el fondo del tema oscuro) */
+.sign-thumb,
+.firma-canvas {
+  background:
+    conic-gradient(
+        rgba(0, 0, 0, 0.07) 90deg,
+        transparent 90deg 180deg,
+        rgba(0, 0, 0, 0.07) 180deg 270deg,
+        transparent 270deg
+      )
+      0 0 / 14px 14px,
+    #ffffff;
+}
+
+.sign-panel {
+  position: fixed;
+  top: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  width: 400px;
+  box-shadow: var(--shadow-pop);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sign-panel h3 {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sign-empty {
+  color: var(--fg-muted);
+  line-height: 1.45;
+}
+
+.sign-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  max-height: 290px;
+  overflow-y: auto;
+}
+
+.sign-thumb {
+  width: 100%;
+  height: 68px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+}
+
+.sign-thumb:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(52, 120, 246, 0.25);
+}
+
+.sign-thumb img {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.sign-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.sign-name {
+  font-size: 11px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sign-delete {
+  font-size: 11px;
+  line-height: 1;
+}
+
+.modal-firma {
+  width: auto;
+}
+
+.firma-canvas {
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  cursor: crosshair;
+}
+
+.firma-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.sign-ghost {
+  position: absolute;
+  opacity: 0.85;
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+  pointer-events: none;
+}
+
+.sign-hint {
+  position: fixed;
+  bottom: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  background: var(--card-translucent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 7px 16px;
+  box-shadow: var(--shadow-card);
+  color: var(--fg);
+  pointer-events: none;
+}
+
 .image-box {
   position: absolute;
   cursor: move;

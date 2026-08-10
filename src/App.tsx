@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import {
+  deleteStoredSignature,
+  importSignatureFile,
+  listStoredSignatures,
+  saveStoredSignature,
+  stampSignature,
+  type FirmaGuardada,
+} from "./api";
+import PanelFirmas from "./components/PanelFirmas";
+import DibujarFirma from "./components/DibujarFirma";
 import "./App.css";
 
 const BASE_WIDTH = 900;
@@ -56,7 +66,7 @@ type ImgAction = {
   orig: ImageInfo;
   moved: boolean;
 };
-type Mode = "select" | "draw" | "note" | "edit" | "image";
+type Mode = "select" | "draw" | "note" | "edit" | "image" | "firmar";
 
 const FONT_CHOICES: { value: string; label: string }[] = [
   { value: "auto", label: "Automática (documento)" },
@@ -260,6 +270,14 @@ function App() {
     path: string;
     password: string;
   } | null>(null);
+  const [firmas, setFirmas] = useState<FirmaGuardada[]>([]);
+  const [activeSig, setActiveSig] = useState<{
+    png: string;
+    ratio: number;
+  } | null>(null);
+  const [sigDraft, setSigDraft] = useState<Rect | null>(null);
+  const [drawingSig, setDrawingSig] = useState(false);
+  const sigDragRef = useRef<{ x: number; y: number } | null>(null);
 
   const [query, setQuery] = useState("");
   const [lastQuery, setLastQuery] = useState("");
@@ -372,6 +390,23 @@ function App() {
       cancelled = true;
     };
   }, [workPath, pageIndex, docVersion, mode]);
+
+  // Biblioteca de firmas al entrar en modo firma; Esc cancela el estampado
+  useEffect(() => {
+    if (mode !== "firmar") return;
+    listStoredSignatures()
+      .then(setFirmas)
+      .catch((e) => setError(String(e)));
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setActiveSig(null);
+        setSigDraft(null);
+        setMode("select");
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mode]);
 
   /** Guarda un render en el caché de páginas, con tope de entradas. */
   function cachePut(key: string, src: string) {
@@ -1000,6 +1035,81 @@ function App() {
     }
   }
 
+  /** Activa una firma para estamparla (guarda su relación de aspecto). */
+  function pickSignature(f: FirmaGuardada) {
+    const img = new Image();
+    img.onload = () =>
+      setActiveSig({
+        png: f.png_base64,
+        ratio: img.height / Math.max(1, img.width),
+      });
+    img.src = `data:image/png;base64,${f.png_base64}`;
+  }
+
+  async function uploadSignature() {
+    const sel = await open({
+      filters: [
+        {
+          name: "Imagen",
+          extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"],
+        },
+      ],
+      multiple: false,
+      title: "Imagen de tu firma (PNG con transparencia funciona mejor)",
+    });
+    if (typeof sel !== "string") return;
+    try {
+      const f = await importSignatureFile(sel);
+      setFirmas((l) => [f, ...l]);
+      pickSignature(f);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function saveDrawnSignature(name: string, png: string) {
+    try {
+      const f = await saveStoredSignature(name, png);
+      setDrawingSig(false);
+      setFirmas((l) => [f, ...l]);
+      pickSignature(f);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function removeSignature(id: string) {
+    try {
+      await deleteStoredSignature(id);
+      setFirmas((l) => l.filter((f) => f.id !== id));
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function stampActiveSignature(r: Rect) {
+    if (!workPath || !activeSig) return;
+    try {
+      await stampSignature({
+        workPath,
+        pageIndex,
+        pngBase64: activeSig.png,
+        x: r.x,
+        y: r.y,
+        w: r.w,
+        h: r.h,
+      });
+      setActiveSig(null);
+      setSigDraft(null);
+      // la firma estampada es una imagen: el modo imagen permite moverla,
+      // redimensionarla o borrarla al instante
+      setMode("image");
+      afterMutation(pageCount);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function runSearch() {
     if (!workPath) return;
     if (!query.trim()) {
@@ -1074,6 +1184,12 @@ function App() {
       insertImageAt(x, y);
       return;
     }
+    if (mode === "firmar") {
+      if (!activeSig) return;
+      sigDragRef.current = { x, y };
+      setSigDraft(null);
+      return;
+    }
     if (!pageText) return;
     anchorRef.current = charIndexAt(pageText, x, y);
     setDragging(true);
@@ -1107,6 +1223,21 @@ function App() {
       setStrokePts((pts) => [...pts, [x, y]]);
       return;
     }
+    if (mode === "firmar") {
+      const start = sigDragRef.current;
+      if (!activeSig || !start) return;
+      const { x, y } = pagePoint(e);
+      const w = Math.abs(x - start.x);
+      if (w < 4) return;
+      const h = w * activeSig.ratio;
+      setSigDraft({
+        x: Math.min(x, start.x),
+        y: y >= start.y ? start.y : start.y - h,
+        w,
+        h,
+      });
+      return;
+    }
     if (mode !== "select" || !pageText || anchorRef.current === null) return;
     const { x, y } = pagePoint(e);
     const idx = charIndexAt(pageText, x, y);
@@ -1118,6 +1249,26 @@ function App() {
   function onMouseUp() {
     anchorRef.current = null;
     setDragging(false);
+    if (mode === "firmar") {
+      const start = sigDragRef.current;
+      sigDragRef.current = null;
+      if (!activeSig || !start || !pageText) return;
+      const draft = sigDraft;
+      setSigDraft(null);
+      let r: Rect;
+      if (draft && draft.w > 12) {
+        r = draft;
+      } else {
+        // clic simple: tamaño por defecto centrado en el punto
+        const w = Math.min(180, pageText.width * 0.5);
+        const h = w * activeSig.ratio;
+        r = { x: start.x - w / 2, y: start.y - h / 2, w, h };
+      }
+      r.x = Math.max(0, Math.min(r.x, pageText.width - r.w));
+      r.y = Math.max(0, Math.min(r.y, pageText.height - r.h));
+      stampActiveSignature(r);
+      return;
+    }
     if (mode === "image" && imgActionRef.current) {
       const a = imgActionRef.current;
       imgActionRef.current = null;
@@ -1162,6 +1313,12 @@ function App() {
       label: "Imagen",
       hint: "Insertar imágenes (clic en zona libre) o editar las existentes (arrastrar mueve, tirador redimensiona, clic abre opciones)",
     },
+    {
+      id: "firmar",
+      icon: "sign",
+      label: "Firma",
+      hint: "Estampar tu firma manuscrita: elige o crea una y haz clic (o arrastra) donde quieras colocarla",
+    },
   ];
 
   function selectMode(m: Mode) {
@@ -1169,6 +1326,9 @@ function App() {
     setSelection(null);
     setStrokePts([]);
     setNoteDraft(null);
+    setActiveSig(null);
+    setSigDraft(null);
+    sigDragRef.current = null;
   }
 
   return (
@@ -1291,7 +1451,7 @@ function App() {
                         }}
                       >
                         <Icon name="sign" size={14} />
-                        Firmar…
+                        Firma digital (certificado)…
                       </button>
                       <button
                         className="btn"
@@ -1358,6 +1518,29 @@ function App() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {mode === "firmar" && !activeSig && !drawingSig && (
+        <PanelFirmas
+          firmas={firmas}
+          onPick={pickSignature}
+          onUpload={uploadSignature}
+          onDraw={() => setDrawingSig(true)}
+          onDelete={removeSignature}
+          onClose={() => selectMode("select")}
+        />
+      )}
+      {drawingSig && (
+        <DibujarFirma
+          onSave={saveDrawnSignature}
+          onClose={() => setDrawingSig(false)}
+        />
+      )}
+      {mode === "firmar" && activeSig && (
+        <div className="sign-hint">
+          Haz clic donde quieras la firma (o arrastra para elegir el tamaño) ·
+          Esc cancela
         </div>
       )}
 
@@ -1790,6 +1973,20 @@ function App() {
                         }}
                       />
                     </div>
+                  )}
+                  {mode === "firmar" && activeSig && sigDraft && (
+                    <img
+                      className="sign-ghost"
+                      src={`data:image/png;base64,${activeSig.png}`}
+                      draggable={false}
+                      alt="Vista previa de la firma"
+                      style={{
+                        left: sigDraft.x * scale,
+                        top: sigDraft.y * scale,
+                        width: sigDraft.w * scale,
+                        height: sigDraft.h * scale,
+                      }}
+                    />
                   )}
                   {strokePts.length > 1 && (
                     <svg className="stroke-preview">
