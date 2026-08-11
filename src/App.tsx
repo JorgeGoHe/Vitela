@@ -21,10 +21,23 @@ import {
   type HeaderFooter,
   type Rgba,
 } from "./api";
+import {
+  getLinks,
+  getMetadata,
+  getOutline,
+  setMetadata,
+  setOutline,
+  type LinkInfo,
+  type Metadata,
+  type OutlineNode,
+} from "./api";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import PanelFirmas from "./components/PanelFirmas";
 import DibujarFirma from "./components/DibujarFirma";
 import DialogoMarcaAgua from "./components/DialogoMarcaAgua";
 import DialogoEncabezado from "./components/DialogoEncabezado";
+import PanelMarcadores from "./components/PanelMarcadores";
+import DialogoPropiedades from "./components/DialogoPropiedades";
 import "./App.css";
 
 const BASE_WIDTH = 900;
@@ -346,6 +359,12 @@ function App() {
   const cropStartRef = useRef<{ x: number; y: number } | null>(null);
   const [wmOpen, setWmOpen] = useState(false);
   const [hfOpen, setHfOpen] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<"paginas" | "marcadores">(
+    "paginas",
+  );
+  const [outline, setOutlineState] = useState<OutlineNode[]>([]);
+  const [links, setLinks] = useState<LinkInfo[]>([]);
+  const [propsDraft, setPropsDraft] = useState<Metadata | null>(null);
   const [firmas, setFirmas] = useState<FirmaGuardada[]>([]);
   const [activeSig, setActiveSig] = useState<{
     png: string;
@@ -479,6 +498,85 @@ function App() {
       cancelled = true;
     };
   }, [workPath, pageIndex, docVersion, mode]);
+
+  // Marcadores del documento (pestaña del sidebar)
+  useEffect(() => {
+    if (!workPath) {
+      setOutlineState([]);
+      return;
+    }
+    let cancelled = false;
+    getOutline(workPath)
+      .then((o) => {
+        if (!cancelled) setOutlineState(o);
+      })
+      .catch(() => {
+        if (!cancelled) setOutlineState([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workPath, docVersion]);
+
+  // Enlaces de la página actual (zonas clicables en modo selección)
+  useEffect(() => {
+    if (!workPath) {
+      setLinks([]);
+      return;
+    }
+    let cancelled = false;
+    getLinks(workPath, pageIndex)
+      .then((l) => {
+        if (!cancelled) setLinks(l);
+      })
+      .catch(() => {
+        if (!cancelled) setLinks([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workPath, pageIndex, docVersion]);
+
+  async function persistOutline(nodes: OutlineNode[]) {
+    if (!workPath) return;
+    const anterior = outline;
+    setOutlineState(nodes);
+    try {
+      await setOutline(workPath, nodes);
+      setModified(true);
+    } catch (e) {
+      setOutlineState(anterior);
+      setError(String(e));
+    }
+  }
+
+  async function openProperties() {
+    if (!workPath) return;
+    try {
+      setPropsDraft(await getMetadata(workPath));
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function saveProperties(meta: Metadata) {
+    if (!workPath) return;
+    try {
+      await setMetadata(workPath, meta);
+      setPropsDraft(null);
+      setModified(true);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  function onLinkClick(l: LinkInfo) {
+    if (l.uri) {
+      openUrl(l.uri).catch((e) => setError(String(e)));
+    } else if (l.dest_page !== null) {
+      setPageIndex(l.dest_page);
+    }
+  }
 
   // Esc sale del modo recorte
   useEffect(() => {
@@ -1815,6 +1913,16 @@ function App() {
                         <Icon name="hf" size={14} />
                         Encabezado, pie y numeración…
                       </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          openProperties();
+                        }}
+                      >
+                        <Icon name="doc" size={14} />
+                        Propiedades del documento…
+                      </button>
                     </div>
                   </>
                 )}
@@ -1886,6 +1994,13 @@ function App() {
         <DialogoEncabezado
           onApply={applyHeaderFooter}
           onClose={() => setHfOpen(false)}
+        />
+      )}
+      {propsDraft && (
+        <DialogoPropiedades
+          initial={propsDraft}
+          onSave={saveProperties}
+          onClose={() => setPropsDraft(null)}
         />
       )}
       {mode === "crop" && !cropDraft && (
@@ -1998,7 +2113,30 @@ function App() {
       <div className="body">
         {pageCount > 0 && (
           <aside className="sidebar">
-            {thumbs.map((src, i) => (
+            <div className="sidebar-tabs">
+              <button
+                className={`btn${sidebarTab === "paginas" ? " on" : ""}`}
+                onClick={() => setSidebarTab("paginas")}
+              >
+                Páginas
+              </button>
+              <button
+                className={`btn${sidebarTab === "marcadores" ? " on" : ""}`}
+                onClick={() => setSidebarTab("marcadores")}
+              >
+                Marcadores
+              </button>
+            </div>
+            {sidebarTab === "marcadores" && (
+              <PanelMarcadores
+                outline={outline}
+                currentPage={pageIndex}
+                onGoto={setPageIndex}
+                onChange={persistOutline}
+              />
+            )}
+            {sidebarTab === "paginas" &&
+              thumbs.map((src, i) => (
               <div
                 key={i}
                 className={`thumb${i === pageIndex ? " active" : ""}`}
@@ -2350,6 +2488,25 @@ function App() {
                       </div>
                     </div>
                   )}
+                  {mode === "select" &&
+                    links.map((l, i) => (
+                      <div
+                        key={`lk${i}`}
+                        className="link-zone"
+                        title={l.uri ?? `Ir a la página ${(l.dest_page ?? 0) + 1}`}
+                        style={{
+                          left: l.x * scale,
+                          top: l.y * scale,
+                          width: l.w * scale,
+                          height: l.h * scale,
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onLinkClick(l);
+                        }}
+                      />
+                    ))}
                   {mode === "select" &&
                     formFields.map((f) => (
                       <div

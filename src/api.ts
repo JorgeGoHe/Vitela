@@ -132,6 +132,56 @@ export function addHeaderFooter(
   });
 }
 
+export type OutlineNode = {
+  title: string;
+  page_index: number | null;
+  children: OutlineNode[];
+};
+
+export function getOutline(path: string): Promise<OutlineNode[]> {
+  return invoke("get_outline", { path });
+}
+
+export function setOutline(
+  workPath: string,
+  nodes: OutlineNode[],
+): Promise<void> {
+  return invoke("set_outline", { workPath, nodes });
+}
+
+export type Metadata = {
+  title: string;
+  author: string;
+  subject: string;
+  keywords: string;
+  creator: string;
+  producer: string;
+};
+
+export function getMetadata(path: string): Promise<Metadata> {
+  return invoke("get_metadata", { path });
+}
+
+export function setMetadata(workPath: string, meta: Metadata): Promise<void> {
+  return invoke("set_metadata", { workPath, meta });
+}
+
+export type LinkInfo = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  uri: string | null;
+  dest_page: number | null;
+};
+
+export function getLinks(
+  path: string,
+  pageIndex: number,
+): Promise<LinkInfo[]> {
+  return invoke("get_links", { path, pageIndex });
+}
+
 /** Contenido de un objeto de imagen como PNG base64 (para previsualizar). */
 export function getImageData(
   path: string,

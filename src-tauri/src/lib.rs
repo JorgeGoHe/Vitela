@@ -1399,6 +1399,7 @@ fn delete_text_block(work_path: String, page_index: u16, object_index: u32) -> R
 }
 
 mod anotaciones2;
+mod documento;
 mod firma;
 mod firmas_visuales;
 mod imagenes;
@@ -2267,7 +2268,12 @@ pub fn run() {
             paginas2::insert_pdf_at,
             paginas2::crop_page,
             paginas2::add_watermark,
-            paginas2::add_header_footer
+            paginas2::add_header_footer,
+            documento::get_outline,
+            documento::set_outline,
+            documento::get_metadata,
+            documento::set_metadata,
+            documento::get_links
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
