@@ -22,7 +22,10 @@ import {
   type Rgba,
 } from "./api";
 import {
+  compressPdf,
   encryptPdf,
+  exportPagesPng,
+  exportText,
   flattenPdf,
   getLinks,
   getMetadata,
@@ -223,6 +226,12 @@ const ICONS: Record<string, string[]> = {
   ],
   flatten: ["M12 3v12", "m8 11 4 4 4-4", "M4 21h16"],
   redact: ["M4 5h16v6H4Z", "M4 15h7", "M4 19h10"],
+  printer: [
+    "M6 9V3h12v6",
+    "M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2",
+    "M6 14h12v8H6Z",
+  ],
+  shrink: ["m15 15 6 6", "m15 9 6-6", "M9 21v-6H3", "M3 9h6V3"],
   water: ["M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7Z"],
   hf: ["M3 5h18", "M3 19h18", "M7 12h10"],
 };
@@ -385,6 +394,14 @@ function App() {
   const [redactDraft, setRedactDraft] = useState<Rect | null>(null);
   const redactStartRef = useRef<{ x: number; y: number } | null>(null);
   const [redactReport, setRedactReport] = useState<RedactReport | null>(null);
+  const [printPages, setPrintPages] = useState<string[] | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportFmt, setExportFmt] = useState<"png" | "jpeg">("png");
+  const [exportDpi, setExportDpi] = useState(150);
+  const [compressOpen, setCompressOpen] = useState(false);
+  const [compressQuality, setCompressQuality] = useState(75);
+  const [compressDpi, setCompressDpi] = useState(150);
+  const [notice, setNotice] = useState<string | null>(null);
   const [outline, setOutlineState] = useState<OutlineNode[]>([]);
   const [links, setLinks] = useState<LinkInfo[]>([]);
   const [propsDraft, setPropsDraft] = useState<Metadata | null>(null);
@@ -1331,6 +1348,99 @@ function App() {
     }
   }
 
+  async function printDocument() {
+    if (!workPath) return;
+    try {
+      setNotice("Preparando la impresión…");
+      const pages: string[] = [];
+      for (let i = 0; i < pageCount; i++) {
+        const width = Math.round(((pageText?.width ?? 595) * 200) / 72);
+        const b64 = await invoke<string>("render_page", {
+          path: workPath,
+          pageIndex: i,
+          width,
+        });
+        pages.push(`data:image/png;base64,${b64}`);
+      }
+      setNotice(null);
+      setPrintPages(pages);
+    } catch (e) {
+      setNotice(null);
+      setError(String(e));
+    }
+  }
+
+  // cuando las páginas de impresión están montadas, abrir el diálogo
+  useEffect(() => {
+    if (!printPages) return;
+    const t = setTimeout(() => {
+      try {
+        window.print();
+      } catch (e) {
+        setError(String(e));
+      }
+      setPrintPages(null);
+    }, 200);
+    return () => clearTimeout(t);
+  }, [printPages]);
+
+  async function exportImages() {
+    if (!workPath) return;
+    const dir = await open({
+      directory: true,
+      multiple: false,
+      title: "Carpeta para las imágenes",
+    });
+    if (typeof dir !== "string") return;
+    try {
+      setExportOpen(false);
+      setNotice("Exportando imágenes…");
+      const rutas = await exportPagesPng(workPath, dir, exportDpi, exportFmt);
+      setNotice(`${rutas.length} imagen(es) exportadas a ${dir}`);
+    } catch (e) {
+      setNotice(null);
+      setError(String(e));
+    }
+  }
+
+  async function exportPlainText() {
+    if (!workPath) return;
+    const dest = await save({
+      filters: [{ name: "Texto", extensions: ["txt"] }],
+      defaultPath: (originalPath ?? "documento.pdf").replace(
+        /\.pdf$/i,
+        ".txt",
+      ),
+      title: "Exportar texto plano",
+    });
+    if (!dest) return;
+    try {
+      await exportText(workPath, dest);
+      setNotice(`Texto exportado a ${dest}`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function applyCompress() {
+    if (!workPath) return;
+    try {
+      setCompressOpen(false);
+      setNotice("Comprimiendo…");
+      const r = await compressPdf(workPath, compressQuality, compressDpi);
+      const mb = (n: number) => (n / 1024 / 1024).toFixed(2);
+      setNotice(
+        r.imagenes === 0
+          ? "No había imágenes que comprimir."
+          : `${r.imagenes} imagen(es) recomprimidas: ${mb(r.antes)} MB → ${mb(r.despues)} MB`,
+      );
+      afterMutation(pageCount);
+    } catch (e) {
+      setNotice(null);
+      setError(String(e));
+    }
+  }
+
   async function addPdf() {
     if (!workPath) return;
     const selected = await open({
@@ -2074,6 +2184,46 @@ function App() {
                         <Icon name="redact" size={14} />
                         Redactar (censurar)…
                       </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          printDocument();
+                        }}
+                      >
+                        <Icon name="printer" size={14} />
+                        Imprimir…
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          setExportOpen(true);
+                        }}
+                      >
+                        <Icon name="image" size={14} />
+                        Exportar como imágenes…
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          exportPlainText();
+                        }}
+                      >
+                        <Icon name="extract" size={14} />
+                        Exportar texto…
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          setCompressOpen(true);
+                        }}
+                      >
+                        <Icon name="shrink" size={14} />
+                        Reducir tamaño…
+                      </button>
                     </div>
                   </>
                 )}
@@ -2087,6 +2237,14 @@ function App() {
         <div className="banner-error">
           <p title={error}>{error}</p>
           <button className="btn btn-icon" onClick={() => setError(null)}>
+            <Icon name="close" size={13} />
+          </button>
+        </div>
+      )}
+      {notice && (
+        <div className="banner-notice">
+          <p title={notice}>{notice}</p>
+          <button className="btn btn-icon" onClick={() => setNotice(null)}>
             <Icon name="close" size={13} />
           </button>
         </div>
@@ -2252,6 +2410,93 @@ function App() {
         <div className="sign-hint">
           Arrastra sobre el área a censurar: el contenido se ELIMINA de verdad
           · Esc cancela
+        </div>
+      )}
+      {exportOpen && (
+        <div className="modal-backdrop" onClick={() => setExportOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Exportar como imágenes</h3>
+            <div className="card-row">
+              <select
+                className="size-select"
+                value={exportFmt}
+                onChange={(e) => setExportFmt(e.target.value as "png" | "jpeg")}
+              >
+                <option value="png">PNG</option>
+                <option value="jpeg">JPEG</option>
+              </select>
+              <select
+                className="size-select"
+                value={exportDpi}
+                onChange={(e) => setExportDpi(Number(e.target.value))}
+              >
+                {[96, 150, 200, 300].map((d) => (
+                  <option key={d} value={d}>
+                    {d} ppp
+                  </option>
+                ))}
+              </select>
+            </div>
+            <p className="modal-file">Una imagen por página del documento.</p>
+            <div className="card-actions">
+              <button className="btn" onClick={() => setExportOpen(false)}>
+                Cancelar
+              </button>
+              <button className="btn btn-primary" onClick={exportImages}>
+                Elegir carpeta…
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {compressOpen && (
+        <div className="modal-backdrop" onClick={() => setCompressOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Reducir tamaño del PDF</h3>
+            <div className="card-row">
+              <select
+                className="size-select"
+                title="Calidad JPEG"
+                value={compressQuality}
+                onChange={(e) => setCompressQuality(Number(e.target.value))}
+              >
+                <option value={60}>Calidad baja (más pequeño)</option>
+                <option value={75}>Calidad media</option>
+                <option value={85}>Calidad alta</option>
+              </select>
+              <select
+                className="size-select"
+                title="Resolución máxima"
+                value={compressDpi}
+                onChange={(e) => setCompressDpi(Number(e.target.value))}
+              >
+                {[110, 150, 200, 300].map((d) => (
+                  <option key={d} value={d}>
+                    {d} ppp máx.
+                  </option>
+                ))}
+              </select>
+            </div>
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              Recomprime las imágenes del documento (las que tienen
+              transparencia se conservan tal cual). El texto no se toca.
+            </p>
+            <div className="card-actions">
+              <button className="btn" onClick={() => setCompressOpen(false)}>
+                Cancelar
+              </button>
+              <button className="btn btn-primary" onClick={applyCompress}>
+                Comprimir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {printPages && (
+        <div className="print-pages">
+          {printPages.map((src, i) => (
+            <img key={i} src={src} alt={`Página ${i + 1}`} />
+          ))}
         </div>
       )}
       {mode === "crop" && !cropDraft && (

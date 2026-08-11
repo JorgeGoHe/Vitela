@@ -209,6 +209,34 @@ export function redactArea(
   return invoke("redact_area", { workPath, pageIndex, rect, dryRun });
 }
 
+/** Exporta todas las páginas como imágenes; devuelve las rutas escritas. */
+export function exportPagesPng(
+  path: string,
+  destDir: string,
+  dpi: number,
+  format: "png" | "jpeg",
+): Promise<string[]> {
+  return invoke("export_pages_png", { path, destDir, dpi, format });
+}
+
+export function exportText(path: string, destPath: string): Promise<void> {
+  return invoke("export_text", { path, destPath });
+}
+
+export type CompressReport = {
+  antes: number;
+  despues: number;
+  imagenes: number;
+};
+
+export function compressPdf(
+  workPath: string,
+  quality: number,
+  maxDpi: number,
+): Promise<CompressReport> {
+  return invoke("compress_pdf", { workPath, quality, maxDpi });
+}
+
 /** Contenido de un objeto de imagen como PNG base64 (para previsualizar). */
 export function getImageData(
   path: string,

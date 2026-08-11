@@ -657,6 +657,43 @@ textarea {
   pointer-events: none;
 }
 
+.banner-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(52, 120, 246, 0.12);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+}
+
+.banner-notice p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.print-pages {
+  display: none;
+}
+
+@media print {
+  .app {
+    display: none !important;
+  }
+
+  .print-pages {
+    display: block;
+  }
+
+  .print-pages img {
+    display: block;
+    width: 100%;
+    page-break-after: always;
+  }
+}
+
 .modal-hf {
   width: 430px;
 }
