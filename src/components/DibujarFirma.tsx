@@ -3,8 +3,8 @@ import { useEffect, useRef, useState } from "react";
 const CANVAS_W = 560;
 const CANVAS_H = 220;
 const COLORS: { value: string; label: string }[] = [
-  { value: "#111111", label: "Negro" },
-  { value: "#1a4fd6", label: "Azul" },
+  { value: "#1d1c18", label: "Negro tinta" },
+  { value: "#2743c0", label: "Azul tinta" },
 ];
 
 /**

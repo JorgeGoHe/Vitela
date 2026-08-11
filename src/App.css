@@ -581,7 +581,6 @@ textarea {
 
 .stroke-preview polyline {
   fill: none;
-  stroke: #e23d3d;
   stroke-width: 2.5;
   stroke-linecap: round;
   stroke-linejoin: round;

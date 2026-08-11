@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-const COLORS = ["#c81e1e", "#8a8a8e", "#1a4fd6", "#1d7a34"];
+const COLORS = ["#c0392b", "#6f6a5c", "#2743c0", "#2ea043"];
 
 /** Diálogo de marca de agua: texto diagonal u horizontal en todas las páginas. */
 export default function DialogoMarcaAgua({

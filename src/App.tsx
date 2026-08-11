@@ -117,7 +117,10 @@ type Mode =
   | "link-new";
 type ShapeKind = "rect" | "ellipse" | "line" | "arrow";
 
-const SHAPE_COLORS = ["#e23d3d", "#3478f6", "#2ea043", "#f5b400", "#111111"];
+/* Paleta única de anotación (DESIGN.md): la comparten dibujo, formas,
+   marcas de texto y sellos. */
+const ANNOT_COLORS = ["#f5c400", "#2ea043", "#2743c0", "#c0392b", "#1d1c18"];
+const SHAPE_COLORS = ANNOT_COLORS;
 const STAMP_PRESETS = [
   "APROBADO",
   "BORRADOR",
@@ -380,11 +383,11 @@ function App() {
     path: string;
     password: string;
   } | null>(null);
-  const [drawColor, setDrawColor] = useState("#e23d3d");
+  const [drawColor, setDrawColor] = useState("#c0392b");
   const [drawWidth, setDrawWidth] = useState(2);
   const [markupColor, setMarkupColor] = useState<string | null>(null);
   const [shapeKind, setShapeKind] = useState<ShapeKind>("rect");
-  const [shapeColor, setShapeColor] = useState(SHAPE_COLORS[0]);
+  const [shapeColor, setShapeColor] = useState("#c0392b");
   const [shapeFill, setShapeFill] = useState(false);
   const [shapeWidth, setShapeWidth] = useState(2);
   const [shapeDraft, setShapeDraft] = useState<{
@@ -397,7 +400,7 @@ function App() {
   const shapeLiveRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [stampText, setStampText] = useState(STAMP_PRESETS[0]);
   const [stampCustom, setStampCustom] = useState("");
-  const [stampColor, setStampColor] = useState("#c81e1e");
+  const [stampColor, setStampColor] = useState("#c0392b");
   const [cropDraft, setCropDraft] = useState<Rect | null>(null);
   const cropStartRef = useRef<{ x: number; y: number } | null>(null);
   const [wmOpen, setWmOpen] = useState(false);
@@ -2908,7 +2911,7 @@ function App() {
             />
           )}
           <div className="swatches">
-            {["#c81e1e", "#1a4fd6", "#1d7a34", "#111111"].map((c) => (
+            {["#c0392b", "#2743c0", "#2ea043", "#1d1c18"].map((c) => (
               <button
                 key={c}
                 className={`swatch${stampColor === c ? " on" : ""}`}
@@ -3690,6 +3693,8 @@ function App() {
                         points={strokePts
                           .map((p) => `${p[0] * scale},${p[1] * scale}`)
                           .join(" ")}
+                        stroke={drawColor}
+                        strokeWidth={drawWidth * scale}
                       />
                     </svg>
                   )}
@@ -3808,7 +3813,7 @@ function App() {
                       onMouseDown={(e) => e.stopPropagation()}
                     >
                       <div className="swatches" style={{ marginRight: 4 }}>
-                        {["#f5c400", "#2ea043", "#2743c0", "#c0392b"].map(
+                        {ANNOT_COLORS.map(
                           (c) => (
                             <button
                               key={c}
