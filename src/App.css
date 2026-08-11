@@ -657,6 +657,51 @@ textarea {
   pointer-events: none;
 }
 
+/* ===== responsive ===== */
+
+/* toolbar: con poco ancho, los botones pierden la etiqueta (queda el icono
+   con tooltip) y como red de seguridad la barra puede partirse en dos filas */
+@media (max-width: 1080px) {
+  .toolbar .btn-etiqueta {
+    display: none;
+  }
+
+  /* con poco sitio, la derecha reclama su ancho natural (con flex: 1 solo
+     recibiría la mitad del sobrante y sus hijos desbordarían sobre los
+     modos); el segmented deja de estar perfectamente centrado, no pasa nada */
+  .toolbar-right {
+    flex: 0 1 auto;
+    min-width: max-content;
+  }
+
+  .segmented .btn {
+    padding: 5px 7px;
+  }
+}
+
+/* el nombre del fichero es lo primero prescindible en ventanas estrechas */
+@media (max-width: 920px) {
+  .filename {
+    display: none;
+  }
+
+  .search input {
+    min-width: 70px;
+  }
+}
+
+@media (max-width: 780px) {
+  .toolbar {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+}
+
+.search input {
+  flex: 0 1 140px;
+  min-width: 90px;
+}
+
 .banner-notice {
   display: flex;
   align-items: center;
@@ -694,8 +739,10 @@ textarea {
   }
 }
 
-.modal-hf {
-  width: 430px;
+/* .modal se define más abajo con la misma especificidad: el doble selector
+   garantiza que el ancho extra de este modal gane siempre */
+.modal.modal-hf {
+  width: min(430px, calc(100vw - 32px));
 }
 
 .sidebar-tabs {
@@ -815,6 +862,10 @@ textarea {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
   gap: 6px;
+}
+
+.hf-grid input {
+  min-width: 0;
 }
 
 .textlayer.mode-stamp {
@@ -941,7 +992,9 @@ textarea {
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 14px;
-  width: 400px;
+  width: min(400px, calc(100vw - 32px));
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
   box-shadow: var(--shadow-pop);
   display: flex;
   flex-direction: column;
@@ -1011,6 +1064,11 @@ textarea {
 
 .modal-firma {
   width: auto;
+  max-width: calc(100vw - 32px);
+}
+
+.modal-firma .firma-canvas {
+  max-width: 100%;
 }
 
 .firma-canvas {
@@ -1115,7 +1173,9 @@ textarea {
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 18px;
-  width: 330px;
+  width: min(330px, calc(100vw - 32px));
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
   box-shadow: var(--shadow-pop);
   display: flex;
   flex-direction: column;

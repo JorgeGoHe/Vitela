@@ -207,6 +207,7 @@ const ICONS: Record<string, string[]> = {
     "m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21",
   ],
   sticky: ["M12 3v10", "M12 13l-3-3", "M12 13l3-3"],
+  panel: ["M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5Z", "M9 3v18"],
   shapes: [
     "M8 3H3v5h5V3Z",
     "M17 21a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z",
@@ -311,7 +312,12 @@ function App() {
   const [docVersion, setDocVersion] = useState(0);
   const [pageCount, setPageCount] = useState(0);
   const [pageIndex, setPageIndex] = useState(0);
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState<number | "ajuste">("ajuste");
+  const [viewerW, setViewerW] = useState<number | null>(null);
+  const viewerRef = useRef<HTMLElement | null>(null);
+  const [sidebarVisible, setSidebarVisible] = useState(
+    window.innerWidth >= 900,
+  );
   const [imgSrc, setImgSrc] = useState<string | null>(null);
   const [thumbs, setThumbs] = useState<(string | null)[]>([]);
   const [loading, setLoading] = useState(false);
@@ -660,6 +666,27 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [mode]);
 
+  // Ancho útil del visor para el zoom "ajustar a ventana" (redondeado a
+  // múltiplos de 16px y con debounce para no invalidar el caché de renders
+  // en cada píxel del arrastre de la ventana)
+  useEffect(() => {
+    const el = viewerRef.current;
+    if (!el) return;
+    let timer: number | undefined;
+    const mide = () =>
+      setViewerW(Math.max(320, Math.round(el.clientWidth / 16) * 16));
+    const ro = new ResizeObserver(() => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(mide, 150);
+    });
+    ro.observe(el);
+    mide();
+    return () => {
+      ro.disconnect();
+      window.clearTimeout(timer);
+    };
+  }, []);
+
   /** Guarda un render en el caché de páginas, con tope de entradas. */
   function cachePut(key: string, src: string) {
     const cache = pageCacheRef.current;
@@ -670,10 +697,19 @@ function App() {
     }
   }
 
+  // Ancho de página en pantalla: fijo por zoom numérico, o el ancho útil
+  // del visor en modo "ajuste". El ancho de render (px físicos) es también
+  // la clave del caché: unifica ambos modos.
+  const PADDING_VIEWER = 48;
+  const fitWidth = viewerW ? Math.max(320, viewerW - PADDING_VIEWER) : BASE_WIDTH;
+  const displayWidth = zoom === "ajuste" ? fitWidth : BASE_WIDTH * zoom;
+  const renderWidth = Math.round(displayWidth * window.devicePixelRatio);
+  const zoomNum = zoom === "ajuste" ? displayWidth / BASE_WIDTH : zoom;
+
   // Render de la página actual (instantáneo si ya está en caché)
   useEffect(() => {
     if (!workPath) return;
-    const key = `${docVersion}:${pageIndex}:${zoom}`;
+    const key = `${docVersion}:${pageIndex}:${renderWidth}`;
     const cached = pageCacheRef.current.get(key);
     if (cached) {
       setImgSrc(cached);
@@ -682,8 +718,11 @@ function App() {
     }
     let cancelled = false;
     setLoading(true);
-    const width = Math.round(BASE_WIDTH * zoom * window.devicePixelRatio);
-    invoke<string>("render_page", { path: workPath, pageIndex, width })
+    invoke<string>("render_page", {
+      path: workPath,
+      pageIndex,
+      width: renderWidth,
+    })
       .then((b64) => {
         const src = `data:image/png;base64,${b64}`;
         cachePut(key, src);
@@ -698,22 +737,25 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [workPath, pageIndex, zoom, docVersion, annotVersion]);
+  }, [workPath, pageIndex, renderWidth, docVersion, annotVersion]);
 
   // Prefetch de las páginas adyacentes cuando la actual ya está lista
   useEffect(() => {
     if (!workPath || pageCount === 0 || loading) return;
-    const width = Math.round(BASE_WIDTH * zoom * window.devicePixelRatio);
     for (const p of [pageIndex + 1, pageIndex - 1]) {
       if (p < 0 || p >= pageCount) continue;
-      const key = `${docVersion}:${p}:${zoom}`;
+      const key = `${docVersion}:${p}:${renderWidth}`;
       if (pageCacheRef.current.has(key)) continue;
       cachePut(key, ""); // reserva para no pedirla dos veces
-      invoke<string>("render_page", { path: workPath, pageIndex: p, width })
+      invoke<string>("render_page", {
+        path: workPath,
+        pageIndex: p,
+        width: renderWidth,
+      })
         .then((b64) => cachePut(key, `data:image/png;base64,${b64}`))
         .catch(() => pageCacheRef.current.delete(key));
     }
-  }, [workPath, pageIndex, zoom, docVersion, annotVersion, pageCount, loading]);
+  }, [workPath, pageIndex, renderWidth, docVersion, annotVersion, pageCount, loading]);
 
   // Capa de texto de la página actual
   useEffect(() => {
@@ -1686,8 +1728,12 @@ function App() {
     currentHitRef.current?.scrollIntoView({ block: "center", inline: "center" });
   }, [matchIdx, matches, pageIndex, imgSrc, pageText]);
 
-  const displayWidth = BASE_WIDTH * zoom;
   const scale = pageText ? displayWidth / pageText.width : 1;
+
+  /** Evita que una tarjeta flotante se salga del borde de la página. */
+  function clampCardLeft(left: number, w = 260) {
+    return Math.max(0, Math.min(left, displayWidth - w));
+  }
 
   function pagePoint(e: React.MouseEvent<HTMLDivElement>) {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -1966,8 +2012,17 @@ function App() {
         <div className="toolbar-left">
           <button className="btn" onClick={openFile}>
             <Icon name="open" />
-            Abrir
+            <span className="btn-etiqueta">Abrir</span>
           </button>
+          {pageCount > 0 && (
+            <button
+              className="btn btn-icon"
+              title={sidebarVisible ? "Ocultar el panel lateral" : "Mostrar el panel lateral"}
+              onClick={() => setSidebarVisible((v) => !v)}
+            >
+              <Icon name="panel" size={14} />
+            </button>
+          )}
           {fileName && (
             <span className="filename" title={originalPath ?? undefined}>
               {fileName}
@@ -1987,7 +2042,7 @@ function App() {
                 onClick={() => selectMode(m.id)}
               >
                 <Icon name={m.icon} size={14} />
-                {m.label}
+                <span className="btn-etiqueta">{m.label}</span>
               </button>
             ))}
           </div>
@@ -2045,7 +2100,7 @@ function App() {
                 onClick={saveFile}
               >
                 <Icon name="save" size={14} />
-                Guardar
+                <span className="btn-etiqueta">Guardar</span>
               </button>
               <div className="menu-wrap">
                 <button
@@ -2607,7 +2662,7 @@ function App() {
       )}
 
       <div className="body">
-        {pageCount > 0 && (
+        {pageCount > 0 && sidebarVisible && (
           <aside className="sidebar">
             <div className="sidebar-tabs">
               <button
@@ -2709,7 +2764,7 @@ function App() {
         )}
 
         <div className="viewer-wrap">
-          <main className="viewer">
+          <main className="viewer" ref={viewerRef}>
             {!workPath && (
               <div className="placeholder">
                 <Icon name="doc" size={56} />
@@ -2835,7 +2890,7 @@ function App() {
                     <div
                       className="card"
                       style={{
-                        left: imagePopover.x * scale,
+                        left: clampCardLeft(imagePopover.x * scale),
                         top: (imagePopover.y + imagePopover.h) * scale + 6,
                       }}
                       onMouseDown={(e) => e.stopPropagation()}
@@ -2868,7 +2923,7 @@ function App() {
                     <div
                       className="card"
                       style={{
-                        left: newTextDraft.x * scale,
+                        left: clampCardLeft(newTextDraft.x * scale, 288),
                         top: newTextDraft.y * scale,
                         width: 280,
                       }}
@@ -2945,7 +3000,7 @@ function App() {
                     <div
                       className="card"
                       style={{
-                        left: blockDraft.block.x * scale,
+                        left: clampCardLeft(blockDraft.block.x * scale),
                         top: (blockDraft.block.y + blockDraft.block.h) * scale + 6,
                         width: Math.max(260, blockDraft.block.w * scale),
                       }}
@@ -3026,7 +3081,7 @@ function App() {
                     <div
                       className="card"
                       style={{
-                        left: fieldDraft.field.x * scale,
+                        left: clampCardLeft(fieldDraft.field.x * scale),
                         top: (fieldDraft.field.y + fieldDraft.field.h) * scale + 6,
                       }}
                       onMouseDown={(e) => e.stopPropagation()}
@@ -3082,7 +3137,7 @@ function App() {
                     <div
                       className="card"
                       style={{
-                        left: notePopover.x * scale,
+                        left: clampCardLeft(notePopover.x * scale),
                         top: (notePopover.y + notePopover.h) * scale + 6,
                       }}
                       onMouseDown={(e) => e.stopPropagation()}
@@ -3110,7 +3165,7 @@ function App() {
                     <div
                       className="card"
                       style={{
-                        left: noteDraft.x * scale,
+                        left: clampCardLeft(noteDraft.x * scale),
                         top: noteDraft.y * scale,
                       }}
                       onMouseDown={(e) => e.stopPropagation()}
@@ -3146,7 +3201,7 @@ function App() {
                       <div
                         className="card crop-actions"
                         style={{
-                          left: cropDraft.x * scale,
+                          left: clampCardLeft(cropDraft.x * scale, 320),
                           top: (cropDraft.y + cropDraft.h) * scale + 8,
                         }}
                         onMouseDown={(e) => e.stopPropagation()}
@@ -3188,7 +3243,7 @@ function App() {
                       <div
                         className="card crop-actions"
                         style={{
-                          left: redactDraft.x * scale,
+                          left: clampCardLeft(redactDraft.x * scale, 320),
                           top: (redactDraft.y + redactDraft.h) * scale + 8,
                         }}
                         onMouseDown={(e) => e.stopPropagation()}
@@ -3351,7 +3406,7 @@ function App() {
                     <div
                       className="card sel-popover"
                       style={{
-                        left: lastSelRect.x * scale,
+                        left: clampCardLeft(lastSelRect.x * scale),
                         top: (lastSelRect.y + lastSelRect.h) * scale + 6,
                       }}
                       onMouseDown={(e) => e.stopPropagation()}
@@ -3416,16 +3471,29 @@ function App() {
               <div className="sep" />
               <button
                 className="btn btn-icon"
-                onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))}
+                onClick={() =>
+                  setZoom(Math.max(0.5, Math.round((zoomNum - 0.25) * 4) / 4))
+                }
               >
                 <Icon name="minus" size={14} />
               </button>
-              <span>{Math.round(zoom * 100)}%</span>
+              <span>{Math.round(zoomNum * 100)}%</span>
               <button
                 className="btn btn-icon"
-                onClick={() => setZoom((z) => Math.min(4, z + 0.25))}
+                onClick={() =>
+                  setZoom(Math.min(4, Math.round((zoomNum + 0.25) * 4) / 4))
+                }
               >
                 <Icon name="plus" size={14} />
+              </button>
+              <button
+                className={`btn${zoom === "ajuste" ? " on" : ""}`}
+                title="Ajustar la página al ancho de la ventana"
+                onClick={() =>
+                  setZoom((z) => (z === "ajuste" ? 1 : "ajuste"))
+                }
+              >
+                Ajustar
               </button>
             </div>
           )}
