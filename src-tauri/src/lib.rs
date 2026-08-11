@@ -768,9 +768,80 @@ fn get_annotations(path: String, page_index: u16) -> Result<Vec<AnnotationInfo>,
                     color,
                 });
             }
+            if out.iter().any(|a| a.color.is_none()) {
+                if let Some(colores) = colores_annots_lopdf(&path, page_index) {
+                    for a in out.iter_mut() {
+                        if a.color.is_none() {
+                            a.color = colores
+                                .get(a.index as usize)
+                                .copied()
+                                .flatten();
+                        }
+                    }
+                }
+            }
             Ok(out)
         })
     })
+}
+
+/// Colores /C de las anotaciones de una página leídos con lopdf, alineados
+/// por índice con el orden de /Annots (el mismo que recorre PDFium). Hace
+/// falta porque FPDFAnnot_GetColor se niega a leer el color cuando la
+/// anotación tiene appearance stream — y PDFium se los genera en memoria al
+/// renderizar la página, así que las páginas ya vistas "pierden" el color.
+fn colores_annots_lopdf(path: &str, page_index: u16) -> Option<Vec<Option<[u8; 4]>>> {
+    use lopdf::Object;
+    let doc = lopdf::Document::load(path).ok()?;
+    let page_id = *doc.get_pages().get(&(page_index as u32 + 1))?;
+    let page = doc.get_object(page_id).ok()?.as_dict().ok()?;
+    let annots = match page.get(b"Annots").ok()? {
+        Object::Reference(rid) => doc.get_object(*rid).ok()?.as_array().ok()?.clone(),
+        Object::Array(a) => a.clone(),
+        _ => return None,
+    };
+    let num = |o: &Object| -> Option<f32> {
+        match o {
+            Object::Integer(i) => Some(*i as f32),
+            Object::Real(r) => Some(*r),
+            _ => None,
+        }
+    };
+    Some(
+        annots
+            .iter()
+            .map(|a| {
+                let dict = match a {
+                    Object::Reference(rid) => doc.get_object(*rid).ok()?.as_dict().ok()?,
+                    Object::Dictionary(d) => d,
+                    _ => return None,
+                };
+                let c = match dict.get(b"C").ok()? {
+                    Object::Array(v) => v,
+                    _ => return None,
+                };
+                let alpha = dict
+                    .get(b"CA")
+                    .ok()
+                    .and_then(num)
+                    .map(|a| (a * 255.0) as u8)
+                    .unwrap_or(255);
+                match c.len() {
+                    3 => Some([
+                        (num(&c[0])? * 255.0) as u8,
+                        (num(&c[1])? * 255.0) as u8,
+                        (num(&c[2])? * 255.0) as u8,
+                        alpha,
+                    ]),
+                    1 => {
+                        let g = (num(&c[0])? * 255.0) as u8;
+                        Some([g, g, g, alpha])
+                    }
+                    _ => None,
+                }
+            })
+            .collect(),
+    )
 }
 
 /// Elimina la anotación con el índice dado.

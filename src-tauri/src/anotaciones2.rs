@@ -334,6 +334,32 @@ mod tests {
     }
 
     #[test]
+    fn el_color_sobrevive_al_render() {
+        // PDFium genera appearance streams al renderizar y su GetColor deja
+        // de responder: el fallback lopdf debe seguir dando el color
+        let pdf = std::env::temp_dir().join("anotaciones2-color-render-test.pdf");
+        crea_pdf(&["Texto marcado"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+        add_markup(
+            work.clone(),
+            0,
+            vec![Rect { x: 50.0, y: 690.0, w: 120.0, h: 16.0 }],
+            "strikeout".into(),
+            Some([192, 57, 43, 255]),
+        )
+        .expect("tachar");
+        // renderizar con el caché del documento (como hace la UI)
+        crate::render_page(work.clone(), 0, 400).expect("render");
+        let annots = crate::get_annotations(work, 0).expect("listar");
+        assert_eq!(annots.len(), 1);
+        assert_eq!(
+            annots[0].color,
+            Some([192, 57, 43, 255]),
+            "el color debe leerse aunque el render haya generado AP"
+        );
+    }
+
+    #[test]
     fn formas_visibles_en_el_render() {
         let pdf = std::env::temp_dir().join("anotaciones2-shapes-test.pdf");
         crea_pdf(&["Página"], &pdf);
