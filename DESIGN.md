@@ -67,3 +67,6 @@
 | 2026-08-11 | Sistema inicial «Mesa de trabajo» | /design-consultation: investigación (PDF Expert, Acrobat) + voz independiente; Jorge eligió «ligero y rápido» como lo memorable y aprobó la preview completa |
 | 2026-08-11 | Lienzo verde alfombrilla por defecto | El riesgo firma del sistema; si cansa, se añade conmutador a gris cálido |
 | 2026-08-11 | Chrome siempre visible (se descarta el auto-ocultar de la voz independiente) | En una herramienta con modos, la barra es el volante |
+| 2026-08-11 | Píldoras flotantes (nav y hint) a 8px; resto de radios 6/4 | /design-review F-004: la excepción cubre la familia de píldoras, no 20/999px |
+| 2026-08-11 | Espaciado: la app usa una escala compacta (6/10/14/18) coherente, documentada aquí en vez de migrar a la de 8px | /design-review F-007: es internamente consistente; migrarla no aporta al usuario |
+| 2026-08-11 | Overlays de anotación pintan el color real (get_annotations expone stroke color) | /design-review F-003: la preview no puede mentir |
