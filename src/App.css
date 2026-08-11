@@ -402,7 +402,8 @@ textarea {
   padding: 2px;
 }
 
-.thumb:hover .thumb-actions {
+.thumb:hover .thumb-actions,
+.thumb:focus-within .thumb-actions {
   display: flex;
 }
 
@@ -871,7 +872,8 @@ textarea {
   gap: 2px;
 }
 
-.bm-row:hover .bm-actions {
+.bm-row:hover .bm-actions,
+.bm-row:focus-within .bm-actions {
   display: flex;
 }
 
