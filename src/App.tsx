@@ -378,6 +378,7 @@ function App() {
     y2: number;
   } | null>(null);
   const shapeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const shapeLiveRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [stampText, setStampText] = useState(STAMP_PRESETS[0]);
   const [stampCustom, setStampCustom] = useState("");
   const [stampColor, setStampColor] = useState("#c81e1e");
@@ -399,6 +400,7 @@ function App() {
   const [flattenAsk, setFlattenAsk] = useState(false);
   const [redactDraft, setRedactDraft] = useState<Rect | null>(null);
   const redactStartRef = useRef<{ x: number; y: number } | null>(null);
+  const redactLiveRef = useRef<Rect | null>(null);
   const [redactReport, setRedactReport] = useState<RedactReport | null>(null);
   const [printPages, setPrintPages] = useState<string[] | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
@@ -417,6 +419,7 @@ function App() {
     ratio: number;
   } | null>(null);
   const [sigDraft, setSigDraft] = useState<Rect | null>(null);
+  const sigLiveRef = useRef<Rect | null>(null);
   const [drawingSig, setDrawingSig] = useState(false);
   const sigDragRef = useRef<{ x: number; y: number } | null>(null);
 
@@ -1834,19 +1837,23 @@ function App() {
       const w = Math.abs(x - start.x);
       if (w < 4) return;
       const h = w * activeSig.ratio;
-      setSigDraft({
+      const d = {
         x: Math.min(x, start.x),
         y: y >= start.y ? start.y : start.y - h,
         w,
         h,
-      });
+      };
+      sigLiveRef.current = d;
+      setSigDraft(d);
       return;
     }
     if (mode === "shape") {
       const start = shapeStartRef.current;
       if (!start) return;
       const { x, y } = pagePoint(e);
-      setShapeDraft({ x1: start.x, y1: start.y, x2: x, y2: y });
+      const d = { x1: start.x, y1: start.y, x2: x, y2: y };
+      shapeLiveRef.current = d;
+      setShapeDraft(d);
       return;
     }
     if (mode === "crop") {
@@ -1865,12 +1872,14 @@ function App() {
       const start = redactStartRef.current;
       if (!start) return;
       const { x, y } = pagePoint(e);
-      setRedactDraft({
+      const d = {
         x: Math.min(x, start.x),
         y: Math.min(y, start.y),
         w: Math.abs(x - start.x),
         h: Math.abs(y - start.y),
-      });
+      };
+      redactLiveRef.current = d;
+      setRedactDraft(d);
       return;
     }
     if (mode !== "select" || !pageText || anchorRef.current === null) return;
@@ -1888,7 +1897,10 @@ function App() {
       const start = sigDragRef.current;
       sigDragRef.current = null;
       if (!activeSig || !start || !pageText) return;
-      const draft = sigDraft;
+      // ref espejo: en un arrastre en un solo frame el estado de React aún
+      // no se ha re-renderizado y sigDraft sería el del render anterior
+      const draft = sigLiveRef.current;
+      sigLiveRef.current = null;
       setSigDraft(null);
       let r: Rect;
       if (draft && draft.w > 12) {
@@ -1906,7 +1918,8 @@ function App() {
     }
     if (mode === "shape") {
       shapeStartRef.current = null;
-      const d = shapeDraft;
+      const d = shapeLiveRef.current;
+      shapeLiveRef.current = null;
       setShapeDraft(null);
       if (d && Math.abs(d.x2 - d.x1) + Math.abs(d.y2 - d.y1) > 4) {
         commitShape(d);
@@ -1920,8 +1933,11 @@ function App() {
     }
     if (mode === "redact") {
       redactStartRef.current = null;
-      if (redactDraft && redactDraft.w > 6 && redactDraft.h > 6) {
-        previewRedact(redactDraft);
+      const d = redactLiveRef.current;
+      redactLiveRef.current = null;
+      if (d && d.w > 6 && d.h > 6) {
+        setRedactDraft(d);
+        previewRedact(d);
       }
       return;
     }
