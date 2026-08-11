@@ -83,6 +83,29 @@ cd src-tauri && cargo check   # compilar solo el core Rust
   Nunca llamar a `pdfium()`/`with_doc` fuera de ese hilo. Gracias a esto los
   tests corren en paralelo sin precauciones y los comandos podrían pasar a
   `async` sin riesgo.
+- Comandos añadidos tras la hoja de ruta inicial: `add_markup`
+  (subrayado/tachado), `add_shape`, `add_stamp` (anotaciones2.rs);
+  `add_blank_page`, `duplicate_page`, `insert_pdf_at`, `crop_page`
+  (normaliza MediaBox para no desalinear coordenadas), `add_watermark`,
+  `add_header_footer` (paginas2.rs); `get/set_outline`, `get/set_metadata`,
+  `get_links` (documento.rs); `encrypt_pdf` (AES-256 R6 propio con
+  RustCrypto — lopdf 0.34 no escribe cifrado), `flatten_pdf`, `redact_area`
+  (seguridad.rs); `export_pages_png`, `export_text`, `compress_pdf`
+  (exportar.rs); `stamp_signature` + biblioteca de firmas
+  (firmas_visuales.rs; `DIR_DATOS` OnceLock en vez de AppHandle);
+  `get_image_data` (imagenes.rs); `create_form_field` y `create_link`
+  (formularios2.rs, cirugía lopdf con `NeedAppearances`; el borrado de
+  campos no se ofrece — dejaría huérfanos en /Fields; los enlaces sí se
+  borran con `remove_annotation`).
+- **QA como usuario real**: `src/ipc.ts` y `src/dialogos.ts` son shims — en
+  Tauri delegan en la API oficial; en un navegador normal hablan con el
+  puente HTTP de desarrollo (`src-tauri/src/puente_dev.rs`, puerto 1422,
+  solo debug). Sesión: `bun run dev` + `bun run qa:puente` (binario
+  `puente`, sin ventana) + el navegador de la skill browse contra
+  `http://localhost:1420`. Diálogos de fichero: se encolan con
+  `POST /qa/dialogo {"value": ...}`; fixtures con `POST /qa/fixture`.
+  Al añadir un comando: registrarlo en `generate_handler!` Y en el match de
+  `puente_dev::despachar`. Informes en `.gstack/qa-reports/`.
 - Tauri convierte los argumentos camelCase de JS a snake_case de Rust
   automáticamente (`pageIndex` → `page_index`).
 - PDFium se carga en runtime: primero desde los resources del bundle
