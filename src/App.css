@@ -222,7 +222,7 @@ textarea {
   display: flex;
   gap: 2px;
   background: var(--btn-hover);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 2px;
   flex-shrink: 0;
 }
@@ -296,7 +296,7 @@ textarea {
   top: calc(100% + 6px);
   background: var(--card-bg);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
   box-shadow: var(--shadow-pop);
   padding: 4px;
   min-width: 190px;
@@ -388,7 +388,7 @@ textarea {
   color: #fff;
   font-size: 10px;
   padding: 1px 7px;
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .thumb-actions {
@@ -461,7 +461,7 @@ textarea {
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--border);
-  border-radius: 20px;
+  border-radius: 8px;
   padding: 3px 8px;
   box-shadow: var(--shadow-pop);
   z-index: 20;
@@ -486,7 +486,7 @@ textarea {
 
 .nav-pill .btn {
   padding: 4px;
-  border-radius: 50%;
+  border-radius: 4px;
 }
 
 .placeholder .voz {
@@ -632,7 +632,7 @@ textarea {
   z-index: 30;
   background: var(--card-bg);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
   box-shadow: var(--shadow-pop);
   padding: 10px;
   width: 240px;
@@ -976,7 +976,7 @@ textarea {
   gap: 10px;
   background: var(--card-bg);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
   padding: 7px 12px;
   box-shadow: var(--shadow-pop);
   max-width: calc(100vw - 24px);
@@ -1060,7 +1060,7 @@ textarea {
   z-index: 60;
   background: var(--card-bg);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius);
   padding: 14px;
   width: min(400px, calc(100vw - 32px));
   max-height: calc(100vh - 120px);
@@ -1170,7 +1170,7 @@ textarea {
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 8px;
   padding: 7px 16px;
   box-shadow: var(--shadow-card);
   color: var(--fg);
@@ -1241,7 +1241,7 @@ textarea {
 .modal {
   background: var(--card-bg);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius);
   padding: 18px;
   width: min(330px, calc(100vw - 32px));
   max-height: calc(100vh - 96px);
