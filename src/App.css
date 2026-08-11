@@ -630,7 +630,9 @@ textarea {
 
 .textlayer.mode-firmar,
 .textlayer.mode-shape,
-.textlayer.mode-crop {
+.textlayer.mode-crop,
+.textlayer.mode-form-new,
+.textlayer.mode-link-new {
   cursor: crosshair;
 }
 

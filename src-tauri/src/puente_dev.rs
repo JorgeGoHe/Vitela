@@ -207,6 +207,8 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "export_pages_png" => cmd!(exportar::export_pages_png, { path: String, dest_dir: String, dpi: u16, format: String }),
         "export_text" => cmd!(exportar::export_text, { path: String, dest_path: String }),
         "compress_pdf" => cmd!(exportar::compress_pdf, { work_path: String, quality: u8, max_dpi: u16 }),
+        "create_form_field" => cmd!(crate::formularios2::create_form_field, { work_path: String, page_index: u16, kind: String, rect: crate::Rect, name: String }),
+        "create_link" => cmd!(crate::formularios2::create_link, { work_path: String, page_index: u16, rect: crate::Rect, uri: Option<String>, dest_page: Option<u16> }),
         otro => Err(format!("Comando desconocido en el puente: {otro}")),
     }
 }

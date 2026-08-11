@@ -1430,6 +1430,7 @@ mod documento;
 mod exportar;
 mod firma;
 mod firmas_visuales;
+mod formularios2;
 mod imagenes;
 mod paginas2;
 #[cfg(debug_assertions)]
@@ -2321,7 +2322,9 @@ pub fn run() {
             seguridad::redact_area,
             exportar::export_pages_png,
             exportar::export_text,
-            exportar::compress_pdf
+            exportar::compress_pdf,
+            formularios2::create_form_field,
+            formularios2::create_link
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

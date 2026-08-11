@@ -237,6 +237,28 @@ export function compressPdf(
   return invoke("compress_pdf", { workPath, quality, maxDpi });
 }
 
+/** Crea un campo de formulario (texto o casilla) en la página. */
+export function createFormField(args: {
+  workPath: string;
+  pageIndex: number;
+  kind: "text" | "checkbox";
+  rect: { x: number; y: number; w: number; h: number };
+  name: string;
+}): Promise<void> {
+  return invoke("create_form_field", { ...args });
+}
+
+/** Crea un enlace (a URL externa o a otra página). */
+export function createLink(args: {
+  workPath: string;
+  pageIndex: number;
+  rect: { x: number; y: number; w: number; h: number };
+  uri?: string | null;
+  destPage?: number | null;
+}): Promise<void> {
+  return invoke("create_link", { uri: null, destPage: null, ...args });
+}
+
 /** Contenido de un objeto de imagen como PNG base64 (para previsualizar). */
 export function getImageData(
   path: string,

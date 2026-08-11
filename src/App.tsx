@@ -23,6 +23,8 @@ import {
 } from "./api";
 import {
   compressPdf,
+  createFormField,
+  createLink,
   encryptPdf,
   exportPagesPng,
   exportText,
@@ -110,7 +112,9 @@ type Mode =
   | "shape"
   | "stamp"
   | "crop"
-  | "redact";
+  | "redact"
+  | "form-new"
+  | "link-new";
 type ShapeKind = "rect" | "ellipse" | "line" | "arrow";
 
 const SHAPE_COLORS = ["#e23d3d", "#3478f6", "#2ea043", "#f5b400", "#111111"];
@@ -227,6 +231,14 @@ const ICONS: Record<string, string[]> = {
   ],
   flatten: ["M12 3v12", "m8 11 4 4 4-4", "M4 21h16"],
   redact: ["M4 5h16v6H4Z", "M4 15h7", "M4 19h10"],
+  field: [
+    "M4 7h16a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1Z",
+    "M7 10v4",
+  ],
+  link: [
+    "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71",
+    "M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
+  ],
   printer: [
     "M6 9V3h12v6",
     "M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2",
@@ -402,6 +414,16 @@ function App() {
   const redactStartRef = useRef<{ x: number; y: number } | null>(null);
   const redactLiveRef = useRef<Rect | null>(null);
   const [redactReport, setRedactReport] = useState<RedactReport | null>(null);
+  const [formDraft, setFormDraft] = useState<Rect | null>(null);
+  const formStartRef = useRef<{ x: number; y: number } | null>(null);
+  const formLiveRef = useRef<Rect | null>(null);
+  const [formName, setFormName] = useState("campo");
+  const [formKind, setFormKind] = useState<"text" | "checkbox">("text");
+  const [linkDraft, setLinkDraft] = useState<Rect | null>(null);
+  const linkStartRef = useRef<{ x: number; y: number } | null>(null);
+  const linkLiveRef = useRef<Rect | null>(null);
+  const [linkTipo, setLinkTipo] = useState<"url" | "pagina">("url");
+  const [linkValor, setLinkValor] = useState("");
   const [printPages, setPrintPages] = useState<string[] | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportFmt, setExportFmt] = useState<"png" | "jpeg">("png");
@@ -637,14 +659,22 @@ function App() {
     }
   }
 
-  // Esc sale de los modos de área (recorte y redacción)
+  // Esc sale de los modos de área (recorte, redacción, campo y enlace)
   useEffect(() => {
-    if (mode !== "crop" && mode !== "redact") return;
+    if (
+      mode !== "crop" &&
+      mode !== "redact" &&
+      mode !== "form-new" &&
+      mode !== "link-new"
+    )
+      return;
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         setCropDraft(null);
         setRedactDraft(null);
         setRedactReport(null);
+        setFormDraft(null);
+        setLinkDraft(null);
         setMode("select");
       }
     }
@@ -1486,6 +1516,45 @@ function App() {
     }
   }
 
+  async function applyFormField() {
+    if (!workPath || !formDraft || !formName.trim()) return;
+    try {
+      await createFormField({
+        workPath,
+        pageIndex,
+        kind: formKind,
+        rect: formDraft,
+        name: formName.trim(),
+      });
+      setFormDraft(null);
+      setMode("select");
+      afterMutation(pageCount);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function applyLink() {
+    if (!workPath || !linkDraft || !linkValor.trim()) return;
+    try {
+      await createLink({
+        workPath,
+        pageIndex,
+        rect: linkDraft,
+        uri: linkTipo === "url" ? linkValor.trim() : null,
+        destPage:
+          linkTipo === "pagina"
+            ? Math.max(0, Math.min(pageCount - 1, Number(linkValor) - 1))
+            : null,
+      });
+      setLinkDraft(null);
+      setMode("select");
+      afterMutation(pageCount);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function addPdf() {
     if (!workPath) return;
     const selected = await open({
@@ -1797,6 +1866,16 @@ function App() {
       setRedactReport(null);
       return;
     }
+    if (mode === "form-new") {
+      formStartRef.current = { x, y };
+      setFormDraft(null);
+      return;
+    }
+    if (mode === "link-new") {
+      linkStartRef.current = { x, y };
+      setLinkDraft(null);
+      return;
+    }
     if (!pageText) return;
     anchorRef.current = charIndexAt(pageText, x, y);
     setDragging(true);
@@ -1882,6 +1961,25 @@ function App() {
       setRedactDraft(d);
       return;
     }
+    if (mode === "form-new" || mode === "link-new") {
+      const start = (mode === "form-new" ? formStartRef : linkStartRef).current;
+      if (!start) return;
+      const { x, y } = pagePoint(e);
+      const d = {
+        x: Math.min(x, start.x),
+        y: Math.min(y, start.y),
+        w: Math.abs(x - start.x),
+        h: Math.abs(y - start.y),
+      };
+      if (mode === "form-new") {
+        formLiveRef.current = d;
+        setFormDraft(d);
+      } else {
+        linkLiveRef.current = d;
+        setLinkDraft(d);
+      }
+      return;
+    }
     if (mode !== "select" || !pageText || anchorRef.current === null) return;
     const { x, y } = pagePoint(e);
     const idx = charIndexAt(pageText, x, y);
@@ -1939,6 +2037,15 @@ function App() {
         setRedactDraft(d);
         previewRedact(d);
       }
+      return;
+    }
+    if (mode === "form-new") {
+      formStartRef.current = null;
+      // el borrador queda visible; se confirma en la tarjeta
+      return;
+    }
+    if (mode === "link-new") {
+      linkStartRef.current = null;
       return;
     }
     if (mode === "image" && imgActionRef.current) {
@@ -2020,6 +2127,12 @@ function App() {
     setRedactDraft(null);
     setRedactReport(null);
     redactStartRef.current = null;
+    setFormDraft(null);
+    formLiveRef.current = null;
+    formStartRef.current = null;
+    setLinkDraft(null);
+    linkLiveRef.current = null;
+    linkStartRef.current = null;
   }
 
   return (
@@ -2259,6 +2372,28 @@ function App() {
                         className="btn"
                         onClick={() => {
                           setMenuOpen(false);
+                          selectMode("select");
+                          setMode("form-new");
+                        }}
+                      >
+                        <Icon name="field" size={14} />
+                        Añadir campo de formulario…
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          selectMode("select");
+                          setMode("link-new");
+                        }}
+                      >
+                        <Icon name="link" size={14} />
+                        Añadir enlace…
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
                           printDocument();
                         }}
                       >
@@ -2481,6 +2616,16 @@ function App() {
         <div className="sign-hint">
           Arrastra sobre el área a censurar: el contenido se ELIMINA de verdad
           · Esc cancela
+        </div>
+      )}
+      {mode === "form-new" && !formDraft && (
+        <div className="sign-hint">
+          Arrastra donde quieras el campo de formulario · Esc cancela
+        </div>
+      )}
+      {mode === "link-new" && !linkDraft && (
+        <div className="sign-hint">
+          Arrastra sobre la zona que será clicable · Esc cancela
         </div>
       )}
       {exportOpen && (
@@ -3290,6 +3435,132 @@ function App() {
                       </div>
                     </>
                   )}
+                  {(mode === "form-new" || mode === "link-new") &&
+                    (mode === "form-new" ? formDraft : linkDraft) && (
+                      <>
+                        <div
+                          className="crop-rect"
+                          style={{
+                            left:
+                              (mode === "form-new" ? formDraft : linkDraft)!.x *
+                              scale,
+                            top:
+                              (mode === "form-new" ? formDraft : linkDraft)!.y *
+                              scale,
+                            width:
+                              (mode === "form-new" ? formDraft : linkDraft)!.w *
+                              scale,
+                            height:
+                              (mode === "form-new" ? formDraft : linkDraft)!.h *
+                              scale,
+                          }}
+                        />
+                        <div
+                          className="card crop-actions"
+                          style={{
+                            left: clampCardLeft(
+                              (mode === "form-new" ? formDraft : linkDraft)!.x *
+                                scale,
+                              300,
+                            ),
+                            top:
+                              ((mode === "form-new" ? formDraft : linkDraft)!.y +
+                                (mode === "form-new" ? formDraft : linkDraft)!
+                                  .h) *
+                                scale +
+                              8,
+                          }}
+                          onMouseDown={(e) => e.stopPropagation()}
+                        >
+                          {mode === "form-new" ? (
+                            <>
+                              <div className="card-row">
+                                <input
+                                  type="text"
+                                  className="stamp-input"
+                                  autoFocus
+                                  placeholder="Nombre del campo"
+                                  value={formName}
+                                  onChange={(e) => setFormName(e.target.value)}
+                                />
+                                <select
+                                  className="size-select"
+                                  value={formKind}
+                                  onChange={(e) =>
+                                    setFormKind(
+                                      e.target.value as "text" | "checkbox",
+                                    )
+                                  }
+                                >
+                                  <option value="text">Texto</option>
+                                  <option value="checkbox">Casilla</option>
+                                </select>
+                              </div>
+                              <div className="card-actions">
+                                <button
+                                  className="btn btn-primary"
+                                  disabled={!formName.trim()}
+                                  onClick={applyFormField}
+                                >
+                                  Crear campo
+                                </button>
+                                <button
+                                  className="btn"
+                                  onClick={() => setFormDraft(null)}
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="card-row">
+                                <select
+                                  className="size-select"
+                                  value={linkTipo}
+                                  onChange={(e) => {
+                                    setLinkTipo(
+                                      e.target.value as "url" | "pagina",
+                                    );
+                                    setLinkValor("");
+                                  }}
+                                >
+                                  <option value="url">URL</option>
+                                  <option value="pagina">Página</option>
+                                </select>
+                                <input
+                                  type={linkTipo === "url" ? "text" : "number"}
+                                  className="stamp-input"
+                                  autoFocus
+                                  placeholder={
+                                    linkTipo === "url"
+                                      ? "https://…"
+                                      : `1-${pageCount}`
+                                  }
+                                  value={linkValor}
+                                  onChange={(e) => setLinkValor(e.target.value)}
+                                />
+                              </div>
+                              <div className="card-actions">
+                                <button
+                                  className="btn btn-primary"
+                                  disabled={!linkValor.trim()}
+                                  onClick={applyLink}
+                                >
+                                  Crear enlace
+                                </button>
+                                <button
+                                  className="btn"
+                                  onClick={() => setLinkDraft(null)}
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </>
+                    )}
                   {mode === "firmar" && activeSig && sigDraft && (
                     <img
                       className="sign-ghost"
