@@ -213,9 +213,9 @@ const ICONS: Record<string, string[]> = {
   sticky: ["M12 3v10", "M12 13l-3-3", "M12 13l3-3"],
   panel: ["M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5Z", "M9 3v18"],
   shapes: [
-    "M8 3H3v5h5V3Z",
-    "M17 21a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z",
-    "m14 4 6 6",
+    "M8.3 10a.7.7 0 0 1-.626-1.08L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z",
+    "M3 14h7v7H3z",
+    "M17.5 21a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z",
   ],
   stamp: [
     "M5 22h14",
@@ -346,6 +346,7 @@ function App() {
   const [annots, setAnnots] = useState<AnnotationInfo[]>([]);
   const [annotVersion, setAnnotVersion] = useState(0);
   const [strokePts, setStrokePts] = useState<[number, number][]>([]);
+  const strokeLiveRef = useRef<[number, number][]>([]);
   const [noteDraft, setNoteDraft] = useState<{
     x: number;
     y: number;
@@ -379,6 +380,9 @@ function App() {
     path: string;
     password: string;
   } | null>(null);
+  const [drawColor, setDrawColor] = useState("#e23d3d");
+  const [drawWidth, setDrawWidth] = useState(2);
+  const [markupColor, setMarkupColor] = useState<string | null>(null);
   const [shapeKind, setShapeKind] = useState<ShapeKind>("rect");
   const [shapeColor, setShapeColor] = useState(SHAPE_COLORS[0]);
   const [shapeFill, setShapeFill] = useState(false);
@@ -720,6 +724,37 @@ function App() {
     };
   }, []);
 
+  // Atajos de teclado: ⌘O abrir, ⌘S guardar, ⌘F buscar, ⌘± zoom, ←/→ páginas
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const mod = e.metaKey || e.ctrlKey;
+      const tag = (e.target as HTMLElement)?.tagName;
+      const enCampo = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+      if (mod && e.key === "o") {
+        e.preventDefault();
+        openFile();
+      } else if (mod && e.key === "s") {
+        e.preventDefault();
+        if (modified) saveFile();
+      } else if (mod && e.key === "f" && pageCount > 0) {
+        e.preventDefault();
+        (document.querySelector(".search input") as HTMLInputElement)?.focus();
+      } else if (mod && (e.key === "+" || e.key === "=") && pageCount > 0) {
+        e.preventDefault();
+        setZoom(Math.min(4, Math.round((zoomNum + 0.25) * 4) / 4));
+      } else if (mod && e.key === "-" && pageCount > 0) {
+        e.preventDefault();
+        setZoom(Math.max(0.5, Math.round((zoomNum - 0.25) * 4) / 4));
+      } else if (!mod && !enCampo && e.key === "ArrowRight") {
+        setPageIndex((i) => Math.min(pageCount - 1, i + 1));
+      } else if (!mod && !enCampo && e.key === "ArrowLeft") {
+        setPageIndex((i) => Math.max(0, i - 1));
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   /** Guarda un render en el caché de páginas, con tope de entradas. */
   function cachePut(key: string, src: string) {
     const cache = pageCacheRef.current;
@@ -898,7 +933,15 @@ function App() {
     );
     if (rects.length === 0) return;
     try {
-      await addMarkup({ workPath, pageIndex, rects, kind });
+      await addMarkup({
+        workPath,
+        pageIndex,
+        rects,
+        kind,
+        color: markupColor
+          ? hexToRgba(markupColor, kind === "highlight" ? 140 : 255)
+          : undefined,
+      });
       setSelection(null);
       afterAnnotate(pageIndex);
     } catch (e) {
@@ -974,11 +1017,18 @@ function App() {
   }
 
   async function finishStroke() {
-    const pts = strokePts;
+    const pts = strokeLiveRef.current;
+    strokeLiveRef.current = [];
     setStrokePts([]);
     if (!workPath || pts.length < 2) return;
     try {
-      await invoke("add_stroke", { workPath, pageIndex, points: pts });
+      await invoke("add_stroke", {
+        workPath,
+        pageIndex,
+        points: pts,
+        color: hexToRgba(drawColor),
+        width: drawWidth,
+      });
       afterAnnotate(pageIndex);
     } catch (e) {
       setError(String(e));
@@ -1819,6 +1869,7 @@ function App() {
     if (e.button !== 0) return;
     const { x, y } = pagePoint(e);
     if (mode === "draw") {
+      strokeLiveRef.current = [[x, y]];
       setStrokePts([[x, y]]);
       return;
     }
@@ -1904,9 +1955,10 @@ function App() {
       return;
     }
     if (mode === "draw") {
-      if (strokePts.length === 0) return;
+      if (strokeLiveRef.current.length === 0) return;
       const { x, y } = pagePoint(e);
-      setStrokePts((pts) => [...pts, [x, y]]);
+      strokeLiveRef.current = [...strokeLiveRef.current, [x, y]];
+      setStrokePts(strokeLiveRef.current);
       return;
     }
     if (mode === "firmar") {
@@ -2061,7 +2113,7 @@ function App() {
       }
       return;
     }
-    if (mode === "draw" && strokePts.length > 0) finishStroke();
+    if (mode === "draw" && strokeLiveRef.current.length > 0) finishStroke();
   }
 
   const selectionRects =
@@ -2163,16 +2215,31 @@ function App() {
 
         {pageCount > 0 && (
           <div className="segmented">
-            {MODES.map((m) => (
-              <button
-                key={m.id}
-                className={`btn${mode === m.id ? " on" : ""}`}
-                title={m.hint}
-                onClick={() => selectMode(m.id)}
-              >
-                <Icon name={m.icon} size={14} />
-                <span className="btn-etiqueta">{m.label}</span>
-              </button>
+            {(
+              [
+                ["select"],
+                ["draw", "note", "shape", "stamp"],
+                ["edit", "image"],
+                ["firmar"],
+              ] as Mode[][]
+            ).map((grupo, gi) => (
+              <span key={gi} style={{ display: "contents" }}>
+                {gi > 0 && <span className="grupo-sep" />}
+                {grupo.map((id) => {
+                  const m = MODES.find((x) => x.id === id)!;
+                  return (
+                    <button
+                      key={m.id}
+                      className={`btn${mode === m.id ? " on" : ""}`}
+                      title={m.hint}
+                      onClick={() => selectMode(m.id)}
+                    >
+                      <Icon name={m.icon} size={14} />
+                      <span className="btn-etiqueta">{m.label}</span>
+                    </button>
+                  );
+                })}
+              </span>
             ))}
           </div>
         )}
@@ -2246,6 +2313,7 @@ function App() {
                       onClick={() => setMenuOpen(false)}
                     />
                     <div className="menu">
+                      <div className="menu-titulo">Archivo</div>
                       <button
                         className="btn"
                         onClick={() => {
@@ -2255,16 +2323,6 @@ function App() {
                       >
                         <Icon name="save" size={14} />
                         Guardar como…
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          signPdf();
-                        }}
-                      >
-                        <Icon name="sign" size={14} />
-                        Firma digital (certificado)…
                       </button>
                       <button
                         className="btn"
@@ -2296,6 +2354,7 @@ function App() {
                         <Icon name="merge" size={14} />
                         Insertar PDF aquí…
                       </button>
+                      <div className="menu-titulo">Documento</div>
                       <button
                         className="btn"
                         onClick={() => {
@@ -2337,6 +2396,17 @@ function App() {
                         <Icon name="doc" size={14} />
                         Propiedades del documento…
                       </button>
+                      <div className="menu-titulo">Seguridad</div>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          signPdf();
+                        }}
+                      >
+                        <Icon name="sign" size={14} />
+                        Firma digital (certificado)…
+                      </button>
                       <button
                         className="btn"
                         onClick={() => {
@@ -2368,6 +2438,7 @@ function App() {
                         <Icon name="redact" size={14} />
                         Redactar (censurar)…
                       </button>
+                      <div className="menu-titulo">Insertar</div>
                       <button
                         className="btn"
                         onClick={() => {
@@ -2390,6 +2461,7 @@ function App() {
                         <Icon name="link" size={14} />
                         Añadir enlace…
                       </button>
+                      <div className="menu-titulo">Salida</div>
                       <button
                         className="btn"
                         onClick={() => {
@@ -2726,6 +2798,34 @@ function App() {
           Esc cancela
         </div>
       )}
+      {mode === "draw" && (
+        <div className="tool-options">
+          <span>Trazo</span>
+          <div className="swatches">
+            {SHAPE_COLORS.map((c) => (
+              <button
+                key={c}
+                className={`swatch${drawColor === c ? " on" : ""}`}
+                style={{ background: c }}
+                title={c}
+                onClick={() => setDrawColor(c)}
+              />
+            ))}
+          </div>
+          <select
+            className="size-select"
+            title="Grosor"
+            value={drawWidth}
+            onChange={(e) => setDrawWidth(Number(e.target.value))}
+          >
+            {[1, 2, 3, 5, 8].map((w) => (
+              <option key={w} value={w}>
+                {w} pt
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       {mode === "shape" && (
         <div className="tool-options">
           <div className="segmented">
@@ -2818,6 +2918,12 @@ function App() {
               />
             ))}
           </div>
+          <span
+            className="sello-preview"
+            style={{ color: stampColor, borderColor: stampColor }}
+          >
+            {(stampText === "custom" ? stampCustom || "SELLO" : stampText)}
+          </span>
           <span className="opt-hint">Clic en la página para colocarlo</span>
         </div>
       )}
@@ -2928,8 +3034,7 @@ function App() {
           <main className="viewer" ref={viewerRef}>
             {!workPath && (
               <div className="placeholder">
-                <Icon name="doc" size={56} />
-                <p>Abre un PDF para empezar</p>
+                <p className="voz">Nada abierto todavía. El papel espera.</p>
                 <button className="btn btn-primary" onClick={openFile}>
                   <Icon name="open" size={14} />
                   Abrir PDF
@@ -2938,6 +3043,10 @@ function App() {
             )}
             {imgSrc && (
               <div className="page-wrap" style={{ width: displayWidth }}>
+                <span className="esquina a" />
+                <span className="esquina b" />
+                <span className="esquina c" />
+                <span className="esquina d" />
                 <img
                   className="page"
                   src={imgSrc}
@@ -3698,6 +3807,21 @@ function App() {
                       }}
                       onMouseDown={(e) => e.stopPropagation()}
                     >
+                      <div className="swatches" style={{ marginRight: 4 }}>
+                        {["#f5c400", "#2ea043", "#2743c0", "#c0392b"].map(
+                          (c) => (
+                            <button
+                              key={c}
+                              className={`swatch${
+                                (markupColor ?? "#f5c400") === c ? " on" : ""
+                              }`}
+                              style={{ background: c }}
+                              title="Color de la marca"
+                              onClick={() => setMarkupColor(c)}
+                            />
+                          ),
+                        )}
+                      </div>
                       <button
                         className="btn"
                         onClick={() => markupSelection("highlight")}

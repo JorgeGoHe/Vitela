@@ -569,10 +569,18 @@ fn add_highlight(work_path: String, page_index: u16, rects: Vec<Rect>) -> Result
 /// individualmente. Los puntos vienen en coords de UI (puntos PDF,
 /// origen arriba-izquierda).
 #[tauri::command]
-fn add_stroke(work_path: String, page_index: u16, points: Vec<[f32; 2]>) -> Result<(), String> {
+fn add_stroke(
+    work_path: String,
+    page_index: u16,
+    points: Vec<[f32; 2]>,
+    color: Option<[u8; 4]>,
+    width: Option<f32>,
+) -> Result<(), String> {
     if points.len() < 2 {
         return Err("Trazo demasiado corto".into());
     }
+    let c = color.unwrap_or([226, 61, 61, 255]);
+    let w = width.unwrap_or(2.0).clamp(0.5, 12.0);
     on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
@@ -601,8 +609,8 @@ fn add_stroke(work_path: String, page_index: u16, points: Vec<[f32; 2]>) -> Resu
             &doc,
             PdfPoints::new(points[0][0]),
             PdfPoints::new(page_h - points[0][1]),
-            Some(PdfColor::new(226, 61, 61, 255)),
-            Some(PdfPoints::new(2.0)),
+            Some(PdfColor::new(c[0], c[1], c[2], c[3])),
+            Some(PdfPoints::new(w)),
             None,
         )
         .map_err(|e| e.to_string())?;
@@ -1640,7 +1648,7 @@ pub(crate) mod tests {
         };
         let antes = decode(render_page(work.clone(), 0, 200).unwrap());
         // trazo horizontal que pasa por (150, 120) pt
-        add_stroke(work.clone(), 0, vec![[50.0, 120.0], [250.0, 120.0]]).expect("trazo");
+        add_stroke(work.clone(), 0, vec![[50.0, 120.0], [250.0, 120.0]], None, None).expect("trazo");
         let despues = decode(render_page(work.clone(), 0, 200).unwrap());
         let px = (150.0f32 * 200.0 / 595.0) as u32;
         let py = (120.0f32 * 200.0 / 595.0) as u32;
@@ -1721,6 +1729,8 @@ pub(crate) mod tests {
             work.clone(),
             0,
             vec![[10.0, 10.0], [50.0, 40.0], [90.0, 10.0]],
+            None,
+            None,
         )
         .expect("añadir trazo");
         let annots = get_annotations(work.clone(), 0).expect("listar con trazo");

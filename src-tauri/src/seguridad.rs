@@ -457,6 +457,8 @@ mod tests {
             work.clone(),
             0,
             vec![[100.0, 100.0], [200.0, 200.0], [250.0, 150.0]],
+            None,
+            None,
         )
         .expect("trazo");
         assert_eq!(crate::get_annotations(work.clone(), 0).unwrap().len(), 1);

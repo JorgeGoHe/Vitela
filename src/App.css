@@ -4,41 +4,95 @@
   box-sizing: border-box;
 }
 
+/* ===== Sistema de diseño «Mesa de trabajo» — ver DESIGN.md =====
+   El documento es papel; la app es la mesa donde está apoyado. */
+
+@font-face {
+  font-family: "Instrument Sans";
+  src: url("./assets/fonts/instrument-sans.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  src: url("./assets/fonts/instrument-sans-italic.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Fragment Mono";
+  src: url("./assets/fonts/fragment-mono.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Fraunces";
+  src: url("./assets/fonts/fraunces.woff2") format("woff2");
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Fraunces";
+  src: url("./assets/fonts/fraunces-italic.woff2") format("woff2");
+  font-weight: 300 700;
+  font-style: italic;
+  font-display: swap;
+}
+
 :root {
-  --bg-chrome: #f5f5f7;
-  --bg-viewer: #e8e8ec;
-  --bg-sidebar: #efeff2;
-  --fg: #1d1d1f;
-  --fg-muted: #6e6e73;
-  --border: rgba(0, 0, 0, 0.12);
-  --accent: #3478f6;
-  --danger: #e5484d;
-  --card-bg: #ffffff;
-  --card-translucent: rgba(255, 255, 255, 0.82);
-  --btn-hover: rgba(0, 0, 0, 0.06);
-  --btn-active: rgba(0, 0, 0, 0.11);
-  --radius: 8px;
-  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.14);
-  --shadow-page: 0 2px 8px rgba(0, 0, 0, 0.18), 0 8px 24px rgba(0, 0, 0, 0.1);
-  --shadow-pop: 0 8px 28px rgba(0, 0, 0, 0.22);
+  /* mesa de día */
+  --bg-chrome: #f5f3ec;
+  --bg-viewer: #40604f; /* alfombrilla de corte */
+  --bg-sidebar: #f0eee5;
+  --fg: #1d1c18; /* tinta */
+  --fg-muted: #6f6a5c; /* lápiz HB */
+  --border: rgba(29, 28, 24, 0.14);
+  --accent: #2743c0; /* estilográfica */
+  --danger: #c0392b; /* corrector */
+  --exito: #2f6b3a;
+  --card-bg: #fcfbf7;
+  --card-translucent: rgba(252, 251, 247, 0.92);
+  --btn-hover: rgba(29, 28, 24, 0.06);
+  --btn-active: rgba(29, 28, 24, 0.11);
+  --radius: 6px;
+  /* sombras duras y cortas: papel apoyado, no tarjeta levitando */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.16);
+  --shadow-page: 0 2px 3px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 4px 6px rgba(0, 0, 0, 0.3);
+  --marca-esquina: rgba(253, 253, 251, 0.28);
+  --font-ui: "Instrument Sans", "Segoe UI", sans-serif;
+  --font-mono: "Fragment Mono", monospace;
+  --font-voz: "Fraunces", serif;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg-chrome: #1e1e21;
-    --bg-viewer: #2a2a2e;
-    --bg-sidebar: #232327;
-    --fg: #ececef;
-    --fg-muted: #9a9aa2;
-    --border: rgba(255, 255, 255, 0.14);
-    --accent: #4a8df6;
-    --card-bg: #313135;
-    --card-translucent: rgba(49, 49, 53, 0.82);
-    --btn-hover: rgba(255, 255, 255, 0.08);
-    --btn-active: rgba(255, 255, 255, 0.14);
-    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.45);
-    --shadow-page: 0 2px 8px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.35);
-    --shadow-pop: 0 8px 28px rgba(0, 0, 0, 0.55);
+    /* lámpara de escritorio: la misma mesa, de noche (cálido, jamás azul-pizarra) */
+    --bg-chrome: #171511;
+    --bg-viewer: #232b26; /* la alfombrilla apagada */
+    --bg-sidebar: #1c1a15;
+    --fg: #ede9dd;
+    --fg-muted: #97907c;
+    --border: rgba(237, 233, 221, 0.16);
+    --accent: #8e9ef5; /* la misma tinta, diluida */
+    --danger: #e06a55;
+    --exito: #8fc79a;
+    --card-bg: #201e18;
+    --card-translucent: rgba(32, 30, 24, 0.92);
+    --btn-hover: rgba(237, 233, 221, 0.08);
+    --btn-active: rgba(237, 233, 221, 0.14);
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --shadow-page: 0 2px 3px rgba(0, 0, 0, 0.6);
+    --shadow-pop: 0 4px 6px rgba(0, 0, 0, 0.55);
+    --marca-esquina: rgba(237, 233, 221, 0.2);
   }
 }
 
@@ -49,10 +103,16 @@ body,
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-ui);
   font-size: 13px;
   color: var(--fg);
   -webkit-font-smoothing: antialiased;
+}
+
+/* datos "de imprenta": páginas, zoom, tamaños, atajos */
+.dato {
+  font-family: var(--font-mono);
+  font-size: 12px;
 }
 
 .app {
@@ -144,9 +204,12 @@ textarea {
 
 .toolbar-right {
   justify-content: flex-end;
+  flex: 0 1 auto;
+  min-width: max-content;
 }
 
 .filename {
+  font-family: var(--font-mono);
   color: var(--fg-muted);
   font-size: 12px;
   overflow: hidden;
@@ -209,6 +272,7 @@ textarea {
 }
 
 .match-count {
+  font-family: var(--font-mono);
   color: var(--fg-muted);
   font-size: 11px;
   white-space: nowrap;
@@ -316,6 +380,7 @@ textarea {
 }
 
 .thumb-num {
+  font-family: var(--font-mono);
   position: absolute;
   bottom: 5px;
   left: 5px;
@@ -403,6 +468,8 @@ textarea {
 }
 
 .nav-pill span {
+  font-family: var(--font-mono);
+  font-size: 12px;
   font-size: 12px;
   color: var(--fg);
   min-width: 44px;
@@ -420,6 +487,14 @@ textarea {
 .nav-pill .btn {
   padding: 4px;
   border-radius: 50%;
+}
+
+.placeholder .voz {
+  font-family: var(--font-voz);
+  font-style: italic;
+  font-weight: 350;
+  font-size: 26px;
+  color: rgba(253, 253, 251, 0.88);
 }
 
 .placeholder {
@@ -620,6 +695,7 @@ textarea {
 }
 
 .card-label {
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--fg-muted);
 }
@@ -666,14 +742,6 @@ textarea {
 @media (max-width: 1080px) {
   .toolbar .btn-etiqueta {
     display: none;
-  }
-
-  /* con poco sitio, la derecha reclama su ancho natural (con flex: 1 solo
-     recibiría la mitad del sobrante y sus hijos desbordarían sobre los
-     modos); el segmented deja de estar perfectamente centrado, no pasa nada */
-  .toolbar-right {
-    flex: 0 1 auto;
-    min-width: max-content;
   }
 
   .segmented .btn {
@@ -950,6 +1018,7 @@ textarea {
 }
 
 .opt-hint {
+  font-family: var(--font-mono);
   color: var(--fg-muted);
   font-size: 12px;
 }
@@ -1192,6 +1261,7 @@ textarea {
 
 .modal-file {
   font-size: 12px;
+  font-family: var(--font-mono);
   color: var(--fg-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1215,4 +1285,73 @@ textarea {
 .status {
   color: var(--fg-muted);
   font-size: 11px;
+}
+
+
+/* ===== mesa de trabajo: marcas de esquina y estado vacío ===== */
+
+.page-wrap {
+  position: relative;
+}
+
+.esquina {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border: 0 solid var(--marca-esquina);
+  pointer-events: none;
+}
+
+.esquina.a { top: -14px; left: -14px; border-top-width: 1.5px; border-left-width: 1.5px; }
+.esquina.b { top: -14px; right: -14px; border-top-width: 1.5px; border-right-width: 1.5px; }
+.esquina.c { bottom: -14px; left: -14px; border-bottom-width: 1.5px; border-left-width: 1.5px; }
+.esquina.d { bottom: -14px; right: -14px; border-bottom-width: 1.5px; border-right-width: 1.5px; }
+
+.placeholder {
+  color: rgba(253, 253, 251, 0.65);
+}
+
+.placeholder svg {
+  color: rgba(253, 253, 251, 0.4);
+}
+
+.banner-notice p,
+.alerta-exito {
+  color: var(--fg);
+}
+
+/* separadores y cabeceras del menú ⋯ */
+.menu-titulo {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-muted);
+  padding: 8px 10px 3px;
+  user-select: none;
+}
+
+.menu-titulo:not(:first-child) {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+/* separador vertical entre grupos de la toolbar */
+.grupo-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+.sello-preview {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  border: 2px solid;
+  border-radius: 3px;
+  padding: 2px 8px;
+  transform: rotate(-3deg);
+  user-select: none;
 }

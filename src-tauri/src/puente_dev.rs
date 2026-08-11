@@ -162,7 +162,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "extract_pages" => cmd!(crate::extract_pages, { work_path: String, page_indices: Vec<u16>, dest_path: String }),
         "save_pdf" => cmd!(crate::save_pdf, { work_path: String, dest_path: String }),
         "add_highlight" => cmd!(crate::add_highlight, { work_path: String, page_index: u16, rects: Vec<crate::Rect> }),
-        "add_stroke" => cmd!(crate::add_stroke, { work_path: String, page_index: u16, points: Vec<[f32; 2]> }),
+        "add_stroke" => cmd!(crate::add_stroke, { work_path: String, page_index: u16, points: Vec<[f32; 2]>, color: Option<[u8; 4]>, width: Option<f32> }),
         "add_note" => cmd!(crate::add_note, { work_path: String, page_index: u16, x: f32, y: f32, text: String }),
         "get_annotations" => cmd!(crate::get_annotations, { path: String, page_index: u16 }),
         "remove_annotation" => cmd!(crate::remove_annotation, { work_path: String, page_index: u16, annot_index: u16 }),
