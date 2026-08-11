@@ -4895,11 +4895,14 @@ dependencies = [
 name = "tauri-app"
 version = "0.1.0"
 dependencies = [
+ "aes 0.8.4",
  "base64 0.22.1",
+ "cbc 0.1.2",
  "chrono",
  "cms 0.2.3",
  "const-oid 0.9.6",
  "der 0.7.10",
+ "getrandom 0.2.17",
  "image",
  "lopdf",
  "p12-keystore",

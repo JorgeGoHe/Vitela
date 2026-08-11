@@ -22,14 +22,18 @@ import {
   type Rgba,
 } from "./api";
 import {
+  encryptPdf,
+  flattenPdf,
   getLinks,
   getMetadata,
   getOutline,
+  redactArea,
   setMetadata,
   setOutline,
   type LinkInfo,
   type Metadata,
   type OutlineNode,
+  type RedactReport,
 } from "./api";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import PanelFirmas from "./components/PanelFirmas";
@@ -102,7 +106,8 @@ type Mode =
   | "firmar"
   | "shape"
   | "stamp"
-  | "crop";
+  | "crop"
+  | "redact";
 type ShapeKind = "rect" | "ellipse" | "line" | "arrow";
 
 const SHAPE_COLORS = ["#e23d3d", "#3478f6", "#2ea043", "#f5b400", "#111111"];
@@ -212,6 +217,12 @@ const ICONS: Record<string, string[]> = {
   underline: ["M6 4v6a6 6 0 0 0 12 0V4", "M4 20h16"],
   strike: ["M16 4H9a3 3 0 0 0-2.83 4", "M14 12a4 4 0 0 1 0 8H6", "M4 12h16"],
   crop: ["M6 2v14a2 2 0 0 0 2 2h14", "M18 22V8a2 2 0 0 0-2-2H2"],
+  lock: [
+    "M19 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2Z",
+    "M7 11V7a5 5 0 0 1 10 0v4",
+  ],
+  flatten: ["M12 3v12", "m8 11 4 4 4-4", "M4 21h16"],
+  redact: ["M4 5h16v6H4Z", "M4 15h7", "M4 19h10"],
   water: ["M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7Z"],
   hf: ["M3 5h18", "M3 19h18", "M7 12h10"],
 };
@@ -362,6 +373,18 @@ function App() {
   const [sidebarTab, setSidebarTab] = useState<"paginas" | "marcadores">(
     "paginas",
   );
+  const [pwdDraft, setPwdDraft] = useState<{
+    path: string;
+    password: string;
+  } | null>(null);
+  const [protectDraft, setProtectDraft] = useState<{
+    user: string;
+    owner: string;
+  } | null>(null);
+  const [flattenAsk, setFlattenAsk] = useState(false);
+  const [redactDraft, setRedactDraft] = useState<Rect | null>(null);
+  const redactStartRef = useRef<{ x: number; y: number } | null>(null);
+  const [redactReport, setRedactReport] = useState<RedactReport | null>(null);
   const [outline, setOutlineState] = useState<OutlineNode[]>([]);
   const [links, setLinks] = useState<LinkInfo[]>([]);
   const [propsDraft, setPropsDraft] = useState<Metadata | null>(null);
@@ -381,12 +404,7 @@ function App() {
   const [searched, setSearched] = useState(false);
   const currentHitRef = useRef<HTMLDivElement | null>(null);
 
-  async function openFile() {
-    const selected = await open({
-      filters: [{ name: "PDF", extensions: ["pdf"] }],
-      multiple: false,
-    });
-    if (typeof selected !== "string") return;
+  async function openPath(path: string, password?: string) {
     try {
       setError(null);
       setImgSrc(null);
@@ -397,16 +415,31 @@ function App() {
       setModified(false);
       const info = await invoke<{ page_count: number; work_path: string }>(
         "open_pdf",
-        { path: selected },
+        { path, password: password ?? null },
       );
-      setOriginalPath(selected);
+      setPwdDraft(null);
+      setOriginalPath(path);
       setWorkPath(info.work_path);
       setPageCount(info.page_count);
       setPageIndex(0);
       setDocVersion((v) => v + 1);
     } catch (e) {
-      setError(String(e));
+      if (String(e) === "PASSWORD_REQUIRED") {
+        setPwdDraft({ path, password: "" });
+        if (password !== undefined) setError("Contraseña incorrecta");
+      } else {
+        setError(String(e));
+      }
     }
+  }
+
+  async function openFile() {
+    const selected = await open({
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+      multiple: false,
+    });
+    if (typeof selected !== "string") return;
+    await openPath(selected);
   }
 
   // Anotaciones de la página actual (para iconos de nota y popovers)
@@ -578,12 +611,14 @@ function App() {
     }
   }
 
-  // Esc sale del modo recorte
+  // Esc sale de los modos de área (recorte y redacción)
   useEffect(() => {
-    if (mode !== "crop") return;
+    if (mode !== "crop" && mode !== "redact") return;
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         setCropDraft(null);
+        setRedactDraft(null);
+        setRedactReport(null);
         setMode("select");
       }
     }
@@ -1239,6 +1274,63 @@ function App() {
     }
   }
 
+  async function applyProtect() {
+    if (!workPath || !protectDraft || !protectDraft.user) return;
+    const dest = await save({
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+      defaultPath: (originalPath ?? "documento.pdf").replace(
+        /\.pdf$/i,
+        "-protegido.pdf",
+      ),
+      title: "Guardar PDF protegido",
+    });
+    if (!dest) return;
+    try {
+      await encryptPdf({
+        workPath,
+        destPath: dest,
+        userPassword: protectDraft.user,
+        ownerPassword: protectDraft.owner || null,
+      });
+      setProtectDraft(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function applyFlatten() {
+    if (!workPath) return;
+    try {
+      await flattenPdf(workPath);
+      setFlattenAsk(false);
+      afterMutation(pageCount);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function previewRedact(r: Rect) {
+    if (!workPath) return;
+    try {
+      setRedactReport(await redactArea(workPath, pageIndex, r, true));
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function applyRedact() {
+    if (!workPath || !redactDraft) return;
+    try {
+      await redactArea(workPath, pageIndex, redactDraft, false);
+      setRedactDraft(null);
+      setRedactReport(null);
+      setMode("select");
+      afterMutation(pageCount);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function addPdf() {
     if (!workPath) return;
     const selected = await open({
@@ -1540,6 +1632,12 @@ function App() {
       setCropDraft(null);
       return;
     }
+    if (mode === "redact") {
+      redactStartRef.current = { x, y };
+      setRedactDraft(null);
+      setRedactReport(null);
+      return;
+    }
     if (!pageText) return;
     anchorRef.current = charIndexAt(pageText, x, y);
     setDragging(true);
@@ -1607,6 +1705,18 @@ function App() {
       });
       return;
     }
+    if (mode === "redact") {
+      const start = redactStartRef.current;
+      if (!start) return;
+      const { x, y } = pagePoint(e);
+      setRedactDraft({
+        x: Math.min(x, start.x),
+        y: Math.min(y, start.y),
+        w: Math.abs(x - start.x),
+        h: Math.abs(y - start.y),
+      });
+      return;
+    }
     if (mode !== "select" || !pageText || anchorRef.current === null) return;
     const { x, y } = pagePoint(e);
     const idx = charIndexAt(pageText, x, y);
@@ -1650,6 +1760,13 @@ function App() {
     if (mode === "crop") {
       cropStartRef.current = null;
       // el borrador se queda visible; se confirma con los botones
+      return;
+    }
+    if (mode === "redact") {
+      redactStartRef.current = null;
+      if (redactDraft && redactDraft.w > 6 && redactDraft.h > 6) {
+        previewRedact(redactDraft);
+      }
       return;
     }
     if (mode === "image" && imgActionRef.current) {
@@ -1728,6 +1845,9 @@ function App() {
     shapeStartRef.current = null;
     setCropDraft(null);
     cropStartRef.current = null;
+    setRedactDraft(null);
+    setRedactReport(null);
+    redactStartRef.current = null;
   }
 
   return (
@@ -1923,6 +2043,37 @@ function App() {
                         <Icon name="doc" size={14} />
                         Propiedades del documento…
                       </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          setProtectDraft({ user: "", owner: "" });
+                        }}
+                      >
+                        <Icon name="lock" size={14} />
+                        Proteger con contraseña…
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          setFlattenAsk(true);
+                        }}
+                      >
+                        <Icon name="flatten" size={14} />
+                        Aplanar anotaciones…
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          selectMode("select");
+                          setMode("redact");
+                        }}
+                      >
+                        <Icon name="redact" size={14} />
+                        Redactar (censurar)…
+                      </button>
                     </div>
                   </>
                 )}
@@ -2002,6 +2153,106 @@ function App() {
           onSave={saveProperties}
           onClose={() => setPropsDraft(null)}
         />
+      )}
+      {pwdDraft && (
+        <div className="modal-backdrop" onClick={() => setPwdDraft(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Documento protegido</h3>
+            <p className="modal-file">{pwdDraft.path.split(/[\\/]/).pop()}</p>
+            <input
+              type="password"
+              autoFocus
+              placeholder="Contraseña del documento"
+              value={pwdDraft.password}
+              onChange={(e) =>
+                setPwdDraft({ ...pwdDraft, password: e.target.value })
+              }
+              onKeyDown={(e) => {
+                if (e.key === "Enter")
+                  openPath(pwdDraft.path, pwdDraft.password);
+                if (e.key === "Escape") setPwdDraft(null);
+              }}
+            />
+            <div className="card-actions">
+              <button className="btn" onClick={() => setPwdDraft(null)}>
+                Cancelar
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={() => openPath(pwdDraft.path, pwdDraft.password)}
+              >
+                Abrir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {protectDraft && (
+        <div className="modal-backdrop" onClick={() => setProtectDraft(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Proteger con contraseña</h3>
+            <input
+              type="password"
+              autoFocus
+              placeholder="Contraseña (necesaria para abrir)"
+              value={protectDraft.user}
+              onChange={(e) =>
+                setProtectDraft({ ...protectDraft, user: e.target.value })
+              }
+            />
+            <input
+              type="password"
+              placeholder="Contraseña de propietario (opcional)"
+              value={protectDraft.owner}
+              onChange={(e) =>
+                setProtectDraft({ ...protectDraft, owner: e.target.value })
+              }
+            />
+            <p className="modal-file">
+              Cifrado AES-256. Se guarda como una copia protegida; si el
+              documento va a llevar firma digital, fírmalo por separado.
+            </p>
+            <div className="card-actions">
+              <button className="btn" onClick={() => setProtectDraft(null)}>
+                Cancelar
+              </button>
+              <button
+                className="btn btn-primary"
+                disabled={!protectDraft.user}
+                onClick={applyProtect}
+              >
+                Proteger…
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {flattenAsk && (
+        <div className="modal-backdrop" onClick={() => setFlattenAsk(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Aplanar anotaciones y formularios</h3>
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              Los sellos, formas, trazos y campos rellenados pasan a ser
+              contenido fijo de la página (ya no se podrán editar ni borrar).
+              Ojo: los resaltados, subrayados y notas creados con esta app se
+              perderán al aplanar.
+            </p>
+            <div className="card-actions">
+              <button className="btn" onClick={() => setFlattenAsk(false)}>
+                Cancelar
+              </button>
+              <button className="btn btn-primary" onClick={applyFlatten}>
+                Aplanar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {mode === "redact" && !redactDraft && (
+        <div className="sign-hint">
+          Arrastra sobre el área a censurar: el contenido se ELIMINA de verdad
+          · Esc cancela
+        </div>
       )}
       {mode === "crop" && !cropDraft && (
         <div className="sign-hint">
@@ -2670,6 +2921,51 @@ function App() {
                             onClick={() => {
                               setCropDraft(null);
                               setMode("select");
+                            }}
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                  {mode === "redact" && redactDraft && (
+                    <>
+                      <div
+                        className="redact-rect"
+                        style={{
+                          left: redactDraft.x * scale,
+                          top: redactDraft.y * scale,
+                          width: redactDraft.w * scale,
+                          height: redactDraft.h * scale,
+                        }}
+                      />
+                      <div
+                        className="card crop-actions"
+                        style={{
+                          left: redactDraft.x * scale,
+                          top: (redactDraft.y + redactDraft.h) * scale + 8,
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        <p>
+                          {redactReport
+                            ? `Se eliminarán ${redactReport.textos} bloque(s) de texto y ${redactReport.imagenes} imagen(es).`
+                            : "Calculando…"}
+                        </p>
+                        <div className="card-actions">
+                          <button
+                            className="btn btn-danger"
+                            disabled={!redactReport}
+                            onClick={applyRedact}
+                          >
+                            Redactar
+                          </button>
+                          <button
+                            className="btn"
+                            onClick={() => {
+                              setRedactDraft(null);
+                              setRedactReport(null);
                             }}
                           >
                             Cancelar

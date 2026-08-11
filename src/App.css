@@ -646,6 +646,17 @@ textarea {
   z-index: 30;
 }
 
+.textlayer.mode-redact {
+  cursor: crosshair;
+}
+
+.redact-rect {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.85);
+  outline: 2px solid var(--danger);
+  pointer-events: none;
+}
+
 .modal-hf {
   width: 430px;
 }

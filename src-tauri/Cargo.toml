@@ -36,4 +36,7 @@ der = "0.7"
 const-oid = { version = "0.9", features = ["db"] }
 chrono = "0.4"
 p12-keystore = "0.3"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+getrandom = "0.2"
 

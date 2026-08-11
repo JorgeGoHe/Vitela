@@ -182,6 +182,33 @@ export function getLinks(
   return invoke("get_links", { path, pageIndex });
 }
 
+/** Protege con contraseña (AES-256) escribiendo una copia en destPath. */
+export function encryptPdf(args: {
+  workPath: string;
+  destPath: string;
+  userPassword: string;
+  ownerPassword?: string | null;
+}): Promise<void> {
+  return invoke("encrypt_pdf", { ownerPassword: null, ...args });
+}
+
+/** Aplana anotaciones y formularios a contenido fijo. */
+export function flattenPdf(workPath: string): Promise<void> {
+  return invoke("flatten_pdf", { workPath });
+}
+
+export type RedactReport = { textos: number; imagenes: number };
+
+/** Redacción real de un área; con dryRun solo cuenta qué caería. */
+export function redactArea(
+  workPath: string,
+  pageIndex: number,
+  rect: { x: number; y: number; w: number; h: number },
+  dryRun: boolean,
+): Promise<RedactReport> {
+  return invoke("redact_area", { workPath, pageIndex, rect, dryRun });
+}
+
 /** Contenido de un objeto de imagen como PNG base64 (para previsualizar). */
 export function getImageData(
   path: string,

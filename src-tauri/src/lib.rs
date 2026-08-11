@@ -100,10 +100,13 @@ pub(crate) fn invalidate_doc_cache() {
     DOC_CACHE.with(|cell| *cell.borrow_mut() = None);
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 struct DocumentInfo {
     page_count: u16,
     work_path: String,
+    /// El original estaba cifrado (la copia de trabajo queda descifrada;
+    /// guardar sin re-proteger equivale a quitar la contraseña).
+    had_password: bool,
 }
 
 /// Ruta única en temp para la copia de trabajo del documento.
@@ -133,18 +136,42 @@ pub(crate) fn save_and_close(doc: PdfDocument<'static>, path: &str) -> Result<()
 }
 
 /// Abre un PDF creando una copia de trabajo en temp. Todas las mutaciones
-/// operan sobre la copia; el original solo se toca al guardar.
+/// operan sobre la copia; el original solo se toca al guardar. Si el PDF
+/// está cifrado hace falta `password`: la copia de trabajo se guarda ya
+/// descifrada para que el resto de comandos no tengan que saber nada. El
+/// error "PASSWORD_REQUIRED" indica a la UI que pida contraseña.
 #[tauri::command]
-fn open_pdf(path: String) -> Result<DocumentInfo, String> {
+fn open_pdf(path: String, password: Option<String>) -> Result<DocumentInfo, String> {
     let work = work_copy_path(&path);
-    std::fs::copy(&path, &work)
-        .map_err(|e| format!("No se pudo crear la copia de trabajo: {e}"))?;
     let work_path = work.to_string_lossy().into_owned();
     on_pdfium_thread(move || {
-        let page_count = with_doc(&work_path, |doc| Ok(doc.pages().len()))?;
+        let pdfium = pdfium()?;
+        let doc = match pdfium.load_pdf_from_file(&path, password.as_deref()) {
+            Ok(doc) => doc,
+            Err(PdfiumError::PdfiumLibraryInternalError(
+                PdfiumInternalError::PasswordError,
+            )) => return Err("PASSWORD_REQUIRED".into()),
+            Err(e) => return Err(e.to_string()),
+        };
+        let page_count = doc.pages().len();
+        let had_password = password.is_some();
+        if had_password {
+            // copia descifrada (save_to_file conservaría el cifrado)
+            drop(doc);
+            seguridad::guarda_descifrado(
+                &path,
+                password.as_deref().unwrap_or(""),
+                &work_path,
+            )?;
+        } else {
+            drop(doc);
+            std::fs::copy(&path, &work_path)
+                .map_err(|e| format!("No se pudo crear la copia de trabajo: {e}"))?;
+        }
         Ok(DocumentInfo {
             page_count,
             work_path,
+            had_password,
         })
     })
 }
@@ -1404,6 +1431,7 @@ mod firma;
 mod firmas_visuales;
 mod imagenes;
 mod paginas2;
+mod seguridad;
 
 /// Firma digitalmente la copia de trabajo y escribe el PDF firmado en
 /// `dest_path`. Certificado y clave privada en PEM (RSA sin cifrar).
@@ -2273,7 +2301,10 @@ pub fn run() {
             documento::set_outline,
             documento::get_metadata,
             documento::set_metadata,
-            documento::get_links
+            documento::get_links,
+            seguridad::encrypt_pdf,
+            seguridad::flatten_pdf,
+            seguridad::redact_area
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
