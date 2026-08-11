@@ -357,6 +357,7 @@ function App() {
   const [mode, setMode] = useState<Mode>("select");
   const [annots, setAnnots] = useState<AnnotationInfo[]>([]);
   const [annotVersion, setAnnotVersion] = useState(0);
+  const [pageVersions, setPageVersions] = useState<number[]>([]);
   const [strokePts, setStrokePts] = useState<[number, number][]>([]);
   const strokeLiveRef = useRef<[number, number][]>([]);
   const [noteDraft, setNoteDraft] = useState<{
@@ -521,7 +522,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [workPath, pageIndex, docVersion, annotVersion]);
+  }, [workPath, pageIndex, docVersion, annotVersion, pageVersions]);
 
   // Campos de formulario de la página actual
   useEffect(() => {
@@ -538,7 +539,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [workPath, pageIndex, docVersion, annotVersion]);
+  }, [workPath, pageIndex, docVersion, annotVersion, pageVersions]);
 
   // Bloques de texto (solo en modo edición)
   useEffect(() => {
@@ -559,7 +560,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [workPath, pageIndex, docVersion, mode]);
+  }, [workPath, pageIndex, docVersion, mode, pageVersions]);
 
   // Imágenes de la página (solo en modo imagen). Se precarga también su
   // contenido para que al arrastrar se mueva la imagen, no solo el recuadro.
@@ -594,7 +595,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [workPath, pageIndex, docVersion, mode]);
+  }, [workPath, pageIndex, docVersion, mode, pageVersions]);
 
   // Marcadores del documento (pestaña del sidebar)
   useEffect(() => {
@@ -632,7 +633,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [workPath, pageIndex, docVersion]);
+  }, [workPath, pageIndex, docVersion, pageVersions]);
 
   async function persistOutline(nodes: OutlineNode[]) {
     if (!workPath) return;
@@ -790,7 +791,8 @@ function App() {
   // Render de la página actual (instantáneo si ya está en caché)
   useEffect(() => {
     if (!workPath) return;
-    const key = `${docVersion}:${pageIndex}:${renderWidth}`;
+    const pv = pageVersions[pageIndex] ?? 0;
+    const key = `${docVersion}:${pv}:${pageIndex}:${renderWidth}`;
     const cached = pageCacheRef.current.get(key);
     if (cached) {
       setImgSrc(cached);
@@ -818,14 +820,14 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [workPath, pageIndex, renderWidth, docVersion, annotVersion]);
+  }, [workPath, pageIndex, renderWidth, docVersion, annotVersion, pageVersions]);
 
   // Prefetch de las páginas adyacentes cuando la actual ya está lista
   useEffect(() => {
     if (!workPath || pageCount === 0 || loading) return;
     for (const p of [pageIndex + 1, pageIndex - 1]) {
       if (p < 0 || p >= pageCount) continue;
-      const key = `${docVersion}:${p}:${renderWidth}`;
+      const key = `${docVersion}:${pageVersions[p] ?? 0}:${p}:${renderWidth}`;
       if (pageCacheRef.current.has(key)) continue;
       cachePut(key, ""); // reserva para no pedirla dos veces
       invoke<string>(
@@ -836,7 +838,7 @@ function App() {
         .then((b64) => cachePut(key, `data:image/png;base64,${b64}`))
         .catch(() => pageCacheRef.current.delete(key));
     }
-  }, [workPath, pageIndex, renderWidth, docVersion, annotVersion, pageCount, loading]);
+  }, [workPath, pageIndex, renderWidth, docVersion, annotVersion, pageCount, loading, pageVersions]);
 
   // Capa de texto de la página actual
   useEffect(() => {
@@ -854,13 +856,19 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [workPath, pageIndex, docVersion]);
+  }, [workPath, pageIndex, docVersion, pageVersions]);
 
   // Miniaturas de la barra lateral (secuencial, en segundo plano)
   useEffect(() => {
     if (!workPath || pageCount === 0) return;
     let cancelled = false;
-    setThumbs(Array(pageCount).fill(null));
+    // conservar las miniaturas viejas mientras llegan las nuevas (sin
+    // parpadeo a placeholders); solo la primera carga parte de null
+    setThumbs((t) => {
+      const next = t.slice(0, pageCount);
+      while (next.length < pageCount) next.push(null);
+      return next;
+    });
     (async () => {
       for (let i = 0; i < pageCount; i++) {
         if (cancelled) return;
@@ -932,7 +940,7 @@ function App() {
     if (pushUndo) undoStackRef.current.push({ page });
     setModified(true);
     for (const key of [...pageCacheRef.current.keys()]) {
-      if (key.split(":")[1] === String(page)) pageCacheRef.current.delete(key);
+      if (key.split(":")[2] === String(page)) pageCacheRef.current.delete(key);
     }
     setAnnotVersion((v) => v + 1);
     refreshThumb(page);
@@ -1123,7 +1131,7 @@ function App() {
     if (typeof sel !== "string") return;
     try {
       await invoke("add_image", { workPath, pageIndex, imagePath: sel, x, y });
-      afterMutation(pageCount);
+      afterPageMutation(pageIndex);
     } catch (e) {
       setError(String(e));
     }
@@ -1141,7 +1149,7 @@ function App() {
         w: b.w,
         h: b.h,
       });
-      afterMutation(pageCount);
+      afterPageMutation(pageIndex);
     } catch (e) {
       setError(String(e));
     }
@@ -1168,7 +1176,7 @@ function App() {
         imagePath: sel,
       });
       setImagePopover(null);
-      afterMutation(pageCount);
+      afterPageMutation(pageIndex);
     } catch (e) {
       setError(String(e));
     }
@@ -1183,7 +1191,7 @@ function App() {
         objectIndex: im.object_index,
       });
       setImagePopover(null);
-      afterMutation(pageCount);
+      afterPageMutation(pageIndex);
     } catch (e) {
       setError(String(e));
     }
@@ -1227,7 +1235,7 @@ function App() {
         font: newTextDraft.font === "auto" ? null : newTextDraft.font,
       });
       setNewTextDraft(null);
-      afterMutation(pageCount);
+      afterPageMutation(pageIndex);
     } catch (e) {
       setError(String(e));
     }
@@ -1243,7 +1251,7 @@ function App() {
         newText: blockDraft.text,
       });
       setBlockDraft(null);
-      afterMutation(pageCount);
+      afterPageMutation(pageIndex);
     } catch (e) {
       setError(String(e));
     }
@@ -1258,7 +1266,7 @@ function App() {
         objectIndex: blockDraft.block.object_index,
       });
       setBlockDraft(null);
-      afterMutation(pageCount);
+      afterPageMutation(pageIndex);
     } catch (e) {
       setError(String(e));
     }
@@ -1301,6 +1309,23 @@ function App() {
     } else if (field.kind === "Checkbox" || field.kind === "RadioButton") {
       toggleFormCheck(field);
     }
+  }
+
+  /** Tras mutar UNA página: re-render y miniatura solo de esa página. */
+  function afterPageMutation(page: number) {
+    setModified(true);
+    setMatches([]);
+    setSearched(false);
+    setLastQuery("");
+    setPageVersions((v) => {
+      const next = [...v];
+      next[page] = (next[page] ?? 0) + 1;
+      return next;
+    });
+    for (const key of [...pageCacheRef.current.keys()]) {
+      if (key.split(":")[2] === String(page)) pageCacheRef.current.delete(key);
+    }
+    refreshThumb(page);
   }
 
   /** Tras mutar el documento: refrescar render, miniaturas y limpiar búsqueda. */
@@ -1480,7 +1505,7 @@ function App() {
       setRedactDraft(null);
       setRedactReport(null);
       setMode("select");
-      afterMutation(pageCount);
+      afterPageMutation(pageIndex);
     } catch (e) {
       setError(String(e));
     }
@@ -1591,7 +1616,7 @@ function App() {
       });
       setFormDraft(null);
       setMode("select");
-      afterMutation(pageCount);
+      afterPageMutation(pageIndex);
     } catch (e) {
       setError(String(e));
     }
@@ -1612,7 +1637,7 @@ function App() {
       });
       setLinkDraft(null);
       setMode("select");
-      afterMutation(pageCount);
+      afterPageMutation(pageIndex);
     } catch (e) {
       setError(String(e));
     }
@@ -1819,7 +1844,7 @@ function App() {
       // la firma estampada es una imagen: el modo imagen permite moverla,
       // redimensionarla o borrarla al instante
       setMode("image");
-      afterMutation(pageCount);
+      afterPageMutation(pageIndex);
     } catch (e) {
       setError(String(e));
     }
