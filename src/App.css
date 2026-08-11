@@ -548,7 +548,7 @@ textarea {
 
 .textlayer .sel {
   position: absolute;
-  background: rgba(52, 120, 246, 0.28);
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
   pointer-events: none;
 }
 
@@ -610,20 +610,20 @@ textarea {
 
 .form-field:hover {
   outline: 2px dashed var(--accent);
-  background: rgba(52, 120, 246, 0.08);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
 .text-block {
   position: absolute;
   cursor: pointer;
   border-radius: 2px;
-  outline: 1px dashed rgba(52, 120, 246, 0.5);
+  outline: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent);
   transition: background 120ms ease;
 }
 
 .text-block:hover {
   outline: 2px dashed var(--accent);
-  background: rgba(52, 120, 246, 0.1);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 /* ---------- tarjetas flotantes ---------- */
@@ -715,7 +715,7 @@ textarea {
 .crop-rect {
   position: absolute;
   border: 2px dashed var(--accent);
-  background: rgba(52, 120, 246, 0.08);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
   box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.35);
   pointer-events: none;
 }
@@ -778,7 +778,7 @@ textarea {
   justify-content: space-between;
   gap: 8px;
   padding: 6px 12px;
-  background: rgba(52, 120, 246, 0.12);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
   border-bottom: 1px solid var(--border);
   color: var(--fg);
 }
@@ -924,8 +924,8 @@ textarea {
 }
 
 .link-zone:hover {
-  background: rgba(52, 120, 246, 0.15);
-  outline: 1px solid rgba(52, 120, 246, 0.45);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 .hf-grid {
@@ -1104,7 +1104,7 @@ textarea {
 
 .sign-thumb:hover {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(52, 120, 246, 0.25);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 .sign-thumb img {
@@ -1190,12 +1190,12 @@ textarea {
   position: absolute;
   cursor: move;
   border-radius: 2px;
-  outline: 1px dashed rgba(52, 120, 246, 0.55);
+  outline: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
 .image-box:hover {
   outline: 2px dashed var(--accent);
-  background: rgba(52, 120, 246, 0.07);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
 .image-handle {
