@@ -2,20 +2,29 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
+  addBlankPage,
+  addHeaderFooter,
   addMarkup,
   addShape,
   addStamp,
+  addWatermark,
+  cropPage,
   deleteStoredSignature,
+  duplicatePage,
   getImageData,
   importSignatureFile,
+  insertPdfAt,
   listStoredSignatures,
   saveStoredSignature,
   stampSignature,
   type FirmaGuardada,
+  type HeaderFooter,
   type Rgba,
 } from "./api";
 import PanelFirmas from "./components/PanelFirmas";
 import DibujarFirma from "./components/DibujarFirma";
+import DialogoMarcaAgua from "./components/DialogoMarcaAgua";
+import DialogoEncabezado from "./components/DialogoEncabezado";
 import "./App.css";
 
 const BASE_WIDTH = 900;
@@ -79,7 +88,8 @@ type Mode =
   | "image"
   | "firmar"
   | "shape"
-  | "stamp";
+  | "stamp"
+  | "crop";
 type ShapeKind = "rect" | "ellipse" | "line" | "arrow";
 
 const SHAPE_COLORS = ["#e23d3d", "#3478f6", "#2ea043", "#f5b400", "#111111"];
@@ -188,6 +198,9 @@ const ICONS: Record<string, string[]> = {
   ],
   underline: ["M6 4v6a6 6 0 0 0 12 0V4", "M4 20h16"],
   strike: ["M16 4H9a3 3 0 0 0-2.83 4", "M14 12a4 4 0 0 1 0 8H6", "M4 12h16"],
+  crop: ["M6 2v14a2 2 0 0 0 2 2h14", "M18 22V8a2 2 0 0 0-2-2H2"],
+  water: ["M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7Z"],
+  hf: ["M3 5h18", "M3 19h18", "M7 12h10"],
 };
 
 function Icon({ name, size = 16 }: { name: string; size?: number }) {
@@ -329,6 +342,10 @@ function App() {
   const [stampText, setStampText] = useState(STAMP_PRESETS[0]);
   const [stampCustom, setStampCustom] = useState("");
   const [stampColor, setStampColor] = useState("#c81e1e");
+  const [cropDraft, setCropDraft] = useState<Rect | null>(null);
+  const cropStartRef = useRef<{ x: number; y: number } | null>(null);
+  const [wmOpen, setWmOpen] = useState(false);
+  const [hfOpen, setHfOpen] = useState(false);
   const [firmas, setFirmas] = useState<FirmaGuardada[]>([]);
   const [activeSig, setActiveSig] = useState<{
     png: string;
@@ -462,6 +479,19 @@ function App() {
       cancelled = true;
     };
   }, [workPath, pageIndex, docVersion, mode]);
+
+  // Esc sale del modo recorte
+  useEffect(() => {
+    if (mode !== "crop") return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setCropDraft(null);
+        setMode("select");
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mode]);
 
   // Biblioteca de firmas al entrar en modo firma; Esc cancela el estampado
   useEffect(() => {
@@ -1029,6 +1059,88 @@ function App() {
     }
   }
 
+  async function blankPageAfter(i: number) {
+    if (!workPath) return;
+    try {
+      const count = await addBlankPage(workPath, i + 1);
+      afterMutation(count);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function duplicatePageAt(i: number) {
+    if (!workPath) return;
+    try {
+      const count = await duplicatePage(workPath, i);
+      afterMutation(count);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function insertPdfHere() {
+    if (!workPath) return;
+    const selected = await open({
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+      multiple: false,
+      title: "Insertar PDF después de la página actual",
+    });
+    if (typeof selected !== "string") return;
+    try {
+      const count = await insertPdfAt(workPath, selected, pageIndex + 1);
+      afterMutation(count);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function applyCrop(allPages: boolean) {
+    if (!workPath || !cropDraft) return;
+    try {
+      await cropPage(workPath, pageIndex, cropDraft, allPages);
+      setCropDraft(null);
+      setMode("select");
+      afterMutation(pageCount);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function applyWatermark(opts: {
+    text: string;
+    fontSize: number;
+    color: string;
+    opacity: number;
+    diagonal: boolean;
+  }) {
+    if (!workPath) return;
+    try {
+      await addWatermark({
+        workPath,
+        text: opts.text,
+        fontSize: opts.fontSize,
+        color: hexToRgba(opts.color, Math.round((opts.opacity / 100) * 255)),
+        diagonal: opts.diagonal,
+      });
+      setWmOpen(false);
+      afterMutation(pageCount);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function applyHeaderFooter(zonas: HeaderFooter, fontSize: number) {
+    if (!workPath) return;
+    try {
+      await addHeaderFooter(workPath, zonas, fontSize);
+      setHfOpen(false);
+      afterMutation(pageCount);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function addPdf() {
     if (!workPath) return;
     const selected = await open({
@@ -1325,6 +1437,11 @@ function App() {
       placeStamp(x, y);
       return;
     }
+    if (mode === "crop") {
+      cropStartRef.current = { x, y };
+      setCropDraft(null);
+      return;
+    }
     if (!pageText) return;
     anchorRef.current = charIndexAt(pageText, x, y);
     setDragging(true);
@@ -1380,6 +1497,18 @@ function App() {
       setShapeDraft({ x1: start.x, y1: start.y, x2: x, y2: y });
       return;
     }
+    if (mode === "crop") {
+      const start = cropStartRef.current;
+      if (!start) return;
+      const { x, y } = pagePoint(e);
+      setCropDraft({
+        x: Math.min(x, start.x),
+        y: Math.min(y, start.y),
+        w: Math.abs(x - start.x),
+        h: Math.abs(y - start.y),
+      });
+      return;
+    }
     if (mode !== "select" || !pageText || anchorRef.current === null) return;
     const { x, y } = pagePoint(e);
     const idx = charIndexAt(pageText, x, y);
@@ -1418,6 +1547,11 @@ function App() {
       if (d && Math.abs(d.x2 - d.x1) + Math.abs(d.y2 - d.y1) > 4) {
         commitShape(d);
       }
+      return;
+    }
+    if (mode === "crop") {
+      cropStartRef.current = null;
+      // el borrador se queda visible; se confirma con los botones
       return;
     }
     if (mode === "image" && imgActionRef.current) {
@@ -1494,6 +1628,8 @@ function App() {
     sigDragRef.current = null;
     setShapeDraft(null);
     shapeStartRef.current = null;
+    setCropDraft(null);
+    cropStartRef.current = null;
   }
 
   return (
@@ -1638,6 +1774,47 @@ function App() {
                         <Icon name="extract" size={14} />
                         Extraer página…
                       </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          insertPdfHere();
+                        }}
+                      >
+                        <Icon name="merge" size={14} />
+                        Insertar PDF aquí…
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          selectMode("select");
+                          setMode("crop");
+                        }}
+                      >
+                        <Icon name="crop" size={14} />
+                        Recortar página…
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          setWmOpen(true);
+                        }}
+                      >
+                        <Icon name="water" size={14} />
+                        Marca de agua…
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          setHfOpen(true);
+                        }}
+                      >
+                        <Icon name="hf" size={14} />
+                        Encabezado, pie y numeración…
+                      </button>
                     </div>
                   </>
                 )}
@@ -1701,6 +1878,20 @@ function App() {
           onSave={saveDrawnSignature}
           onClose={() => setDrawingSig(false)}
         />
+      )}
+      {wmOpen && (
+        <DialogoMarcaAgua onApply={applyWatermark} onClose={() => setWmOpen(false)} />
+      )}
+      {hfOpen && (
+        <DialogoEncabezado
+          onApply={applyHeaderFooter}
+          onClose={() => setHfOpen(false)}
+        />
+      )}
+      {mode === "crop" && !cropDraft && (
+        <div className="sign-hint">
+          Arrastra para marcar el área que quieres conservar · Esc cancela
+        </div>
       )}
       {mode === "firmar" && activeSig && (
         <div className="sign-hint">
@@ -1848,6 +2039,24 @@ function App() {
                     }}
                   >
                     <Icon name="rotate" size={13} />
+                  </button>
+                  <button
+                    title="Duplicar página"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      duplicatePageAt(i);
+                    }}
+                  >
+                    <Icon name="copy" size={13} />
+                  </button>
+                  <button
+                    title="Página en blanco después"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      blankPageAfter(i);
+                    }}
+                  >
+                    <Icon name="plus" size={13} />
                   </button>
                   <button
                     title="Eliminar página"
@@ -2269,6 +2478,48 @@ function App() {
                         }}
                       />
                     </div>
+                  )}
+                  {mode === "crop" && cropDraft && (
+                    <>
+                      <div
+                        className="crop-rect"
+                        style={{
+                          left: cropDraft.x * scale,
+                          top: cropDraft.y * scale,
+                          width: cropDraft.w * scale,
+                          height: cropDraft.h * scale,
+                        }}
+                      />
+                      <div
+                        className="card crop-actions"
+                        style={{
+                          left: cropDraft.x * scale,
+                          top: (cropDraft.y + cropDraft.h) * scale + 8,
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        <div className="card-actions">
+                          <button
+                            className="btn btn-primary"
+                            onClick={() => applyCrop(false)}
+                          >
+                            Recortar
+                          </button>
+                          <button className="btn" onClick={() => applyCrop(true)}>
+                            Todas las páginas
+                          </button>
+                          <button
+                            className="btn"
+                            onClick={() => {
+                              setCropDraft(null);
+                              setMode("select");
+                            }}
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    </>
                   )}
                   {mode === "firmar" && activeSig && sigDraft && (
                     <img

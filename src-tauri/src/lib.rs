@@ -1402,6 +1402,7 @@ mod anotaciones2;
 mod firma;
 mod firmas_visuales;
 mod imagenes;
+mod paginas2;
 
 /// Firma digitalmente la copia de trabajo y escribe el PDF firmado en
 /// `dest_path`. Certificado y clave privada en PEM (RSA sin cifrar).
@@ -2260,7 +2261,13 @@ pub fn run() {
             imagenes::get_image_data,
             anotaciones2::add_markup,
             anotaciones2::add_shape,
-            anotaciones2::add_stamp
+            anotaciones2::add_stamp,
+            paginas2::add_blank_page,
+            paginas2::duplicate_page,
+            paginas2::insert_pdf_at,
+            paginas2::crop_page,
+            paginas2::add_watermark,
+            paginas2::add_header_footer
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

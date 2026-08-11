@@ -68,6 +68,70 @@ export function addStamp(args: {
   return invoke("add_stamp", { ...args });
 }
 
+export function addBlankPage(workPath: string, index: number): Promise<number> {
+  return invoke("add_blank_page", { workPath, index });
+}
+
+export function duplicatePage(
+  workPath: string,
+  pageIndex: number,
+): Promise<number> {
+  return invoke("duplicate_page", { workPath, pageIndex });
+}
+
+export function insertPdfAt(
+  workPath: string,
+  otherPath: string,
+  index: number,
+): Promise<number> {
+  return invoke("insert_pdf_at", { workPath, otherPath, index });
+}
+
+export function cropPage(
+  workPath: string,
+  pageIndex: number,
+  rect: { x: number; y: number; w: number; h: number },
+  allPages: boolean,
+): Promise<void> {
+  return invoke("crop_page", { workPath, pageIndex, rect, allPages });
+}
+
+export function addWatermark(args: {
+  workPath: string;
+  text: string;
+  fontSize: number;
+  color: Rgba;
+  diagonal: boolean;
+}): Promise<void> {
+  return invoke("add_watermark", { ...args });
+}
+
+export type HeaderFooter = {
+  headerLeft?: string;
+  headerCenter?: string;
+  headerRight?: string;
+  footerLeft?: string;
+  footerCenter?: string;
+  footerRight?: string;
+};
+
+export function addHeaderFooter(
+  workPath: string,
+  zonas: HeaderFooter,
+  fontSize: number,
+): Promise<void> {
+  return invoke("add_header_footer", {
+    workPath,
+    headerLeft: zonas.headerLeft || null,
+    headerCenter: zonas.headerCenter || null,
+    headerRight: zonas.headerRight || null,
+    footerLeft: zonas.footerLeft || null,
+    footerCenter: zonas.footerCenter || null,
+    footerRight: zonas.footerRight || null,
+    fontSize,
+  });
+}
+
 /** Contenido de un objeto de imagen como PNG base64 (para previsualizar). */
 export function getImageData(
   path: string,

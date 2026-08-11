@@ -629,8 +629,31 @@ textarea {
 }
 
 .textlayer.mode-firmar,
-.textlayer.mode-shape {
+.textlayer.mode-shape,
+.textlayer.mode-crop {
   cursor: crosshair;
+}
+
+.crop-rect {
+  position: absolute;
+  border: 2px dashed var(--accent);
+  background: rgba(52, 120, 246, 0.08);
+  box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.crop-actions {
+  z-index: 30;
+}
+
+.modal-hf {
+  width: 430px;
+}
+
+.hf-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
 }
 
 .textlayer.mode-stamp {
