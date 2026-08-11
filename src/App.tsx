@@ -122,6 +122,13 @@ type ShapeKind = "rect" | "ellipse" | "line" | "arrow";
    marcas de texto y sellos. */
 const ANNOT_COLORS = ["#f5c400", "#2ea043", "#2743c0", "#c0392b", "#1d1c18"];
 const SHAPE_COLORS = ANNOT_COLORS;
+const NOMBRE_COLOR: Record<string, string> = {
+  "#f5c400": "Amarillo",
+  "#2ea043": "Verde",
+  "#2743c0": "Azul tinta",
+  "#c0392b": "Rojo corrector",
+  "#1d1c18": "Negro tinta",
+};
 const STAMP_PRESETS = [
   "APROBADO",
   "BORRADOR",
@@ -2811,7 +2818,7 @@ function App() {
                 key={c}
                 className={`swatch${drawColor === c ? " on" : ""}`}
                 style={{ background: c }}
-                title={c}
+                title={NOMBRE_COLOR[c] ?? c}
                 onClick={() => setDrawColor(c)}
               />
             ))}
@@ -2856,7 +2863,7 @@ function App() {
                 key={c}
                 className={`swatch${shapeColor === c ? " on" : ""}`}
                 style={{ background: c }}
-                title={c}
+                title={NOMBRE_COLOR[c] ?? c}
                 onClick={() => setShapeColor(c)}
               />
             ))}
@@ -2917,7 +2924,7 @@ function App() {
                 key={c}
                 className={`swatch${stampColor === c ? " on" : ""}`}
                 style={{ background: c }}
-                title={c}
+                title={NOMBRE_COLOR[c] ?? c}
                 onClick={() => setStampColor(c)}
               />
             ))}
