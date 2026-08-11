@@ -66,6 +66,7 @@ type AnnotationInfo = {
   h: number;
   contents: string;
   rects: Rect[];
+  color: [number, number, number, number] | null;
 };
 type FormFieldInfo = {
   annot_index: number;
@@ -3075,6 +3076,9 @@ function App() {
                             top: r.y * scale,
                             width: r.w * scale,
                             height: r.h * scale,
+                            background: a.color
+                              ? `rgba(${a.color[0]}, ${a.color[1]}, ${a.color[2]}, 0.45)`
+                              : undefined,
                           }}
                         />
                       )),
@@ -3102,6 +3106,9 @@ function App() {
                                 ? (r.y + r.h) * scale - 2
                                 : (r.y + r.h * 0.55) * scale - 1,
                             width: r.w * scale,
+                            background: a.color
+                              ? `rgba(${a.color[0]}, ${a.color[1]}, ${a.color[2]}, 0.9)`
+                              : undefined,
                           }}
                         />
                       )),

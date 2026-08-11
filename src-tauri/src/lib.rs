@@ -682,6 +682,9 @@ struct AnnotationInfo {
     contents: String,
     /// Para resaltados: un rect por línea (los quads), en coords de UI.
     rects: Vec<Rect>,
+    /// Color de trazo de la anotación (para que la UI pinte los overlays
+    /// con el color real, no uno fijo).
+    color: Option<[u8; 4]>,
 }
 
 /// Lista las anotaciones de una página (bounds en coords de UI). La UI las
@@ -725,6 +728,10 @@ fn get_annotations(path: String, page_index: u16) -> Result<Vec<AnnotationInfo>,
                     lee_quads!(a.as_underline_annotation_mut());
                     lee_quads!(a.as_strikeout_annotation_mut());
                 }
+                let color = a
+                    .stroke_color()
+                    .ok()
+                    .map(|c| [c.red(), c.green(), c.blue(), c.alpha()]);
                 out.push(AnnotationInfo {
                     index: i as u16,
                     kind: format!("{:?}", a.annotation_type()),
@@ -734,6 +741,7 @@ fn get_annotations(path: String, page_index: u16) -> Result<Vec<AnnotationInfo>,
                     h: b.top().value - b.bottom().value,
                     contents: a.contents().unwrap_or_default(),
                     rects,
+                    color,
                 });
             }
             Ok(out)
