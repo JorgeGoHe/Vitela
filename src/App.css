@@ -397,10 +397,9 @@ textarea {
   top: 5px;
   right: 5px;
   gap: 2px;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.72);
   border-radius: 6px;
   padding: 2px;
-  backdrop-filter: blur(6px);
 }
 
 .thumb:hover .thumb-actions {
@@ -457,9 +456,7 @@ textarea {
   display: flex;
   align-items: center;
   gap: 2px;
-  background: var(--card-translucent);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 3px 8px;
@@ -1166,9 +1163,7 @@ textarea {
   left: 50%;
   transform: translateX(-50%);
   z-index: 40;
-  background: var(--card-translucent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 7px 16px;
