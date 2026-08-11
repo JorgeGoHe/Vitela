@@ -351,6 +351,7 @@ function App() {
   const [selection, setSelection] = useState<Selection | null>(null);
   const [dragging, setDragging] = useState(false);
   const anchorRef = useRef<number | null>(null);
+  const downPosRef = useRef<{ x: number; y: number } | null>(null);
   const pageCacheRef = useRef<Map<string, string>>(new Map());
 
   const [mode, setMode] = useState<Mode>("select");
@@ -1940,6 +1941,9 @@ function App() {
     }
     if (!pageText) return;
     anchorRef.current = charIndexAt(pageText, x, y);
+    // el jitter de un clic simple no debe crear una selección de 1 carácter
+    // (bloquearía el clic-para-borrar de las anotaciones)
+    downPosRef.current = { x: e.clientX, y: e.clientY };
     setDragging(true);
     setSelection(null);
     setNotePopover(null);
@@ -2044,6 +2048,13 @@ function App() {
       return;
     }
     if (mode !== "select" || !pageText || anchorRef.current === null) return;
+    const down = downPosRef.current;
+    if (
+      down &&
+      Math.abs(e.clientX - down.x) < 4 &&
+      Math.abs(e.clientY - down.y) < 4
+    )
+      return;
     const { x, y } = pagePoint(e);
     const idx = charIndexAt(pageText, x, y);
     if (idx === null) return;
