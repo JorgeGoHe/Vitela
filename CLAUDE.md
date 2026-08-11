@@ -145,3 +145,10 @@ cd src-tauri && cargo check   # compilar solo el core Rust
 
 - Commits: mensajes limpios, sin `Co-Authored-By` ni menciones a IA/Claude.
 - UI y textos de la app en español.
+
+## Sistema de diseño
+
+Lee SIEMPRE DESIGN.md antes de cualquier decisión visual o de UI. Fuentes,
+colores, spacing y dirección estética están definidos ahí. No te desvíes sin
+aprobación explícita del usuario. En modo QA, señala cualquier código que no
+case con DESIGN.md.
