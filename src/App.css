@@ -317,9 +317,9 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: rgba(229, 72, 77, 0.12);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
   color: var(--danger);
-  border-bottom: 1px solid rgba(229, 72, 77, 0.25);
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
   padding: 6px 12px;
   font-size: 12px;
 }
@@ -552,7 +552,7 @@ textarea {
 
 .textlayer .hit {
   position: absolute;
-  background: rgba(255, 214, 0, 0.4);
+  background: rgba(245, 196, 0, 0.4);
   pointer-events: none;
   border-radius: 2px;
 }
@@ -563,7 +563,7 @@ textarea {
 
 .annot-highlight {
   position: absolute;
-  background: rgba(255, 216, 0, 0.55);
+  background: rgba(245, 196, 0, 0.45);
   mix-blend-mode: multiply;
   pointer-events: none;
   border-radius: 2px;
@@ -589,8 +589,8 @@ textarea {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: #ffd60a;
-  color: #6b5300;
+  background: #f5c400;
+  color: #1d1c18;
   border: none;
   border-radius: 5px;
   cursor: pointer;
@@ -953,7 +953,7 @@ textarea {
 }
 
 .annot-strike {
-  background: rgba(226, 61, 61, 0.9);
+  background: color-mix(in srgb, var(--danger) 90%, transparent);
 }
 
 .shape-preview {
@@ -1311,8 +1311,7 @@ textarea {
   color: rgba(253, 253, 251, 0.4);
 }
 
-.banner-notice p,
-.alerta-exito {
+.banner-notice p {
   color: var(--fg);
 }
 
