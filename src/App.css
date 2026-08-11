@@ -1350,3 +1350,14 @@ textarea {
   transform: rotate(-3deg);
   user-select: none;
 }
+
+/* accesibilidad: sin movimiento para quien lo pide */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
