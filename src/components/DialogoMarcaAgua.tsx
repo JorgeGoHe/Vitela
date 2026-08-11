@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { cargaColores, guardaColor } from "../tipos";
 
 const COLORS = ["#c0392b", "#6f6a5c", "#2743c0", "#2ea043"];
 
@@ -18,7 +19,7 @@ export default function DialogoMarcaAgua({
 }) {
   const [text, setText] = useState("BORRADOR");
   const [fontSize, setFontSize] = useState(64);
-  const [color, setColor] = useState(COLORS[1]);
+  const [color, setColor] = useState(() => cargaColores().marcaAgua ?? COLORS[1]);
   const [opacity, setOpacity] = useState(35);
   const [diagonal, setDiagonal] = useState(true);
 
@@ -64,9 +65,27 @@ export default function DialogoMarcaAgua({
                 key={c}
                 className={`swatch${color === c ? " on" : ""}`}
                 style={{ background: c }}
-                onClick={() => setColor(c)}
+                onClick={() => {
+                  setColor(c);
+                  guardaColor("marcaAgua", c);
+                }}
               />
             ))}
+            <label
+              className={`swatch swatch-custom${
+                !COLORS.includes(color) ? " on" : ""
+              }`}
+              title="Color personalizado"
+            >
+              <input
+                type="color"
+                value={color}
+                onChange={(e) => {
+                  setColor(e.target.value);
+                  guardaColor("marcaAgua", e.target.value);
+                }}
+              />
+            </label>
           </div>
         </div>
         <label className="opt-check">

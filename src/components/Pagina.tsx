@@ -48,8 +48,13 @@ import Icon from "./Icon";
 export type ToolProps = {
   drawColor: string;
   drawWidth: number;
-  markupColor: string | null;
-  onMarkupColor: (c: string) => void;
+  markupPending: string | null;
+  onMarkupPending: (c: string | null) => void;
+  markupColors: { resaltar: string; subrayar: string; tachar: string };
+  onMarkupUsed: (
+    kind: "highlight" | "underline" | "strikeout",
+    color: string,
+  ) => void;
   shapeKind: ShapeKind;
   shapeColor: string;
   shapeFill: boolean;
@@ -441,15 +446,22 @@ function Pagina({
     );
     if (rects.length === 0) return;
     try {
+      const accion =
+        kind === "highlight"
+          ? "resaltar"
+          : kind === "underline"
+            ? "subrayar"
+            : "tachar";
+      const colorHex =
+        tool.markupPending ?? tool.markupColors[accion];
       await addMarkup({
         workPath,
         pageIndex: index,
         rects,
         kind,
-        color: tool.markupColor
-          ? hexToRgba(tool.markupColor, kind === "highlight" ? 140 : 255)
-          : undefined,
+        color: hexToRgba(colorHex, kind === "highlight" ? 140 : 255),
       });
+      tool.onMarkupUsed(kind, colorHex);
       setSelection(null);
       onAnnotated(index);
     } catch (e) {
@@ -1950,34 +1962,64 @@ function Pagina({
                 {ANNOT_COLORS.map((c) => (
                   <button
                     key={c}
-                    className={`swatch${
-                      (tool.markupColor ?? "#f5c400") === c ? " on" : ""
-                    }`}
+                    className={`swatch${tool.markupPending === c ? " on" : ""}`}
                     style={{ background: c }}
-                    title="Color de la marca"
-                    onClick={() => tool.onMarkupColor(c)}
+                    title="Usar este color en la próxima marca"
+                    onClick={() =>
+                      tool.onMarkupPending(tool.markupPending === c ? null : c)
+                    }
                   />
                 ))}
+                <label
+                  className={`swatch swatch-custom${
+                    tool.markupPending &&
+                    !ANNOT_COLORS.includes(tool.markupPending)
+                      ? " on"
+                      : ""
+                  }`}
+                  title="Color personalizado"
+                >
+                  <input
+                    type="color"
+                    value={tool.markupPending ?? "#888888"}
+                    onChange={(e) => tool.onMarkupPending(e.target.value)}
+                  />
+                </label>
               </div>
               <button
                 className="btn"
                 onClick={() => markupSelection("highlight")}
               >
-                <Icon name="highlight" size={13} />
+                <span
+                  className="punto-color"
+                  style={{
+                    background: tool.markupPending ?? tool.markupColors.resaltar,
+                  }}
+                />
                 Resaltar
               </button>
               <button
                 className="btn"
                 onClick={() => markupSelection("underline")}
               >
-                <Icon name="underline" size={13} />
+                <span
+                  className="punto-color"
+                  style={{
+                    background: tool.markupPending ?? tool.markupColors.subrayar,
+                  }}
+                />
                 Subrayar
               </button>
               <button
                 className="btn"
                 onClick={() => markupSelection("strikeout")}
               >
-                <Icon name="strike" size={13} />
+                <span
+                  className="punto-color"
+                  style={{
+                    background: tool.markupPending ?? tool.markupColors.tachar,
+                  }}
+                />
                 Tachar
               </button>
               <button

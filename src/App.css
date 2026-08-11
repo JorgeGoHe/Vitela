@@ -1372,3 +1372,39 @@ textarea {
     scroll-behavior: auto !important;
   }
 }
+
+/* chip de color personalizado (selector RGB nativo) */
+.swatch-custom {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    conic-gradient(#c0392b, #f5c400, #2ea043, #2743c0, #c0392b);
+  position: relative;
+  overflow: hidden;
+}
+
+.swatch-custom::after {
+  content: "+";
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.swatch-custom input[type="color"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* el color que usaría cada acción de marcado */
+.punto-color {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+}

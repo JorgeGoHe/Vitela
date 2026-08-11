@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { cargaColores, guardaColor } from "../tipos";
 
 const CANVAS_W = 560;
 const CANVAS_H = 220;
@@ -23,7 +24,9 @@ export default function DibujarFirma({
   const drawingRef = useRef(false);
   const lastRef = useRef<{ x: number; y: number } | null>(null);
   const [name, setName] = useState("Mi firma");
-  const [color, setColor] = useState(COLORS[0].value);
+  const [color, setColor] = useState(
+    () => cargaColores().firmaTrazo ?? COLORS[0].value,
+  );
   const [empty, setEmpty] = useState(true);
   const colorRef = useRef(color);
   colorRef.current = color;
@@ -163,18 +166,35 @@ export default function DibujarFirma({
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
-          <select
-            className="size-select"
-            title="Color del trazo"
-            value={color}
-            onChange={(e) => setColor(e.target.value)}
-          >
+          <div className="swatches">
             {COLORS.map((c) => (
-              <option key={c.value} value={c.value}>
-                {c.label}
-              </option>
+              <button
+                key={c.value}
+                className={`swatch${color === c.value ? " on" : ""}`}
+                style={{ background: c.value }}
+                title={c.label}
+                onClick={() => {
+                  setColor(c.value);
+                  guardaColor("firmaTrazo", c.value);
+                }}
+              />
             ))}
-          </select>
+            <label
+              className={`swatch swatch-custom${
+                !COLORS.some((c) => c.value === color) ? " on" : ""
+              }`}
+              title="Color personalizado"
+            >
+              <input
+                type="color"
+                value={color}
+                onChange={(e) => {
+                  setColor(e.target.value);
+                  guardaColor("firmaTrazo", e.target.value);
+                }}
+              />
+            </label>
+          </div>
           <button className="btn" disabled={empty} onClick={clear}>
             Borrar
           </button>

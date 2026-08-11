@@ -45,6 +45,8 @@ import {
   type PageSize,
   type SearchMatch,
   type ShapeKind,
+  cargaColores,
+  guardaColor,
 } from "./tipos";
 import Icon from "./components/Icon";
 import Pagina, { type PageMatch, type ToolProps } from "./components/Pagina";
@@ -108,16 +110,24 @@ function App() {
     path: string;
     password: string;
   } | null>(null);
-  const [drawColor, setDrawColor] = useState("#c0392b");
+  const [drawColor, setDrawColor] = useState(() => cargaColores().dibujo ?? "#c0392b");
   const [drawWidth, setDrawWidth] = useState(2);
-  const [markupColor, setMarkupColor] = useState<string | null>(null);
+  const [markupPending, setMarkupPending] = useState<string | null>(null);
+  const [markupColors, setMarkupColors] = useState(() => {
+    const c = cargaColores();
+    return {
+      resaltar: c.resaltar ?? "#f5c400",
+      subrayar: c.subrayar ?? "#2ea043",
+      tachar: c.tachar ?? "#c0392b",
+    };
+  });
   const [shapeKind, setShapeKind] = useState<ShapeKind>("rect");
-  const [shapeColor, setShapeColor] = useState("#c0392b");
+  const [shapeColor, setShapeColor] = useState(() => cargaColores().forma ?? "#c0392b");
   const [shapeFill, setShapeFill] = useState(false);
   const [shapeWidth, setShapeWidth] = useState(2);
   const [stampText, setStampText] = useState(STAMP_PRESETS[0]);
   const [stampCustom, setStampCustom] = useState("");
-  const [stampColor, setStampColor] = useState("#c0392b");
+  const [stampColor, setStampColor] = useState(() => cargaColores().sello ?? "#c0392b");
   const [wmOpen, setWmOpen] = useState(false);
   const [marginalAsk, setMarginalAsk] = useState<{
     zona: "watermark" | "header" | "footer";
@@ -372,6 +382,31 @@ function App() {
   const fitWidth = viewerW ? Math.max(320, viewerW - PADDING_VIEWER) : BASE_WIDTH;
   const displayWidth = zoom === "ajuste" ? fitWidth : BASE_WIDTH * zoom;
   const ocupado = useSyncExternalStore(subscribeBusy, busyCount) > 0;
+
+  function cambiaColorAccion(
+    accion: "dibujo" | "forma" | "sello",
+    color: string,
+  ) {
+    guardaColor(accion, color);
+    if (accion === "dibujo") setDrawColor(color);
+    else if (accion === "forma") setShapeColor(color);
+    else setStampColor(color);
+  }
+
+  function onMarkupUsed(
+    kind: "highlight" | "underline" | "strikeout",
+    color: string,
+  ) {
+    const accion =
+      kind === "highlight"
+        ? "resaltar"
+        : kind === "underline"
+          ? "subrayar"
+          : "tachar";
+    guardaColor(accion, color);
+    setMarkupColors((c) => ({ ...c, [accion]: color }));
+    setMarkupPending(null);
+  }
   const zoomNum = zoom === "ajuste" ? displayWidth / BASE_WIDTH : zoom;
 
   // el estado del documento en un ref para que requestRender sea estable
@@ -1105,8 +1140,10 @@ function App() {
   const tool: ToolProps = {
     drawColor,
     drawWidth,
-    markupColor,
-    onMarkupColor: setMarkupColor,
+    markupPending,
+    onMarkupPending: setMarkupPending,
+    markupColors,
+    onMarkupUsed,
     shapeKind,
     shapeColor,
     shapeFill,
@@ -1828,9 +1865,21 @@ function App() {
                 className={`swatch${drawColor === c ? " on" : ""}`}
                 style={{ background: c }}
                 title={NOMBRE_COLOR[c] ?? c}
-                onClick={() => setDrawColor(c)}
+                onClick={() => cambiaColorAccion("dibujo", c)}
               />
             ))}
+            <label
+              className={`swatch swatch-custom${
+                !SHAPE_COLORS.includes(drawColor) ? " on" : ""
+              }`}
+              title="Color personalizado"
+            >
+              <input
+                type="color"
+                value={drawColor}
+                onChange={(e) => cambiaColorAccion("dibujo", e.target.value)}
+              />
+            </label>
           </div>
           <select
             className="size-select"
@@ -1873,9 +1922,21 @@ function App() {
                 className={`swatch${shapeColor === c ? " on" : ""}`}
                 style={{ background: c }}
                 title={NOMBRE_COLOR[c] ?? c}
-                onClick={() => setShapeColor(c)}
+                onClick={() => cambiaColorAccion("forma", c)}
               />
             ))}
+            <label
+              className={`swatch swatch-custom${
+                !SHAPE_COLORS.includes(shapeColor) ? " on" : ""
+              }`}
+              title="Color personalizado"
+            >
+              <input
+                type="color"
+                value={shapeColor}
+                onChange={(e) => cambiaColorAccion("forma", e.target.value)}
+              />
+            </label>
           </div>
           <label
             className={`opt-check${
@@ -1934,9 +1995,25 @@ function App() {
                 className={`swatch${stampColor === c ? " on" : ""}`}
                 style={{ background: c }}
                 title={NOMBRE_COLOR[c] ?? c}
-                onClick={() => setStampColor(c)}
+                onClick={() => cambiaColorAccion("sello", c)}
               />
             ))}
+            <label
+              className={`swatch swatch-custom${
+                !["#c0392b", "#2743c0", "#2ea043", "#1d1c18"].includes(
+                  stampColor,
+                )
+                  ? " on"
+                  : ""
+              }`}
+              title="Color personalizado"
+            >
+              <input
+                type="color"
+                value={stampColor}
+                onChange={(e) => cambiaColorAccion("sello", e.target.value)}
+              />
+            </label>
           </div>
           <span
             className="sello-preview"

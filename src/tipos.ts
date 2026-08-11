@@ -156,3 +156,21 @@ export function copyToClipboard(text: string) {
     ta.remove();
   });
 }
+
+/* ---- memoria de color por acción (persistida en localStorage) ---- */
+
+const CLAVE_COLORES = "editorPdf.coloresAccion";
+
+export function cargaColores(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(CLAVE_COLORES) ?? "{}");
+  } catch {
+    return {};
+  }
+}
+
+export function guardaColor(accion: string, color: string) {
+  const c = cargaColores();
+  c[accion] = color;
+  localStorage.setItem(CLAVE_COLORES, JSON.stringify(c));
+}
