@@ -154,6 +154,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "open_pdf" => cmd!(crate::open_pdf, { path: String, password: Option<String> }),
         "render_page" => cmd!(crate::render_page, { path: String, page_index: u16, width: i32 }),
         "get_page_text" => cmd!(crate::get_page_text, { path: String, page_index: u16 }),
+        "get_page_sizes" => cmd!(crate::get_page_sizes, { path: String }),
         "search_pdf" => cmd!(crate::search_pdf, { path: String, query: String }),
         "delete_page" => cmd!(crate::delete_page, { work_path: String, page_index: u16 }),
         "rotate_page" => cmd!(crate::rotate_page, { work_path: String, page_index: u16 }),

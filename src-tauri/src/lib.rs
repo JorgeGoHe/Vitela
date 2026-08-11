@@ -257,6 +257,30 @@ fn extract_chars(page: &PdfPage) -> Result<PageText, String> {
     })
 }
 
+#[derive(Serialize)]
+struct PageSize {
+    width: f32,
+    height: f32,
+}
+
+/// Tamaño de todas las páginas en puntos PDF (para el layout del scroll
+/// continuo sin renderizar nada).
+#[tauri::command]
+fn get_page_sizes(path: String) -> Result<Vec<PageSize>, String> {
+    on_pdfium_thread(move || {
+        with_doc(&path, |doc| {
+            Ok(doc
+                .pages()
+                .iter()
+                .map(|p| PageSize {
+                    width: p.width().value,
+                    height: p.height().value,
+                })
+                .collect())
+        })
+    })
+}
+
 #[tauri::command]
 fn get_page_text(path: String, page_index: u16) -> Result<PageText, String> {
     on_pdfium_thread(move || {
@@ -1566,6 +1590,19 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn tamanos_de_pagina() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_tamanos.pdf");
+        crea_pdf(&["Uno", "Dos", "Tres"], &tmp);
+        let sizes = get_page_sizes(tmp.to_string_lossy().into_owned()).expect("tamaños");
+        std::fs::remove_file(&tmp).ok();
+        assert_eq!(sizes.len(), 3);
+        for s in &sizes {
+            assert!((s.width - 595.28).abs() < 0.1, "ancho A4: {}", s.width);
+            assert!((s.height - 841.89).abs() < 0.1, "alto A4: {}", s.height);
+        }
+    }
+
+    #[test]
     fn busca_sin_distinguir_mayusculas() {
         let tmp = std::env::temp_dir().join("editor_pdf_test_busqueda.pdf");
         crea_pdf(&["Hola Mundo"], &tmp);
@@ -2289,6 +2326,7 @@ pub fn run() {
             open_pdf,
             render_page,
             get_page_text,
+            get_page_sizes,
             search_pdf,
             delete_page,
             rotate_page,
