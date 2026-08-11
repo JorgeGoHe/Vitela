@@ -190,11 +190,11 @@ struct PageText {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-struct Rect {
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
+pub(crate) struct Rect {
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) w: f32,
+    pub(crate) h: f32,
 }
 
 #[derive(Serialize)]
@@ -468,7 +468,7 @@ fn extract_pages(
 
 /// Convierte un rect en coords de UI (origen arriba-izquierda) a PdfRect
 /// (origen abajo-izquierda).
-fn ui_rect_to_pdf(r: &Rect, page_h: f32) -> PdfRect {
+pub(crate) fn ui_rect_to_pdf(r: &Rect, page_h: f32) -> PdfRect {
     PdfRect::new(
         PdfPoints::new(page_h - r.y - r.h),
         PdfPoints::new(r.x),
@@ -666,18 +666,29 @@ fn get_annotations(path: String, page_index: u16) -> Result<Vec<AnnotationInfo>,
                 };
                 let Ok(b) = a.bounds() else { continue };
                 let mut rects = Vec::new();
-                if let Some(hl) = a.as_highlight_annotation_mut() {
-                    let points = hl.attachment_points_mut();
-                    for j in 0..points.len() {
-                        if let Ok(q) = points.get(j) {
-                            rects.push(Rect {
-                                x: q.left().value,
-                                y: page_h - q.top().value,
-                                w: q.right().value - q.left().value,
-                                h: q.top().value - q.bottom().value,
-                            });
-                        }
+                {
+                    // resaltado, subrayado y tachado guardan sus líneas como
+                    // quadpoints; tipos distintos sin trait común
+                    macro_rules! lee_quads {
+                        ($m:expr) => {
+                            if let Some(m) = $m {
+                                let points = m.attachment_points_mut();
+                                for j in 0..points.len() {
+                                    if let Ok(q) = points.get(j) {
+                                        rects.push(Rect {
+                                            x: q.left().value,
+                                            y: page_h - q.top().value,
+                                            w: q.right().value - q.left().value,
+                                            h: q.top().value - q.bottom().value,
+                                        });
+                                    }
+                                }
+                            }
+                        };
                     }
+                    lee_quads!(a.as_highlight_annotation_mut());
+                    lee_quads!(a.as_underline_annotation_mut());
+                    lee_quads!(a.as_strikeout_annotation_mut());
                 }
                 out.push(AnnotationInfo {
                     index: i as u16,
@@ -1387,6 +1398,7 @@ fn delete_text_block(work_path: String, page_index: u16, object_index: u32) -> R
     })
 }
 
+mod anotaciones2;
 mod firma;
 mod firmas_visuales;
 mod imagenes;
@@ -2245,7 +2257,10 @@ pub fn run() {
             firmas_visuales::save_stored_signature,
             firmas_visuales::list_stored_signatures,
             firmas_visuales::delete_stored_signature,
-            imagenes::get_image_data
+            imagenes::get_image_data,
+            anotaciones2::add_markup,
+            anotaciones2::add_shape,
+            anotaciones2::add_stamp
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

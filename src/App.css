@@ -628,8 +628,108 @@ textarea {
   cursor: copy;
 }
 
-.textlayer.mode-firmar {
+.textlayer.mode-firmar,
+.textlayer.mode-shape {
   cursor: crosshair;
+}
+
+.textlayer.mode-stamp {
+  cursor: copy;
+}
+
+.annot-underline,
+.annot-strike {
+  position: absolute;
+  height: 2px;
+  pointer-events: none;
+  border-radius: 1px;
+}
+
+.annot-underline {
+  background: rgba(46, 160, 67, 0.9);
+}
+
+.annot-strike {
+  background: rgba(226, 61, 61, 0.9);
+}
+
+.shape-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.tool-options {
+  position: fixed;
+  top: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 7px 12px;
+  box-shadow: var(--shadow-pop);
+  max-width: calc(100vw - 24px);
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.swatches {
+  display: flex;
+  gap: 5px;
+}
+
+.swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
+.swatch.on {
+  border-color: var(--fg);
+  box-shadow: 0 0 0 2px var(--card-bg) inset;
+}
+
+.opt-check {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.opt-check.disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.opt-hint {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.stamp-input {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  padding: 4px 8px;
+  font-size: 12px;
+  outline: none;
+  width: 150px;
+}
+
+.stamp-input:focus {
+  border-color: var(--accent);
 }
 
 /* damero para ver la transparencia de las firmas, siempre sobre blanco

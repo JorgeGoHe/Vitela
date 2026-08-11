@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
+  addMarkup,
+  addShape,
+  addStamp,
   deleteStoredSignature,
   getImageData,
   importSignatureFile,
@@ -9,6 +12,7 @@ import {
   saveStoredSignature,
   stampSignature,
   type FirmaGuardada,
+  type Rgba,
 } from "./api";
 import PanelFirmas from "./components/PanelFirmas";
 import DibujarFirma from "./components/DibujarFirma";
@@ -67,7 +71,30 @@ type ImgAction = {
   orig: ImageInfo;
   moved: boolean;
 };
-type Mode = "select" | "draw" | "note" | "edit" | "image" | "firmar";
+type Mode =
+  | "select"
+  | "draw"
+  | "note"
+  | "edit"
+  | "image"
+  | "firmar"
+  | "shape"
+  | "stamp";
+type ShapeKind = "rect" | "ellipse" | "line" | "arrow";
+
+const SHAPE_COLORS = ["#e23d3d", "#3478f6", "#2ea043", "#f5b400", "#111111"];
+const STAMP_PRESETS = [
+  "APROBADO",
+  "BORRADOR",
+  "CONFIDENCIAL",
+  "REVISADO",
+  "URGENTE",
+];
+
+function hexToRgba(hex: string, alpha = 255): Rgba {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255, alpha];
+}
 
 const FONT_CHOICES: { value: string; label: string }[] = [
   { value: "auto", label: "Automática (documento)" },
@@ -86,6 +113,10 @@ const KIND_LABELS: Record<string, string> = {
   Text: "Nota",
   Highlight: "Resaltado",
   Ink: "Dibujo",
+  Underline: "Subrayado",
+  Strikeout: "Tachado",
+  StrikeOut: "Tachado",
+  Stamp: "Sello",
 };
 
 const ICONS: Record<string, string[]> = {
@@ -145,6 +176,18 @@ const ICONS: Record<string, string[]> = {
     "m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21",
   ],
   sticky: ["M12 3v10", "M12 13l-3-3", "M12 13l3-3"],
+  shapes: [
+    "M8 3H3v5h5V3Z",
+    "M17 21a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z",
+    "m14 4 6 6",
+  ],
+  stamp: [
+    "M5 22h14",
+    "M19.27 13.73A2.5 2.5 0 0 0 17.5 13h-11A2.5 2.5 0 0 0 4 15.5V17a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-1.5c0-.66-.26-1.3-.73-1.77Z",
+    "M14 13V8.5C14 7 15 7 15 5a3 3 0 0 0-6 0c0 2 1 2 1 3.5V13",
+  ],
+  underline: ["M6 4v6a6 6 0 0 0 12 0V4", "M4 20h16"],
+  strike: ["M16 4H9a3 3 0 0 0-2.83 4", "M14 12a4 4 0 0 1 0 8H6", "M4 12h16"],
 };
 
 function Icon({ name, size = 16 }: { name: string; size?: number }) {
@@ -272,6 +315,20 @@ function App() {
     path: string;
     password: string;
   } | null>(null);
+  const [shapeKind, setShapeKind] = useState<ShapeKind>("rect");
+  const [shapeColor, setShapeColor] = useState(SHAPE_COLORS[0]);
+  const [shapeFill, setShapeFill] = useState(false);
+  const [shapeWidth, setShapeWidth] = useState(2);
+  const [shapeDraft, setShapeDraft] = useState<{
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+  } | null>(null);
+  const shapeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const [stampText, setStampText] = useState(STAMP_PRESETS[0]);
+  const [stampCustom, setStampCustom] = useState("");
+  const [stampColor, setStampColor] = useState("#c81e1e");
   const [firmas, setFirmas] = useState<FirmaGuardada[]>([]);
   const [activeSig, setActiveSig] = useState<{
     png: string;
@@ -578,15 +635,62 @@ function App() {
     refreshThumb(page);
   }
 
-  async function highlightSelection() {
+  /** Resalta, subraya o tacha la selección actual. */
+  async function markupSelection(kind: "highlight" | "underline" | "strikeout") {
     if (!workPath || !selection || !pageText) return;
     const rects = mergeLineRects(
       pageText.chars.slice(selection.start, selection.end + 1),
     );
     if (rects.length === 0) return;
     try {
-      await invoke("add_highlight", { workPath, pageIndex, rects });
+      await addMarkup({ workPath, pageIndex, rects, kind });
       setSelection(null);
+      afterAnnotate(pageIndex);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function commitShape(d: {
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+  }) {
+    if (!workPath) return;
+    const fillable = shapeKind === "rect" || shapeKind === "ellipse";
+    try {
+      await addShape({
+        workPath,
+        pageIndex,
+        kind: shapeKind,
+        x1: d.x1,
+        y1: d.y1,
+        x2: d.x2,
+        y2: d.y2,
+        stroke: hexToRgba(shapeColor),
+        fill: shapeFill && fillable ? hexToRgba(shapeColor, 70) : null,
+        strokeWidth: shapeWidth,
+      });
+      afterAnnotate(pageIndex);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function placeStamp(x: number, y: number) {
+    const text = stampText === "custom" ? stampCustom.trim() : stampText;
+    if (!workPath || !text) return;
+    try {
+      await addStamp({
+        workPath,
+        pageIndex,
+        text,
+        color: hexToRgba(stampColor),
+        x,
+        y,
+        fontSize: 22,
+      });
       afterAnnotate(pageIndex);
     } catch (e) {
       setError(String(e));
@@ -665,16 +769,23 @@ function App() {
   function onClickLayer(e: React.MouseEvent<HTMLDivElement>) {
     if (mode !== "select" || selection) return;
     const { x, y } = pagePoint(e);
+    const CLICKABLE = [
+      "Highlight",
+      "Underline",
+      "Strikeout",
+      "StrikeOut",
+      "Ink",
+      "Stamp",
+    ];
     const hit = annots.find((a) => {
-      if (a.kind === "Highlight") {
-        return a.rects.some(
-          (r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h,
-        );
-      }
-      if (a.kind === "Ink") {
-        return x >= a.x && x <= a.x + a.w && y >= a.y && y <= a.y + a.h;
-      }
-      return false;
+      if (!CLICKABLE.includes(a.kind)) return false;
+      const zonas =
+        a.rects.length > 0
+          ? a.rects
+          : [{ x: a.x, y: a.y, w: a.w, h: a.h }];
+      return zonas.some(
+        (r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h,
+      );
     });
     if (hit) setNotePopover(hit);
   }
@@ -1205,6 +1316,15 @@ function App() {
       setSigDraft(null);
       return;
     }
+    if (mode === "shape") {
+      shapeStartRef.current = { x, y };
+      setShapeDraft(null);
+      return;
+    }
+    if (mode === "stamp") {
+      placeStamp(x, y);
+      return;
+    }
     if (!pageText) return;
     anchorRef.current = charIndexAt(pageText, x, y);
     setDragging(true);
@@ -1253,6 +1373,13 @@ function App() {
       });
       return;
     }
+    if (mode === "shape") {
+      const start = shapeStartRef.current;
+      if (!start) return;
+      const { x, y } = pagePoint(e);
+      setShapeDraft({ x1: start.x, y1: start.y, x2: x, y2: y });
+      return;
+    }
     if (mode !== "select" || !pageText || anchorRef.current === null) return;
     const { x, y } = pagePoint(e);
     const idx = charIndexAt(pageText, x, y);
@@ -1282,6 +1409,15 @@ function App() {
       r.x = Math.max(0, Math.min(r.x, pageText.width - r.w));
       r.y = Math.max(0, Math.min(r.y, pageText.height - r.h));
       stampActiveSignature(r);
+      return;
+    }
+    if (mode === "shape") {
+      shapeStartRef.current = null;
+      const d = shapeDraft;
+      setShapeDraft(null);
+      if (d && Math.abs(d.x2 - d.x1) + Math.abs(d.y2 - d.y1) > 4) {
+        commitShape(d);
+      }
       return;
     }
     if (mode === "image" && imgActionRef.current) {
@@ -1329,6 +1465,18 @@ function App() {
       hint: "Insertar imágenes (clic en zona libre) o editar las existentes (arrastrar mueve, tirador redimensiona, clic abre opciones)",
     },
     {
+      id: "shape",
+      icon: "shapes",
+      label: "Formas",
+      hint: "Dibujar rectángulos, elipses, líneas y flechas (arrastra en la página)",
+    },
+    {
+      id: "stamp",
+      icon: "stamp",
+      label: "Sello",
+      hint: "Estampar un sello (APROBADO, BORRADOR…) con un clic",
+    },
+    {
       id: "firmar",
       icon: "sign",
       label: "Firma",
@@ -1344,6 +1492,8 @@ function App() {
     setActiveSig(null);
     setSigDraft(null);
     sigDragRef.current = null;
+    setShapeDraft(null);
+    shapeStartRef.current = null;
   }
 
   return (
@@ -1558,6 +1708,101 @@ function App() {
           Esc cancela
         </div>
       )}
+      {mode === "shape" && (
+        <div className="tool-options">
+          <div className="segmented">
+            {(
+              [
+                ["rect", "Rectángulo"],
+                ["ellipse", "Elipse"],
+                ["line", "Línea"],
+                ["arrow", "Flecha"],
+              ] as [ShapeKind, string][]
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                className={`btn${shapeKind === k ? " on" : ""}`}
+                onClick={() => setShapeKind(k)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="swatches">
+            {SHAPE_COLORS.map((c) => (
+              <button
+                key={c}
+                className={`swatch${shapeColor === c ? " on" : ""}`}
+                style={{ background: c }}
+                title={c}
+                onClick={() => setShapeColor(c)}
+              />
+            ))}
+          </div>
+          <label
+            className={`opt-check${
+              shapeKind === "line" || shapeKind === "arrow" ? " disabled" : ""
+            }`}
+          >
+            <input
+              type="checkbox"
+              checked={shapeFill}
+              disabled={shapeKind === "line" || shapeKind === "arrow"}
+              onChange={(e) => setShapeFill(e.target.checked)}
+            />
+            Relleno
+          </label>
+          <select
+            className="size-select"
+            title="Grosor"
+            value={shapeWidth}
+            onChange={(e) => setShapeWidth(Number(e.target.value))}
+          >
+            {[1, 2, 3, 5].map((s) => (
+              <option key={s} value={s}>
+                {s} pt
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      {mode === "stamp" && (
+        <div className="tool-options">
+          <select
+            className="size-select"
+            value={stampText}
+            onChange={(e) => setStampText(e.target.value)}
+          >
+            {STAMP_PRESETS.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+            <option value="custom">Personalizado…</option>
+          </select>
+          {stampText === "custom" && (
+            <input
+              type="text"
+              className="stamp-input"
+              placeholder="Texto del sello"
+              value={stampCustom}
+              onChange={(e) => setStampCustom(e.target.value.toUpperCase())}
+            />
+          )}
+          <div className="swatches">
+            {["#c81e1e", "#1a4fd6", "#1d7a34", "#111111"].map((c) => (
+              <button
+                key={c}
+                className={`swatch${stampColor === c ? " on" : ""}`}
+                style={{ background: c }}
+                title={c}
+                onClick={() => setStampColor(c)}
+              />
+            ))}
+          </div>
+          <span className="opt-hint">Clic en la página para colocarlo</span>
+        </div>
+      )}
 
       <div className="body">
         {pageCount > 0 && (
@@ -1659,6 +1904,33 @@ function App() {
                             top: r.y * scale,
                             width: r.w * scale,
                             height: r.h * scale,
+                          }}
+                        />
+                      )),
+                    )}
+                  {annots
+                    .filter(
+                      (a) =>
+                        a.kind === "Underline" ||
+                        a.kind === "Strikeout" ||
+                        a.kind === "StrikeOut",
+                    )
+                    .flatMap((a) =>
+                      a.rects.map((r, j) => (
+                        <div
+                          key={`u${a.index}-${j}`}
+                          className={
+                            a.kind === "Underline"
+                              ? "annot-underline"
+                              : "annot-strike"
+                          }
+                          style={{
+                            left: r.x * scale,
+                            top:
+                              a.kind === "Underline"
+                                ? (r.y + r.h) * scale - 2
+                                : (r.y + r.h * 0.55) * scale - 1,
+                            width: r.w * scale,
                           }}
                         />
                       )),
@@ -2021,6 +2293,82 @@ function App() {
                       />
                     </svg>
                   )}
+                  {mode === "shape" && shapeDraft && (
+                    <svg className="shape-preview">
+                      {(() => {
+                        const d = shapeDraft;
+                        const stroke = shapeColor;
+                        const sw = shapeWidth * scale;
+                        const fillable =
+                          shapeKind === "rect" || shapeKind === "ellipse";
+                        const fill =
+                          shapeFill && fillable ? `${shapeColor}46` : "none";
+                        const x = Math.min(d.x1, d.x2) * scale;
+                        const y = Math.min(d.y1, d.y2) * scale;
+                        const w = Math.abs(d.x2 - d.x1) * scale;
+                        const h = Math.abs(d.y2 - d.y1) * scale;
+                        if (shapeKind === "rect")
+                          return (
+                            <rect
+                              x={x}
+                              y={y}
+                              width={w}
+                              height={h}
+                              stroke={stroke}
+                              strokeWidth={sw}
+                              fill={fill}
+                            />
+                          );
+                        if (shapeKind === "ellipse")
+                          return (
+                            <ellipse
+                              cx={x + w / 2}
+                              cy={y + h / 2}
+                              rx={w / 2}
+                              ry={h / 2}
+                              stroke={stroke}
+                              strokeWidth={sw}
+                              fill={fill}
+                            />
+                          );
+                        const pts = {
+                          x1: d.x1 * scale,
+                          y1: d.y1 * scale,
+                          x2: d.x2 * scale,
+                          y2: d.y2 * scale,
+                        };
+                        const head = (12 + shapeWidth * 2) * scale;
+                        const ang = Math.atan2(
+                          pts.y2 - pts.y1,
+                          pts.x2 - pts.x1,
+                        );
+                        return (
+                          <>
+                            <line
+                              {...pts}
+                              stroke={stroke}
+                              strokeWidth={sw}
+                            />
+                            {shapeKind === "arrow" &&
+                              [Math.PI / 6, -Math.PI / 6].map((delta, i) => {
+                                const a2 = ang + Math.PI - delta;
+                                return (
+                                  <line
+                                    key={i}
+                                    x1={pts.x2}
+                                    y1={pts.y2}
+                                    x2={pts.x2 + head * Math.cos(a2)}
+                                    y2={pts.y2 + head * Math.sin(a2)}
+                                    stroke={stroke}
+                                    strokeWidth={sw}
+                                  />
+                                );
+                              })}
+                          </>
+                        );
+                      })()}
+                    </svg>
+                  )}
                   {matches.map((m, i) =>
                     m.page_index === pageIndex
                       ? m.rects.map((r, j) => (
@@ -2059,9 +2407,26 @@ function App() {
                       }}
                       onMouseDown={(e) => e.stopPropagation()}
                     >
-                      <button className="btn" onClick={highlightSelection}>
+                      <button
+                        className="btn"
+                        onClick={() => markupSelection("highlight")}
+                      >
                         <Icon name="highlight" size={13} />
                         Resaltar
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => markupSelection("underline")}
+                      >
+                        <Icon name="underline" size={13} />
+                        Subrayar
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => markupSelection("strikeout")}
+                      >
+                        <Icon name="strike" size={13} />
+                        Tachar
                       </button>
                       <button
                         className="btn"

@@ -26,6 +26,48 @@ export function deleteStoredSignature(id: string): Promise<void> {
   return invoke("delete_stored_signature", { id });
 }
 
+export type Rgba = [number, number, number, number];
+
+/** Marca de texto sobre rects: resaltar, subrayar o tachar. */
+export function addMarkup(args: {
+  workPath: string;
+  pageIndex: number;
+  rects: { x: number; y: number; w: number; h: number }[];
+  kind: "highlight" | "underline" | "strikeout";
+  color?: Rgba;
+}): Promise<void> {
+  return invoke("add_markup", { color: null, ...args });
+}
+
+/** Forma geométrica entre dos puntos (coords de página). */
+export function addShape(args: {
+  workPath: string;
+  pageIndex: number;
+  kind: "rect" | "ellipse" | "line" | "arrow";
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  stroke: Rgba;
+  fill?: Rgba | null;
+  strokeWidth: number;
+}): Promise<void> {
+  return invoke("add_shape", { fill: null, ...args });
+}
+
+/** Sello de texto centrado en el punto dado. */
+export function addStamp(args: {
+  workPath: string;
+  pageIndex: number;
+  text: string;
+  color: Rgba;
+  x: number;
+  y: number;
+  fontSize: number;
+}): Promise<void> {
+  return invoke("add_stamp", { ...args });
+}
+
 /** Contenido de un objeto de imagen como PNG base64 (para previsualizar). */
 export function getImageData(
   path: string,
