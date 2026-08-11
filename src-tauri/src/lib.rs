@@ -1432,6 +1432,8 @@ mod firma;
 mod firmas_visuales;
 mod imagenes;
 mod paginas2;
+#[cfg(debug_assertions)]
+pub mod puente_dev;
 mod seguridad;
 
 /// Firma digitalmente la copia de trabajo y escribe el PDF firmado en
@@ -1466,6 +1468,34 @@ fn sign_pdf_p12(
     firma::sign(&work_path, &dest_path, &cred, reason)
 }
 
+/// Crea un PDF de prueba con una página de texto por cada entrada. Lo usan
+/// los tests y el puente de QA (fixtures).
+#[cfg(any(test, debug_assertions))]
+pub(crate) fn crea_pdf(textos: &[&str], dest: &std::path::Path) {
+    let textos: Vec<String> = textos.iter().map(|t| t.to_string()).collect();
+    let dest = dest.to_path_buf();
+    on_pdfium_thread(move || {
+        let pdfium = pdfium().expect("no cargó libpdfium");
+        let mut doc = pdfium.create_new_pdf().expect("crear documento");
+        let font = doc.fonts_mut().helvetica();
+        for texto in &textos {
+            let mut page = doc
+                .pages_mut()
+                .create_page_at_end(PdfPagePaperSize::a4())
+                .expect("crear página");
+            let mut obj = PdfPageTextObject::new(&doc, texto, font, PdfPoints::new(14.0))
+                .expect("crear objeto de texto");
+            // posición realista (no en la esquina 0,0)
+            obj.translate(PdfPoints::new(50.0), PdfPoints::new(700.0))
+                .expect("posicionar texto");
+            page.objects_mut()
+                .add_text_object(obj)
+                .expect("añadir texto");
+        }
+        doc.save_to_file(&dest).expect("guardar PDF de prueba");
+    })
+}
+
 /// Vuelca la copia de trabajo en el destino (guardar / guardar como).
 #[tauri::command]
 fn save_pdf(work_path: String, dest_path: String) -> Result<(), String> {
@@ -1478,31 +1508,7 @@ fn save_pdf(work_path: String, dest_path: String) -> Result<(), String> {
 pub(crate) mod tests {
     use super::*;
 
-    /// Crea un PDF de prueba con una página de texto por cada entrada.
-    pub(crate) fn crea_pdf(textos: &[&str], dest: &std::path::Path) {
-        let textos: Vec<String> = textos.iter().map(|t| t.to_string()).collect();
-        let dest = dest.to_path_buf();
-        on_pdfium_thread(move || {
-            let pdfium = pdfium().expect("no cargó libpdfium");
-            let mut doc = pdfium.create_new_pdf().expect("crear documento");
-            let font = doc.fonts_mut().helvetica();
-            for texto in &textos {
-                let mut page = doc
-                    .pages_mut()
-                    .create_page_at_end(PdfPagePaperSize::a4())
-                    .expect("crear página");
-                let mut obj = PdfPageTextObject::new(&doc, texto, font, PdfPoints::new(14.0))
-                    .expect("crear objeto de texto");
-                // posición realista (no en la esquina 0,0)
-                obj.translate(PdfPoints::new(50.0), PdfPoints::new(700.0))
-                    .expect("posicionar texto");
-                page.objects_mut()
-                    .add_text_object(obj)
-                    .expect("añadir texto");
-            }
-            doc.save_to_file(&dest).expect("guardar PDF de prueba");
-        })
-    }
+    pub(crate) use crate::crea_pdf;
 
     /// Texto plano de cada página de un PDF, para verificar orden y contenido.
     fn textos_de(path: &std::path::Path) -> Vec<String> {
@@ -2248,6 +2254,13 @@ pub fn run() {
             use tauri::Manager;
             if let Ok(dir) = app.path().resource_dir() {
                 let _ = RESOURCE_LIB_DIR.set(dir.join("lib"));
+            }
+            if let Ok(dir) = app.path().app_data_dir() {
+                let _ = firmas_visuales::DIR_DATOS.set(dir);
+            }
+            #[cfg(debug_assertions)]
+            if std::env::var("EDITOR_PDF_PUENTE").as_deref() == Ok("1") {
+                std::thread::spawn(|| puente_dev::arrancar(puente_dev::puerto()));
             }
             Ok(())
         })

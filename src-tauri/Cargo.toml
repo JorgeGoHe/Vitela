@@ -39,4 +39,6 @@ p12-keystore = "0.3"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
 getrandom = "0.2"
+# puente HTTP de QA (el código solo se compila en debug)
+tiny_http = "0.12"
 

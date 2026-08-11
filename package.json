@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "qa:puente": "cd src-tauri && cargo run --bin puente"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

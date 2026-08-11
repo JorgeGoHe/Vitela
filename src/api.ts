@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc";
 
 /** Firma manuscrita guardada en la biblioteca del usuario. */
 export type FirmaGuardada = {

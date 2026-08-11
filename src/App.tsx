@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { invoke } from "./ipc";
+import { open, save } from "./dialogos";
 import {
   addBlankPage,
   addHeaderFooter,
@@ -38,7 +38,7 @@ import {
   type OutlineNode,
   type RedactReport,
 } from "./api";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "./dialogos";
 import PanelFirmas from "./components/PanelFirmas";
 import DibujarFirma from "./components/DibujarFirma";
 import DialogoMarcaAgua from "./components/DialogoMarcaAgua";

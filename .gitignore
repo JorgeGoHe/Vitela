@@ -33,3 +33,4 @@ src-tauri/lib/*.so
 
 # config local de Claude
 .claude/
+.gstack/

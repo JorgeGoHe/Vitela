@@ -8,7 +8,6 @@ use crate::{on_pdfium_thread, pdfium, save_and_close};
 use base64::Engine;
 use pdfium_render::prelude::*;
 use serde::Serialize;
-use tauri::Manager;
 
 #[derive(Serialize)]
 pub struct FirmaGuardada {
@@ -59,12 +58,16 @@ pub fn stamp_signature(
     })
 }
 
-/// Directorio de firmas guardadas dentro del app data dir.
-fn dir_de_firmas(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Sin directorio de datos: {e}"))?
+/// Directorio de datos de la app. Lo fija el setup de Tauri (app_data_dir)
+/// o el puente de QA (temp). Así los comandos no necesitan AppHandle y el
+/// puente de desarrollo puede llamarlos igual que Tauri.
+pub(crate) static DIR_DATOS: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Directorio de firmas guardadas dentro del directorio de datos.
+fn dir_de_firmas() -> Result<std::path::PathBuf, String> {
+    let dir = DIR_DATOS
+        .get()
+        .ok_or("Directorio de datos no inicializado")?
         .join("firmas");
     std::fs::create_dir_all(&dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
     Ok(dir)
@@ -128,10 +131,7 @@ pub(crate) fn listar_firmas_en(dir: &std::path::Path) -> Result<Vec<FirmaGuardad
 /// devuelve una ruta; la lectura se hace aquí, sin plugin fs). Se re-codifica
 /// a PNG para conservar la transparencia con un formato único.
 #[tauri::command]
-pub fn import_signature_file(
-    app: tauri::AppHandle,
-    image_path: String,
-) -> Result<FirmaGuardada, String> {
+pub fn import_signature_file(image_path: String) -> Result<FirmaGuardada, String> {
     let img = image::open(&image_path).map_err(|e| format!("No se pudo leer la imagen: {e}"))?;
     let mut buf = std::io::Cursor::new(Vec::new());
     img.write_to(&mut buf, image::ImageFormat::Png)
@@ -142,32 +142,28 @@ pub fn import_signature_file(
         .and_then(|s| s.to_str())
         .unwrap_or("Firma")
         .to_string();
-    guardar_firma_en(&dir_de_firmas(&app)?, &name, &png_base64)
+    guardar_firma_en(&dir_de_firmas()?, &name, &png_base64)
 }
 
 /// Guarda una firma reutilizable en la biblioteca del usuario.
 #[tauri::command]
-pub fn save_stored_signature(
-    app: tauri::AppHandle,
-    name: String,
-    png_base64: String,
-) -> Result<FirmaGuardada, String> {
-    guardar_firma_en(&dir_de_firmas(&app)?, &name, &png_base64)
+pub fn save_stored_signature(name: String, png_base64: String) -> Result<FirmaGuardada, String> {
+    guardar_firma_en(&dir_de_firmas()?, &name, &png_base64)
 }
 
 /// Lista las firmas guardadas (con su PNG en base64 para las miniaturas).
 #[tauri::command]
-pub fn list_stored_signatures(app: tauri::AppHandle) -> Result<Vec<FirmaGuardada>, String> {
-    listar_firmas_en(&dir_de_firmas(&app)?)
+pub fn list_stored_signatures() -> Result<Vec<FirmaGuardada>, String> {
+    listar_firmas_en(&dir_de_firmas()?)
 }
 
 /// Borra una firma guardada de la biblioteca.
 #[tauri::command]
-pub fn delete_stored_signature(app: tauri::AppHandle, id: String) -> Result<(), String> {
+pub fn delete_stored_signature(id: String) -> Result<(), String> {
     if id.contains(['/', '\\', '.']) {
         return Err("Id de firma inválido".into());
     }
-    let dir = dir_de_firmas(&app)?;
+    let dir = dir_de_firmas()?;
     std::fs::remove_file(dir.join(format!("{id}.png")))
         .map_err(|e| format!("No se pudo borrar la firma: {e}"))?;
     let _ = std::fs::remove_file(dir.join(format!("{id}.txt")));
