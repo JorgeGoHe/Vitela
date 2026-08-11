@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { invoke } from "./ipc";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { busyCount, invoke, subscribeBusy } from "./ipc";
 import { open, save } from "./dialogos";
 import {
   addBlankPage,
@@ -783,6 +783,7 @@ function App() {
   const PADDING_VIEWER = 48;
   const fitWidth = viewerW ? Math.max(320, viewerW - PADDING_VIEWER) : BASE_WIDTH;
   const displayWidth = zoom === "ajuste" ? fitWidth : BASE_WIDTH * zoom;
+  const ocupado = useSyncExternalStore(subscribeBusy, busyCount) > 0;
   const renderWidth = Math.round(displayWidth * window.devicePixelRatio);
   const zoomNum = zoom === "ajuste" ? displayWidth / BASE_WIDTH : zoom;
 
@@ -827,11 +828,11 @@ function App() {
       const key = `${docVersion}:${p}:${renderWidth}`;
       if (pageCacheRef.current.has(key)) continue;
       cachePut(key, ""); // reserva para no pedirla dos veces
-      invoke<string>("render_page", {
-        path: workPath,
-        pageIndex: p,
-        width: renderWidth,
-      })
+      invoke<string>(
+        "render_page",
+        { path: workPath, pageIndex: p, width: renderWidth },
+        { background: true },
+      )
         .then((b64) => cachePut(key, `data:image/png;base64,${b64}`))
         .catch(() => pageCacheRef.current.delete(key));
     }
@@ -864,11 +865,11 @@ function App() {
       for (let i = 0; i < pageCount; i++) {
         if (cancelled) return;
         try {
-          const b64 = await invoke<string>("render_page", {
-            path: workPath,
-            pageIndex: i,
-            width: THUMB_WIDTH,
-          });
+          const b64 = await invoke<string>(
+            "render_page",
+            { path: workPath, pageIndex: i, width: THUMB_WIDTH },
+            { background: true },
+          );
           if (cancelled) return;
           setThumbs((t) => {
             const next = [...t];
@@ -911,11 +912,11 @@ function App() {
   async function refreshThumb(page: number) {
     if (!workPath) return;
     try {
-      const b64 = await invoke<string>("render_page", {
-        path: workPath,
-        pageIndex: page,
-        width: THUMB_WIDTH,
-      });
+      const b64 = await invoke<string>(
+        "render_page",
+        { path: workPath, pageIndex: page, width: THUMB_WIDTH },
+        { background: true },
+      );
       setThumbs((t) => {
         const next = [...t];
         next[page] = `data:image/png;base64,${b64}`;
@@ -2232,7 +2233,9 @@ function App() {
               {modified ? " •" : ""}
             </span>
           )}
-          {loading && <span className="status">Renderizando…</span>}
+          {(loading || ocupado) && (
+            <span className="status dato">trabajando…</span>
+          )}
         </div>
 
         {pageCount > 0 && (
