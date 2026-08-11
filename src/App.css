@@ -446,6 +446,7 @@ textarea {
   display: flex;
   flex-direction: column;
   align-items: center;
+  gap: 24px; /* separación entre páginas del scroll continuo */
   padding: 28px 24px 72px;
 }
 

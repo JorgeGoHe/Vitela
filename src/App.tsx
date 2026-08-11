@@ -1,48 +1,53 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { busyCount, invoke, subscribeBusy } from "./ipc";
-import { open, save } from "./dialogos";
+import { open, save, openUrl } from "./dialogos";
 import {
   addBlankPage,
-  deleteFormField,
   removeMarginalText,
   addHeaderFooter,
-  addMarkup,
-  addShape,
-  addStamp,
   addWatermark,
-  cropPage,
   deleteStoredSignature,
   duplicatePage,
-  getImageData,
   importSignatureFile,
   insertPdfAt,
   listStoredSignatures,
   saveStoredSignature,
-  stampSignature,
   type FirmaGuardada,
   type HeaderFooter,
-  type Rgba,
 } from "./api";
 import {
   compressPdf,
-  createFormField,
-  createLink,
   encryptPdf,
   exportPagesPng,
   exportText,
   flattenPdf,
-  getLinks,
   getMetadata,
   getOutline,
-  redactArea,
   setMetadata,
   setOutline,
-  type LinkInfo,
   type Metadata,
   type OutlineNode,
-  type RedactReport,
 } from "./api";
-import { openUrl } from "./dialogos";
+import {
+  ANNOT_COLORS,
+  hexToRgba,
+  NOMBRE_COLOR,
+  type AnnotationInfo,
+  type Mode,
+  type PageSize,
+  type SearchMatch,
+  type ShapeKind,
+} from "./tipos";
+import Icon from "./components/Icon";
+import Pagina, { type PageMatch, type ToolProps } from "./components/Pagina";
 import PanelFirmas from "./components/PanelFirmas";
 import DibujarFirma from "./components/DibujarFirma";
 import DialogoMarcaAgua from "./components/DialogoMarcaAgua";
@@ -53,84 +58,11 @@ import "./App.css";
 
 const BASE_WIDTH = 900;
 const THUMB_WIDTH = 240;
+/** Separación vertical entre páginas y padding superior del visor (px). */
+const PAGE_GAP = 24;
+const VIEWER_PAD_TOP = 28;
 
-type CharBox = { ch: string; x: number; y: number; w: number; h: number };
-type PageText = { width: number; height: number; chars: CharBox[] };
-type Rect = { x: number; y: number; w: number; h: number };
-type SearchMatch = { page_index: number; rects: Rect[] };
-type Selection = { start: number; end: number };
-type AnnotationInfo = {
-  index: number;
-  kind: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  contents: string;
-  rects: Rect[];
-  color: [number, number, number, number] | null;
-};
-type FormFieldInfo = {
-  annot_index: number;
-  name: string;
-  kind: string;
-  value: string;
-  checked: boolean;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-};
-type TextBlock = {
-  object_index: number;
-  text: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  font_size: number;
-  font_family: string;
-};
-type ImageInfo = {
-  object_index: number;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-};
-type ImgAction = {
-  kind: "move" | "resize";
-  startX: number;
-  startY: number;
-  orig: ImageInfo;
-  moved: boolean;
-};
-type Mode =
-  | "select"
-  | "draw"
-  | "note"
-  | "edit"
-  | "image"
-  | "firmar"
-  | "shape"
-  | "stamp"
-  | "crop"
-  | "redact"
-  | "form-new"
-  | "link-new";
-type ShapeKind = "rect" | "ellipse" | "line" | "arrow";
-
-/* Paleta única de anotación (DESIGN.md): la comparten dibujo, formas,
-   marcas de texto y sellos. */
-const ANNOT_COLORS = ["#f5c400", "#2ea043", "#2743c0", "#c0392b", "#1d1c18"];
 const SHAPE_COLORS = ANNOT_COLORS;
-const NOMBRE_COLOR: Record<string, string> = {
-  "#f5c400": "Amarillo",
-  "#2ea043": "Verde",
-  "#2743c0": "Azul tinta",
-  "#c0392b": "Rojo corrector",
-  "#1d1c18": "Negro tinta",
-};
 const STAMP_PRESETS = [
   "APROBADO",
   "BORRADOR",
@@ -139,196 +71,7 @@ const STAMP_PRESETS = [
   "URGENTE",
 ];
 
-function hexToRgba(hex: string, alpha = 255): Rgba {
-  const n = parseInt(hex.slice(1), 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255, alpha];
-}
-
-const FONT_CHOICES: { value: string; label: string }[] = [
-  { value: "auto", label: "Automática (documento)" },
-  { value: "Helvetica", label: "Helvetica" },
-  { value: "Helvetica Bold", label: "Helvetica Negrita" },
-  { value: "Helvetica Oblique", label: "Helvetica Cursiva" },
-  { value: "Times", label: "Times" },
-  { value: "Times Bold", label: "Times Negrita" },
-  { value: "Times Italic", label: "Times Cursiva" },
-  { value: "Courier", label: "Courier" },
-  { value: "Courier Bold", label: "Courier Negrita" },
-];
 type UndoEntry = { page: number };
-
-const KIND_LABELS: Record<string, string> = {
-  Text: "Nota",
-  Highlight: "Resaltado",
-  Ink: "Dibujo",
-  Underline: "Subrayado",
-  Strikeout: "Tachado",
-  StrikeOut: "Tachado",
-  Stamp: "Sello",
-};
-
-const ICONS: Record<string, string[]> = {
-  open: [
-    "M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z",
-  ],
-  save: [
-    "M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z",
-    "M17 21v-8H7v8",
-    "M7 3v5h8",
-  ],
-  chevLeft: ["m15 18-6-6 6-6"],
-  chevRight: ["m9 18 6-6-6-6"],
-  minus: ["M5 12h14"],
-  plus: ["M12 5v14", "M5 12h14"],
-  search: ["M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16Z", "m21 21-4.35-4.35"],
-  select: ["m3 3 7.07 16.97 2.51-7.39 7.39-2.51L3 3Z"],
-  pen: ["M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3Z"],
-  note: [
-    "M15.5 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z",
-    "M15 3v6h6",
-  ],
-  textedit: ["M4 7V5h16v2", "M9 20h6", "M12 5v15"],
-  undo: ["M3 7v6h6", "M21 17a9 9 0 0 0-15-6.7L3 13"],
-  highlight: [
-    "m9 11-6 6v3h9l3-3",
-    "m22 12-4.6 4.6a2 2 0 0 1-2.83 0l-5.17-5.17a2 2 0 0 1 0-2.83L14 4",
-  ],
-  trash: [
-    "M3 6h18",
-    "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6",
-    "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2",
-  ],
-  rotate: ["M21 3v5h-5", "M21 8a9 9 0 1 0-2.34 8.66"],
-  up: ["m18 15-6-6-6 6"],
-  down: ["m6 9 6 6 6-6"],
-  copy: [
-    "M20 8H10a2 2 0 0 0-2 2v10c0 1.1.9 2 2 2h10a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2Z",
-    "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2",
-  ],
-  close: ["M18 6 6 18", "m6 6 12 12"],
-  sign: ["M3 17c3-6 6-6 8 0s5 6 8 0", "M3 21h18"],
-  merge: ["M14 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V8l-6-6Z", "M12 11v6", "M9 14h6"],
-  extract: [
-    "M14 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V8l-6-6Z",
-    "M14 2v6h6",
-    "M12 18v-6",
-    "m9 15 3 3 3-3",
-  ],
-  doc: [
-    "M14 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V8l-6-6Z",
-    "M14 2v6h6",
-  ],
-  image: [
-    "M19 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Z",
-    "M9 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z",
-    "m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21",
-  ],
-  sticky: ["M12 3v10", "M12 13l-3-3", "M12 13l3-3"],
-  panel: ["M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5Z", "M9 3v18"],
-  shapes: [
-    "M8.3 10a.7.7 0 0 1-.626-1.08L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z",
-    "M3 14h7v7H3z",
-    "M17.5 21a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z",
-  ],
-  stamp: [
-    "M5 22h14",
-    "M19.27 13.73A2.5 2.5 0 0 0 17.5 13h-11A2.5 2.5 0 0 0 4 15.5V17a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-1.5c0-.66-.26-1.3-.73-1.77Z",
-    "M14 13V8.5C14 7 15 7 15 5a3 3 0 0 0-6 0c0 2 1 2 1 3.5V13",
-  ],
-  underline: ["M6 4v6a6 6 0 0 0 12 0V4", "M4 20h16"],
-  strike: ["M16 4H9a3 3 0 0 0-2.83 4", "M14 12a4 4 0 0 1 0 8H6", "M4 12h16"],
-  crop: ["M6 2v14a2 2 0 0 0 2 2h14", "M18 22V8a2 2 0 0 0-2-2H2"],
-  lock: [
-    "M19 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2Z",
-    "M7 11V7a5 5 0 0 1 10 0v4",
-  ],
-  flatten: ["M12 3v12", "m8 11 4 4 4-4", "M4 21h16"],
-  redact: ["M4 5h16v6H4Z", "M4 15h7", "M4 19h10"],
-  field: [
-    "M4 7h16a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1Z",
-    "M7 10v4",
-  ],
-  link: [
-    "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71",
-    "M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
-  ],
-  printer: [
-    "M6 9V3h12v6",
-    "M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2",
-    "M6 14h12v8H6Z",
-  ],
-  shrink: ["m15 15 6 6", "m15 9 6-6", "M9 21v-6H3", "M3 9h6V3"],
-  water: ["M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7Z"],
-  hf: ["M3 5h18", "M3 19h18", "M7 12h10"],
-};
-
-function Icon({ name, size = 16 }: { name: string; size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.8}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      {ICONS[name]?.map((d, i) => (
-        <path key={i} d={d} />
-      ))}
-    </svg>
-  );
-}
-
-/** Une cajas de caracteres consecutivos en rectángulos por línea. */
-function mergeLineRects(boxes: CharBox[]): Rect[] {
-  const out: Rect[] = [];
-  for (const b of boxes) {
-    if (b.w <= 0 || b.h <= 0) continue;
-    const last = out[out.length - 1];
-    if (last && Math.abs(b.y - last.y) < Math.max(last.h, b.h) * 0.7) {
-      const right = Math.max(last.x + last.w, b.x + b.w);
-      const bottom = Math.max(last.y + last.h, b.y + b.h);
-      last.x = Math.min(last.x, b.x);
-      last.y = Math.min(last.y, b.y);
-      last.w = right - last.x;
-      last.h = bottom - last.y;
-    } else {
-      out.push({ x: b.x, y: b.y, w: b.w, h: b.h });
-    }
-  }
-  return out;
-}
-
-/** Índice del carácter más cercano a un punto (en puntos PDF). */
-function charIndexAt(pt: PageText, x: number, y: number): number | null {
-  let best = -1;
-  let bestScore = Infinity;
-  pt.chars.forEach((c, i) => {
-    if (c.w <= 0 || c.h <= 0) return;
-    const dyOut = y < c.y ? c.y - y : y > c.y + c.h ? y - (c.y + c.h) : 0;
-    const dxOut = x < c.x ? c.x - x : x > c.x + c.w ? x - (c.x + c.w) : 0;
-    const score = dyOut * 20 + dxOut;
-    if (score < bestScore) {
-      bestScore = score;
-      best = i;
-    }
-  });
-  return best >= 0 ? best : null;
-}
-
-function copyToClipboard(text: string) {
-  navigator.clipboard?.writeText(text).catch(() => {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    ta.remove();
-  });
-}
 
 function App() {
   const [originalPath, setOriginalPath] = useState<string | null>(null);
@@ -336,6 +79,7 @@ function App() {
   const [modified, setModified] = useState(false);
   const [docVersion, setDocVersion] = useState(0);
   const [pageCount, setPageCount] = useState(0);
+  const [pageSizes, setPageSizes] = useState<PageSize[]>([]);
   const [pageIndex, setPageIndex] = useState(0);
   const [zoom, setZoom] = useState<number | "ajuste">("ajuste");
   const [viewerW, setViewerW] = useState<number | null>(null);
@@ -343,54 +87,23 @@ function App() {
   const [sidebarVisible, setSidebarVisible] = useState(
     window.innerWidth >= 900,
   );
-  const [imgSrc, setImgSrc] = useState<string | null>(null);
   const [thumbs, setThumbs] = useState<(string | null)[]>([]);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
-  const [pageText, setPageText] = useState<PageText | null>(null);
-  const [selection, setSelection] = useState<Selection | null>(null);
-  const [dragging, setDragging] = useState(false);
-  const anchorRef = useRef<number | null>(null);
-  const downPosRef = useRef<{ x: number; y: number } | null>(null);
   const pageCacheRef = useRef<Map<string, string>>(new Map());
+  const inFlightRef = useRef<Map<string, Promise<string>>>(new Map());
+  const pageElsRef = useRef<Map<number, HTMLDivElement>>(new Map());
+  const scrollRafRef = useRef<number | null>(null);
+  // ancla del scroll (página superior visible y fracción ya desplazada)
+  // para conservar el punto de lectura al cambiar el zoom
+  const scrollAnchorRef = useRef<{ page: number; frac: number } | null>(null);
 
   const [mode, setMode] = useState<Mode>("select");
-  const [annots, setAnnots] = useState<AnnotationInfo[]>([]);
   const [annotVersion, setAnnotVersion] = useState(0);
   const [pageVersions, setPageVersions] = useState<number[]>([]);
-  const [strokePts, setStrokePts] = useState<[number, number][]>([]);
-  const strokeLiveRef = useRef<[number, number][]>([]);
-  const [noteDraft, setNoteDraft] = useState<{
-    x: number;
-    y: number;
-    text: string;
-  } | null>(null);
-  const [notePopover, setNotePopover] = useState<AnnotationInfo | null>(null);
+  const [selOwner, setSelOwner] = useState<number | null>(null);
   const undoStackRef = useRef<UndoEntry[]>([]);
-  const [formFields, setFormFields] = useState<FormFieldInfo[]>([]);
-  const [fieldDraft, setFieldDraft] = useState<{
-    field: FormFieldInfo;
-    text: string;
-  } | null>(null);
-  const [textBlocks, setTextBlocks] = useState<TextBlock[]>([]);
-  const [blockDraft, setBlockDraft] = useState<{
-    block: TextBlock;
-    text: string;
-  } | null>(null);
-  const [newTextDraft, setNewTextDraft] = useState<{
-    x: number;
-    y: number;
-    text: string;
-    size: number;
-    font: string;
-  } | null>(null);
-  const [images, setImages] = useState<ImageInfo[]>([]);
-  const [imgPreviews, setImgPreviews] = useState<Record<number, string>>({});
-  const [imgDraft, setImgDraft] = useState<ImageInfo | null>(null);
-  const [imagePopover, setImagePopover] = useState<ImageInfo | null>(null);
-  const imgActionRef = useRef<ImgAction | null>(null);
   const [p12Draft, setP12Draft] = useState<{
     path: string;
     password: string;
@@ -402,19 +115,9 @@ function App() {
   const [shapeColor, setShapeColor] = useState("#c0392b");
   const [shapeFill, setShapeFill] = useState(false);
   const [shapeWidth, setShapeWidth] = useState(2);
-  const [shapeDraft, setShapeDraft] = useState<{
-    x1: number;
-    y1: number;
-    x2: number;
-    y2: number;
-  } | null>(null);
-  const shapeStartRef = useRef<{ x: number; y: number } | null>(null);
-  const shapeLiveRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [stampText, setStampText] = useState(STAMP_PRESETS[0]);
   const [stampCustom, setStampCustom] = useState("");
   const [stampColor, setStampColor] = useState("#c0392b");
-  const [cropDraft, setCropDraft] = useState<Rect | null>(null);
-  const cropStartRef = useRef<{ x: number; y: number } | null>(null);
   const [wmOpen, setWmOpen] = useState(false);
   const [marginalAsk, setMarginalAsk] = useState<{
     zona: "watermark" | "header" | "footer";
@@ -433,20 +136,6 @@ function App() {
     owner: string;
   } | null>(null);
   const [flattenAsk, setFlattenAsk] = useState(false);
-  const [redactDraft, setRedactDraft] = useState<Rect | null>(null);
-  const redactStartRef = useRef<{ x: number; y: number } | null>(null);
-  const redactLiveRef = useRef<Rect | null>(null);
-  const [redactReport, setRedactReport] = useState<RedactReport | null>(null);
-  const [formDraft, setFormDraft] = useState<Rect | null>(null);
-  const formStartRef = useRef<{ x: number; y: number } | null>(null);
-  const formLiveRef = useRef<Rect | null>(null);
-  const [formName, setFormName] = useState("campo");
-  const [formKind, setFormKind] = useState<"text" | "checkbox">("text");
-  const [linkDraft, setLinkDraft] = useState<Rect | null>(null);
-  const linkStartRef = useRef<{ x: number; y: number } | null>(null);
-  const linkLiveRef = useRef<Rect | null>(null);
-  const [linkTipo, setLinkTipo] = useState<"url" | "pagina">("url");
-  const [linkValor, setLinkValor] = useState("");
   const [printPages, setPrintPages] = useState<string[] | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportFmt, setExportFmt] = useState<"png" | "jpeg">("png");
@@ -456,30 +145,25 @@ function App() {
   const [compressDpi, setCompressDpi] = useState(150);
   const [notice, setNotice] = useState<string | null>(null);
   const [outline, setOutlineState] = useState<OutlineNode[]>([]);
-  const [links, setLinks] = useState<LinkInfo[]>([]);
   const [propsDraft, setPropsDraft] = useState<Metadata | null>(null);
   const [firmas, setFirmas] = useState<FirmaGuardada[]>([]);
   const [activeSig, setActiveSig] = useState<{
     png: string;
     ratio: number;
   } | null>(null);
-  const [sigDraft, setSigDraft] = useState<Rect | null>(null);
-  const sigLiveRef = useRef<Rect | null>(null);
   const [drawingSig, setDrawingSig] = useState(false);
-  const sigDragRef = useRef<{ x: number; y: number } | null>(null);
 
   const [query, setQuery] = useState("");
   const [lastQuery, setLastQuery] = useState("");
   const [matches, setMatches] = useState<SearchMatch[]>([]);
   const [matchIdx, setMatchIdx] = useState(0);
   const [searched, setSearched] = useState(false);
-  const currentHitRef = useRef<HTMLDivElement | null>(null);
 
   async function openPath(path: string, password?: string) {
     try {
       setError(null);
-      setImgSrc(null);
       setThumbs([]);
+      setPageSizes([]);
       setMatches([]);
       setSearched(false);
       setQuery("");
@@ -494,6 +178,8 @@ function App() {
       setPageCount(info.page_count);
       setPageIndex(0);
       setDocVersion((v) => v + 1);
+      viewerRef.current?.scrollTo({ top: 0 });
+      scrollAnchorRef.current = null;
     } catch (e) {
       if (String(e) === "PASSWORD_REQUIRED") {
         setPwdDraft({ path, password: "" });
@@ -513,52 +199,16 @@ function App() {
     await openPath(selected);
   }
 
-  // Anotaciones de la página actual (para iconos de nota y popovers)
+  // Tamaños de página del documento: el esqueleto del scroll continuo
   useEffect(() => {
-    if (!workPath) return;
-    let cancelled = false;
-    setNotePopover(null);
-    invoke<AnnotationInfo[]>("get_annotations", { path: workPath, pageIndex })
-      .then((a) => {
-        if (!cancelled) setAnnots(a);
-      })
-      .catch(() => {
-        if (!cancelled) setAnnots([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [workPath, pageIndex, docVersion, annotVersion, pageVersions]);
-
-  // Campos de formulario de la página actual
-  useEffect(() => {
-    if (!workPath) return;
-    let cancelled = false;
-    setFieldDraft(null);
-    invoke<FormFieldInfo[]>("get_form_fields", { path: workPath, pageIndex })
-      .then((f) => {
-        if (!cancelled) setFormFields(f);
-      })
-      .catch(() => {
-        if (!cancelled) setFormFields([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [workPath, pageIndex, docVersion, annotVersion, pageVersions]);
-
-  // Bloques de texto (solo en modo edición)
-  useEffect(() => {
-    setNewTextDraft(null);
-    if (!workPath || mode !== "edit") {
-      setTextBlocks([]);
-      setBlockDraft(null);
+    if (!workPath) {
+      setPageSizes([]);
       return;
     }
     let cancelled = false;
-    invoke<TextBlock[]>("get_text_blocks", { path: workPath, pageIndex })
-      .then((b) => {
-        if (!cancelled) setTextBlocks(b);
+    invoke<PageSize[]>("get_page_sizes", { path: workPath })
+      .then((s) => {
+        if (!cancelled) setPageSizes(s);
       })
       .catch((e) => {
         if (!cancelled) setError(String(e));
@@ -566,42 +216,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [workPath, pageIndex, docVersion, mode, pageVersions]);
-
-  // Imágenes de la página (solo en modo imagen). Se precarga también su
-  // contenido para que al arrastrar se mueva la imagen, no solo el recuadro.
-  useEffect(() => {
-    setImagePopover(null);
-    setImgDraft(null);
-    imgActionRef.current = null;
-    setImgPreviews({});
-    if (!workPath || mode !== "image") {
-      setImages([]);
-      return;
-    }
-    let cancelled = false;
-    invoke<ImageInfo[]>("get_images", { path: workPath, pageIndex })
-      .then((list) => {
-        if (cancelled) return;
-        setImages(list);
-        for (const im of list) {
-          getImageData(workPath, pageIndex, im.object_index)
-            .then((b64) => {
-              if (!cancelled)
-                setImgPreviews((p) => ({ ...p, [im.object_index]: b64 }));
-            })
-            .catch(() => {
-              // sin vista previa: al arrastrar se verá solo el recuadro
-            });
-        }
-      })
-      .catch((e) => {
-        if (!cancelled) setError(String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [workPath, pageIndex, docVersion, mode, pageVersions]);
+  }, [workPath, docVersion]);
 
   // Marcadores del documento (pestaña del sidebar)
   useEffect(() => {
@@ -621,25 +236,6 @@ function App() {
       cancelled = true;
     };
   }, [workPath, docVersion]);
-
-  // Enlaces de la página actual (zonas clicables en modo selección)
-  useEffect(() => {
-    if (!workPath) {
-      setLinks([]);
-      return;
-    }
-    let cancelled = false;
-    getLinks(workPath, pageIndex)
-      .then((l) => {
-        if (!cancelled) setLinks(l);
-      })
-      .catch(() => {
-        if (!cancelled) setLinks([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [workPath, pageIndex, docVersion, pageVersions]);
 
   async function persistOutline(nodes: OutlineNode[]) {
     if (!workPath) return;
@@ -674,15 +270,8 @@ function App() {
     }
   }
 
-  function onLinkClick(l: LinkInfo) {
-    if (l.uri) {
-      openUrl(l.uri).catch((e) => setError(String(e)));
-    } else if (l.dest_page !== null) {
-      setPageIndex(l.dest_page);
-    }
-  }
-
-  // Esc sale de los modos de área (recorte, redacción, campo y enlace)
+  // Esc sale de los modos de área (recorte, redacción, campo y enlace);
+  // las páginas limpian sus borradores al cambiar el modo
   useEffect(() => {
     if (
       mode !== "crop" &&
@@ -692,14 +281,7 @@ function App() {
     )
       return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        setCropDraft(null);
-        setRedactDraft(null);
-        setRedactReport(null);
-        setFormDraft(null);
-        setLinkDraft(null);
-        setMode("select");
-      }
+      if (e.key === "Escape") setMode("select");
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -714,7 +296,6 @@ function App() {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         setActiveSig(null);
-        setSigDraft(null);
         setMode("select");
       }
     }
@@ -765,9 +346,9 @@ function App() {
         e.preventDefault();
         setZoom(Math.max(0.5, Math.round((zoomNum - 0.25) * 4) / 4));
       } else if (!mod && !enCampo && e.key === "ArrowRight") {
-        setPageIndex((i) => Math.min(pageCount - 1, i + 1));
+        gotoPage(pageIndex + 1);
       } else if (!mod && !enCampo && e.key === "ArrowLeft") {
-        setPageIndex((i) => Math.max(0, i - 1));
+        gotoPage(pageIndex - 1);
       }
     }
     window.addEventListener("keydown", onKey);
@@ -791,78 +372,110 @@ function App() {
   const fitWidth = viewerW ? Math.max(320, viewerW - PADDING_VIEWER) : BASE_WIDTH;
   const displayWidth = zoom === "ajuste" ? fitWidth : BASE_WIDTH * zoom;
   const ocupado = useSyncExternalStore(subscribeBusy, busyCount) > 0;
-  const renderWidth = Math.round(displayWidth * window.devicePixelRatio);
   const zoomNum = zoom === "ajuste" ? displayWidth / BASE_WIDTH : zoom;
 
-  // Render de la página actual (instantáneo si ya está en caché)
-  useEffect(() => {
-    if (!workPath) return;
-    const pv = pageVersions[pageIndex] ?? 0;
-    const key = `${docVersion}:${pv}:${pageIndex}:${renderWidth}`;
-    const cached = pageCacheRef.current.get(key);
-    if (cached) {
-      setImgSrc(cached);
-      setLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    invoke<string>("render_page", {
-      path: workPath,
-      pageIndex,
-      width: renderWidth,
-    })
-      .then((b64) => {
-        const src = `data:image/png;base64,${b64}`;
-        cachePut(key, src);
-        if (!cancelled) setImgSrc(src);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(String(e));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [workPath, pageIndex, renderWidth, docVersion, annotVersion, pageVersions]);
+  // el estado del documento en un ref para que requestRender sea estable
+  const docRef = useRef({ workPath, docVersion });
+  docRef.current = { workPath, docVersion };
 
-  // Prefetch de las páginas adyacentes cuando la actual ya está lista
-  useEffect(() => {
-    if (!workPath || pageCount === 0 || loading) return;
-    for (const p of [pageIndex + 1, pageIndex - 1]) {
-      if (p < 0 || p >= pageCount) continue;
-      const key = `${docVersion}:${pageVersions[p] ?? 0}:${p}:${renderWidth}`;
-      if (pageCacheRef.current.has(key)) continue;
-      cachePut(key, ""); // reserva para no pedirla dos veces
-      invoke<string>(
-        "render_page",
-        { path: workPath, pageIndex: p, width: renderWidth },
-        { background: true },
-      )
-        .then((b64) => cachePut(key, `data:image/png;base64,${b64}`))
-        .catch(() => pageCacheRef.current.delete(key));
-    }
-  }, [workPath, pageIndex, renderWidth, docVersion, annotVersion, pageCount, loading, pageVersions]);
-
-  // Capa de texto de la página actual
-  useEffect(() => {
-    if (!workPath) return;
-    let cancelled = false;
-    setPageText(null);
-    setSelection(null);
-    invoke<PageText>("get_page_text", { path: workPath, pageIndex })
-      .then((t) => {
-        if (!cancelled) setPageText(t);
+  /** Render de una página vía el caché global, con deduplicación de las
+   *  peticiones en vuelo. Lo consumen las Paginas visibles. */
+  const requestRender = useCallback(
+    (page: number, width: number, pv: number): Promise<string> => {
+      const { workPath, docVersion } = docRef.current;
+      if (!workPath) return Promise.reject("Sin documento");
+      const key = `${docVersion}:${pv}:${page}:${width}`;
+      const cached = pageCacheRef.current.get(key);
+      if (cached) return Promise.resolve(cached);
+      const enVuelo = inFlightRef.current.get(key);
+      if (enVuelo) return enVuelo;
+      const p = invoke<string>("render_page", {
+        path: workPath,
+        pageIndex: page,
+        width,
       })
-      .catch((e) => {
-        if (!cancelled) setError(String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [workPath, pageIndex, docVersion, pageVersions]);
+        .then((b64) => {
+          const src = `data:image/png;base64,${b64}`;
+          cachePut(key, src);
+          return src;
+        })
+        .finally(() => {
+          inFlightRef.current.delete(key);
+        });
+      inFlightRef.current.set(key, p);
+      return p;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  const registerEl = useCallback((page: number, el: HTMLDivElement | null) => {
+    if (el) pageElsRef.current.set(page, el);
+    else pageElsRef.current.delete(page);
+  }, []);
+
+  /** Alturas en pantalla de cada página con el ancho dado. */
+  function alturasPagina(width: number): number[] {
+    return pageSizes.map((s) => (width * s.height) / s.width);
+  }
+
+  /** Lleva el visor al principio de una página (miniaturas, marcadores,
+   *  enlaces internos, flechas y píldora). */
+  function gotoPage(i: number) {
+    if (pageCount === 0) return;
+    const target = Math.max(0, Math.min(i, pageCount - 1));
+    setPageIndex(target);
+    pageElsRef.current.get(target)?.scrollIntoView({ block: "start" });
+  }
+
+  // Seguimiento del scroll: la página cuyo centro queda más cerca del centro
+  // del visor es la "actual" (píldora y sidebar), sin provocar scroll.
+  function onViewerScroll() {
+    if (scrollRafRef.current !== null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      const el = viewerRef.current;
+      if (!el || pageSizes.length === 0) return;
+      const centro = el.scrollTop + el.clientHeight / 2;
+      const alturas = alturasPagina(displayWidth);
+      let y = VIEWER_PAD_TOP;
+      let best = 0;
+      let bestDist = Infinity;
+      let anchor: { page: number; frac: number } | null = null;
+      for (let i = 0; i < alturas.length; i++) {
+        const h = alturas[i];
+        if (anchor === null && y + h > el.scrollTop) {
+          anchor = { page: i, frac: Math.max(0, (el.scrollTop - y) / h) };
+        }
+        const d = Math.abs(y + h / 2 - centro);
+        if (d < bestDist) {
+          bestDist = d;
+          best = i;
+        }
+        y += h + PAGE_GAP;
+      }
+      scrollAnchorRef.current = anchor;
+      setPageIndex(best);
+    });
+  }
+
+  // Al cambiar el ancho de página (zoom o ajuste) se conserva el punto de
+  // lectura: misma página superior y misma fracción desplazada.
+  const prevWidthRef = useRef(displayWidth);
+  useLayoutEffect(() => {
+    if (prevWidthRef.current === displayWidth) return;
+    prevWidthRef.current = displayWidth;
+    const el = viewerRef.current;
+    const a = scrollAnchorRef.current;
+    if (!el || !a || pageSizes.length === 0) return;
+    const alturas = alturasPagina(displayWidth);
+    let y = VIEWER_PAD_TOP;
+    for (let i = 0; i < a.page && i < alturas.length; i++) {
+      y += alturas[i] + PAGE_GAP;
+    }
+    el.scrollTop = y + a.frac * (alturas[a.page] ?? 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayWidth]);
 
   // Miniaturas de la barra lateral (secuencial, en segundo plano)
   useEffect(() => {
@@ -900,28 +513,6 @@ function App() {
     };
   }, [workPath, pageCount, docVersion]);
 
-  function copySelection() {
-    if (!selection || !pageText) return;
-    const text = pageText.chars
-      .slice(selection.start, selection.end + 1)
-      .map((c) => c.ch)
-      .join("");
-    copyToClipboard(text);
-  }
-
-  // Copiar selección con ⌘C / Ctrl+C
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key === "c" && selection && pageText) {
-        copySelection();
-        e.preventDefault();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selection, pageText]);
-
   /** Refresca solo la miniatura de una página (tras anotar). */
   async function refreshThumb(page: number) {
     if (!workPath) return;
@@ -942,125 +533,19 @@ function App() {
   }
 
   /** Tras anotar: invalidar el render de esa página sin recargar todo. */
-  function afterAnnotate(page: number, pushUndo = true) {
-    if (pushUndo) undoStackRef.current.push({ page });
-    setModified(true);
-    for (const key of [...pageCacheRef.current.keys()]) {
-      if (key.split(":")[2] === String(page)) pageCacheRef.current.delete(key);
-    }
-    setAnnotVersion((v) => v + 1);
-    refreshThumb(page);
-  }
-
-  /** Resalta, subraya o tacha la selección actual. */
-  async function markupSelection(kind: "highlight" | "underline" | "strikeout") {
-    if (!workPath || !selection || !pageText) return;
-    const rects = mergeLineRects(
-      pageText.chars.slice(selection.start, selection.end + 1),
-    );
-    if (rects.length === 0) return;
-    try {
-      await addMarkup({
-        workPath,
-        pageIndex,
-        rects,
-        kind,
-        color: markupColor
-          ? hexToRgba(markupColor, kind === "highlight" ? 140 : 255)
-          : undefined,
-      });
-      setSelection(null);
-      afterAnnotate(pageIndex);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function commitShape(d: {
-    x1: number;
-    y1: number;
-    x2: number;
-    y2: number;
-  }) {
-    if (!workPath) return;
-    const fillable = shapeKind === "rect" || shapeKind === "ellipse";
-    try {
-      await addShape({
-        workPath,
-        pageIndex,
-        kind: shapeKind,
-        x1: d.x1,
-        y1: d.y1,
-        x2: d.x2,
-        y2: d.y2,
-        stroke: hexToRgba(shapeColor),
-        fill: shapeFill && fillable ? hexToRgba(shapeColor, 70) : null,
-        strokeWidth: shapeWidth,
-      });
-      afterAnnotate(pageIndex);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function placeStamp(x: number, y: number) {
-    const text = stampText === "custom" ? stampCustom.trim() : stampText;
-    if (!workPath || !text) return;
-    try {
-      await addStamp({
-        workPath,
-        pageIndex,
-        text,
-        color: hexToRgba(stampColor),
-        x,
-        y,
-        fontSize: 22,
-      });
-      afterAnnotate(pageIndex);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function submitNote() {
-    if (!workPath || !noteDraft || !noteDraft.text.trim()) {
-      setNoteDraft(null);
-      return;
-    }
-    try {
-      await invoke("add_note", {
-        workPath,
-        pageIndex,
-        x: noteDraft.x,
-        y: noteDraft.y,
-        text: noteDraft.text,
-      });
-      setNoteDraft(null);
-      setMode("select");
-      afterAnnotate(pageIndex);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function finishStroke() {
-    const pts = strokeLiveRef.current;
-    strokeLiveRef.current = [];
-    setStrokePts([]);
-    if (!workPath || pts.length < 2) return;
-    try {
-      await invoke("add_stroke", {
-        workPath,
-        pageIndex,
-        points: pts,
-        color: hexToRgba(drawColor),
-        width: drawWidth,
-      });
-      afterAnnotate(pageIndex);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
+  const afterAnnotate = useCallback(
+    (page: number, pushUndo = true) => {
+      if (pushUndo) undoStackRef.current.push({ page });
+      setModified(true);
+      for (const key of [...pageCacheRef.current.keys()]) {
+        if (key.split(":")[2] === String(page)) pageCacheRef.current.delete(key);
+      }
+      setAnnotVersion((v) => v + 1);
+      refreshThumb(page);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [workPath],
+  );
 
   async function undoAnnotation() {
     const action = undoStackRef.current.pop();
@@ -1082,260 +567,29 @@ function App() {
     }
   }
 
-  async function deleteAnnotation(annot: AnnotationInfo) {
-    if (!workPath) return;
-    try {
-      await invoke("remove_annotation", {
-        workPath,
-        pageIndex,
-        annotIndex: annot.index,
-      });
-      setNotePopover(null);
-      afterAnnotate(pageIndex, false);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  /** Clic simple en modo selección: abre el popover de la anotación pulsada. */
-  function onClickLayer(e: React.MouseEvent<HTMLDivElement>) {
-    if (mode !== "select" || selection) return;
-    const { x, y } = pagePoint(e);
-    const CLICKABLE = [
-      "Highlight",
-      "Underline",
-      "Strikeout",
-      "StrikeOut",
-      "Ink",
-      "Stamp",
-    ];
-    const hit = annots.find((a) => {
-      if (!CLICKABLE.includes(a.kind)) return false;
-      const zonas =
-        a.rects.length > 0
-          ? a.rects
-          : [{ x: a.x, y: a.y, w: a.w, h: a.h }];
-      return zonas.some(
-        (r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h,
-      );
-    });
-    if (hit) setNotePopover(hit);
-  }
-
-  async function insertImageAt(x: number, y: number) {
-    if (!workPath) return;
-    const sel = await open({
-      filters: [
-        {
-          name: "Imagen",
-          extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"],
-        },
-      ],
-      multiple: false,
-      title: "Insertar imagen",
-    });
-    if (typeof sel !== "string") return;
-    try {
-      await invoke("add_image", { workPath, pageIndex, imagePath: sel, x, y });
-      afterPageMutation(pageIndex);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function commitImage(objectIndex: number, b: ImageInfo) {
-    if (!workPath) return;
-    try {
-      await invoke("transform_image", {
-        workPath,
-        pageIndex,
-        objectIndex,
-        x: b.x,
-        y: b.y,
-        w: b.w,
-        h: b.h,
-      });
-      afterPageMutation(pageIndex);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function replaceImagePick(im: ImageInfo) {
-    if (!workPath) return;
-    const sel = await open({
-      filters: [
-        {
-          name: "Imagen",
-          extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"],
-        },
-      ],
-      multiple: false,
-      title: "Imagen de reemplazo",
-    });
-    if (typeof sel !== "string") return;
-    try {
-      await invoke("replace_image", {
-        workPath,
-        pageIndex,
-        objectIndex: im.object_index,
-        imagePath: sel,
-      });
-      setImagePopover(null);
-      afterPageMutation(pageIndex);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function deleteImage(im: ImageInfo) {
-    if (!workPath) return;
-    try {
-      await invoke("delete_image", {
-        workPath,
-        pageIndex,
-        objectIndex: im.object_index,
-      });
-      setImagePopover(null);
-      afterPageMutation(pageIndex);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  function startImgAction(
-    e: React.MouseEvent<HTMLDivElement>,
-    im: ImageInfo,
-    kind: ImgAction["kind"],
-  ) {
-    e.stopPropagation();
-    if (e.button !== 0) return;
-    const rect = (
-      e.currentTarget.closest(".textlayer") as HTMLElement
-    ).getBoundingClientRect();
-    imgActionRef.current = {
-      kind,
-      startX: (e.clientX - rect.left) / scale,
-      startY: (e.clientY - rect.top) / scale,
-      orig: im,
-      moved: false,
-    };
-    setImagePopover(null);
-    setImgDraft(im);
-  }
-
-  async function submitNewText() {
-    if (!workPath || !newTextDraft) return;
-    if (!newTextDraft.text.trim()) {
-      setNewTextDraft(null);
-      return;
-    }
-    try {
-      await invoke("add_text_block", {
-        workPath,
-        pageIndex,
-        x: newTextDraft.x,
-        y: newTextDraft.y,
-        text: newTextDraft.text,
-        fontSize: newTextDraft.size,
-        font: newTextDraft.font === "auto" ? null : newTextDraft.font,
-      });
-      setNewTextDraft(null);
-      afterPageMutation(pageIndex);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function submitBlockDraft() {
-    if (!workPath || !blockDraft) return;
-    try {
-      await invoke("edit_text_block", {
-        workPath,
-        pageIndex,
-        objectIndex: blockDraft.block.object_index,
-        newText: blockDraft.text,
-      });
-      setBlockDraft(null);
-      afterPageMutation(pageIndex);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function deleteBlock() {
-    if (!workPath || !blockDraft) return;
-    try {
-      await invoke("delete_text_block", {
-        workPath,
-        pageIndex,
-        objectIndex: blockDraft.block.object_index,
-      });
-      setBlockDraft(null);
-      afterPageMutation(pageIndex);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function submitFieldDraft() {
-    if (!workPath || !fieldDraft) return;
-    try {
-      await invoke("set_form_text", {
-        workPath,
-        pageIndex,
-        annotIndex: fieldDraft.field.annot_index,
-        value: fieldDraft.text,
-      });
-      setFieldDraft(null);
-      afterAnnotate(pageIndex, false);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function toggleFormCheck(field: FormFieldInfo) {
-    if (!workPath) return;
-    try {
-      await invoke("set_form_checked", {
-        workPath,
-        pageIndex,
-        annotIndex: field.annot_index,
-        checked: !field.checked,
-      });
-      afterAnnotate(pageIndex, false);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  function onFieldClick(field: FormFieldInfo) {
-    if (field.kind === "Text") {
-      setFieldDraft({ field, text: field.value });
-    } else if (field.kind === "Checkbox" || field.kind === "RadioButton") {
-      toggleFormCheck(field);
-    }
-  }
-
   /** Tras mutar UNA página: re-render y miniatura solo de esa página. */
-  function afterPageMutation(page: number) {
-    setModified(true);
-    setMatches([]);
-    setSearched(false);
-    setLastQuery("");
-    setPageVersions((v) => {
-      const next = [...v];
-      next[page] = (next[page] ?? 0) + 1;
-      return next;
-    });
-    for (const key of [...pageCacheRef.current.keys()]) {
-      if (key.split(":")[2] === String(page)) pageCacheRef.current.delete(key);
-    }
-    refreshThumb(page);
-  }
+  const afterPageMutation = useCallback(
+    (page: number) => {
+      setModified(true);
+      setMatches([]);
+      setSearched(false);
+      setLastQuery("");
+      setPageVersions((v) => {
+        const next = [...v];
+        next[page] = (next[page] ?? 0) + 1;
+        return next;
+      });
+      for (const key of [...pageCacheRef.current.keys()]) {
+        if (key.split(":")[2] === String(page)) pageCacheRef.current.delete(key);
+      }
+      refreshThumb(page);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [workPath],
+  );
 
   /** Tras mutar el documento: refrescar render, miniaturas y limpiar búsqueda. */
-  function afterMutation(newCount: number, nextPage?: number) {
+  const afterMutation = useCallback((newCount: number, nextPage?: number) => {
     setPageCount(newCount);
     setModified(true);
     setMatches([]);
@@ -1343,7 +597,7 @@ function App() {
     setLastQuery("");
     setPageIndex((p) => Math.max(0, Math.min(nextPage ?? p, newCount - 1)));
     setDocVersion((v) => v + 1);
-  }
+  }, []);
 
   async function rotatePage(i: number) {
     if (!workPath) return;
@@ -1414,18 +668,6 @@ function App() {
     }
   }
 
-  async function applyCrop(allPages: boolean) {
-    if (!workPath || !cropDraft) return;
-    try {
-      await cropPage(workPath, pageIndex, cropDraft, allPages);
-      setCropDraft(null);
-      setMode("select");
-      afterMutation(pageCount);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
   async function askRemoveMarginal(zona: "watermark" | "header" | "footer") {
     if (!workPath) return;
     try {
@@ -1454,17 +696,6 @@ function App() {
       }
       setMarginalAsk(null);
       afterMutation(pageCount);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function removeFormField(name: string) {
-    if (!workPath) return;
-    try {
-      await deleteFormField(workPath, name);
-      setFieldDraft(null);
-      afterPageMutation(pageIndex);
     } catch (e) {
       setError(String(e));
     }
@@ -1539,35 +770,13 @@ function App() {
     }
   }
 
-  async function previewRedact(r: Rect) {
-    if (!workPath) return;
-    try {
-      setRedactReport(await redactArea(workPath, pageIndex, r, true));
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function applyRedact() {
-    if (!workPath || !redactDraft) return;
-    try {
-      await redactArea(workPath, pageIndex, redactDraft, false);
-      setRedactDraft(null);
-      setRedactReport(null);
-      setMode("select");
-      afterPageMutation(pageIndex);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
   async function printDocument() {
     if (!workPath) return;
     try {
       setNotice("Preparando la impresión…");
       const pages: string[] = [];
       for (let i = 0; i < pageCount; i++) {
-        const width = Math.round(((pageText?.width ?? 595) * 200) / 72);
+        const width = Math.round(((pageSizes[i]?.width ?? 595) * 200) / 72);
         const b64 = await invoke<string>("render_page", {
           path: workPath,
           pageIndex: i,
@@ -1650,45 +859,6 @@ function App() {
       afterMutation(pageCount);
     } catch (e) {
       setNotice(null);
-      setError(String(e));
-    }
-  }
-
-  async function applyFormField() {
-    if (!workPath || !formDraft || !formName.trim()) return;
-    try {
-      await createFormField({
-        workPath,
-        pageIndex,
-        kind: formKind,
-        rect: formDraft,
-        name: formName.trim(),
-      });
-      setFormDraft(null);
-      setMode("select");
-      afterPageMutation(pageIndex);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function applyLink() {
-    if (!workPath || !linkDraft || !linkValor.trim()) return;
-    try {
-      await createLink({
-        workPath,
-        pageIndex,
-        rect: linkDraft,
-        uri: linkTipo === "url" ? linkValor.trim() : null,
-        destPage:
-          linkTipo === "pagina"
-            ? Math.max(0, Math.min(pageCount - 1, Number(linkValor) - 1))
-            : null,
-      });
-      setLinkDraft(null);
-      setMode("select");
-      afterPageMutation(pageIndex);
-    } catch (e) {
       setError(String(e));
     }
   }
@@ -1877,29 +1047,6 @@ function App() {
     }
   }
 
-  async function stampActiveSignature(r: Rect) {
-    if (!workPath || !activeSig) return;
-    try {
-      await stampSignature({
-        workPath,
-        pageIndex,
-        pngBase64: activeSig.png,
-        x: r.x,
-        y: r.y,
-        w: r.w,
-        h: r.h,
-      });
-      setActiveSig(null);
-      setSigDraft(null);
-      // la firma estampada es una imagen: el modo imagen permite moverla,
-      // redimensionarla o borrarla al instante
-      setMode("image");
-      afterPageMutation(pageIndex);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
   async function runSearch() {
     if (!workPath) return;
     if (!query.trim()) {
@@ -1917,7 +1064,7 @@ function App() {
       setMatchIdx(0);
       setSearched(true);
       setLastQuery(query);
-      if (res.length > 0) setPageIndex(res[0].page_index);
+      if (res.length > 0) gotoPage(res[0].page_index);
     } catch (e) {
       setError(String(e));
     }
@@ -1927,301 +1074,48 @@ function App() {
     if (matches.length === 0) return;
     const next = (matchIdx + delta + matches.length) % matches.length;
     setMatchIdx(next);
-    setPageIndex(matches[next].page_index);
+    gotoPage(matches[next].page_index);
   }
 
-  // Centrar el visor en la coincidencia actual. Depende también de imgSrc y
-  // pageText para re-centrar cuando termina el render de una página nueva y
-  // cuando cambia la escala (pageText fija el scale real).
-  useEffect(() => {
-    if (matches.length === 0) return;
-    currentHitRef.current?.scrollIntoView({ block: "center", inline: "center" });
-  }, [matchIdx, matches, pageIndex, imgSrc, pageText]);
+  // Coincidencias agrupadas por página, con su índice global para saber
+  // cuál es la actual
+  const matchesByPage = useMemo(() => {
+    const m = new Map<number, PageMatch[]>();
+    matches.forEach((match, i) => {
+      const list = m.get(match.page_index) ?? [];
+      list.push({ rects: match.rects, groupIndex: i });
+      m.set(match.page_index, list);
+    });
+    return m;
+  }, [matches]);
 
-  const scale = pageText ? displayWidth / pageText.width : 1;
+  const mostrarError = useCallback((e: unknown) => setError(String(e)), []);
+  const onLinkUri = useCallback(
+    (uri: string) => {
+      openUrl(uri).catch((e) => setError(String(e)));
+    },
+    [],
+  );
+  const onSigStamped = useCallback(() => {
+    setActiveSig(null);
+    // la firma estampada es una imagen: el modo imagen permite retocarla
+    setMode("image");
+  }, []);
 
-  /** Evita que una tarjeta flotante se salga del borde de la página. */
-  function clampCardLeft(left: number, w = 260) {
-    return Math.max(0, Math.min(left, displayWidth - w));
-  }
-
-  function pagePoint(e: React.MouseEvent<HTMLDivElement>) {
-    const rect = e.currentTarget.getBoundingClientRect();
-    return {
-      x: (e.clientX - rect.left) / scale,
-      y: (e.clientY - rect.top) / scale,
-    };
-  }
-
-  function onMouseDown(e: React.MouseEvent<HTMLDivElement>) {
-    if (e.button !== 0) return;
-    const { x, y } = pagePoint(e);
-    if (mode === "draw") {
-      strokeLiveRef.current = [[x, y]];
-      setStrokePts([[x, y]]);
-      return;
-    }
-    if (mode === "note") {
-      setNoteDraft({ x, y, text: "" });
-      return;
-    }
-    if (mode === "edit") {
-      // clic en zona libre: añadir texto nuevo ahí (los bloques existentes
-      // capturan su propio clic con stopPropagation)
-      setBlockDraft(null);
-      setNewTextDraft({ x, y, text: "", size: 12, font: "auto" });
-      return;
-    }
-    if (mode === "image") {
-      // clic en zona libre: insertar imagen ahí (las cajas de imagen
-      // capturan su propio mousedown con stopPropagation)
-      setImagePopover(null);
-      insertImageAt(x, y);
-      return;
-    }
-    if (mode === "firmar") {
-      if (!activeSig) return;
-      sigDragRef.current = { x, y };
-      setSigDraft(null);
-      return;
-    }
-    if (mode === "shape") {
-      shapeStartRef.current = { x, y };
-      setShapeDraft(null);
-      return;
-    }
-    if (mode === "stamp") {
-      placeStamp(x, y);
-      return;
-    }
-    if (mode === "crop") {
-      cropStartRef.current = { x, y };
-      setCropDraft(null);
-      return;
-    }
-    if (mode === "redact") {
-      redactStartRef.current = { x, y };
-      setRedactDraft(null);
-      setRedactReport(null);
-      return;
-    }
-    if (mode === "form-new") {
-      formStartRef.current = { x, y };
-      setFormDraft(null);
-      return;
-    }
-    if (mode === "link-new") {
-      linkStartRef.current = { x, y };
-      setLinkDraft(null);
-      return;
-    }
-    if (!pageText) return;
-    anchorRef.current = charIndexAt(pageText, x, y);
-    // el jitter de un clic simple no debe crear una selección de 1 carácter
-    // (bloquearía el clic-para-borrar de las anotaciones)
-    downPosRef.current = { x: e.clientX, y: e.clientY };
-    setDragging(true);
-    setSelection(null);
-    setNotePopover(null);
-  }
-
-  function onMouseMove(e: React.MouseEvent<HTMLDivElement>) {
-    if (!(e.buttons & 1)) return;
-    if (mode === "image" && imgActionRef.current) {
-      const a = imgActionRef.current;
-      const { x, y } = pagePoint(e);
-      const dx = x - a.startX;
-      const dy = y - a.startY;
-      if (Math.abs(dx) + Math.abs(dy) > 1) a.moved = true;
-      if (a.kind === "move") {
-        setImgDraft({ ...a.orig, x: a.orig.x + dx, y: a.orig.y + dy });
-      } else {
-        let w = Math.max(8, a.orig.w + dx);
-        let h = Math.max(8, a.orig.h + dy);
-        if (!e.shiftKey && a.orig.w > 0) {
-          h = w * (a.orig.h / a.orig.w);
-        }
-        setImgDraft({ ...a.orig, w, h });
-      }
-      return;
-    }
-    if (mode === "draw") {
-      if (strokeLiveRef.current.length === 0) return;
-      const { x, y } = pagePoint(e);
-      strokeLiveRef.current = [...strokeLiveRef.current, [x, y]];
-      setStrokePts(strokeLiveRef.current);
-      return;
-    }
-    if (mode === "firmar") {
-      const start = sigDragRef.current;
-      if (!activeSig || !start) return;
-      const { x, y } = pagePoint(e);
-      const w = Math.abs(x - start.x);
-      if (w < 4) return;
-      const h = w * activeSig.ratio;
-      const d = {
-        x: Math.min(x, start.x),
-        y: y >= start.y ? start.y : start.y - h,
-        w,
-        h,
-      };
-      sigLiveRef.current = d;
-      setSigDraft(d);
-      return;
-    }
-    if (mode === "shape") {
-      const start = shapeStartRef.current;
-      if (!start) return;
-      const { x, y } = pagePoint(e);
-      const d = { x1: start.x, y1: start.y, x2: x, y2: y };
-      shapeLiveRef.current = d;
-      setShapeDraft(d);
-      return;
-    }
-    if (mode === "crop") {
-      const start = cropStartRef.current;
-      if (!start) return;
-      const { x, y } = pagePoint(e);
-      setCropDraft({
-        x: Math.min(x, start.x),
-        y: Math.min(y, start.y),
-        w: Math.abs(x - start.x),
-        h: Math.abs(y - start.y),
-      });
-      return;
-    }
-    if (mode === "redact") {
-      const start = redactStartRef.current;
-      if (!start) return;
-      const { x, y } = pagePoint(e);
-      const d = {
-        x: Math.min(x, start.x),
-        y: Math.min(y, start.y),
-        w: Math.abs(x - start.x),
-        h: Math.abs(y - start.y),
-      };
-      redactLiveRef.current = d;
-      setRedactDraft(d);
-      return;
-    }
-    if (mode === "form-new" || mode === "link-new") {
-      const start = (mode === "form-new" ? formStartRef : linkStartRef).current;
-      if (!start) return;
-      const { x, y } = pagePoint(e);
-      const d = {
-        x: Math.min(x, start.x),
-        y: Math.min(y, start.y),
-        w: Math.abs(x - start.x),
-        h: Math.abs(y - start.y),
-      };
-      if (mode === "form-new") {
-        formLiveRef.current = d;
-        setFormDraft(d);
-      } else {
-        linkLiveRef.current = d;
-        setLinkDraft(d);
-      }
-      return;
-    }
-    if (mode !== "select" || !pageText || anchorRef.current === null) return;
-    const down = downPosRef.current;
-    if (
-      down &&
-      Math.abs(e.clientX - down.x) < 4 &&
-      Math.abs(e.clientY - down.y) < 4
-    )
-      return;
-    const { x, y } = pagePoint(e);
-    const idx = charIndexAt(pageText, x, y);
-    if (idx === null) return;
-    const a = anchorRef.current;
-    setSelection({ start: Math.min(a, idx), end: Math.max(a, idx) });
-  }
-
-  function onMouseUp() {
-    anchorRef.current = null;
-    setDragging(false);
-    if (mode === "firmar") {
-      const start = sigDragRef.current;
-      sigDragRef.current = null;
-      if (!activeSig || !start || !pageText) return;
-      // ref espejo: en un arrastre en un solo frame el estado de React aún
-      // no se ha re-renderizado y sigDraft sería el del render anterior
-      const draft = sigLiveRef.current;
-      sigLiveRef.current = null;
-      setSigDraft(null);
-      let r: Rect;
-      if (draft && draft.w > 12) {
-        r = draft;
-      } else {
-        // clic simple: tamaño por defecto centrado en el punto
-        const w = Math.min(180, pageText.width * 0.5);
-        const h = w * activeSig.ratio;
-        r = { x: start.x - w / 2, y: start.y - h / 2, w, h };
-      }
-      r.x = Math.max(0, Math.min(r.x, pageText.width - r.w));
-      r.y = Math.max(0, Math.min(r.y, pageText.height - r.h));
-      stampActiveSignature(r);
-      return;
-    }
-    if (mode === "shape") {
-      shapeStartRef.current = null;
-      const d = shapeLiveRef.current;
-      shapeLiveRef.current = null;
-      setShapeDraft(null);
-      if (d && Math.abs(d.x2 - d.x1) + Math.abs(d.y2 - d.y1) > 4) {
-        commitShape(d);
-      }
-      return;
-    }
-    if (mode === "crop") {
-      cropStartRef.current = null;
-      // el borrador se queda visible; se confirma con los botones
-      return;
-    }
-    if (mode === "redact") {
-      redactStartRef.current = null;
-      const d = redactLiveRef.current;
-      redactLiveRef.current = null;
-      if (d && d.w > 6 && d.h > 6) {
-        setRedactDraft(d);
-        previewRedact(d);
-      }
-      return;
-    }
-    if (mode === "form-new") {
-      formStartRef.current = null;
-      // el borrador queda visible; se confirma en la tarjeta
-      return;
-    }
-    if (mode === "link-new") {
-      linkStartRef.current = null;
-      return;
-    }
-    if (mode === "image" && imgActionRef.current) {
-      const a = imgActionRef.current;
-      imgActionRef.current = null;
-      const draft = imgDraft;
-      setImgDraft(null);
-      if (!a.moved) {
-        // clic simple: abrir el popover de la imagen
-        setImagePopover(a.orig);
-      } else if (draft) {
-        commitImage(a.orig.object_index, draft);
-      }
-      return;
-    }
-    if (mode === "draw" && strokeLiveRef.current.length > 0) finishStroke();
-  }
-
-  const selectionRects =
-    selection && pageText
-      ? mergeLineRects(pageText.chars.slice(selection.start, selection.end + 1))
-      : [];
-  const lastSelRect =
-    selectionRects.length > 0
-      ? selectionRects[selectionRects.length - 1]
-      : null;
+  const tool: ToolProps = {
+    drawColor,
+    drawWidth,
+    markupColor,
+    onMarkupColor: setMarkupColor,
+    shapeKind,
+    shapeColor,
+    shapeFill,
+    shapeWidth,
+    stampText,
+    stampCustom,
+    stampColor,
+    activeSig,
+  };
 
   // separador de ruta multiplataforma (macOS "/" y Windows "\")
   const fileName = originalPath?.split(/[\\/]/).pop() ?? null;
@@ -2264,25 +1158,7 @@ function App() {
 
   function selectMode(m: Mode) {
     setMode((cur) => (cur === m ? "select" : m));
-    setSelection(null);
-    setStrokePts([]);
-    setNoteDraft(null);
     setActiveSig(null);
-    setSigDraft(null);
-    sigDragRef.current = null;
-    setShapeDraft(null);
-    shapeStartRef.current = null;
-    setCropDraft(null);
-    cropStartRef.current = null;
-    setRedactDraft(null);
-    setRedactReport(null);
-    redactStartRef.current = null;
-    setFormDraft(null);
-    formLiveRef.current = null;
-    formStartRef.current = null;
-    setLinkDraft(null);
-    linkLiveRef.current = null;
-    linkStartRef.current = null;
   }
 
   return (
@@ -2308,9 +1184,7 @@ function App() {
               {modified ? " •" : ""}
             </span>
           )}
-          {(loading || ocupado) && (
-            <span className="status dato">trabajando…</span>
-          )}
+          {ocupado && <span className="status dato">trabajando…</span>}
         </div>
 
         {pageCount > 0 && (
@@ -2830,18 +1704,18 @@ function App() {
           </div>
         </div>
       )}
-      {mode === "redact" && !redactDraft && (
+      {mode === "redact" && (
         <div className="sign-hint">
           Arrastra sobre el área a censurar: el contenido se ELIMINA de verdad
           · Esc cancela
         </div>
       )}
-      {mode === "form-new" && !formDraft && (
+      {mode === "form-new" && (
         <div className="sign-hint">
           Arrastra donde quieras el campo de formulario · Esc cancela
         </div>
       )}
-      {mode === "link-new" && !linkDraft && (
+      {mode === "link-new" && (
         <div className="sign-hint">
           Arrastra sobre la zona que será clicable · Esc cancela
         </div>
@@ -2933,7 +1807,7 @@ function App() {
           ))}
         </div>
       )}
-      {mode === "crop" && !cropDraft && (
+      {mode === "crop" && (
         <div className="sign-hint">
           Arrastra para marcar el área que quieres conservar · Esc cancela
         </div>
@@ -3095,7 +1969,7 @@ function App() {
               <PanelMarcadores
                 outline={outline}
                 currentPage={pageIndex}
-                onGoto={setPageIndex}
+                onGoto={gotoPage}
                 onChange={persistOutline}
               />
             )}
@@ -3104,7 +1978,7 @@ function App() {
               <div
                 key={i}
                 className={`thumb${i === pageIndex ? " active" : ""}`}
-                onClick={() => setPageIndex(i)}
+                onClick={() => gotoPage(i)}
               >
                 {src ? (
                   <img src={src} draggable={false} alt={`Página ${i + 1}`} />
@@ -3177,7 +2051,7 @@ function App() {
         )}
 
         <div className="viewer-wrap">
-          <main className="viewer" ref={viewerRef}>
+          <main className="viewer" ref={viewerRef} onScroll={onViewerScroll}>
             {!workPath && (
               <div className="placeholder">
                 <p className="voz">Nada abierto todavía. El papel espera.</p>
@@ -3187,839 +2061,37 @@ function App() {
                 </button>
               </div>
             )}
-            {imgSrc && (
-              <div className="page-wrap" style={{ width: displayWidth }}>
-                <span className="esquina a" />
-                <span className="esquina b" />
-                <span className="esquina c" />
-                <span className="esquina d" />
-                <img
-                  className="page"
-                  src={imgSrc}
-                  draggable={false}
-                  alt={`Página ${pageIndex + 1}`}
+            {workPath &&
+              pageSizes.slice(0, pageCount).map((size, i) => (
+                <Pagina
+                  key={i}
+                  index={i}
+                  workPath={workPath}
+                  size={size}
+                  pageCount={pageCount}
+                  displayWidth={displayWidth}
+                  devicePixelRatio={window.devicePixelRatio}
+                  docVersion={docVersion}
+                  annotVersion={annotVersion}
+                  pageVersion={pageVersions[i] ?? 0}
+                  mode={mode}
+                  tool={tool}
+                  matches={matchesByPage.get(i)}
+                  currentGroup={matchIdx}
+                  selOwner={selOwner}
+                  claimSel={setSelOwner}
+                  requestRender={requestRender}
+                  registerEl={registerEl}
+                  onAnnotated={afterAnnotate}
+                  onPageMutated={afterPageMutation}
+                  onDocMutated={afterMutation}
+                  onError={mostrarError}
+                  onModeChange={setMode}
+                  onLinkGoto={gotoPage}
+                  onLinkUri={onLinkUri}
+                  onSigStamped={onSigStamped}
                 />
-                <div
-                  className={`textlayer mode-${mode}`}
-                  onMouseDown={onMouseDown}
-                  onMouseMove={onMouseMove}
-                  onMouseUp={onMouseUp}
-                  onClick={onClickLayer}
-                >
-                  {annots
-                    .filter((a) => a.kind === "Highlight")
-                    .flatMap((a) =>
-                      a.rects.map((r, j) => (
-                        <div
-                          key={`h${a.index}-${j}`}
-                          className="annot-highlight"
-                          style={{
-                            left: r.x * scale,
-                            top: r.y * scale,
-                            width: r.w * scale,
-                            height: r.h * scale,
-                            background: a.color
-                              ? `rgba(${a.color[0]}, ${a.color[1]}, ${a.color[2]}, 0.45)`
-                              : undefined,
-                          }}
-                        />
-                      )),
-                    )}
-                  {annots
-                    .filter(
-                      (a) =>
-                        a.kind === "Underline" ||
-                        a.kind === "Strikeout" ||
-                        a.kind === "StrikeOut",
-                    )
-                    .flatMap((a) =>
-                      a.rects.map((r, j) => (
-                        <div
-                          key={`u${a.index}-${j}`}
-                          className={
-                            a.kind === "Underline"
-                              ? "annot-underline"
-                              : "annot-strike"
-                          }
-                          style={{
-                            left: r.x * scale,
-                            top:
-                              a.kind === "Underline"
-                                ? (r.y + r.h) * scale - 2
-                                : (r.y + r.h * 0.55) * scale - 1,
-                            width: r.w * scale,
-                            background: a.color
-                              ? `rgba(${a.color[0]}, ${a.color[1]}, ${a.color[2]}, 0.9)`
-                              : undefined,
-                          }}
-                        />
-                      )),
-                    )}
-                  {mode === "edit" &&
-                    textBlocks.map((b) => (
-                      <div
-                        key={`b${b.object_index}`}
-                        className="text-block"
-                        style={{
-                          left: b.x * scale,
-                          top: b.y * scale,
-                          width: b.w * scale,
-                          height: b.h * scale,
-                        }}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setBlockDraft({ block: b, text: b.text });
-                        }}
-                      />
-                    ))}
-                  {mode === "image" &&
-                    images.map((im) => {
-                      const isDragging =
-                        imgDraft !== null &&
-                        imgDraft.object_index === im.object_index;
-                      const b = isDragging ? imgDraft : im;
-                      const preview = imgPreviews[im.object_index];
-                      return (
-                        <div
-                          key={`im${im.object_index}`}
-                          className="image-box"
-                          style={{
-                            left: b.x * scale,
-                            top: b.y * scale,
-                            width: b.w * scale,
-                            height: b.h * scale,
-                          }}
-                          onMouseDown={(e) => startImgAction(e, im, "move")}
-                        >
-                          {isDragging && preview && (
-                            <img
-                              className="image-preview"
-                              src={`data:image/png;base64,${preview}`}
-                              draggable={false}
-                              alt=""
-                            />
-                          )}
-                          <div
-                            className="image-handle"
-                            title="Redimensionar (Shift: libre)"
-                            onMouseDown={(e) => startImgAction(e, im, "resize")}
-                          />
-                        </div>
-                      );
-                    })}
-                  {imagePopover && (
-                    <div
-                      className="card"
-                      style={{
-                        left: clampCardLeft(imagePopover.x * scale),
-                        top: (imagePopover.y + imagePopover.h) * scale + 6,
-                      }}
-                      onMouseDown={(e) => e.stopPropagation()}
-                    >
-                      <div className="card-actions">
-                        <button
-                          className="btn"
-                          onClick={() => replaceImagePick(imagePopover)}
-                        >
-                          <Icon name="image" size={13} />
-                          Reemplazar…
-                        </button>
-                        <button
-                          className="btn btn-danger"
-                          onClick={() => deleteImage(imagePopover)}
-                        >
-                          <Icon name="trash" size={13} />
-                          Eliminar
-                        </button>
-                        <button
-                          className="btn"
-                          onClick={() => setImagePopover(null)}
-                        >
-                          Cerrar
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                  {newTextDraft && (
-                    <div
-                      className="card"
-                      style={{
-                        left: clampCardLeft(newTextDraft.x * scale, 288),
-                        top: newTextDraft.y * scale,
-                        width: 280,
-                      }}
-                      onMouseDown={(e) => e.stopPropagation()}
-                    >
-                      <textarea
-                        autoFocus
-                        placeholder="Texto nuevo… (Enter añade, Esc cancela)"
-                        value={newTextDraft.text}
-                        onChange={(e) =>
-                          setNewTextDraft({
-                            ...newTextDraft,
-                            text: e.target.value,
-                          })
-                        }
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && !e.shiftKey) {
-                            e.preventDefault();
-                            submitNewText();
-                          }
-                          if (e.key === "Escape") setNewTextDraft(null);
-                        }}
-                      />
-                      <div className="card-row">
-                        <select
-                          className="size-select font-select"
-                          title="Fuente"
-                          value={newTextDraft.font}
-                          onChange={(e) =>
-                            setNewTextDraft({
-                              ...newTextDraft,
-                              font: e.target.value,
-                            })
-                          }
-                        >
-                          {FONT_CHOICES.map((f) => (
-                            <option key={f.value} value={f.value}>
-                              {f.label}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          className="size-select"
-                          title="Tamaño"
-                          value={newTextDraft.size}
-                          onChange={(e) =>
-                            setNewTextDraft({
-                              ...newTextDraft,
-                              size: Number(e.target.value),
-                            })
-                          }
-                        >
-                          {[8, 10, 12, 14, 18, 24, 32].map((s) => (
-                            <option key={s} value={s}>
-                              {s} pt
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="card-actions">
-                        <button
-                          className="btn"
-                          onClick={() => setNewTextDraft(null)}
-                        >
-                          Cancelar
-                        </button>
-                        <button className="btn btn-primary" onClick={submitNewText}>
-                          Añadir
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                  {blockDraft && (
-                    <div
-                      className="card"
-                      style={{
-                        left: clampCardLeft(blockDraft.block.x * scale),
-                        top: (blockDraft.block.y + blockDraft.block.h) * scale + 6,
-                        width: Math.max(260, blockDraft.block.w * scale),
-                      }}
-                      onMouseDown={(e) => e.stopPropagation()}
-                    >
-                      <span className="card-label">
-                        {blockDraft.block.font_family || "Fuente del documento"}
-                        {" · "}
-                        {Math.round(blockDraft.block.font_size)} pt
-                      </span>
-                      <textarea
-                        autoFocus
-                        value={blockDraft.text}
-                        onChange={(e) =>
-                          setBlockDraft({ ...blockDraft, text: e.target.value })
-                        }
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && !e.shiftKey) {
-                            e.preventDefault();
-                            submitBlockDraft();
-                          }
-                          if (e.key === "Escape") setBlockDraft(null);
-                        }}
-                      />
-                      <div className="card-actions">
-                        <button className="btn btn-danger" onClick={deleteBlock}>
-                          <Icon name="trash" size={13} />
-                          Eliminar
-                        </button>
-                        <button className="btn" onClick={() => setBlockDraft(null)}>
-                          Cancelar
-                        </button>
-                        <button className="btn btn-primary" onClick={submitBlockDraft}>
-                          Guardar
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                  {mode === "select" &&
-                    links.map((l, i) => (
-                      <div
-                        key={`lk${i}`}
-                        className="link-zone"
-                        title={l.uri ?? `Ir a la página ${(l.dest_page ?? 0) + 1}`}
-                        style={{
-                          left: l.x * scale,
-                          top: l.y * scale,
-                          width: l.w * scale,
-                          height: l.h * scale,
-                        }}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onLinkClick(l);
-                        }}
-                      />
-                    ))}
-                  {mode === "select" &&
-                    formFields.map((f) => (
-                      <div
-                        key={`f${f.annot_index}`}
-                        className="form-field"
-                        title={f.name}
-                        style={{
-                          left: f.x * scale,
-                          top: f.y * scale,
-                          width: f.w * scale,
-                          height: f.h * scale,
-                        }}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onFieldClick(f);
-                        }}
-                      />
-                    ))}
-                  {fieldDraft && (
-                    <div
-                      className="card"
-                      style={{
-                        left: clampCardLeft(fieldDraft.field.x * scale),
-                        top: (fieldDraft.field.y + fieldDraft.field.h) * scale + 6,
-                      }}
-                      onMouseDown={(e) => e.stopPropagation()}
-                    >
-                      <textarea
-                        autoFocus
-                        placeholder={`${fieldDraft.field.name}…`}
-                        value={fieldDraft.text}
-                        onChange={(e) =>
-                          setFieldDraft({ ...fieldDraft, text: e.target.value })
-                        }
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && !e.shiftKey) {
-                            e.preventDefault();
-                            submitFieldDraft();
-                          }
-                          if (e.key === "Escape") setFieldDraft(null);
-                        }}
-                      />
-                      <div className="card-actions">
-                        <button
-                          className="btn btn-danger"
-                          title="Borrar este campo del formulario"
-                          onClick={() => removeFormField(fieldDraft.field.name)}
-                        >
-                          <Icon name="trash" size={13} />
-                          Eliminar
-                        </button>
-                        <button className="btn" onClick={() => setFieldDraft(null)}>
-                          Cancelar
-                        </button>
-                        <button className="btn btn-primary" onClick={submitFieldDraft}>
-                          Guardar
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                  {annots
-                    .filter((a) => a.kind === "Text")
-                    .map((a) => (
-                      <button
-                        key={`n${a.index}`}
-                        className="note-icon"
-                        style={{
-                          left: a.x * scale,
-                          top: a.y * scale,
-                          width: Math.max(18, a.w * scale),
-                          height: Math.max(18, a.h * scale),
-                        }}
-                        title={a.contents}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setNotePopover((p) => (p?.index === a.index ? null : a));
-                        }}
-                      >
-                        <Icon name="note" size={12} />
-                      </button>
-                    ))}
-                  {notePopover && (
-                    <div
-                      className="card"
-                      style={{
-                        left: clampCardLeft(notePopover.x * scale),
-                        top: (notePopover.y + notePopover.h) * scale + 6,
-                      }}
-                      onMouseDown={(e) => e.stopPropagation()}
-                    >
-                      <p>
-                        {notePopover.contents ||
-                          KIND_LABELS[notePopover.kind] ||
-                          notePopover.kind}
-                      </p>
-                      <div className="card-actions">
-                        <button
-                          className="btn btn-danger"
-                          onClick={() => deleteAnnotation(notePopover)}
-                        >
-                          <Icon name="trash" size={13} />
-                          Eliminar
-                        </button>
-                        <button className="btn" onClick={() => setNotePopover(null)}>
-                          Cerrar
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                  {noteDraft && (
-                    <div
-                      className="card"
-                      style={{
-                        left: clampCardLeft(noteDraft.x * scale),
-                        top: noteDraft.y * scale,
-                      }}
-                      onMouseDown={(e) => e.stopPropagation()}
-                    >
-                      <textarea
-                        autoFocus
-                        placeholder="Escribe la nota y pulsa Enter…"
-                        value={noteDraft.text}
-                        onChange={(e) =>
-                          setNoteDraft({ ...noteDraft, text: e.target.value })
-                        }
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && !e.shiftKey) {
-                            e.preventDefault();
-                            submitNote();
-                          }
-                          if (e.key === "Escape") setNoteDraft(null);
-                        }}
-                      />
-                    </div>
-                  )}
-                  {mode === "crop" && cropDraft && (
-                    <>
-                      <div
-                        className="crop-rect"
-                        style={{
-                          left: cropDraft.x * scale,
-                          top: cropDraft.y * scale,
-                          width: cropDraft.w * scale,
-                          height: cropDraft.h * scale,
-                        }}
-                      />
-                      <div
-                        className="card crop-actions"
-                        style={{
-                          left: clampCardLeft(cropDraft.x * scale, 320),
-                          top: (cropDraft.y + cropDraft.h) * scale + 8,
-                        }}
-                        onMouseDown={(e) => e.stopPropagation()}
-                      >
-                        <div className="card-actions">
-                          <button
-                            className="btn btn-primary"
-                            onClick={() => applyCrop(false)}
-                          >
-                            Recortar
-                          </button>
-                          <button className="btn" onClick={() => applyCrop(true)}>
-                            Todas las páginas
-                          </button>
-                          <button
-                            className="btn"
-                            onClick={() => {
-                              setCropDraft(null);
-                              setMode("select");
-                            }}
-                          >
-                            Cancelar
-                          </button>
-                        </div>
-                      </div>
-                    </>
-                  )}
-                  {mode === "redact" && redactDraft && (
-                    <>
-                      <div
-                        className="redact-rect"
-                        style={{
-                          left: redactDraft.x * scale,
-                          top: redactDraft.y * scale,
-                          width: redactDraft.w * scale,
-                          height: redactDraft.h * scale,
-                        }}
-                      />
-                      <div
-                        className="card crop-actions"
-                        style={{
-                          left: clampCardLeft(redactDraft.x * scale, 320),
-                          top: (redactDraft.y + redactDraft.h) * scale + 8,
-                        }}
-                        onMouseDown={(e) => e.stopPropagation()}
-                      >
-                        <p>
-                          {redactReport
-                            ? `Se eliminarán ${redactReport.textos} bloque(s) de texto y ${redactReport.imagenes} imagen(es).`
-                            : "Calculando…"}
-                        </p>
-                        <div className="card-actions">
-                          <button
-                            className="btn btn-danger"
-                            disabled={!redactReport}
-                            onClick={applyRedact}
-                          >
-                            Redactar
-                          </button>
-                          <button
-                            className="btn"
-                            onClick={() => {
-                              setRedactDraft(null);
-                              setRedactReport(null);
-                            }}
-                          >
-                            Cancelar
-                          </button>
-                        </div>
-                      </div>
-                    </>
-                  )}
-                  {(mode === "form-new" || mode === "link-new") &&
-                    (mode === "form-new" ? formDraft : linkDraft) && (
-                      <>
-                        <div
-                          className="crop-rect"
-                          style={{
-                            left:
-                              (mode === "form-new" ? formDraft : linkDraft)!.x *
-                              scale,
-                            top:
-                              (mode === "form-new" ? formDraft : linkDraft)!.y *
-                              scale,
-                            width:
-                              (mode === "form-new" ? formDraft : linkDraft)!.w *
-                              scale,
-                            height:
-                              (mode === "form-new" ? formDraft : linkDraft)!.h *
-                              scale,
-                          }}
-                        />
-                        <div
-                          className="card crop-actions"
-                          style={{
-                            left: clampCardLeft(
-                              (mode === "form-new" ? formDraft : linkDraft)!.x *
-                                scale,
-                              300,
-                            ),
-                            top:
-                              ((mode === "form-new" ? formDraft : linkDraft)!.y +
-                                (mode === "form-new" ? formDraft : linkDraft)!
-                                  .h) *
-                                scale +
-                              8,
-                          }}
-                          onMouseDown={(e) => e.stopPropagation()}
-                        >
-                          {mode === "form-new" ? (
-                            <>
-                              <div className="card-row">
-                                <input
-                                  type="text"
-                                  className="stamp-input"
-                                  autoFocus
-                                  placeholder="Nombre del campo"
-                                  value={formName}
-                                  onChange={(e) => setFormName(e.target.value)}
-                                />
-                                <select
-                                  className="size-select"
-                                  value={formKind}
-                                  onChange={(e) =>
-                                    setFormKind(
-                                      e.target.value as "text" | "checkbox",
-                                    )
-                                  }
-                                >
-                                  <option value="text">Texto</option>
-                                  <option value="checkbox">Casilla</option>
-                                </select>
-                              </div>
-                              <div className="card-actions">
-                                <button
-                                  className="btn btn-primary"
-                                  disabled={!formName.trim()}
-                                  onClick={applyFormField}
-                                >
-                                  Crear campo
-                                </button>
-                                <button
-                                  className="btn"
-                                  onClick={() => setFormDraft(null)}
-                                >
-                                  Cancelar
-                                </button>
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              <div className="card-row">
-                                <select
-                                  className="size-select"
-                                  value={linkTipo}
-                                  onChange={(e) => {
-                                    setLinkTipo(
-                                      e.target.value as "url" | "pagina",
-                                    );
-                                    setLinkValor("");
-                                  }}
-                                >
-                                  <option value="url">URL</option>
-                                  <option value="pagina">Página</option>
-                                </select>
-                                <input
-                                  type={linkTipo === "url" ? "text" : "number"}
-                                  className="stamp-input"
-                                  autoFocus
-                                  placeholder={
-                                    linkTipo === "url"
-                                      ? "https://…"
-                                      : `1-${pageCount}`
-                                  }
-                                  value={linkValor}
-                                  onChange={(e) => setLinkValor(e.target.value)}
-                                />
-                              </div>
-                              <div className="card-actions">
-                                <button
-                                  className="btn btn-primary"
-                                  disabled={!linkValor.trim()}
-                                  onClick={applyLink}
-                                >
-                                  Crear enlace
-                                </button>
-                                <button
-                                  className="btn"
-                                  onClick={() => setLinkDraft(null)}
-                                >
-                                  Cancelar
-                                </button>
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      </>
-                    )}
-                  {mode === "firmar" && activeSig && sigDraft && (
-                    <img
-                      className="sign-ghost"
-                      src={`data:image/png;base64,${activeSig.png}`}
-                      draggable={false}
-                      alt="Vista previa de la firma"
-                      style={{
-                        left: sigDraft.x * scale,
-                        top: sigDraft.y * scale,
-                        width: sigDraft.w * scale,
-                        height: sigDraft.h * scale,
-                      }}
-                    />
-                  )}
-                  {strokePts.length > 1 && (
-                    <svg className="stroke-preview">
-                      <polyline
-                        points={strokePts
-                          .map((p) => `${p[0] * scale},${p[1] * scale}`)
-                          .join(" ")}
-                        stroke={drawColor}
-                        strokeWidth={drawWidth * scale}
-                      />
-                    </svg>
-                  )}
-                  {mode === "shape" && shapeDraft && (
-                    <svg className="shape-preview">
-                      {(() => {
-                        const d = shapeDraft;
-                        const stroke = shapeColor;
-                        const sw = shapeWidth * scale;
-                        const fillable =
-                          shapeKind === "rect" || shapeKind === "ellipse";
-                        const fill =
-                          shapeFill && fillable ? `${shapeColor}46` : "none";
-                        const x = Math.min(d.x1, d.x2) * scale;
-                        const y = Math.min(d.y1, d.y2) * scale;
-                        const w = Math.abs(d.x2 - d.x1) * scale;
-                        const h = Math.abs(d.y2 - d.y1) * scale;
-                        if (shapeKind === "rect")
-                          return (
-                            <rect
-                              x={x}
-                              y={y}
-                              width={w}
-                              height={h}
-                              stroke={stroke}
-                              strokeWidth={sw}
-                              fill={fill}
-                            />
-                          );
-                        if (shapeKind === "ellipse")
-                          return (
-                            <ellipse
-                              cx={x + w / 2}
-                              cy={y + h / 2}
-                              rx={w / 2}
-                              ry={h / 2}
-                              stroke={stroke}
-                              strokeWidth={sw}
-                              fill={fill}
-                            />
-                          );
-                        const pts = {
-                          x1: d.x1 * scale,
-                          y1: d.y1 * scale,
-                          x2: d.x2 * scale,
-                          y2: d.y2 * scale,
-                        };
-                        const head = (12 + shapeWidth * 2) * scale;
-                        const ang = Math.atan2(
-                          pts.y2 - pts.y1,
-                          pts.x2 - pts.x1,
-                        );
-                        return (
-                          <>
-                            <line
-                              {...pts}
-                              stroke={stroke}
-                              strokeWidth={sw}
-                            />
-                            {shapeKind === "arrow" &&
-                              [Math.PI / 6, -Math.PI / 6].map((delta, i) => {
-                                const a2 = ang + Math.PI - delta;
-                                return (
-                                  <line
-                                    key={i}
-                                    x1={pts.x2}
-                                    y1={pts.y2}
-                                    x2={pts.x2 + head * Math.cos(a2)}
-                                    y2={pts.y2 + head * Math.sin(a2)}
-                                    stroke={stroke}
-                                    strokeWidth={sw}
-                                  />
-                                );
-                              })}
-                          </>
-                        );
-                      })()}
-                    </svg>
-                  )}
-                  {matches.map((m, i) =>
-                    m.page_index === pageIndex
-                      ? m.rects.map((r, j) => (
-                          <div
-                            key={`m${i}-${j}`}
-                            ref={i === matchIdx && j === 0 ? currentHitRef : null}
-                            className={`hit${i === matchIdx ? " current" : ""}`}
-                            style={{
-                              left: r.x * scale,
-                              top: r.y * scale,
-                              width: r.w * scale,
-                              height: r.h * scale,
-                            }}
-                          />
-                        ))
-                      : null,
-                  )}
-                  {selectionRects.map((r, i) => (
-                    <div
-                      key={`s${i}`}
-                      className="sel"
-                      style={{
-                        left: r.x * scale,
-                        top: r.y * scale,
-                        width: r.w * scale,
-                        height: r.h * scale,
-                      }}
-                    />
-                  ))}
-                  {lastSelRect && !dragging && (
-                    <div
-                      className="card sel-popover"
-                      style={{
-                        left: clampCardLeft(lastSelRect.x * scale),
-                        top: (lastSelRect.y + lastSelRect.h) * scale + 6,
-                      }}
-                      onMouseDown={(e) => e.stopPropagation()}
-                    >
-                      <div className="swatches" style={{ marginRight: 4 }}>
-                        {ANNOT_COLORS.map(
-                          (c) => (
-                            <button
-                              key={c}
-                              className={`swatch${
-                                (markupColor ?? "#f5c400") === c ? " on" : ""
-                              }`}
-                              style={{ background: c }}
-                              title="Color de la marca"
-                              onClick={() => setMarkupColor(c)}
-                            />
-                          ),
-                        )}
-                      </div>
-                      <button
-                        className="btn"
-                        onClick={() => markupSelection("highlight")}
-                      >
-                        <Icon name="highlight" size={13} />
-                        Resaltar
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => markupSelection("underline")}
-                      >
-                        <Icon name="underline" size={13} />
-                        Subrayar
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => markupSelection("strikeout")}
-                      >
-                        <Icon name="strike" size={13} />
-                        Tachar
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          copySelection();
-                          setSelection(null);
-                        }}
-                      >
-                        <Icon name="copy" size={13} />
-                        Copiar
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
+              ))}
           </main>
 
           {pageCount > 0 && (
@@ -4027,7 +2099,7 @@ function App() {
               <button
                 className="btn btn-icon"
                 disabled={pageIndex === 0}
-                onClick={() => setPageIndex((i) => i - 1)}
+                onClick={() => gotoPage(pageIndex - 1)}
               >
                 <Icon name="chevLeft" size={14} />
               </button>
@@ -4037,7 +2109,7 @@ function App() {
               <button
                 className="btn btn-icon"
                 disabled={pageIndex >= pageCount - 1}
-                onClick={() => setPageIndex((i) => i + 1)}
+                onClick={() => gotoPage(pageIndex + 1)}
               >
                 <Icon name="chevRight" size={14} />
               </button>
