@@ -3,6 +3,8 @@ import { busyCount, invoke, subscribeBusy } from "./ipc";
 import { open, save } from "./dialogos";
 import {
   addBlankPage,
+  deleteFormField,
+  removeMarginalText,
   addHeaderFooter,
   addMarkup,
   addShape,
@@ -414,6 +416,10 @@ function App() {
   const [cropDraft, setCropDraft] = useState<Rect | null>(null);
   const cropStartRef = useRef<{ x: number; y: number } | null>(null);
   const [wmOpen, setWmOpen] = useState(false);
+  const [marginalAsk, setMarginalAsk] = useState<{
+    zona: "watermark" | "header" | "footer";
+    textos: number;
+  } | null>(null);
   const [hfOpen, setHfOpen] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<"paginas" | "marcadores">(
     "paginas",
@@ -1415,6 +1421,50 @@ function App() {
       setCropDraft(null);
       setMode("select");
       afterMutation(pageCount);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function askRemoveMarginal(zona: "watermark" | "header" | "footer") {
+    if (!workPath) return;
+    try {
+      const r = await removeMarginalText(workPath, zona, true);
+      if (r.textos === 0) {
+        setNotice(
+          zona === "watermark"
+            ? "No hay ninguna marca de agua que quitar."
+            : "No hay encabezados o pies que quitar.",
+        );
+        return;
+      }
+      setMarginalAsk({ zona, textos: r.textos });
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function applyRemoveMarginal() {
+    if (!workPath || !marginalAsk) return;
+    try {
+      await removeMarginalText(workPath, marginalAsk.zona, false);
+      // encabezado y pie van juntos en la UI: quitar ambas bandas
+      if (marginalAsk.zona === "header") {
+        await removeMarginalText(workPath, "footer", false);
+      }
+      setMarginalAsk(null);
+      afterMutation(pageCount);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function removeFormField(name: string) {
+    if (!workPath) return;
+    try {
+      await deleteFormField(workPath, name);
+      setFieldDraft(null);
+      afterPageMutation(pageIndex);
     } catch (e) {
       setError(String(e));
     }
@@ -2440,6 +2490,26 @@ function App() {
                         className="btn"
                         onClick={() => {
                           setMenuOpen(false);
+                          askRemoveMarginal("watermark");
+                        }}
+                      >
+                        <Icon name="water" size={14} />
+                        Quitar marca de agua…
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          askRemoveMarginal("header");
+                        }}
+                      >
+                        <Icon name="hf" size={14} />
+                        Quitar encabezados y pies…
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setMenuOpen(false);
                           openProperties();
                         }}
                       >
@@ -2708,6 +2778,32 @@ function App() {
                 onClick={applyProtect}
               >
                 Proteger…
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {marginalAsk && (
+        <div className="modal-backdrop" onClick={() => setMarginalAsk(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>
+              {marginalAsk.zona === "watermark"
+                ? "Quitar la marca de agua"
+                : "Quitar encabezados y pies"}
+            </h3>
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              Se eliminarán {marginalAsk.textos} texto(s)
+              {marginalAsk.zona === "watermark"
+                ? " en diagonal"
+                : " de los márgenes superior e inferior"}{" "}
+              en todo el documento.
+            </p>
+            <div className="card-actions">
+              <button className="btn" onClick={() => setMarginalAsk(null)}>
+                Cancelar
+              </button>
+              <button className="btn btn-danger" onClick={applyRemoveMarginal}>
+                Quitar
               </button>
             </div>
           </div>
@@ -3428,6 +3524,14 @@ function App() {
                         }}
                       />
                       <div className="card-actions">
+                        <button
+                          className="btn btn-danger"
+                          title="Borrar este campo del formulario"
+                          onClick={() => removeFormField(fieldDraft.field.name)}
+                        >
+                          <Icon name="trash" size={13} />
+                          Eliminar
+                        </button>
                         <button className="btn" onClick={() => setFieldDraft(null)}>
                           Cancelar
                         </button>

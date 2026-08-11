@@ -2330,6 +2330,7 @@ pub fn run() {
             paginas2::crop_page,
             paginas2::add_watermark,
             paginas2::add_header_footer,
+            paginas2::remove_marginal_text,
             documento::get_outline,
             documento::set_outline,
             documento::get_metadata,
@@ -2342,7 +2343,8 @@ pub fn run() {
             exportar::export_text,
             exportar::compress_pdf,
             formularios2::create_form_field,
-            formularios2::create_link
+            formularios2::create_link,
+            formularios2::delete_form_field
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -381,6 +381,25 @@ mod tests {
     }
 
     #[test]
+    fn campo_creado_y_borrado() {
+        let pdf = std::env::temp_dir().join("formularios2-borrar-test.pdf");
+        crea_pdf(&["Baja"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+        create_form_field(
+            work.clone(),
+            0,
+            "text".into(),
+            Rect { x: 60.0, y: 200.0, w: 140.0, h: 22.0 },
+            "efimero".into(),
+        )
+        .expect("crear");
+        assert_eq!(crate::get_form_fields(work.clone(), 0).unwrap().len(), 1);
+        delete_form_field(work.clone(), "efimero".into()).expect("borrar");
+        assert_eq!(crate::get_form_fields(work.clone(), 0).unwrap().len(), 0);
+        assert!(delete_form_field(work, "no-existe".into()).is_err());
+    }
+
+    #[test]
     fn enlaces_uri_y_pagina_y_borrado() {
         let pdf = std::env::temp_dir().join("formularios2-enlaces-test.pdf");
         crea_pdf(&["Uno", "Dos"], &pdf);
@@ -413,4 +432,82 @@ mod tests {
         crate::remove_annotation(work.clone(), 0, link_annot.index).expect("borrar");
         assert_eq!(crate::documento::get_links(work, 0).expect("relistar").len(), 1);
     }
+}
+
+/// Borra un campo de formulario por nombre: quita el widget de los Annots de
+/// su página y la referencia de /Fields del AcroForm.
+#[tauri::command]
+pub fn delete_form_field(work_path: String, name: String) -> Result<(), String> {
+    cirugia(&work_path, |doc| {
+        // localizar el widget por su T
+        let widget_id = doc
+            .objects
+            .iter()
+            .find(|(_, o)| {
+                o.as_dict()
+                    .map(|d| {
+                        matches!(d.get(b"Subtype").and_then(|s| s.as_name()), Ok(b"Widget"))
+                            && matches!(
+                                d.get(b"T"),
+                                Ok(Object::String(t, _)) if String::from_utf8_lossy(t) == name
+                            )
+                    })
+                    .unwrap_or(false)
+            })
+            .map(|(id, _)| *id)
+            .ok_or_else(|| format!("No existe el campo «{name}»"))?;
+        // quitarlo de los Annots de todas las páginas (directo o referencia)
+        let paginas: Vec<ObjectId> = doc.get_pages().values().copied().collect();
+        for page_id in paginas {
+            let annots_ref = {
+                let Ok(page) = doc.get_object(page_id).and_then(|o| o.as_dict()) else {
+                    continue;
+                };
+                match page.get(b"Annots") {
+                    Ok(Object::Reference(rid)) => Some(*rid),
+                    _ => None,
+                }
+            };
+            if let Some(rid) = annots_ref {
+                if let Ok(arr) = doc.get_object_mut(rid).and_then(|o| o.as_array_mut()) {
+                    arr.retain(|o| o.as_reference().ok() != Some(widget_id));
+                }
+            } else if let Ok(page) = doc.get_object_mut(page_id).and_then(|o| o.as_dict_mut()) {
+                if let Ok(Object::Array(arr)) = page.get_mut(b"Annots") {
+                    arr.retain(|o| o.as_reference().ok() != Some(widget_id));
+                }
+            }
+        }
+        // y de /Fields del AcroForm
+        let catalog_id = doc
+            .trailer
+            .get(b"Root")
+            .and_then(|o| o.as_reference())
+            .map_err(|e| e.to_string())?;
+        let form_es_ref = {
+            let catalog = doc
+                .get_object(catalog_id)
+                .and_then(|o| o.as_dict())
+                .map_err(|e| e.to_string())?;
+            match catalog.get(b"AcroForm") {
+                Ok(Object::Reference(rid)) => Some(*rid),
+                _ => None,
+            }
+        };
+        let quita = |form: &mut Dictionary| {
+            if let Ok(Object::Array(arr)) = form.get_mut(b"Fields") {
+                arr.retain(|o| o.as_reference().ok() != Some(widget_id));
+            }
+        };
+        if let Some(rid) = form_es_ref {
+            if let Ok(form) = doc.get_object_mut(rid).and_then(|o| o.as_dict_mut()) {
+                quita(form);
+            }
+        } else if let Ok(catalog) = doc.get_object_mut(catalog_id).and_then(|o| o.as_dict_mut()) {
+            if let Ok(Object::Dictionary(form)) = catalog.get_mut(b"AcroForm") {
+                quita(form);
+            }
+        }
+        Ok(())
+    })
 }

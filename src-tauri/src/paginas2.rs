@@ -410,6 +410,45 @@ mod tests {
     }
 
     #[test]
+    fn quitar_marca_de_agua_y_pies() {
+        let pdf = std::env::temp_dir().join("paginas2-quitar-test.pdf");
+        crea_pdf(&["Contenido uno", "Contenido dos"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+        add_watermark(work.clone(), "BORRADOR".into(), 60.0, [200, 30, 30, 90], true)
+            .expect("marca");
+        add_header_footer(
+            work.clone(),
+            None,
+            None,
+            None,
+            None,
+            Some("{n} / {total}".into()),
+            None,
+            10.0,
+        )
+        .expect("pie");
+        // dry run cuenta sin tocar
+        let previa = remove_marginal_text(work.clone(), "watermark".into(), true)
+            .expect("dry run");
+        assert_eq!(previa.textos, 2);
+        let t = textos(&work);
+        assert!(t[0].contains("BORRADOR"));
+        // quitar de verdad
+        let informe = remove_marginal_text(work.clone(), "watermark".into(), false)
+            .expect("quitar marca");
+        assert_eq!(informe.textos, 2);
+        let informe = remove_marginal_text(work.clone(), "footer".into(), false)
+            .expect("quitar pies");
+        assert_eq!(informe.textos, 2);
+        let t = textos(&work);
+        assert!(!t[0].contains("BORRADOR"), "{:?}", t[0]);
+        assert!(!t[0].contains("1 / 2"));
+        // el contenido normal sobrevive
+        assert!(t[0].contains("Contenido uno"));
+        assert!(t[1].contains("Contenido dos"));
+    }
+
+    #[test]
     fn marca_de_agua_y_numeracion() {
         let pdf = std::env::temp_dir().join("paginas2-marca-test.pdf");
         crea_pdf(&["Uno", "Dos"], &pdf);
@@ -440,4 +479,77 @@ mod tests {
         assert!(t[1].contains("2 / 2"));
         assert!(t[0].contains("Informe"));
     }
+}
+
+#[derive(serde::Serialize)]
+pub struct MarginalReport {
+    pub textos: u32,
+}
+
+/// Elimina el texto "marginal" añadido por la app: marca de agua (objetos de
+/// texto con matriz rotada) o encabezados/pies (objetos de texto contenidos
+/// en las bandas superior/inferior de 40 pt). Con `dry_run` solo cuenta.
+#[tauri::command]
+pub fn remove_marginal_text(
+    work_path: String,
+    zona: String,
+    dry_run: bool,
+) -> Result<MarginalReport, String> {
+    on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| e.to_string())?;
+        let mut total = 0u32;
+        for p in 0..doc.pages().len() {
+            let mut page = doc.pages().get(p).map_err(|e| e.to_string())?;
+            let page_h = page.height().value;
+            let mut caen: Vec<usize> = Vec::new();
+            {
+                let objects = page.objects();
+                for i in 0..objects.len() {
+                    let Ok(obj) = objects.get(i) else { continue };
+                    if obj.as_text_object().is_none() {
+                        continue;
+                    }
+                    let rotado = obj
+                        .matrix()
+                        .map(|m| m.b().abs() > 0.01 || m.c().abs() > 0.01)
+                        .unwrap_or(false);
+                    let Ok(b) = obj.bounds() else { continue };
+                    let en_zona = match zona.as_str() {
+                        "watermark" => rotado,
+                        // banda superior: el objeto entero por encima de h-40
+                        "header" => !rotado && b.bottom().value > page_h - 40.0,
+                        // banda inferior: el objeto entero por debajo de 40
+                        "footer" => !rotado && b.top().value < 40.0,
+                        _ => return Err(format!("Zona desconocida: {zona}")),
+                    };
+                    if en_zona {
+                        caen.push(i);
+                    }
+                }
+            }
+            total += caen.len() as u32;
+            if !dry_run && !caen.is_empty() {
+                for &i in caen.iter().rev() {
+                    let removed = page
+                        .objects_mut()
+                        .remove_object_at_index(i)
+                        .map_err(|e| e.to_string())?;
+                    // regla del proyecto: su Drop llama a FPDFPageObj_Destroy
+                    // y PDFium casca — fuga puntual asumida
+                    std::mem::forget(removed);
+                }
+                page.regenerate_content().map_err(|e| e.to_string())?;
+            }
+        }
+        if dry_run {
+            drop(doc);
+            crate::invalidate_doc_cache();
+        } else {
+            save_and_close(doc, &work_path)?;
+        }
+        Ok(MarginalReport { textos: total })
+    })
 }

@@ -106,6 +106,20 @@ export function addWatermark(args: {
   return invoke("add_watermark", { ...args });
 }
 
+/** Elimina el texto marginal añadido (marca de agua o encabezados/pies). */
+export function removeMarginalText(
+  workPath: string,
+  zona: "watermark" | "header" | "footer",
+  dryRun: boolean,
+): Promise<{ textos: number }> {
+  return invoke("remove_marginal_text", { workPath, zona, dryRun });
+}
+
+/** Borra un campo de formulario por nombre. */
+export function deleteFormField(workPath: string, name: string): Promise<void> {
+  return invoke("delete_form_field", { workPath, name });
+}
+
 export type HeaderFooter = {
   headerLeft?: string;
   headerCenter?: string;

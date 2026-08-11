@@ -195,6 +195,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "insert_pdf_at" => cmd!(paginas2::insert_pdf_at, { work_path: String, other_path: String, index: u16 }),
         "crop_page" => cmd!(paginas2::crop_page, { work_path: String, page_index: u16, rect: crate::Rect, all_pages: bool }),
         "add_watermark" => cmd!(paginas2::add_watermark, { work_path: String, text: String, font_size: f32, color: [u8; 4], diagonal: bool }),
+        "remove_marginal_text" => cmd!(paginas2::remove_marginal_text, { work_path: String, zona: String, dry_run: bool }),
         "add_header_footer" => cmd!(paginas2::add_header_footer, { work_path: String, header_left: Option<String>, header_center: Option<String>, header_right: Option<String>, footer_left: Option<String>, footer_center: Option<String>, footer_right: Option<String>, font_size: f32 }),
         "get_outline" => cmd!(documento::get_outline, { path: String }),
         "set_outline" => cmd!(documento::set_outline, { work_path: String, nodes: Vec<documento::OutlineNode> }),
@@ -208,6 +209,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "export_text" => cmd!(exportar::export_text, { path: String, dest_path: String }),
         "compress_pdf" => cmd!(exportar::compress_pdf, { work_path: String, quality: u8, max_dpi: u16 }),
         "create_form_field" => cmd!(crate::formularios2::create_form_field, { work_path: String, page_index: u16, kind: String, rect: crate::Rect, name: String }),
+        "delete_form_field" => cmd!(crate::formularios2::delete_form_field, { work_path: String, name: String }),
         "create_link" => cmd!(crate::formularios2::create_link, { work_path: String, page_index: u16, rect: crate::Rect, uri: Option<String>, dest_page: Option<u16> }),
         otro => Err(format!("Comando desconocido en el puente: {otro}")),
     }
