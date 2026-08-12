@@ -63,6 +63,27 @@ pub fn stamp_signature(
 /// puente de desarrollo puede llamarlos igual que Tauri.
 pub(crate) static DIR_DATOS: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
+/// Migración del renombre a Vitela: el identifier pasó de
+/// com.jorge.editorpdf a com.jorge.vitela y con él cambió app_data_dir.
+/// Si el directorio antiguo tiene firmas y el nuevo aún no, se copian
+/// (el antiguo se deja intacto por si hay que volver atrás).
+pub(crate) fn migrar_datos_antiguos(nuevo: &std::path::Path) {
+    let Some(padre) = nuevo.parent() else { return };
+    let viejo = padre.join("com.jorge.editorpdf").join("firmas");
+    let destino = nuevo.join("firmas");
+    if !viejo.is_dir() || destino.exists() {
+        return;
+    }
+    if std::fs::create_dir_all(&destino).is_err() {
+        return;
+    }
+    if let Ok(entradas) = std::fs::read_dir(&viejo) {
+        for e in entradas.flatten() {
+            let _ = std::fs::copy(e.path(), destino.join(e.file_name()));
+        }
+    }
+}
+
 /// Directorio de firmas guardadas dentro del directorio de datos.
 fn dir_de_firmas() -> Result<std::path::PathBuf, String> {
     let dir = DIR_DATOS
@@ -257,5 +278,42 @@ mod tests {
         std::fs::remove_file(dir.join(format!("{}.png", guardada.id))).unwrap();
         assert!(listar_firmas_en(&dir).expect("listar").is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn migra_firmas_del_identifier_antiguo() {
+        let raiz = std::env::temp_dir().join(format!(
+            "vitela-migracion-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let viejo = raiz.join("com.jorge.editorpdf").join("firmas");
+        std::fs::create_dir_all(&viejo).unwrap();
+        std::fs::write(viejo.join("1.png"), b"png").unwrap();
+        std::fs::write(viejo.join("1.txt"), "Mi firma").unwrap();
+
+        let nuevo = raiz.join("com.jorge.vitela");
+        migrar_datos_antiguos(&nuevo);
+        assert_eq!(
+            std::fs::read(nuevo.join("firmas").join("1.png")).unwrap(),
+            b"png"
+        );
+        assert_eq!(
+            std::fs::read_to_string(nuevo.join("firmas").join("1.txt")).unwrap(),
+            "Mi firma"
+        );
+        // el directorio antiguo queda intacto
+        assert!(viejo.join("1.png").exists());
+
+        // una segunda llamada no pisa lo que ya hay en el nuevo
+        std::fs::write(nuevo.join("firmas").join("1.txt"), "Editada").unwrap();
+        migrar_datos_antiguos(&nuevo);
+        assert_eq!(
+            std::fs::read_to_string(nuevo.join("firmas").join("1.txt")).unwrap(),
+            "Editada"
+        );
+        let _ = std::fs::remove_dir_all(&raiz);
     }
 }

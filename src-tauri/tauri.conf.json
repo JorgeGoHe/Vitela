@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Vitela",
-  "version": "1.0.0",
-  "identifier": "com.jorge.editorpdf",
+  "version": "1.0.1",
+  "identifier": "com.jorge.vitela",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",

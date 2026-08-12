@@ -2383,6 +2383,9 @@ pub fn run() {
                 let _ = RESOURCE_LIB_DIR.set(dir.join("lib"));
             }
             if let Ok(dir) = app.path().app_data_dir() {
+                // el identifier cambió con el renombre a Vitela: recuperar
+                // las firmas guardadas bajo el identifier antiguo
+                firmas_visuales::migrar_datos_antiguos(&dir);
                 let _ = firmas_visuales::DIR_DATOS.set(dir);
             }
             #[cfg(debug_assertions)]

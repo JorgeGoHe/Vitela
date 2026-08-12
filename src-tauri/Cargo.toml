@@ -1,6 +1,6 @@
 [package]
 name = "vitela"
-version = "1.0.0"
+version = "1.0.1"
 description = "Vitela — visor y editor de PDF de escritorio"
 authors = ["Jorge"]
 edition = "2021"
