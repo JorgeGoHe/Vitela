@@ -4,7 +4,7 @@
 
 #[cfg(debug_assertions)]
 fn main() {
-    tauri_app_lib::puente_dev::arrancar_bin();
+    vitela_lib::puente_dev::arrancar_bin();
 }
 
 #[cfg(not(debug_assertions))]

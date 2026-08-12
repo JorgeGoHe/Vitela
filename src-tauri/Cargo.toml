@@ -1,12 +1,12 @@
 [package]
-name = "tauri-app"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+name = "vitela"
+version = "1.0.0"
+description = "Vitela — visor y editor de PDF de escritorio"
+authors = ["Jorge"]
 edition = "2021"
-# hay dos binarios (tauri-app y el puente de QA): cargo run necesita saber
+# hay dos binarios (vitela y el puente de QA): cargo run necesita saber
 # cuál es el de la app
-default-run = "tauri-app"
+default-run = "vitela"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -14,7 +14,7 @@ default-run = "tauri-app"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "tauri_app_lib"
+name = "vitela_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

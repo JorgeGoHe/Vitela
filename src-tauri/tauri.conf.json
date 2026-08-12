@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Editor PDF",
-  "version": "0.1.0",
+  "productName": "Vitela",
+  "version": "1.0.0",
   "identifier": "com.jorge.editorpdf",
   "build": {
     "beforeDevCommand": "bun run dev",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Editor PDF",
+        "title": "Vitela",
         "width": 1100,
         "height": 800,
         "minWidth": 720,

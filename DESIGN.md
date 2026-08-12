@@ -1,4 +1,4 @@
-# Sistema de diseño — Editor PDF («Mesa de trabajo»)
+# Sistema de diseño — Vitela («Mesa de trabajo»)
 
 ## Contexto de producto
 - **Qué es:** visor y editor de PDF de escritorio (Tauri, Mac/Windows/Linux) en español, con edición real de texto, anotaciones, firmas, páginas, formularios y seguridad.

@@ -1,4 +1,4 @@
-# Editor PDF
+# Vitela
 
 Visor y editor de PDF de escritorio multiplataforma. Objetivo: edición real de
 texto (reescribir el content stream, nunca parches encima como hace Stirling),
