@@ -4,9 +4,15 @@ version = "1.0.1"
 description = "Vitela — visor y editor de PDF de escritorio"
 authors = ["Jorge"]
 edition = "2021"
-# hay dos binarios (vitela y el puente de QA): cargo run necesita saber
+# hay dos binarios (Vitela y el puente de QA): cargo run necesita saber
 # cuál es el de la app
-default-run = "vitela"
+default-run = "Vitela"
+
+# el binario se llama Vitela (con mayúscula) para que el dock lo muestre
+# bien también en desarrollo; en producción manda productName
+[[bin]]
+name = "Vitela"
+path = "src/main.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
