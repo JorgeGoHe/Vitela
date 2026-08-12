@@ -174,6 +174,7 @@ function Pagina({
   const [annotDraft, setAnnotDraft] = useState<(Rect & { index: number }) | null>(null);
   const annotActionRef = useRef<{
     kind: "move" | "resize";
+    handle?: ResizeHandle;
     startX: number;
     startY: number;
     orig: AnnotationInfo;
@@ -796,6 +797,7 @@ function Pagina({
     e: React.MouseEvent<HTMLDivElement>,
     a: AnnotationInfo,
     kind: "move" | "resize",
+    handle: ResizeHandle = "se",
   ) {
     e.stopPropagation();
     if (e.button !== 0) return;
@@ -804,6 +806,7 @@ function Pagina({
     ).getBoundingClientRect();
     annotActionRef.current = {
       kind,
+      handle,
       startX: (e.clientX - rect.left) / scale,
       startY: (e.clientY - rect.top) / scale,
       orig: a,
@@ -1170,7 +1173,7 @@ function Pagina({
       const r =
         a.kind === "move"
           ? { ...o, x: o.x + dx, y: o.y + dy }
-          : resizeRect(o, "se", dx, dy, e.shiftKey);
+          : resizeRect(o, a.handle ?? "se", dx, dy, e.shiftKey);
       const d = { index: a.orig.index, ...r };
       annotLiveRef.current = d;
       setAnnotDraft(d);
@@ -1401,6 +1404,7 @@ function Pagina({
           className="page"
           src={imgSrc}
           draggable={false}
+          decoding="async"
           alt={`Página ${index + 1}`}
         />
       ) : (
@@ -1483,11 +1487,16 @@ function Pagina({
                     }}
                     onMouseDown={(e) => startAnnotAction(e, a, "move")}
                   >
-                    <div
-                      className="image-handle h-se"
-                      title="Redimensionar (Shift: libre)"
-                      onMouseDown={(e) => startAnnotAction(e, a, "resize")}
-                    />
+                    {(
+                      ["nw", "n", "ne", "e", "se", "s", "sw", "w"] as const
+                    ).map((hd) => (
+                      <div
+                        key={hd}
+                        className={`image-handle h-${hd}`}
+                        title="Redimensionar (Shift: libre en esquinas)"
+                        onMouseDown={(e) => startAnnotAction(e, a, "resize", hd)}
+                      />
+                    ))}
                   </div>
                 );
               })}

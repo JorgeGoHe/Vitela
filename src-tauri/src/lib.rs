@@ -176,9 +176,12 @@ fn open_pdf(path: String, password: Option<String>) -> Result<DocumentInfo, Stri
     })
 }
 
-/// Renderiza una página a PNG (base64) con el ancho pedido en píxeles.
-#[tauri::command]
-fn render_page(path: String, page_index: u16, width: i32) -> Result<String, String> {
+/// Renderiza una página a PNG (bytes) con el ancho pedido en píxeles.
+pub(crate) fn render_page_png(
+    path: String,
+    page_index: u16,
+    width: i32,
+) -> Result<Vec<u8>, String> {
     on_pdfium_thread(move || {
         with_doc(&path, |doc| {
             let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
@@ -195,9 +198,31 @@ fn render_page(path: String, page_index: u16, width: i32) -> Result<String, Stri
                 .as_image()
                 .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
                 .map_err(|e| e.to_string())?;
-            Ok(base64::engine::general_purpose::STANDARD.encode(png))
+            Ok(png)
         })
     })
+}
+
+/// Variante en base64 para el puente de QA (que habla JSON) y los tests.
+pub(crate) fn render_page_b64(
+    path: String,
+    page_index: u16,
+    width: i32,
+) -> Result<String, String> {
+    render_page_png(path, page_index, width)
+        .map(|png| base64::engine::general_purpose::STANDARD.encode(png))
+}
+
+/// Comando de render: los bytes del PNG viajan como IPC binario (sin base64
+/// ni JSON — con páginas grandes el parseo de un JSON de varios MB congelaba
+/// el hilo del webview y dejaba zonas sin pintar al redimensionar la ventana).
+#[tauri::command]
+fn render_page(
+    path: String,
+    page_index: u16,
+    width: i32,
+) -> Result<tauri::ipc::Response, String> {
+    render_page_png(path, page_index, width).map(tauri::ipc::Response::new)
 }
 
 #[derive(Serialize, Clone)]
@@ -1639,7 +1664,7 @@ pub(crate) mod tests {
     fn renderiza_pagina() {
         let tmp = std::env::temp_dir().join("editor_pdf_test_render.pdf");
         crea_pdf(&["Hola"], &tmp);
-        let png_b64 = render_page(tmp.to_string_lossy().into_owned(), 0, 200).expect("render");
+        let png_b64 = render_page_b64(tmp.to_string_lossy().into_owned(), 0, 200).expect("render");
         std::fs::remove_file(&tmp).ok();
         let png = base64::engine::general_purpose::STANDARD
             .decode(&png_b64)
@@ -1762,10 +1787,10 @@ pub(crate) mod tests {
                 .unwrap();
             image::load_from_memory(&bytes).unwrap().to_rgba8()
         };
-        let antes = decode(render_page(work.clone(), 0, 200).unwrap());
+        let antes = decode(render_page_b64(work.clone(), 0, 200).unwrap());
         // trazo horizontal que pasa por (150, 120) pt
         add_stroke(work.clone(), 0, vec![[50.0, 120.0], [250.0, 120.0]], None, None).expect("trazo");
-        let despues = decode(render_page(work.clone(), 0, 200).unwrap());
+        let despues = decode(render_page_b64(work.clone(), 0, 200).unwrap());
         let px = (150.0f32 * 200.0 / 595.0) as u32;
         let py = (120.0f32 * 200.0 / 595.0) as u32;
         let mut cambiado = false;
@@ -1866,7 +1891,7 @@ pub(crate) mod tests {
         assert_eq!(get_annotations(work.clone(), 0).expect("listar").len(), 1);
 
         // el render con anotaciones no debe fallar
-        render_page(work.clone(), 0, 200).expect("render con anotaciones");
+        render_page_b64(work.clone(), 0, 200).expect("render con anotaciones");
 
         std::fs::remove_file(&tmp).ok();
     }
@@ -1969,7 +1994,7 @@ pub(crate) mod tests {
         );
         assert!(fields.iter().find(|f| f.name == "acepto").unwrap().checked);
 
-        render_page(work.clone(), 0, 200).expect("render con formulario");
+        render_page_b64(work.clone(), 0, 200).expect("render con formulario");
         std::fs::remove_file(&tmp).ok();
     }
 
@@ -2006,7 +2031,7 @@ pub(crate) mod tests {
         let blocks = get_text_blocks(work.clone(), 0).expect("listar tras borrar");
         assert!(blocks.is_empty(), "quedan {} bloques", blocks.len());
 
-        render_page(work.clone(), 0, 200).expect("render tras editar");
+        render_page_b64(work.clone(), 0, 200).expect("render tras editar");
         std::fs::remove_file(&tmp).ok();
     }
 
@@ -2182,7 +2207,7 @@ pub(crate) mod tests {
             .expect("listar final")
             .is_empty());
 
-        render_page(work.clone(), 0, 200).expect("render tras imágenes");
+        render_page_b64(work.clone(), 0, 200).expect("render tras imágenes");
         for f in [&tmp, &png, &png2] {
             std::fs::remove_file(f).ok();
         }

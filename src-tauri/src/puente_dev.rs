@@ -152,7 +152,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
     use crate::{anotaciones2, documento, exportar, firmas_visuales, imagenes, paginas2, seguridad};
     match cmd {
         "open_pdf" => cmd!(crate::open_pdf, { path: String, password: Option<String> }),
-        "render_page" => cmd!(crate::render_page, { path: String, page_index: u16, width: i32 }),
+        "render_page" => cmd!(crate::render_page_b64, { path: String, page_index: u16, width: i32 }),
         "get_page_text" => cmd!(crate::get_page_text, { path: String, page_index: u16 }),
         "get_page_sizes" => cmd!(crate::get_page_sizes, { path: String }),
         "search_pdf" => cmd!(crate::search_pdf, { path: String, query: String }),

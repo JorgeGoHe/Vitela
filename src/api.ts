@@ -68,6 +68,27 @@ export function addStamp(args: {
   return invoke("add_stamp", { ...args });
 }
 
+/** Render de página como URL para <img>. En Tauri llega como bytes (IPC
+ *  binario, sin base64 ni JSON: los JSON de varios MB congelaban el webview)
+ *  → blob URL (el llamante debe revocarla al desecharla); en el navegador
+ *  del puente de QA llega como base64 → data URL. */
+export async function renderPageSrc(
+  path: string,
+  pageIndex: number,
+  width: number,
+  opts?: { background?: boolean },
+): Promise<string> {
+  const r = await invoke<unknown>(
+    "render_page",
+    { path, pageIndex, width },
+    opts,
+  );
+  if (typeof r === "string") return `data:image/png;base64,${r}`;
+  return URL.createObjectURL(
+    new Blob([r as ArrayBuffer], { type: "image/png" }),
+  );
+}
+
 /** Mueve/reescala una anotación con apariencia embebida (sello o dibujo). */
 export function transformAnnotation(args: {
   workPath: string;

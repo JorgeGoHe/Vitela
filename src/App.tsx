@@ -19,6 +19,7 @@ import {
   importSignatureFile,
   insertPdfAt,
   listStoredSignatures,
+  renderPageSrc,
   saveStoredSignature,
   type FirmaGuardada,
   type HeaderFooter,
@@ -365,6 +366,13 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  /** Saca una entrada del caché revocando su blob URL (no-op para data:). */
+  function cacheEvict(key: string) {
+    const src = pageCacheRef.current.get(key);
+    if (src) URL.revokeObjectURL(src);
+    pageCacheRef.current.delete(key);
+  }
+
   /** Guarda un render en el caché de páginas, con tope de entradas. El get
    *  de requestRender refresca la posición: evicción LRU de verdad, para que
    *  volver a un nivel de zoom anterior siga acertando. */
@@ -373,7 +381,7 @@ function App() {
     cache.set(key, src);
     if (cache.size > 60) {
       const oldest = cache.keys().next().value;
-      if (oldest) cache.delete(oldest);
+      if (oldest) cacheEvict(oldest);
     }
   }
 
@@ -431,13 +439,8 @@ function App() {
       }
       const enVuelo = inFlightRef.current.get(key);
       if (enVuelo) return enVuelo;
-      const p = invoke<string>("render_page", {
-        path: workPath,
-        pageIndex: page,
-        width,
-      })
-        .then((b64) => {
-          const src = `data:image/png;base64,${b64}`;
+      const p = renderPageSrc(workPath, page, width)
+        .then((src) => {
           cachePut(key, src);
           return src;
         })
@@ -537,15 +540,18 @@ function App() {
       for (let i = 0; i < pageCount; i++) {
         if (cancelled) return;
         try {
-          const b64 = await invoke<string>(
-            "render_page",
-            { path: workPath, pageIndex: i, width: THUMB_WIDTH },
-            { background: true },
-          );
-          if (cancelled) return;
+          const src = await renderPageSrc(workPath, i, THUMB_WIDTH, {
+            background: true,
+          });
+          if (cancelled) {
+            URL.revokeObjectURL(src);
+            return;
+          }
           setThumbs((t) => {
             const next = [...t];
-            next[i] = `data:image/png;base64,${b64}`;
+            const previa = next[i];
+            if (previa) URL.revokeObjectURL(previa);
+            next[i] = src;
             return next;
           });
         } catch {
@@ -562,14 +568,14 @@ function App() {
   async function refreshThumb(page: number) {
     if (!workPath) return;
     try {
-      const b64 = await invoke<string>(
-        "render_page",
-        { path: workPath, pageIndex: page, width: THUMB_WIDTH },
-        { background: true },
-      );
+      const src = await renderPageSrc(workPath, page, THUMB_WIDTH, {
+        background: true,
+      });
       setThumbs((t) => {
         const next = [...t];
-        next[page] = `data:image/png;base64,${b64}`;
+        const previa = next[page];
+        if (previa) URL.revokeObjectURL(previa);
+        next[page] = src;
         return next;
       });
     } catch {
@@ -583,7 +589,7 @@ function App() {
       if (pushUndo) undoStackRef.current.push({ page });
       setModified(true);
       for (const key of [...pageCacheRef.current.keys()]) {
-        if (key.split(":")[2] === String(page)) pageCacheRef.current.delete(key);
+        if (key.split(":")[2] === String(page)) cacheEvict(key);
       }
       setAnnotVersion((v) => v + 1);
       refreshThumb(page);
@@ -625,7 +631,7 @@ function App() {
         return next;
       });
       for (const key of [...pageCacheRef.current.keys()]) {
-        if (key.split(":")[2] === String(page)) pageCacheRef.current.delete(key);
+        if (key.split(":")[2] === String(page)) cacheEvict(key);
       }
       refreshThumb(page);
     },
@@ -641,6 +647,8 @@ function App() {
     setSearched(false);
     setLastQuery("");
     setPageIndex((p) => Math.max(0, Math.min(nextPage ?? p, newCount - 1)));
+    // el docVersion nuevo deja inservible todo el caché: liberar los blobs
+    for (const key of [...pageCacheRef.current.keys()]) cacheEvict(key);
     setDocVersion((v) => v + 1);
   }, []);
 
@@ -824,12 +832,7 @@ function App() {
       const pages: string[] = [];
       for (let i = 0; i < pageCount; i++) {
         const width = Math.round(((pageSizes[i]?.width ?? 595) * 200) / 72);
-        const b64 = await invoke<string>("render_page", {
-          path: workPath,
-          pageIndex: i,
-          width,
-        });
-        pages.push(`data:image/png;base64,${b64}`);
+        pages.push(await renderPageSrc(workPath, i, width));
       }
       setNotice(null);
       setPrintPages(pages);
@@ -848,6 +851,8 @@ function App() {
       } catch (e) {
         setError(String(e));
       }
+      // liberar los blob URLs de las páginas ya impresas
+      for (const src of printPages) URL.revokeObjectURL(src);
       setPrintPages(null);
     }, 200);
     return () => clearTimeout(t);
@@ -2089,7 +2094,12 @@ function App() {
                 onClick={() => gotoPage(i)}
               >
                 {src ? (
-                  <img src={src} draggable={false} alt={`Página ${i + 1}`} />
+                  <img
+                    src={src}
+                    draggable={false}
+                    decoding="async"
+                    alt={`Página ${i + 1}`}
+                  />
                 ) : (
                   <div className="thumb-placeholder" />
                 )}

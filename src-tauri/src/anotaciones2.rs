@@ -367,7 +367,7 @@ mod tests {
     use base64::Engine;
 
     fn render_rgba(path: &str) -> image::RgbaImage {
-        let png_b64 = crate::render_page(path.to_string(), 0, 600).expect("render");
+        let png_b64 = crate::render_page_b64(path.to_string(), 0, 600).expect("render");
         let png = base64::engine::general_purpose::STANDARD
             .decode(png_b64)
             .expect("base64");
@@ -413,7 +413,7 @@ mod tests {
         )
         .expect("tachar");
         // renderizar con el caché del documento (como hace la UI)
-        crate::render_page(work.clone(), 0, 400).expect("render");
+        crate::render_page_b64(work.clone(), 0, 400).expect("render");
         let annots = crate::get_annotations(work, 0).expect("listar");
         assert_eq!(annots.len(), 1);
         assert_eq!(

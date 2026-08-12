@@ -430,7 +430,7 @@ mod tests {
             c.y
         );
         // y el render respeta el área nueva
-        let png_b64 = crate::render_page(work, 0, 300).expect("render");
+        let png_b64 = crate::render_page_b64(work, 0, 300).expect("render");
         assert!(!png_b64.is_empty());
     }
 
