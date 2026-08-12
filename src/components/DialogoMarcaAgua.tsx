@@ -3,6 +3,10 @@ import { cargaColores, guardaColor } from "../tipos";
 
 const COLORS = ["#c0392b", "#6f6a5c", "#2743c0", "#2ea043"];
 
+export type PosicionMarca = "nw" | "n" | "ne" | "w" | "c" | "e" | "sw" | "s" | "se";
+
+const POSICIONES: PosicionMarca[] = ["nw", "n", "ne", "w", "c", "e", "sw", "s", "se"];
+
 /** Diálogo de marca de agua: texto diagonal u horizontal en todas las páginas. */
 export default function DialogoMarcaAgua({
   onApply,
@@ -14,6 +18,7 @@ export default function DialogoMarcaAgua({
     color: string;
     opacity: number;
     diagonal: boolean;
+    position: PosicionMarca;
   }) => void;
   onClose: () => void;
 }) {
@@ -22,6 +27,7 @@ export default function DialogoMarcaAgua({
   const [color, setColor] = useState(() => cargaColores().marcaAgua ?? COLORS[1]);
   const [opacity, setOpacity] = useState(35);
   const [diagonal, setDiagonal] = useState(true);
+  const [position, setPosition] = useState<PosicionMarca>("c");
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -88,14 +94,26 @@ export default function DialogoMarcaAgua({
             </label>
           </div>
         </div>
-        <label className="opt-check">
-          <input
-            type="checkbox"
-            checked={diagonal}
-            onChange={(e) => setDiagonal(e.target.checked)}
-          />
-          En diagonal
-        </label>
+        <div className="card-row">
+          <div className="pos-grid" title="Posición en la página">
+            {POSICIONES.map((p) => (
+              <button
+                key={p}
+                className={`pos-cell${position === p ? " on" : ""}`}
+                aria-label={`Posición ${p}`}
+                onClick={() => setPosition(p)}
+              />
+            ))}
+          </div>
+          <label className="opt-check">
+            <input
+              type="checkbox"
+              checked={diagonal}
+              onChange={(e) => setDiagonal(e.target.checked)}
+            />
+            En diagonal
+          </label>
+        </div>
         <p className="modal-file">
           Se añade a todas las páginas como contenido del documento.
         </p>
@@ -106,7 +124,7 @@ export default function DialogoMarcaAgua({
           <button
             className="btn btn-primary"
             disabled={!text.trim()}
-            onClick={() => onApply({ text, fontSize, color, opacity, diagonal })}
+            onClick={() => onApply({ text, fontSize, color, opacity, diagonal, position })}
           >
             Aplicar
           </button>

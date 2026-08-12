@@ -189,8 +189,10 @@ fn ancho_estimado(text: &str, size: f32) -> f32 {
 }
 
 /// Marca de agua de texto en todas las páginas (diagonal ascendente u
-/// horizontal, centrada). Va como contenido de página: no se puede quitar
-/// selectivamente después de guardar.
+/// horizontal). `position` es una celda de un grid 3×3 ("nw".."se", `None` =
+/// centro). Va como contenido de página; para poder quitarla después el alpha
+/// se limita a 240 (así `remove_marginal_text` la reconoce por translucidez
+/// aunque no esté rotada).
 #[tauri::command]
 pub fn add_watermark(
     work_path: String,
@@ -198,11 +200,13 @@ pub fn add_watermark(
     font_size: f32,
     color: [u8; 4],
     diagonal: bool,
+    position: Option<String>,
 ) -> Result<(), String> {
     let text = text.trim().to_string();
     if text.is_empty() {
         return Err("La marca de agua está vacía".into());
     }
+    let pos = position.unwrap_or_else(|| "c".into());
     on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
@@ -210,7 +214,7 @@ pub fn add_watermark(
             .map_err(|e| e.to_string())?;
         let font = doc.fonts_mut().helvetica_bold();
         let size = font_size.clamp(12.0, 200.0);
-        let c = PdfColor::new(color[0], color[1], color[2], color[3]);
+        let c = PdfColor::new(color[0], color[1], color[2], color[3].min(240));
         for i in 0..doc.pages().len() {
             let mut page = doc.pages().get(i).map_err(|e| e.to_string())?;
             let page_w = page.width().value;
@@ -229,11 +233,32 @@ pub fn add_watermark(
             } else {
                 (cx, cy)
             };
-            obj.translate(
-                PdfPoints::new(page_w / 2.0 - cx2),
-                PdfPoints::new(page_h / 2.0 - cy2),
-            )
-            .map_err(|e| e.to_string())?;
+            // semiextensiones de la caja (rotada o no) para que las celdas
+            // laterales no saquen el texto de la página
+            let (hw, hh) = if diagonal {
+                let r = std::f32::consts::FRAC_1_SQRT_2;
+                let d = (w / 2.0 + size * 0.5) * r;
+                (d, d)
+            } else {
+                (w / 2.0, size * 0.5)
+            };
+            let (mx, my) = (page_w * 0.08, page_h * 0.08);
+            let tx = if pos.contains('w') {
+                (mx + hw).min(page_w / 2.0)
+            } else if pos.contains('e') {
+                (page_w - mx - hw).max(page_w / 2.0)
+            } else {
+                page_w / 2.0
+            };
+            let ty = if pos.contains('n') {
+                (page_h - my - hh).max(page_h / 2.0)
+            } else if pos.contains('s') {
+                (my + hh).min(page_h / 2.0)
+            } else {
+                page_h / 2.0
+            };
+            obj.translate(PdfPoints::new(tx - cx2), PdfPoints::new(ty - cy2))
+                .map_err(|e| e.to_string())?;
             page.objects_mut()
                 .add_text_object(obj)
                 .map_err(|e| e.to_string())?;
@@ -414,7 +439,7 @@ mod tests {
         let pdf = std::env::temp_dir().join("paginas2-quitar-test.pdf");
         crea_pdf(&["Contenido uno", "Contenido dos"], &pdf);
         let work = pdf.to_string_lossy().to_string();
-        add_watermark(work.clone(), "BORRADOR".into(), 60.0, [200, 30, 30, 90], true)
+        add_watermark(work.clone(), "BORRADOR".into(), 60.0, [200, 30, 30, 90], true, None)
             .expect("marca");
         add_header_footer(
             work.clone(),
@@ -449,6 +474,69 @@ mod tests {
     }
 
     #[test]
+    fn marca_de_agua_horizontal_en_esquina_se_quita() {
+        // sin rotación la marca se reconoce por translucidez; en una esquina
+        // no debe llevarse por delante encabezados/pies ni contenido
+        let pdf = std::env::temp_dir().join("paginas2-marca-esquina-test.pdf");
+        crea_pdf(&["Contenido uno"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+        add_watermark(
+            work.clone(),
+            "CONFIDENCIAL".into(),
+            30.0,
+            [200, 30, 30, 255],
+            false,
+            Some("se".into()),
+        )
+        .expect("marca");
+        add_header_footer(
+            work.clone(),
+            None,
+            Some("Encabezado".into()),
+            None,
+            None,
+            Some("{n}".into()),
+            None,
+            10.0,
+        )
+        .expect("pie");
+        assert!(textos(&work)[0].contains("CONFIDENCIAL"));
+        // la marca está en el tercio inferior derecho de la página
+        let bounds = on_pdfium_thread({
+            let work = work.clone();
+            move || {
+                let pdfium = pdfium().expect("pdfium");
+                let doc = pdfium.load_pdf_from_file(&work, None).expect("abrir");
+                let page = doc.pages().get(0).expect("página");
+                let (pw, ph) = (page.width().value, page.height().value);
+                for i in 0..page.objects().len() {
+                    let Ok(obj) = page.objects().get(i) else { continue };
+                    if obj.as_text_object().is_none() {
+                        continue;
+                    }
+                    let Ok(c) = obj.fill_color() else { continue };
+                    if c.alpha() < 250 {
+                        let b = obj.bounds().expect("bounds");
+                        return Some((b.left().value / pw, b.bottom().value / ph));
+                    }
+                }
+                None
+            }
+        })
+        .expect("marca translúcida no encontrada");
+        assert!(bounds.0 > 0.3, "muy a la izquierda: {}", bounds.0);
+        assert!(bounds.1 < 0.35, "muy arriba: {}", bounds.1);
+        let informe = remove_marginal_text(work.clone(), "watermark".into(), false)
+            .expect("quitar marca");
+        assert_eq!(informe.textos, 1);
+        let t = textos(&work);
+        assert!(!t[0].contains("CONFIDENCIAL"), "{:?}", t[0]);
+        assert!(t[0].contains("Contenido uno"));
+        assert!(t[0].contains("Encabezado"));
+        assert!(t[0].contains('1'));
+    }
+
+    #[test]
     fn marca_de_agua_y_numeracion() {
         let pdf = std::env::temp_dir().join("paginas2-marca-test.pdf");
         crea_pdf(&["Uno", "Dos"], &pdf);
@@ -459,6 +547,7 @@ mod tests {
             60.0,
             [200, 30, 30, 90],
             true,
+            None,
         )
         .expect("marca de agua");
         add_header_footer(
@@ -516,9 +605,15 @@ pub fn remove_marginal_text(
                         .matrix()
                         .map(|m| m.b().abs() > 0.01 || m.c().abs() > 0.01)
                         .unwrap_or(false);
+                    // las marcas de agua sin rotar se reconocen por su
+                    // translucidez (add_watermark limita el alpha a 240)
+                    let translucido = obj
+                        .fill_color()
+                        .map(|c| c.alpha() < 250)
+                        .unwrap_or(false);
                     let Ok(b) = obj.bounds() else { continue };
                     let en_zona = match zona.as_str() {
-                        "watermark" => rotado,
+                        "watermark" => rotado || translucido,
                         // banda superior: el objeto entero por encima de h-40
                         "header" => !rotado && b.bottom().value > page_h - 40.0,
                         // banda inferior: el objeto entero por debajo de 40

@@ -4,7 +4,7 @@
  * datos de forma perezosa cuando entra en el viewport (± un viewport de
  * margen) y mientras tanto ocupa su sitio con un hueco del tamaño real.
  */
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { invoke } from "../ipc";
 import { open } from "../dialogos";
 import {
@@ -19,6 +19,7 @@ import {
   getLinks,
   redactArea,
   stampSignature,
+  transformAnnotation,
   type LinkInfo,
   type RedactReport,
 } from "../api";
@@ -38,6 +39,7 @@ import {
   type PageSize,
   type PageText,
   type Rect,
+  type ResizeHandle,
   type Selection,
   type ShapeKind,
   type TextBlock,
@@ -165,6 +167,19 @@ function Pagina({
   const [imgDraft, setImgDraft] = useState<ImageInfo | null>(null);
   const [imagePopover, setImagePopover] = useState<ImageInfo | null>(null);
   const imgActionRef = useRef<ImgAction | null>(null);
+  // parche que tapa la copia original (quemada en el bitmap) durante un
+  // arrastre de imagen; se limpia cuando llega el bitmap actualizado
+  const [imgPatch, setImgPatch] = useState<{ rect: Rect; color: string } | null>(null);
+  // arrastre/redimensionado de anotaciones (sellos y dibujos) en modo select
+  const [annotDraft, setAnnotDraft] = useState<(Rect & { index: number }) | null>(null);
+  const annotActionRef = useRef<{
+    kind: "move" | "resize";
+    startX: number;
+    startY: number;
+    orig: AnnotationInfo;
+    moved: boolean;
+  } | null>(null);
+  const annotLiveRef = useRef<(Rect & { index: number }) | null>(null);
   const [links, setLinks] = useState<LinkInfo[]>([]);
 
   const [shapeDraft, setShapeDraft] = useState<{
@@ -198,7 +213,9 @@ function Pagina({
   const hitRef = useRef<HTMLDivElement | null>(null);
 
   const scale = displayWidth / size.width;
-  const renderWidth = Math.round(displayWidth * devicePixelRatio);
+  // tope de píxeles físicos: a zoom alto el CSS escala el resto (un render
+  // de 7000px en base64 congela el hilo; a 4096 no se nota y va fluido)
+  const renderWidth = Math.min(4096, Math.round(displayWidth * devicePixelRatio));
   const { activeSig } = tool;
 
   // Visibilidad dentro del visor (± un viewport de margen): fuera de ahí la
@@ -220,19 +237,29 @@ function Pagina({
     return () => registerEl(index, null);
   }, [index, registerEl]);
 
-  // Render de la página (instantáneo si ya está en el caché global)
+  // Render de la página (instantáneo si ya está en el caché global). Los
+  // cambios de ancho (zoom) se debouncean: el PNG anterior se estira por CSS
+  // al momento y el render nítido se pide cuando se deja de pulsar — así una
+  // ráfaga de ⌘± no encola renders obsoletos en el hilo de PDFium.
+  const lastWidthRef = useRef(0);
   useEffect(() => {
     if (!visible) return;
     let cancelled = false;
-    requestRender(index, renderWidth, pageVersion)
-      .then((src) => {
-        if (!cancelled) setImgSrc(src);
-      })
-      .catch((e) => {
-        if (!cancelled) onError(e);
-      });
+    const go = () => {
+      lastWidthRef.current = renderWidth;
+      requestRender(index, renderWidth, pageVersion)
+        .then((src) => {
+          if (!cancelled) setImgSrc(src);
+        })
+        .catch((e) => {
+          if (!cancelled) onError(e);
+        });
+    };
+    const soloZoom = lastWidthRef.current !== 0 && lastWidthRef.current !== renderWidth;
+    const t = setTimeout(go, soloZoom ? 160 : 0);
     return () => {
       cancelled = true;
+      clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, workPath, index, renderWidth, docVersion, annotVersion, pageVersion]);
@@ -265,6 +292,10 @@ function Pagina({
     setImagePopover(null);
     setImgDraft(null);
     imgActionRef.current = null;
+    setImgPatch(null);
+    setAnnotDraft(null);
+    annotActionRef.current = null;
+    annotLiveRef.current = null;
     setFieldDraft(null);
     setBlockDraft(null);
     setNewTextDraft(null);
@@ -285,7 +316,10 @@ function Pagina({
     setNotePopover(null);
     invoke<AnnotationInfo[]>("get_annotations", { path: workPath, pageIndex: index })
       .then((a) => {
-        if (!cancelled) setAnnots(a);
+        if (cancelled) return;
+        setAnnots(a);
+        // el borrador de un arrastre aguanta hasta aquí para no ver saltos
+        setAnnotDraft(null);
       })
       .catch(() => {
         if (!cancelled) setAnnots([]);
@@ -376,11 +410,12 @@ function Pagina({
   // contenido para que al arrastrar se mueva la imagen, no solo el recuadro.
   useEffect(() => {
     setImagePopover(null);
-    setImgDraft(null);
     imgActionRef.current = null;
     setImgPreviews({});
     if (!workPath || !visible || mode !== "image") {
       setImages([]);
+      setImgDraft(null);
+      setImgPatch(null);
       return;
     }
     let cancelled = false;
@@ -388,6 +423,10 @@ function Pagina({
       .then((list) => {
         if (cancelled) return;
         setImages(list);
+        // el borrador y el parche del arrastre aguantan hasta que llegan los
+        // datos frescos: así no reaparece la copia vieja mientras se re-renderiza
+        setImgDraft(null);
+        setImgPatch(null);
         for (const im of list) {
           getImageData(workPath, index, im.object_index)
             .then((b64) => {
@@ -575,14 +614,8 @@ function Pagina({
   function onClickLayer(e: React.MouseEvent<HTMLDivElement>) {
     if (mode !== "select" || selection) return;
     const { x, y } = pagePoint(e);
-    const CLICKABLE = [
-      "Highlight",
-      "Underline",
-      "Strikeout",
-      "StrikeOut",
-      "Ink",
-      "Stamp",
-    ];
+    // Ink y Stamp tienen su propio overlay arrastrable con su mousedown
+    const CLICKABLE = ["Highlight", "Underline", "Strikeout", "StrikeOut"];
     const hit = annots.find((a) => {
       if (!CLICKABLE.includes(a.kind)) return false;
       const zonas =
@@ -635,7 +668,58 @@ function Pagina({
       });
       onPageMutated(index);
     } catch (e) {
+      setImgDraft(null);
+      setImgPatch(null);
       onError(e);
+    }
+  }
+
+  /** Color medio del perímetro de un rect en el bitmap de la página, para
+   *  tapar la copia original mientras se arrastra (fallback: blanco papel). */
+  function sampleAround(r: Rect): string {
+    try {
+      const el = wrapRef.current?.querySelector("img.page") as HTMLImageElement | null;
+      if (!el || !el.naturalWidth) return "#ffffff";
+      const cw = Math.min(800, el.naturalWidth);
+      const k = cw / size.width;
+      const cv = document.createElement("canvas");
+      cv.width = cw;
+      cv.height = Math.round(el.naturalHeight * (cw / el.naturalWidth));
+      const ctx = cv.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return "#ffffff";
+      ctx.drawImage(el, 0, 0, cv.width, cv.height);
+      const pad = 3 * k;
+      const x0 = r.x * k - pad;
+      const x1 = (r.x + r.w) * k + pad;
+      const y0 = r.y * k - pad;
+      const y1 = (r.y + r.h) * k + pad;
+      const cx = (x0 + x1) / 2;
+      const cy = (y0 + y1) / 2;
+      let cr = 0;
+      let cg = 0;
+      let cb = 0;
+      let n = 0;
+      for (const [px, py] of [
+        [cx, y0],
+        [cx, y1],
+        [x0, cy],
+        [x1, cy],
+        [x0, y0],
+        [x1, y0],
+        [x0, y1],
+        [x1, y1],
+      ]) {
+        const xx = Math.round(Math.min(Math.max(px, 0), cv.width - 1));
+        const yy = Math.round(Math.min(Math.max(py, 0), cv.height - 1));
+        const d = ctx.getImageData(xx, yy, 1, 1).data;
+        cr += d[0];
+        cg += d[1];
+        cb += d[2];
+        n++;
+      }
+      return `rgb(${Math.round(cr / n)}, ${Math.round(cg / n)}, ${Math.round(cb / n)})`;
+    } catch {
+      return "#ffffff";
     }
   }
 
@@ -685,6 +769,7 @@ function Pagina({
     e: React.MouseEvent<HTMLDivElement>,
     im: ImageInfo,
     kind: ImgAction["kind"],
+    handle: ResizeHandle = "se",
   ) {
     e.stopPropagation();
     if (e.button !== 0) return;
@@ -693,6 +778,7 @@ function Pagina({
     ).getBoundingClientRect();
     imgActionRef.current = {
       kind,
+      handle,
       startX: (e.clientX - rect.left) / scale,
       startY: (e.clientY - rect.top) / scale,
       orig: im,
@@ -700,6 +786,52 @@ function Pagina({
     };
     setImagePopover(null);
     setImgDraft(im);
+    setImgPatch({
+      rect: { x: im.x, y: im.y, w: im.w, h: im.h },
+      color: sampleAround(im),
+    });
+  }
+
+  function startAnnotAction(
+    e: React.MouseEvent<HTMLDivElement>,
+    a: AnnotationInfo,
+    kind: "move" | "resize",
+  ) {
+    e.stopPropagation();
+    if (e.button !== 0) return;
+    const rect = (
+      e.currentTarget.closest(".textlayer") as HTMLElement
+    ).getBoundingClientRect();
+    annotActionRef.current = {
+      kind,
+      startX: (e.clientX - rect.left) / scale,
+      startY: (e.clientY - rect.top) / scale,
+      orig: a,
+      moved: false,
+    };
+    setNotePopover(null);
+    const d = { index: a.index, x: a.x, y: a.y, w: a.w, h: a.h };
+    annotLiveRef.current = d;
+    setAnnotDraft(d);
+  }
+
+  async function commitAnnot(a: AnnotationInfo, r: Rect) {
+    if (!workPath) return;
+    try {
+      await transformAnnotation({
+        workPath,
+        pageIndex: index,
+        annotIndex: a.index,
+        x: r.x,
+        y: r.y,
+        w: r.w,
+        h: r.h,
+      });
+      onAnnotated(index, false);
+    } catch (e) {
+      setAnnotDraft(null);
+      onError(e);
+    }
   }
 
   async function submitNewText() {
@@ -995,8 +1127,55 @@ function Pagina({
     setNotePopover(null);
   }
 
+  /** Redimensiona un rect desde un tirador: bordes mueven un solo eje,
+   *  esquinas mantienen la proporción (con Shift, libre). */
+  function resizeRect(
+    o: Rect,
+    hd: ResizeHandle,
+    dx: number,
+    dy: number,
+    free: boolean,
+  ): Rect {
+    let left = o.x;
+    let top = o.y;
+    let right = o.x + o.w;
+    let bottom = o.y + o.h;
+    if (hd.includes("e")) right = Math.max(left + 8, right + dx);
+    if (hd.includes("w")) left = Math.min(right - 8, left + dx);
+    if (hd.includes("s")) bottom = Math.max(top + 8, bottom + dy);
+    if (hd.includes("n")) top = Math.min(bottom - 8, top + dy);
+    let w = right - left;
+    let h = bottom - top;
+    const esquina = hd.length === 2;
+    if (esquina && !free && o.w > 0 && o.h > 0) {
+      const ratio = o.h / o.w;
+      if (Math.abs(w - o.w) >= Math.abs(h - o.h)) h = w * ratio;
+      else w = h / ratio;
+      // el ancla es la esquina opuesta al tirador
+      if (hd.includes("w")) left = right - w;
+      if (hd.includes("n")) top = bottom - h;
+    }
+    return { x: left, y: top, w, h };
+  }
+
   function onMouseMove(e: React.MouseEvent<HTMLDivElement>) {
     if (!(e.buttons & 1)) return;
+    if (mode === "select" && annotActionRef.current) {
+      const a = annotActionRef.current;
+      const { x, y } = pagePoint(e);
+      const dx = x - a.startX;
+      const dy = y - a.startY;
+      if (Math.abs(dx) + Math.abs(dy) > 1) a.moved = true;
+      const o = { x: a.orig.x, y: a.orig.y, w: a.orig.w, h: a.orig.h };
+      const r =
+        a.kind === "move"
+          ? { ...o, x: o.x + dx, y: o.y + dy }
+          : resizeRect(o, "se", dx, dy, e.shiftKey);
+      const d = { index: a.orig.index, ...r };
+      annotLiveRef.current = d;
+      setAnnotDraft(d);
+      return;
+    }
     if (mode === "image" && imgActionRef.current) {
       const a = imgActionRef.current;
       const { x, y } = pagePoint(e);
@@ -1006,12 +1185,8 @@ function Pagina({
       if (a.kind === "move") {
         setImgDraft({ ...a.orig, x: a.orig.x + dx, y: a.orig.y + dy });
       } else {
-        let w = Math.max(8, a.orig.w + dx);
-        let h = Math.max(8, a.orig.h + dy);
-        if (!e.shiftKey && a.orig.w > 0) {
-          h = w * (a.orig.h / a.orig.w);
-        }
-        setImgDraft({ ...a.orig, w, h });
+        const r = resizeRect(a.orig, a.handle ?? "se", dx, dy, e.shiftKey);
+        setImgDraft({ ...a.orig, ...r });
       }
       return;
     }
@@ -1111,6 +1286,20 @@ function Pagina({
   function onMouseUp() {
     anchorRef.current = null;
     setDragging(false);
+    if (mode === "select" && annotActionRef.current) {
+      const a = annotActionRef.current;
+      annotActionRef.current = null;
+      const draft = annotLiveRef.current;
+      annotLiveRef.current = null;
+      if (!a.moved) {
+        // clic simple: opciones de la anotación (borrar)
+        setAnnotDraft(null);
+        setNotePopover(a.orig);
+      } else if (draft) {
+        commitAnnot(a.orig, draft);
+      }
+      return;
+    }
     if (mode === "firmar") {
       const start = sigDragRef.current;
       sigDragRef.current = null;
@@ -1172,11 +1361,14 @@ function Pagina({
       const a = imgActionRef.current;
       imgActionRef.current = null;
       const draft = imgDraft;
-      setImgDraft(null);
       if (!a.moved) {
         // clic simple: abrir el popover de la imagen
+        setImgDraft(null);
+        setImgPatch(null);
         setImagePopover(a.orig);
       } else if (draft) {
+        // el borrador y el parche se quedan hasta que llegan los datos
+        // frescos (efecto de imágenes): sin salto atrás ni doble copia
         commitImage(a.orig.object_index, draft);
       }
       return;
@@ -1272,6 +1464,33 @@ function Pagina({
                 />
               )),
             )}
+          {mode === "select" &&
+            annots
+              .filter((a) => a.kind === "Ink" || a.kind === "Stamp")
+              .map((a) => {
+                const d =
+                  annotDraft && annotDraft.index === a.index ? annotDraft : a;
+                return (
+                  <div
+                    key={`an${a.index}`}
+                    className="annot-hit"
+                    title="Arrastrar para mover · clic para opciones"
+                    style={{
+                      left: d.x * scale,
+                      top: d.y * scale,
+                      width: d.w * scale,
+                      height: d.h * scale,
+                    }}
+                    onMouseDown={(e) => startAnnotAction(e, a, "move")}
+                  >
+                    <div
+                      className="image-handle h-se"
+                      title="Redimensionar (Shift: libre)"
+                      onMouseDown={(e) => startAnnotAction(e, a, "resize")}
+                    />
+                  </div>
+                );
+              })}
           {mode === "edit" &&
             textBlocks.map((b) => (
               <div
@@ -1290,6 +1509,18 @@ function Pagina({
                 }}
               />
             ))}
+          {mode === "image" && imgPatch && (
+            <div
+              className="img-patch"
+              style={{
+                left: imgPatch.rect.x * scale,
+                top: imgPatch.rect.y * scale,
+                width: imgPatch.rect.w * scale,
+                height: imgPatch.rect.h * scale,
+                background: imgPatch.color,
+              }}
+            />
+          )}
           {mode === "image" &&
             images.map((im) => {
               const isDragging =
@@ -1316,11 +1547,16 @@ function Pagina({
                       alt=""
                     />
                   )}
-                  <div
-                    className="image-handle"
-                    title="Redimensionar (Shift: libre)"
-                    onMouseDown={(e) => startImgAction(e, im, "resize")}
-                  />
+                  {(["nw", "n", "ne", "e", "se", "s", "sw", "w"] as const).map(
+                    (hd) => (
+                      <div
+                        key={hd}
+                        className={`image-handle h-${hd}`}
+                        title="Redimensionar (Shift: libre en esquinas)"
+                        onMouseDown={(e) => startImgAction(e, im, "resize", hd)}
+                      />
+                    ),
+                  )}
                 </div>
               );
             })}
@@ -2040,4 +2276,6 @@ function Pagina({
   );
 }
 
-export default Pagina;
+// memo: al hacer zoom o buscar, App re-renderiza; sin esto las ~N páginas
+// reconcilian todos sus overlays aunque sus props no hayan cambiado
+export default memo(Pagina);

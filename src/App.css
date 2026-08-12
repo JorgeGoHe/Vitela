@@ -202,6 +202,12 @@ textarea {
   min-width: 0;
 }
 
+/* solo el nombre del fichero puede colapsar; los botones nunca (si no, el
+   toggle del panel acaba debajo del segmentado) */
+.toolbar-left > .btn {
+  flex-shrink: 0;
+}
+
 .toolbar-right {
   justify-content: flex-end;
   flex: 0 1 auto;
@@ -216,6 +222,8 @@ textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 220px;
+  min-width: 0;
+  flex: 0 1 auto;
 }
 
 .segmented {
@@ -735,8 +743,10 @@ textarea {
 /* ===== responsive ===== */
 
 /* toolbar: con poco ancho, los botones pierden la etiqueta (queda el icono
-   con tooltip) y como red de seguridad la barra puede partirse en dos filas */
-@media (max-width: 1080px) {
+   con tooltip) y como red de seguridad la barra puede partirse en dos filas.
+   El corte va a 1280 porque con etiquetas la barra necesita ~1250px y la
+   ventana por defecto mide 1100. */
+@media (max-width: 1280px) {
   .toolbar .btn-etiqueta {
     display: none;
   }
@@ -757,7 +767,7 @@ textarea {
   }
 }
 
-@media (max-width: 780px) {
+@media (max-width: 900px) {
   .toolbar {
     flex-wrap: wrap;
     row-gap: 4px;
@@ -1013,6 +1023,34 @@ textarea {
   box-shadow: 0 0 0 2px var(--card-bg) inset;
 }
 
+/* grid 3×3 para elegir la posición de la marca de agua en la página */
+.pos-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 16px);
+  grid-auto-rows: 16px;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.pos-cell {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--btn-hover);
+  cursor: pointer;
+  padding: 0;
+}
+
+.pos-cell:hover {
+  background: var(--btn-active);
+}
+
+.pos-cell.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
 .opt-check {
   display: flex;
   align-items: center;
@@ -1207,14 +1245,47 @@ textarea {
 
 .image-handle {
   position: absolute;
-  right: -6px;
-  bottom: -6px;
   width: 11px;
   height: 11px;
   background: var(--accent);
   border: 2px solid var(--card-bg);
   border-radius: 3px;
-  cursor: nwse-resize;
+}
+
+/* 8 tiradores: esquinas con ratio, bordes de un solo eje */
+.image-handle.h-nw { left: -6px; top: -6px; cursor: nwse-resize; }
+.image-handle.h-n  { left: calc(50% - 5px); top: -6px; cursor: ns-resize; }
+.image-handle.h-ne { right: -6px; top: -6px; cursor: nesw-resize; }
+.image-handle.h-e  { right: -6px; top: calc(50% - 5px); cursor: ew-resize; }
+.image-handle.h-se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.image-handle.h-s  { left: calc(50% - 5px); bottom: -6px; cursor: ns-resize; }
+.image-handle.h-sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
+.image-handle.h-w  { left: -6px; top: calc(50% - 5px); cursor: ew-resize; }
+
+/* parche que tapa la copia original quemada en el bitmap durante un arrastre */
+.img-patch {
+  position: absolute;
+  pointer-events: none;
+}
+
+/* zona clicable de una anotación (sello/dibujo) en modo seleccionar */
+.annot-hit {
+  position: absolute;
+  cursor: move;
+  border-radius: 2px;
+}
+
+.annot-hit:hover {
+  outline: 2px dashed var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.annot-hit .image-handle {
+  display: none;
+}
+
+.annot-hit:hover .image-handle {
+  display: block;
 }
 
 .card-actions .btn {

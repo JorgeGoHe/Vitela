@@ -296,6 +296,70 @@ pub fn add_stamp(
     })
 }
 
+/// Mueve y/o reescala una anotación con apariencia embebida (Stamp o Ink):
+/// transforma los objetos de dentro para que ocupen el rect nuevo (coords de
+/// UI) y actualiza los bounds. Para el resto de tipos solo hay borrado.
+#[tauri::command]
+pub fn transform_annotation(
+    work_path: String,
+    page_index: u16,
+    annot_index: u16,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+) -> Result<(), String> {
+    if w <= 1.0 || h <= 1.0 {
+        return Err("Tamaño demasiado pequeño".into());
+    }
+    on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| e.to_string())?;
+        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+        let page_h = page.height().value;
+        let nuevo = ui_rect_to_pdf(&Rect { x, y, w, h }, page_h);
+        {
+            let mut annot = page
+                .annotations_mut()
+                .get(annot_index as usize)
+                .map_err(|e| e.to_string())?;
+            let viejo = annot.bounds().map_err(|e| e.to_string())?;
+            let (vw, vh) = (
+                viejo.right().value - viejo.left().value,
+                viejo.top().value - viejo.bottom().value,
+            );
+            if vw <= 0.0 || vh <= 0.0 {
+                return Err("La anotación no tiene tamaño".into());
+            }
+            let sx = w / vw;
+            let sy = h / vh;
+            // matriz compuesta: llevar el rect viejo al origen, escalar y
+            // colocarlo en el rect nuevo
+            let e = nuevo.left().value - viejo.left().value * sx;
+            let f = nuevo.bottom().value - viejo.bottom().value * sy;
+            let objects = match (
+                annot.as_stamp_annotation_mut().is_some(),
+                annot.as_ink_annotation_mut().is_some(),
+            ) {
+                (true, _) => annot.as_stamp_annotation_mut().unwrap().objects_mut(),
+                (_, true) => annot.as_ink_annotation_mut().unwrap().objects_mut(),
+                _ => return Err("Esta anotación no se puede transformar".into()),
+            };
+            for i in 0..objects.len() {
+                let mut obj = objects.get(i).map_err(|e| e.to_string())?;
+                obj.transform(sx, 0.0, 0.0, sy, e, f)
+                    .map_err(|e| e.to_string())?;
+            }
+            annot.set_bounds(nuevo).map_err(|e| e.to_string())?;
+        }
+        drop(page);
+        save_and_close(doc, &work_path)?;
+        Ok(())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,5 +494,50 @@ mod tests {
             }
         }
         assert!(rojos > 200, "el sello apenas pinta ({rojos} píxeles rojos)");
+    }
+
+    fn rojos_en(img: &image::RgbaImage, x0: u32, y0: u32, x1: u32, y1: u32) -> u32 {
+        let escala = 600.0 / 595.28;
+        let mut n = 0;
+        for yy in y0..y1 {
+            for xx in x0..x1 {
+                let p = img.get_pixel((xx as f32 * escala) as u32, (yy as f32 * escala) as u32);
+                if p[0] > 150 && p[1] < 110 && p[2] < 110 {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
+    #[test]
+    fn sello_movido_y_escalado() {
+        let pdf = std::env::temp_dir().join("anotaciones2-transform-test.pdf");
+        crea_pdf(&["Página"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+        add_stamp(
+            work.clone(),
+            0,
+            "APROBADO".into(),
+            [200, 30, 30, 255],
+            200.0,
+            600.0,
+            22.0,
+        )
+        .expect("sello");
+        let a = &crate::get_annotations(work.clone(), 0).expect("listar")[0];
+        // moverlo arriba a la izquierda y doblar el tamaño
+        let (nx, ny, nw, nh) = (60.0, 100.0, a.w * 2.0, a.h * 2.0);
+        transform_annotation(work.clone(), 0, 0, nx, ny, nw, nh).expect("transformar");
+        let b = &crate::get_annotations(work.clone(), 0).expect("listar")[0];
+        assert!((b.x - nx).abs() < 1.0 && (b.y - ny).abs() < 1.0, "bounds {b:?}");
+        assert!((b.w - nw).abs() < 1.0 && (b.h - nh).abs() < 1.0, "bounds {b:?}");
+        let img = render_rgba(&work);
+        // pinta en la zona nueva…
+        let en_nuevo = rojos_en(&img, 60, 100, (nx + nw) as u32, (ny + nh) as u32);
+        assert!(en_nuevo > 400, "el sello transformado apenas pinta ({en_nuevo})");
+        // …y ya no en la vieja (el sello original rondaba y=590..615, x=130..270)
+        let en_viejo = rojos_en(&img, 130, 570, 270, 630);
+        assert_eq!(en_viejo, 0, "quedan restos del sello en la posición vieja");
     }
 }

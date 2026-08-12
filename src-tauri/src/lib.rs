@@ -119,7 +119,7 @@ fn work_copy_path(original: &str) -> std::path::PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    std::env::temp_dir().join(format!("editor-pdf-{name}-{nanos}.pdf"))
+    std::env::temp_dir().join(format!("vitela-{name}-{nanos}.pdf"))
 }
 
 /// Guarda el documento sobre `path` y lo cierra. PDFium lee el fichero de
@@ -216,7 +216,7 @@ struct PageText {
     chars: Vec<CharBox>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub(crate) struct Rect {
     pub(crate) x: f32,
     pub(crate) y: f32,
@@ -695,7 +695,7 @@ fn add_note(
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 struct AnnotationInfo {
     index: u16,
     kind: String,
@@ -2433,6 +2433,7 @@ pub fn run() {
             anotaciones2::add_markup,
             anotaciones2::add_shape,
             anotaciones2::add_stamp,
+            anotaciones2::transform_annotation,
             paginas2::add_blank_page,
             paginas2::duplicate_page,
             paginas2::insert_pdf_at,

@@ -68,6 +68,19 @@ export function addStamp(args: {
   return invoke("add_stamp", { ...args });
 }
 
+/** Mueve/reescala una anotación con apariencia embebida (sello o dibujo). */
+export function transformAnnotation(args: {
+  workPath: string;
+  pageIndex: number;
+  annotIndex: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}): Promise<void> {
+  return invoke("transform_annotation", { ...args });
+}
+
 export function addBlankPage(workPath: string, index: number): Promise<number> {
   return invoke("add_blank_page", { workPath, index });
 }
@@ -102,6 +115,8 @@ export function addWatermark(args: {
   fontSize: number;
   color: Rgba;
   diagonal: boolean;
+  /** Celda de un grid 3×3 ("nw".."se"); sin ella, centro. */
+  position?: string;
 }): Promise<void> {
   return invoke("add_watermark", { ...args });
 }

@@ -365,11 +365,13 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  /** Guarda un render en el caché de páginas, con tope de entradas. */
+  /** Guarda un render en el caché de páginas, con tope de entradas. El get
+   *  de requestRender refresca la posición: evicción LRU de verdad, para que
+   *  volver a un nivel de zoom anterior siga acertando. */
   function cachePut(key: string, src: string) {
     const cache = pageCacheRef.current;
     cache.set(key, src);
-    if (cache.size > 30) {
+    if (cache.size > 60) {
       const oldest = cache.keys().next().value;
       if (oldest) cache.delete(oldest);
     }
@@ -393,20 +395,20 @@ function App() {
     else setStampColor(color);
   }
 
-  function onMarkupUsed(
-    kind: "highlight" | "underline" | "strikeout",
-    color: string,
-  ) {
-    const accion =
-      kind === "highlight"
-        ? "resaltar"
-        : kind === "underline"
-          ? "subrayar"
-          : "tachar";
-    guardaColor(accion, color);
-    setMarkupColors((c) => ({ ...c, [accion]: color }));
-    setMarkupPending(null);
-  }
+  const onMarkupUsed = useCallback(
+    (kind: "highlight" | "underline" | "strikeout", color: string) => {
+      const accion =
+        kind === "highlight"
+          ? "resaltar"
+          : kind === "underline"
+            ? "subrayar"
+            : "tachar";
+      guardaColor(accion, color);
+      setMarkupColors((c) => ({ ...c, [accion]: color }));
+      setMarkupPending(null);
+    },
+    [],
+  );
   const zoomNum = zoom === "ajuste" ? displayWidth / BASE_WIDTH : zoom;
 
   // el estado del documento en un ref para que requestRender sea estable
@@ -421,7 +423,12 @@ function App() {
       if (!workPath) return Promise.reject("Sin documento");
       const key = `${docVersion}:${pv}:${page}:${width}`;
       const cached = pageCacheRef.current.get(key);
-      if (cached) return Promise.resolve(cached);
+      if (cached) {
+        // refrescar la posición en el Map (LRU)
+        pageCacheRef.current.delete(key);
+        pageCacheRef.current.set(key, cached);
+        return Promise.resolve(cached);
+      }
       const enVuelo = inFlightRef.current.get(key);
       if (enVuelo) return enVuelo;
       const p = invoke<string>("render_page", {
@@ -456,12 +463,15 @@ function App() {
 
   /** Lleva el visor al principio de una página (miniaturas, marcadores,
    *  enlaces internos, flechas y píldora). */
-  function gotoPage(i: number) {
-    if (pageCount === 0) return;
-    const target = Math.max(0, Math.min(i, pageCount - 1));
-    setPageIndex(target);
-    pageElsRef.current.get(target)?.scrollIntoView({ block: "start" });
-  }
+  const gotoPage = useCallback(
+    (i: number) => {
+      if (pageCount === 0) return;
+      const target = Math.max(0, Math.min(i, pageCount - 1));
+      setPageIndex(target);
+      pageElsRef.current.get(target)?.scrollIntoView({ block: "start" });
+    },
+    [pageCount],
+  );
 
   // Seguimiento del scroll: la página cuyo centro queda más cerca del centro
   // del visor es la "actual" (píldora y sidebar), sin provocar scroll.
@@ -742,6 +752,7 @@ function App() {
     color: string;
     opacity: number;
     diagonal: boolean;
+    position: string;
   }) {
     if (!workPath) return;
     try {
@@ -751,6 +762,7 @@ function App() {
         fontSize: opts.fontSize,
         color: hexToRgba(opts.color, Math.round((opts.opacity / 100) * 255)),
         diagonal: opts.diagonal,
+        position: opts.position,
       });
       setWmOpen(false);
       afterMutation(pageCount);
@@ -1137,22 +1149,41 @@ function App() {
     setMode("image");
   }, []);
 
-  const tool: ToolProps = {
-    drawColor,
-    drawWidth,
-    markupPending,
-    onMarkupPending: setMarkupPending,
-    markupColors,
-    onMarkupUsed,
-    shapeKind,
-    shapeColor,
-    shapeFill,
-    shapeWidth,
-    stampText,
-    stampCustom,
-    stampColor,
-    activeSig,
-  };
+  // memoizado para que Pagina (React.memo) no re-renderice todas las páginas
+  // en cada cambio de estado de App
+  const tool: ToolProps = useMemo(
+    () => ({
+      drawColor,
+      drawWidth,
+      markupPending,
+      onMarkupPending: setMarkupPending,
+      markupColors,
+      onMarkupUsed,
+      shapeKind,
+      shapeColor,
+      shapeFill,
+      shapeWidth,
+      stampText,
+      stampCustom,
+      stampColor,
+      activeSig,
+    }),
+    [
+      drawColor,
+      drawWidth,
+      markupPending,
+      markupColors,
+      onMarkupUsed,
+      shapeKind,
+      shapeColor,
+      shapeFill,
+      shapeWidth,
+      stampText,
+      stampCustom,
+      stampColor,
+      activeSig,
+    ],
+  );
 
   // separador de ruta multiplataforma (macOS "/" y Windows "\")
   const fileName = originalPath?.split(/[\\/]/).pop() ?? null;
@@ -1705,7 +1736,7 @@ function App() {
             <p className="modal-file" style={{ whiteSpace: "normal" }}>
               Se eliminarán {marginalAsk.textos} texto(s)
               {marginalAsk.zona === "watermark"
-                ? " en diagonal"
+                ? " de marca de agua"
                 : " de los márgenes superior e inferior"}{" "}
               en todo el documento.
             </p>

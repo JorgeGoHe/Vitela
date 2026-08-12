@@ -9,7 +9,7 @@
 //! Terminal 2: bun run qa:puente    # este puente + PDFium en :1422, sin ventana
 //!
 //! curl -X POST localhost:1422/qa/fixture -d '{"pages":["Uno","Dos","Tres"]}'
-//!   → {"path":"/tmp/editor-pdf-fixture-….pdf"}
+//!   → {"path":"/tmp/vitela-fixture-….pdf"}
 //! curl -X POST localhost:1422/qa/dialogo -d '{"value":"<esa ruta>"}'
 //!   → encola la respuesta del siguiente diálogo de abrir/guardar
 //! browse goto http://localhost:1420 ; click en "Abrir PDF" …
@@ -116,7 +116,7 @@ fn atender(mut request: tiny_http::Request) {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or(0);
-            let path = std::env::temp_dir().join(format!("editor-pdf-fixture-{nanos}.pdf"));
+            let path = std::env::temp_dir().join(format!("vitela-fixture-{nanos}.pdf"));
             crate::crea_pdf(&refs, &path);
             responde(request, 200, json!({"path": path.to_string_lossy()}))
         }
@@ -191,11 +191,12 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "add_markup" => cmd!(anotaciones2::add_markup, { work_path: String, page_index: u16, rects: Vec<crate::Rect>, kind: String, color: Option<[u8; 4]> }),
         "add_shape" => cmd!(anotaciones2::add_shape, { work_path: String, page_index: u16, kind: String, x1: f32, y1: f32, x2: f32, y2: f32, stroke: [u8; 4], fill: Option<[u8; 4]>, stroke_width: f32 }),
         "add_stamp" => cmd!(anotaciones2::add_stamp, { work_path: String, page_index: u16, text: String, color: [u8; 4], x: f32, y: f32, font_size: f32 }),
+        "transform_annotation" => cmd!(anotaciones2::transform_annotation, { work_path: String, page_index: u16, annot_index: u16, x: f32, y: f32, w: f32, h: f32 }),
         "add_blank_page" => cmd!(paginas2::add_blank_page, { work_path: String, index: u16 }),
         "duplicate_page" => cmd!(paginas2::duplicate_page, { work_path: String, page_index: u16 }),
         "insert_pdf_at" => cmd!(paginas2::insert_pdf_at, { work_path: String, other_path: String, index: u16 }),
         "crop_page" => cmd!(paginas2::crop_page, { work_path: String, page_index: u16, rect: crate::Rect, all_pages: bool }),
-        "add_watermark" => cmd!(paginas2::add_watermark, { work_path: String, text: String, font_size: f32, color: [u8; 4], diagonal: bool }),
+        "add_watermark" => cmd!(paginas2::add_watermark, { work_path: String, text: String, font_size: f32, color: [u8; 4], diagonal: bool, position: Option<String> }),
         "remove_marginal_text" => cmd!(paginas2::remove_marginal_text, { work_path: String, zona: String, dry_run: bool }),
         "add_header_footer" => cmd!(paginas2::add_header_footer, { work_path: String, header_left: Option<String>, header_center: Option<String>, header_right: Option<String>, footer_left: Option<String>, footer_center: Option<String>, footer_right: Option<String>, font_size: f32 }),
         "get_outline" => cmd!(documento::get_outline, { path: String }),

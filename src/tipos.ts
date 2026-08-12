@@ -49,8 +49,11 @@ export type ImageInfo = {
   w: number;
   h: number;
 };
+/** Tirador de redimensionado: esquinas y bordes de la caja. */
+export type ResizeHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 export type ImgAction = {
   kind: "move" | "resize";
+  handle?: ResizeHandle;
   startX: number;
   startY: number;
   orig: ImageInfo;
