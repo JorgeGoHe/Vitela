@@ -176,18 +176,28 @@ fn borra_copias_abiertas() {
     });
 }
 
-/// Barrido al arrancar: copias de trabajo e instantáneas huérfanas de
-/// cierres bruscos. Solo las de hace más de 24 h, para no pisar a otra
-/// instancia de la app que esté viva.
+/// Barrido al arrancar: copias de trabajo (`vitela-*.pdf` en temp) e
+/// instantáneas (`vitela-historial/`) huérfanas de cierres bruscos. Solo las
+/// de hace más de 24 h, para no pisar a otra instancia de la app viva.
 fn barre_huerfanos(dir: &std::path::Path, edad_minima: std::time::Duration) -> usize {
+    let mut borrados = barre_ficheros(dir, edad_minima, |n| {
+        n.starts_with("vitela-") && (n.ends_with(".pdf") || n.ends_with(".pdf.tmp"))
+    });
+    borrados += barre_ficheros(&dir.join("vitela-historial"), edad_minima, |n| n.contains(".snap"));
+    borrados
+}
+
+fn barre_ficheros(
+    dir: &std::path::Path,
+    edad_minima: std::time::Duration,
+    es_nuestro: impl Fn(&str) -> bool,
+) -> usize {
     let Ok(entradas) = std::fs::read_dir(dir) else { return 0 };
     let ahora = std::time::SystemTime::now();
     let mut borrados = 0;
     for e in entradas.flatten() {
         let nombre = e.file_name().to_string_lossy().to_string();
-        let es_nuestro = nombre.starts_with("vitela-")
-            && (nombre.ends_with(".pdf") || nombre.contains(".pdf.snap") || nombre.ends_with(".pdf.tmp"));
-        if !es_nuestro {
+        if !es_nuestro(&nombre) {
             continue;
         }
         let viejo = e
@@ -446,6 +456,9 @@ fn sign_pdf_p12(
 pub(crate) fn crea_pdf(textos: &[&str], dest: &std::path::Path) {
     let textos: Vec<String> = textos.iter().map(|t| t.to_string()).collect();
     let dest = dest.to_path_buf();
+    // los tests reutilizan nombres de fixture: fuera las instantáneas de la
+    // ejecución anterior, que si no se acumulan en el temp
+    historial::borra_instantaneas_en_disco(&dest.to_string_lossy());
     on_pdfium_thread(move || {
         let pdfium = pdfium().expect("no cargó libpdfium");
         let mut doc = pdfium.create_new_pdf().expect("crear documento");
@@ -609,10 +622,12 @@ pub(crate) mod tests {
         let work = info.work_path.clone();
         assert!(copias_abiertas().contains(&work));
         paginas::rotate_page(work.clone(), 0).expect("rotar (deja instantánea)");
-        assert!(std::path::Path::new(&format!("{work}.snap0")).exists());
+        let nombre = std::path::Path::new(&work).file_name().unwrap().to_string_lossy().to_string();
+        let snap = historial::directorio().join(format!("{nombre}.snap0"));
+        assert!(snap.exists());
         close_document(work.clone()).expect("cerrar");
         assert!(!std::path::Path::new(&work).exists(), "la copia debe desaparecer");
-        assert!(!std::path::Path::new(&format!("{work}.snap0")).exists());
+        assert!(!snap.exists());
         assert!(!copias_abiertas().contains(&work));
         std::fs::remove_file(&pdf).ok();
     }
@@ -622,9 +637,11 @@ pub(crate) mod tests {
         let dir = std::env::temp_dir().join("editor_pdf_test_barrido");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        for n in ["vitela-a-1.pdf", "vitela-a-1.pdf.snap3", "vitela-b-2.pdf.tmp", "otro.pdf", "vitela-notas.txt"] {
+        std::fs::create_dir_all(dir.join("vitela-historial")).unwrap();
+        for n in ["vitela-a-1.pdf", "vitela-b-2.pdf.tmp", "otro.pdf", "vitela-notas.txt"] {
             std::fs::write(dir.join(n), b"x").unwrap();
         }
+        std::fs::write(dir.join("vitela-historial").join("x.pdf.snap3"), b"x").unwrap();
         // con edad mínima cero se borran los nuestros; los ajenos se quedan
         assert_eq!(barre_huerfanos(&dir, std::time::Duration::ZERO), 3);
         assert!(dir.join("otro.pdf").exists());

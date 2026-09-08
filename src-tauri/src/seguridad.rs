@@ -456,8 +456,9 @@ mod tests {
         .expect("abrir con contraseña");
         assert!(info.had_password);
         // la copia de trabajo quedó sin cifrar
-        let texto = crate::busqueda::get_page_text(info.work_path, 0).expect("texto");
+        let texto = crate::busqueda::get_page_text(info.work_path.clone(), 0).expect("texto");
         assert!(!texto.chars.is_empty());
+        crate::close_document(info.work_path).expect("cerrar");
     }
 
     #[test]

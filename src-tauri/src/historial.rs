@@ -46,8 +46,34 @@ fn con<R>(work_path: &str, f: impl FnOnce(&mut Historial) -> R) -> R {
     f(mapa.entry(work_path.to_string()).or_default())
 }
 
+/// Directorio de las instantáneas (dentro del temp, para que el barrido de
+/// arranque lo limpie entero).
+pub(crate) fn directorio() -> PathBuf {
+    std::env::temp_dir().join("vitela-historial")
+}
+
+fn nombre_base(work_path: &str) -> String {
+    std::path::Path::new(work_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "documento".into())
+}
+
 fn ruta_instantanea(work_path: &str, seq: u64) -> PathBuf {
-    PathBuf::from(format!("{work_path}.snap{seq}"))
+    directorio().join(format!("{}.snap{seq}", nombre_base(work_path)))
+}
+
+/// Borra del disco cualquier instantánea de ese documento, también las de
+/// procesos anteriores (tests con nombres de fixture fijos).
+pub(crate) fn borra_instantaneas_en_disco(work_path: &str) {
+    let prefijo = format!("{}.snap", nombre_base(work_path));
+    if let Ok(entradas) = std::fs::read_dir(directorio()) {
+        for e in entradas.flatten() {
+            if e.file_name().to_string_lossy().starts_with(&prefijo) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
 }
 
 /// Toma una instantánea del estado actual (antes de mutar). Vacía la pila
@@ -60,6 +86,7 @@ fn empuja(work_path: &str) -> Result<(), String> {
         if tam > MAX_BYTES {
             return Ok(());
         }
+        std::fs::create_dir_all(directorio()).map_err(|e| e.to_string())?;
         con(&work_path, |h| {
             let snap = ruta_instantanea(&work_path, h.seq);
             h.seq += 1;
@@ -213,20 +240,14 @@ mod tests {
     use crate::{anotaciones, busqueda, paginas, seguridad};
 
     fn instantaneas(work: &str) -> usize {
-        let dir = std::path::Path::new(work).parent().unwrap();
-        let nombre = std::path::Path::new(work)
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
-        std::fs::read_dir(dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                let n = e.file_name().to_string_lossy().to_string();
-                n.starts_with(&nombre) && n[nombre.len()..].starts_with(".snap")
+        let prefijo = format!("{}.snap", nombre_base(work));
+        std::fs::read_dir(directorio())
+            .map(|d| {
+                d.filter_map(|e| e.ok())
+                    .filter(|e| e.file_name().to_string_lossy().starts_with(&prefijo))
+                    .count()
             })
-            .count()
+            .unwrap_or(0)
     }
 
     fn fixture(nombre: &str, paginas: &[&str]) -> String {

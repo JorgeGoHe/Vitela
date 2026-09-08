@@ -245,6 +245,7 @@ mod tests {
             json!({"path": work, "pageIndex": 0, "width": 200}),
         )
         .expect("render_page");
+        crate::close_document(work.to_string()).expect("cerrar");
         assert!(png.as_str().unwrap().len() > 100);
         // comando desconocido: error claro con el nombre
         let err = despachar("no_existe", json!({})).unwrap_err();
