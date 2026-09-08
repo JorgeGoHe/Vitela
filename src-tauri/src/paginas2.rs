@@ -3,13 +3,14 @@
 //! numeración.
 
 use crate::{on_pdfium_thread, pdfium, save_and_close, Rect};
+use crate::historial::mutacion;
 use pdfium_render::prelude::*;
 
 /// Inserta una página en blanco en `index`, del mismo tamaño que la página
 /// vecina (o A4 si el documento está vacío). Devuelve el nuevo total.
 #[tauri::command(async)]
 pub fn add_blank_page(work_path: String, index: u16) -> Result<u16, String> {
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -26,13 +27,13 @@ pub fn add_blank_page(work_path: String, index: u16) -> Result<u16, String> {
         let nuevo = doc.pages().len();
         save_and_close(doc, &work_path)?;
         Ok(nuevo)
-    })
+    }))
 }
 
 /// Duplica la página dada (la copia queda justo después). Devuelve el total.
 #[tauri::command(async)]
 pub fn duplicate_page(work_path: String, page_index: u16) -> Result<u16, String> {
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -52,14 +53,14 @@ pub fn duplicate_page(work_path: String, page_index: u16) -> Result<u16, String>
         let nuevo = doc.pages().len();
         save_and_close(doc, &work_path)?;
         Ok(nuevo)
-    })
+    }))
 }
 
 /// Inserta todas las páginas de otro PDF en la posición dada. Devuelve el
 /// total resultante (generaliza `merge_pdf`, que solo añade al final).
 #[tauri::command(async)]
 pub fn insert_pdf_at(work_path: String, other_path: String, index: u16) -> Result<u16, String> {
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -76,7 +77,7 @@ pub fn insert_pdf_at(work_path: String, other_path: String, index: u16) -> Resul
         let nuevo = doc.pages().len();
         save_and_close(doc, &work_path)?;
         Ok(nuevo)
-    })
+    }))
 }
 
 /// Recorta una página (o todas) al rect dado en coords de UI. En vez de
@@ -94,7 +95,7 @@ pub fn crop_page(
     if rect.w < 24.0 || rect.h < 24.0 {
         return Err("El área de recorte es demasiado pequeña".into());
     }
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -180,7 +181,7 @@ pub fn crop_page(
         }
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 /// Ancho estimado de un texto en Helvetica Bold (media ~0.6 em por carácter).
@@ -207,7 +208,7 @@ pub fn add_watermark(
         return Err("La marca de agua está vacía".into());
     }
     let pos = position.unwrap_or_else(|| "c".into());
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -266,7 +267,7 @@ pub fn add_watermark(
         }
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 /// Encabezado y pie en todas las páginas, con tres huecos por zona
@@ -298,7 +299,7 @@ pub fn add_header_footer(
     }) {
         return Err("No hay ningún texto que añadir".into());
     }
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -351,7 +352,7 @@ pub fn add_header_footer(
         }
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -584,7 +585,8 @@ pub fn remove_marginal_text(
     zona: String,
     dry_run: bool,
 ) -> Result<MarginalReport, String> {
-    on_pdfium_thread(move || {
+    // sin instantánea en el ensayo (dry_run): no se escribe nada
+    let cuerpo = move |work_path: String| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -646,5 +648,10 @@ pub fn remove_marginal_text(
             save_and_close(doc, &work_path)?;
         }
         Ok(MarginalReport { textos: total })
-    })
+    });
+    if dry_run {
+        cuerpo(work_path)
+    } else {
+        mutacion(work_path, cuerpo)
+    }
 }

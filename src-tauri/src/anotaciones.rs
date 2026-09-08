@@ -1,6 +1,7 @@
 //! Anotaciones básicas: resaltado, trazo (Ink), nota, listado y borrado.
 
 use crate::{on_pdfium_thread, pdfium, save_and_close, with_doc, with_lopdf, Rect};
+use crate::historial::mutacion;
 use pdfium_render::prelude::*;
 use serde::Serialize;
 
@@ -22,7 +23,7 @@ pub fn add_highlight(work_path: String, page_index: u16, rects: Vec<Rect>) -> Re
     if rects.is_empty() {
         return Err("No hay nada que resaltar".into());
     }
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -72,7 +73,7 @@ pub fn add_highlight(work_path: String, page_index: u16, rects: Vec<Rect>) -> Re
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 /// Añade un trazo a mano alzada como anotación Ink con su apariencia
@@ -92,7 +93,7 @@ pub fn add_stroke(
     }
     let c = color.unwrap_or([226, 61, 61, 255]);
     let w = width.unwrap_or(2.0).clamp(0.5, 12.0);
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -137,7 +138,7 @@ pub fn add_stroke(
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 /// Crea una nota (anotación de texto) en el punto dado (coords de UI).
@@ -152,7 +153,7 @@ pub fn add_note(
     if text.trim().is_empty() {
         return Err("La nota está vacía".into());
     }
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -179,7 +180,7 @@ pub fn add_note(
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 #[derive(Serialize, Debug)]
@@ -328,7 +329,7 @@ pub fn colores_annots(doc: &lopdf::Document, page_index: u16) -> Option<Vec<Opti
 /// Elimina la anotación con el índice dado.
 #[tauri::command(async)]
 pub fn remove_annotation(work_path: String, page_index: u16, annot_index: u16) -> Result<(), String> {
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -344,7 +345,7 @@ pub fn remove_annotation(work_path: String, page_index: u16, annot_index: u16) -
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 #[cfg(test)]

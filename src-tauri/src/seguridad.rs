@@ -4,6 +4,7 @@
 //! real (elimina objetos del content stream, no solo los tapa).
 
 use crate::{invalidate_doc_cache, on_pdfium_thread, pdfium, save_and_close, Rect};
+use crate::historial::mutacion;
 use aes::cipher::{
     block_padding::{NoPadding, Pkcs7},
     BlockEncrypt, BlockEncryptMut, KeyInit, KeyIvInit,
@@ -273,7 +274,7 @@ pub(crate) fn guarda_descifrado(
 /// UI avisa antes.
 #[tauri::command(async)]
 pub fn flatten_pdf(work_path: String) -> Result<(), String> {
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -284,7 +285,7 @@ pub fn flatten_pdf(work_path: String) -> Result<(), String> {
         }
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 #[derive(Serialize)]
@@ -304,7 +305,8 @@ pub fn redact_area(
     rect: Rect,
     dry_run: bool,
 ) -> Result<RedactReport, String> {
-    on_pdfium_thread(move || {
+    // sin instantánea en el ensayo (dry_run): no se escribe nada
+    let cuerpo = move |work_path: String| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -378,7 +380,12 @@ pub fn redact_area(
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(RedactReport { textos, imagenes })
-    })
+    });
+    if dry_run {
+        cuerpo(work_path)
+    } else {
+        mutacion(work_path, cuerpo)
+    }
 }
 
 #[cfg(test)]

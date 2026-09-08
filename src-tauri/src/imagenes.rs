@@ -2,6 +2,7 @@
 //! extraer el contenido de un objeto de imagen.
 
 use crate::{on_pdfium_thread, pdfium, save_and_close, with_doc};
+use crate::historial::mutacion;
 use serde::Serialize;
 use base64::Engine;
 use pdfium_render::prelude::*;
@@ -77,7 +78,7 @@ pub fn add_image(
     x: f32,
     y: f32,
 ) -> Result<(), String> {
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let img =
             image::open(&image_path).map_err(|e| format!("No se pudo leer la imagen: {e}"))?;
         let pdfium = pdfium()?;
@@ -112,7 +113,7 @@ pub fn add_image(
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 /// Mueve y/o redimensiona una imagen a los bounds dados (coords de UI).
@@ -130,7 +131,7 @@ pub fn transform_image(
     if w <= 1.0 || h <= 1.0 {
         return Err("Tamaño de imagen inválido".into());
     }
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -160,7 +161,7 @@ pub fn transform_image(
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 /// Reemplaza el contenido de una imagen manteniendo posición y tamaño.
@@ -171,7 +172,7 @@ pub fn replace_image(
     object_index: u32,
     image_path: String,
 ) -> Result<(), String> {
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let img =
             image::open(&image_path).map_err(|e| format!("No se pudo leer la imagen: {e}"))?;
         let pdfium = pdfium()?;
@@ -213,13 +214,13 @@ pub fn replace_image(
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 /// Elimina una imagen de la página.
 #[tauri::command(async)]
 pub fn delete_image(work_path: String, page_index: u16, object_index: u32) -> Result<(), String> {
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -244,7 +245,7 @@ pub fn delete_image(work_path: String, page_index: u16, object_index: u32) -> Re
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 #[cfg(test)]

@@ -173,8 +173,7 @@ pub(crate) fn cirugia(
     work_path: &str,
     f: impl FnOnce(&mut lopdf::Document) -> Result<(), String> + Send + 'static,
 ) -> Result<(), String> {
-    let work_path = work_path.to_string();
-    on_pdfium_thread(move || {
+    historial::mutacion(work_path.to_string(), |work_path| on_pdfium_thread(move || {
         invalidate_doc_cache();
         let mut doc = lopdf::Document::load(&work_path)
             .map_err(|e| format!("No se pudo leer el PDF: {e}"))?;
@@ -185,7 +184,7 @@ pub(crate) fn cirugia(
         let tmp = format!("{work_path}.tmp");
         doc.save(&tmp).map_err(|e| format!("No se pudo guardar: {e}"))?;
         std::fs::rename(&tmp, &work_path).map_err(|e| e.to_string())
-    })
+    }))
 }
 
 /// Abre un PDF creando una copia de trabajo en temp. Todas las mutaciones
@@ -319,6 +318,7 @@ mod firma;
 mod firmas_visuales;
 mod formularios;
 mod formularios2;
+mod historial;
 mod imagenes;
 mod paginas;
 mod paginas2;
@@ -678,7 +678,11 @@ pub fn run() {
             exportar::compress_pdf,
             formularios2::create_form_field,
             formularios2::create_link,
-            formularios2::delete_form_field
+            formularios2::delete_form_field,
+            historial::undo,
+            historial::redo,
+            historial::history_state,
+            historial::squash_history
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

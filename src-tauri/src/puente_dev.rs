@@ -150,7 +150,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         }};
     }
     use crate::{
-        anotaciones, anotaciones2, busqueda, documento, exportar, firmas_visuales, formularios,
+        anotaciones, anotaciones2, busqueda, documento, exportar, firmas_visuales, formularios, historial,
         imagenes, paginas, paginas2, seguridad, texto,
     };
     match cmd {
@@ -216,6 +216,10 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "create_form_field" => cmd!(crate::formularios2::create_form_field, { work_path: String, page_index: u16, kind: String, rect: crate::Rect, name: String }),
         "delete_form_field" => cmd!(crate::formularios2::delete_form_field, { work_path: String, name: String }),
         "create_link" => cmd!(crate::formularios2::create_link, { work_path: String, page_index: u16, rect: crate::Rect, uri: Option<String>, dest_page: Option<u16> }),
+        "undo" => cmd!(historial::undo, { work_path: String }),
+        "redo" => cmd!(historial::redo, { work_path: String }),
+        "history_state" => cmd!(historial::history_state, { work_path: String }),
+        "squash_history" => cmd!(historial::squash_history, { work_path: String, steps: u16 }),
         otro => Err(format!("Comando desconocido en el puente: {otro}")),
     }
 }

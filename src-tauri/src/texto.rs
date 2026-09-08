@@ -1,6 +1,7 @@
 //! Edición real de texto: bloques del content stream, fuentes y texto nuevo.
 
 use crate::{on_pdfium_thread, pdfium, save_and_close, with_doc};
+use crate::historial::mutacion;
 use pdfium_render::prelude::*;
 use serde::Serialize;
 
@@ -186,7 +187,7 @@ pub fn edit_text_block(
     object_index: u32,
     new_text: String,
 ) -> Result<(), String> {
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -251,7 +252,7 @@ pub fn edit_text_block(
         }
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 /// Añade un bloque de texto nuevo en el punto dado (coords de UI, el punto
@@ -273,7 +274,7 @@ pub fn add_text_block(
         return Err("El texto está vacío".into());
     }
     let font_size = font_size.clamp(6.0, 96.0);
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -305,13 +306,13 @@ pub fn add_text_block(
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 /// Borra un bloque de texto del content stream.
 #[tauri::command(async)]
 pub fn delete_text_block(work_path: String, page_index: u16, object_index: u32) -> Result<(), String> {
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -328,7 +329,7 @@ pub fn delete_text_block(work_path: String, page_index: u16, object_index: u32) 
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 #[cfg(test)]

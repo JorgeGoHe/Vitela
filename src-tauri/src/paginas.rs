@@ -1,12 +1,13 @@
 //! Gestión de páginas: borrar, rotar, mover, unir y extraer (FPDF_ImportPages).
 
 use crate::{on_pdfium_thread, pdfium, save_and_close, with_doc};
+use crate::historial::mutacion;
 use pdfium_render::prelude::*;
 
 /// Borra una página y devuelve el nuevo número de páginas.
 #[tauri::command(async)]
 pub fn delete_page(work_path: String, page_index: u16) -> Result<u16, String> {
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -16,13 +17,13 @@ pub fn delete_page(work_path: String, page_index: u16) -> Result<u16, String> {
         let count = doc.pages().len();
         save_and_close(doc, &work_path)?;
         Ok(count)
-    })
+    }))
 }
 
 /// Rota una página 90° en sentido horario (acumulativo).
 #[tauri::command(async)]
 pub fn rotate_page(work_path: String, page_index: u16) -> Result<(), String> {
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -38,7 +39,7 @@ pub fn rotate_page(work_path: String, page_index: u16) -> Result<(), String> {
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 /// Mueve una página a otra posición reconstruyendo el documento en el nuevo
@@ -48,7 +49,7 @@ pub fn move_page(work_path: String, from_index: u16, to_index: u16) -> Result<()
     if from_index == to_index {
         return Ok(());
     }
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -73,13 +74,13 @@ pub fn move_page(work_path: String, from_index: u16, to_index: u16) -> Result<()
         drop(doc);
         save_and_close(new_doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 /// Añade todas las páginas de otro PDF al final y devuelve el nuevo total.
 #[tauri::command(async)]
 pub fn merge_pdf(work_path: String, other_path: String) -> Result<u16, String> {
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -92,7 +93,7 @@ pub fn merge_pdf(work_path: String, other_path: String) -> Result<u16, String> {
         drop(other);
         save_and_close(doc, &work_path)?;
         Ok(count)
-    })
+    }))
 }
 
 /// Extrae las páginas indicadas (índices base 0) a un PDF nuevo.

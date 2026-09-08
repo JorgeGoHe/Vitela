@@ -1,6 +1,7 @@
 //! Formularios AcroForm: leer campos y rellenar texto y casillas.
 
 use crate::{on_pdfium_thread, pdfium, save_and_close, with_doc};
+use crate::historial::mutacion;
 use pdfium_render::prelude::*;
 use serde::Serialize;
 
@@ -86,7 +87,7 @@ pub fn set_form_text(
     annot_index: u16,
     value: String,
 ) -> Result<(), String> {
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -107,7 +108,7 @@ pub fn set_form_text(
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 /// Marca o desmarca una casilla (o selecciona un radio button).
@@ -118,7 +119,7 @@ pub fn set_form_checked(
     annot_index: u16,
     checked: bool,
 ) -> Result<(), String> {
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -145,7 +146,7 @@ pub fn set_form_checked(
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 #[cfg(test)]

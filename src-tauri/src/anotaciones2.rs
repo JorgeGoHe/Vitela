@@ -4,6 +4,7 @@
 //! (Stamp con borde + texto dentro).
 
 use crate::anotaciones::ui_rect_to_pdf;
+use crate::historial::mutacion;
 use crate::{on_pdfium_thread, pdfium, save_and_close, Rect};
 use pdfium_render::prelude::*;
 
@@ -24,7 +25,7 @@ pub fn add_markup(
     if rects.is_empty() {
         return Err("No hay nada que marcar".into());
     }
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -91,7 +92,7 @@ pub fn add_markup(
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 /// Forma geométrica entre dos puntos (coords de UI): rectángulo, elipse,
@@ -110,7 +111,7 @@ pub fn add_shape(
     fill: Option<[u8; 4]>,
     stroke_width: f32,
 ) -> Result<(), String> {
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -214,7 +215,7 @@ pub fn add_shape(
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 /// Sello de texto (APROBADO, BORRADOR…): anotación Stamp con un borde y el
@@ -233,7 +234,7 @@ pub fn add_stamp(
     if text.is_empty() {
         return Err("El sello está vacío".into());
     }
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -300,7 +301,7 @@ pub fn add_stamp(
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 /// Mueve y/o reescala una anotación con apariencia embebida (Stamp o Ink):
@@ -319,7 +320,7 @@ pub fn transform_annotation(
     if w <= 1.0 || h <= 1.0 {
         return Err("Tamaño demasiado pequeño".into());
     }
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -364,7 +365,7 @@ pub fn transform_annotation(
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 #[cfg(test)]

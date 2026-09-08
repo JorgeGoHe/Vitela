@@ -2,6 +2,7 @@
 //! comprimir el documento recomprimiendo sus imágenes.
 
 use crate::{on_pdfium_thread, pdfium, save_and_close, with_doc};
+use crate::historial::mutacion;
 use pdfium_render::prelude::*;
 use serde::Serialize;
 use std::io::Cursor;
@@ -90,7 +91,7 @@ pub fn compress_pdf(work_path: String, quality: u8, max_dpi: u16) -> Result<Comp
     let antes = std::fs::metadata(&work_path)
         .map(|m| m.len())
         .unwrap_or(0);
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -201,7 +202,7 @@ pub fn compress_pdf(work_path: String, quality: u8, max_dpi: u16) -> Result<Comp
             despues,
             imagenes: recomprimidas,
         })
-    })
+    }))
 }
 
 #[cfg(test)]

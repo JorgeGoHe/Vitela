@@ -5,6 +5,7 @@
 //! ya funcionan con los comandos de imágenes existentes.
 
 use crate::{on_pdfium_thread, pdfium, save_and_close};
+use crate::historial::mutacion;
 use base64::Engine;
 use pdfium_render::prelude::*;
 use serde::Serialize;
@@ -31,7 +32,7 @@ pub fn stamp_signature(
     if w <= 1.0 || h <= 1.0 {
         return Err("Tamaño de firma inválido".into());
     }
-    on_pdfium_thread(move || {
+    mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(png_base64.trim())
             .map_err(|e| format!("Imagen base64 inválida: {e}"))?;
@@ -55,7 +56,7 @@ pub fn stamp_signature(
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
-    })
+    }))
 }
 
 /// Directorio de datos de la app. Lo fija el setup de Tauri (app_data_dir)
