@@ -138,6 +138,72 @@ struct DocumentInfo {
     had_password: bool,
 }
 
+/// Copias de trabajo vivas: se borran al cerrar el documento o al salir de
+/// la app (una copia abandonada es un PDF entero en temp; si el original
+/// iba cifrado, además está en claro).
+static COPIAS_ABIERTAS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+fn copias_abiertas() -> std::sync::MutexGuard<'static, std::collections::HashSet<String>> {
+    COPIAS_ABIERTAS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Borra la copia de trabajo y sus instantáneas de historial. Debe llamarse
+/// desde el hilo de PDFium (invalida el caché antes de borrar).
+fn borra_copia(work_path: &str) {
+    invalidate_doc_cache();
+    historial::limpia(work_path);
+    let _ = std::fs::remove_file(work_path);
+    copias_abiertas().remove(work_path);
+}
+
+/// Cierra un documento: borra su copia de trabajo e instantáneas.
+#[tauri::command(async)]
+fn close_document(work_path: String) -> Result<(), String> {
+    on_pdfium_thread(move || {
+        borra_copia(&work_path);
+        Ok(())
+    })
+}
+
+/// Al salir de la app: borra las copias que sigan abiertas.
+fn borra_copias_abiertas() {
+    let restantes: Vec<String> = copias_abiertas().iter().cloned().collect();
+    on_pdfium_thread(move || {
+        for w in restantes {
+            borra_copia(&w);
+        }
+    });
+}
+
+/// Barrido al arrancar: copias de trabajo e instantáneas huérfanas de
+/// cierres bruscos. Solo las de hace más de 24 h, para no pisar a otra
+/// instancia de la app que esté viva.
+fn barre_huerfanos(dir: &std::path::Path, edad_minima: std::time::Duration) -> usize {
+    let Ok(entradas) = std::fs::read_dir(dir) else { return 0 };
+    let ahora = std::time::SystemTime::now();
+    let mut borrados = 0;
+    for e in entradas.flatten() {
+        let nombre = e.file_name().to_string_lossy().to_string();
+        let es_nuestro = nombre.starts_with("vitela-")
+            && (nombre.ends_with(".pdf") || nombre.contains(".pdf.snap") || nombre.ends_with(".pdf.tmp"));
+        if !es_nuestro {
+            continue;
+        }
+        let viejo = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|m| ahora.duration_since(m).ok())
+            .map(|d| d >= edad_minima)
+            .unwrap_or(false);
+        if viejo && std::fs::remove_file(e.path()).is_ok() {
+            borrados += 1;
+        }
+    }
+    borrados
+}
+
 /// Ruta única en temp para la copia de trabajo del documento.
 fn work_copy_path(original: &str) -> std::path::PathBuf {
     let name = std::path::Path::new(original)
@@ -220,6 +286,7 @@ fn open_pdf(path: String, password: Option<String>) -> Result<DocumentInfo, Stri
             std::fs::copy(&path, &work_path)
                 .map_err(|e| format!("No se pudo crear la copia de trabajo: {e}"))?;
         }
+        copias_abiertas().insert(work_path.clone());
         Ok(DocumentInfo {
             page_count,
             work_path,
@@ -433,6 +500,41 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn close_document_borra_copia_e_instantaneas() {
+        let pdf = std::env::temp_dir().join("editor_pdf_test_cerrar.pdf");
+        crea_pdf(&["Uno", "Dos"], &pdf);
+        let info = open_pdf(pdf.to_string_lossy().into_owned(), None).expect("abrir");
+        let work = info.work_path.clone();
+        assert!(copias_abiertas().contains(&work));
+        paginas::rotate_page(work.clone(), 0).expect("rotar (deja instantánea)");
+        assert!(std::path::Path::new(&format!("{work}.snap0")).exists());
+        close_document(work.clone()).expect("cerrar");
+        assert!(!std::path::Path::new(&work).exists(), "la copia debe desaparecer");
+        assert!(!std::path::Path::new(&format!("{work}.snap0")).exists());
+        assert!(!copias_abiertas().contains(&work));
+        std::fs::remove_file(&pdf).ok();
+    }
+
+    #[test]
+    fn barrido_respeta_recientes_y_ajenos() {
+        let dir = std::env::temp_dir().join("editor_pdf_test_barrido");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in ["vitela-a-1.pdf", "vitela-a-1.pdf.snap3", "vitela-b-2.pdf.tmp", "otro.pdf", "vitela-notas.txt"] {
+            std::fs::write(dir.join(n), b"x").unwrap();
+        }
+        // con edad mínima cero se borran los nuestros; los ajenos se quedan
+        assert_eq!(barre_huerfanos(&dir, std::time::Duration::ZERO), 3);
+        assert!(dir.join("otro.pdf").exists());
+        assert!(dir.join("vitela-notas.txt").exists());
+        std::fs::write(dir.join("vitela-c-3.pdf"), b"x").unwrap();
+        // recién creado: con 24 h de margen no se toca
+        assert_eq!(barre_huerfanos(&dir, std::time::Duration::from_secs(24 * 3600)), 0);
+        assert!(dir.join("vitela-c-3.pdf").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn hilo_pdfium_reentrante() {
         // una llamada anidada se ejecuta en línea y devuelve su valor; sin el
         // guardián de reentrada este test se quedaría colgado para siempre
@@ -613,6 +715,9 @@ pub fn run() {
             if std::env::var("EDITOR_PDF_PUENTE").as_deref() == Ok("1") {
                 std::thread::spawn(|| puente_dev::arrancar(puente_dev::puerto()));
             }
+            std::thread::spawn(|| {
+                barre_huerfanos(&std::env::temp_dir(), std::time::Duration::from_secs(24 * 3600));
+            });
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
@@ -682,8 +787,14 @@ pub fn run() {
             historial::undo,
             historial::redo,
             historial::history_state,
-            historial::squash_history
+            historial::squash_history,
+            close_document
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                borra_copias_abiertas();
+            }
+        });
 }

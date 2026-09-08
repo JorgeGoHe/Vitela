@@ -216,6 +216,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "create_form_field" => cmd!(crate::formularios2::create_form_field, { work_path: String, page_index: u16, kind: String, rect: crate::Rect, name: String }),
         "delete_form_field" => cmd!(crate::formularios2::delete_form_field, { work_path: String, name: String }),
         "create_link" => cmd!(crate::formularios2::create_link, { work_path: String, page_index: u16, rect: crate::Rect, uri: Option<String>, dest_page: Option<u16> }),
+        "close_document" => cmd!(crate::close_document, { work_path: String }),
         "undo" => cmd!(historial::undo, { work_path: String }),
         "redo" => cmd!(historial::redo, { work_path: String }),
         "history_state" => cmd!(historial::history_state, { work_path: String }),

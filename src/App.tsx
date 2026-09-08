@@ -186,10 +186,13 @@ function App() {
       setSearched(false);
       setQuery("");
       setModified(false);
+      const anterior = workPath;
       const info = await invoke<{ page_count: number; work_path: string }>(
         "open_pdf",
         { path, password: password ?? null },
       );
+      // la copia de trabajo del documento anterior ya no sirve: borrarla
+      if (anterior) invoke("close_document", { workPath: anterior }).catch(() => {});
       setPwdDraft(null);
       setOriginalPath(path);
       setWorkPath(info.work_path);
@@ -206,6 +209,30 @@ function App() {
         setError(String(e));
       }
     }
+  }
+
+  /** Cierra el documento: vuelve al estado vacío y borra la copia de trabajo. */
+  function closeDocument() {
+    if (!workPath) return;
+    const anterior = workPath;
+    setMenuOpen(false);
+    setWorkPath(null);
+    setOriginalPath(null);
+    setPageCount(0);
+    setPageSizes([]);
+    setThumbs([]);
+    setPageVersions([]);
+    setMatches([]);
+    setSearched(false);
+    setQuery("");
+    setLastQuery("");
+    setModified(false);
+    setMode("select");
+    setPageIndex(0);
+    setOutlineState([]);
+    for (const key of [...pageCacheRef.current.keys()]) cacheEvict(key);
+    setDocVersion((v) => v + 1);
+    invoke("close_document", { workPath: anterior }).catch((e) => setError(String(e)));
   }
 
   async function openFile() {
@@ -1380,6 +1407,10 @@ function App() {
                       >
                         <Icon name="save" size={14} />
                         Guardar como…
+                      </button>
+                      <button className="btn" onClick={closeDocument}>
+                        <Icon name="close" size={14} />
+                        Cerrar documento
                       </button>
                       <button
                         className="btn"
