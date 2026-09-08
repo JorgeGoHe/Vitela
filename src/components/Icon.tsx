@@ -20,6 +20,7 @@ const ICONS: Record<string, string[]> = {
   ],
   textedit: ["M4 7V5h16v2", "M9 20h6", "M12 5v15"],
   undo: ["M3 7v6h6", "M21 17a9 9 0 0 0-15-6.7L3 13"],
+  redo: ["M21 7v6h-6", "M3 17a9 9 0 0 1 15-6.7L21 13"],
   highlight: [
     "m9 11-6 6v3h9l3-3",
     "m22 12-4.6 4.6a2 2 0 0 1-2.83 0l-5.17-5.17a2 2 0 0 1 0-2.83L14 4",

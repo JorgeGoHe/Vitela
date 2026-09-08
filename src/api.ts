@@ -329,3 +329,25 @@ export function stampSignature(args: {
 }): Promise<void> {
   return invoke("stamp_signature", { ...args });
 }
+
+/** Pasos de deshacer/rehacer disponibles y páginas del documento. */
+export type HistoryState = { undo: number; redo: number; page_count: number };
+
+export function historyState(workPath: string): Promise<HistoryState> {
+  return invoke("history_state", { workPath });
+}
+
+export function undoDocument(workPath: string): Promise<HistoryState> {
+  return invoke("undo", { workPath });
+}
+
+export function redoDocument(workPath: string): Promise<HistoryState> {
+  return invoke("redo", { workPath });
+}
+
+export function squashHistory(
+  workPath: string,
+  steps: number,
+): Promise<HistoryState> {
+  return invoke("squash_history", { workPath, steps });
+}

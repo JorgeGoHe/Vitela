@@ -8,6 +8,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { busyCount, invoke, subscribeBusy } from "./ipc";
+import { usoHistorial } from "./hooks/usoHistorial";
 import { open, save, openUrl } from "./dialogos";
 import {
   addBlankPage,
@@ -41,7 +42,6 @@ import {
   ANNOT_COLORS,
   hexToRgba,
   NOMBRE_COLOR,
-  type AnnotationInfo,
   type Mode,
   type PageSize,
   type SearchMatch,
@@ -74,7 +74,8 @@ const STAMP_PRESETS = [
   "URGENTE",
 ];
 
-type UndoEntry = { page: number };
+/** Tecla modificadora en los tooltips de atajos. */
+const MOD = navigator.platform.startsWith("Mac") ? "⌘" : "Ctrl+";
 
 function App() {
   const [originalPath, setOriginalPath] = useState<string | null>(null);
@@ -106,7 +107,13 @@ function App() {
   const [annotVersion, setAnnotVersion] = useState(0);
   const [pageVersions, setPageVersions] = useState<number[]>([]);
   const [selOwner, setSelOwner] = useState<number | null>(null);
-  const undoStackRef = useRef<UndoEntry[]>([]);
+  // deshacer/rehacer general (instantáneas en el backend); tras restaurar
+  // hace falta el refresco completo porque puede cambiar hasta el recuento
+  const historial = usoHistorial({
+    workPath,
+    onRestaurado: (n) => afterMutation(n),
+    onError: (e) => setError(String(e)),
+  });
   const [p12Draft, setP12Draft] = useState<{
     path: string;
     password: string;
@@ -255,6 +262,7 @@ function App() {
     try {
       await setOutline(workPath, nodes);
       setModified(true);
+      historial.refrescar();
     } catch (e) {
       setOutlineState(anterior);
       setError(String(e));
@@ -276,6 +284,7 @@ function App() {
       await setMetadata(workPath, meta);
       setPropsDraft(null);
       setModified(true);
+      historial.refrescar();
     } catch (e) {
       setError(String(e));
     }
@@ -356,6 +365,13 @@ function App() {
       } else if (mod && e.key === "-" && pageCount > 0) {
         e.preventDefault();
         setZoom(Math.max(0.5, Math.round((zoomNum - 0.25) * 4) / 4));
+      } else if (mod && !enCampo && (e.key === "z" || e.key === "Z") && pageCount > 0) {
+        e.preventDefault();
+        if (e.shiftKey) historial.rehacer();
+        else historial.deshacer();
+      } else if (mod && !enCampo && e.key === "y" && pageCount > 0) {
+        e.preventDefault();
+        historial.rehacer();
       } else if (!mod && !enCampo && e.key === "ArrowRight") {
         gotoPage(pageIndex + 1);
       } else if (!mod && !enCampo && e.key === "ArrowLeft") {
@@ -585,9 +601,9 @@ function App() {
 
   /** Tras anotar: invalidar el render de esa página sin recargar todo. */
   const afterAnnotate = useCallback(
-    (page: number, pushUndo = true) => {
-      if (pushUndo) undoStackRef.current.push({ page });
+    (page: number) => {
       setModified(true);
+      historial.refrescar();
       for (const key of [...pageCacheRef.current.keys()]) {
         if (key.split(":")[2] === String(page)) cacheEvict(key);
       }
@@ -595,33 +611,14 @@ function App() {
       refreshThumb(page);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [workPath],
+    [workPath, historial.refrescar],
   );
-
-  async function undoAnnotation() {
-    const action = undoStackRef.current.pop();
-    if (!action || !workPath) return;
-    try {
-      const list = await invoke<AnnotationInfo[]>("get_annotations", {
-        path: workPath,
-        pageIndex: action.page,
-      });
-      if (list.length === 0) return;
-      await invoke("remove_annotation", {
-        workPath,
-        pageIndex: action.page,
-        annotIndex: list[list.length - 1].index,
-      });
-      afterAnnotate(action.page, false);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
 
   /** Tras mutar UNA página: re-render y miniatura solo de esa página. */
   const afterPageMutation = useCallback(
     (page: number) => {
       setModified(true);
+      historial.refrescar();
       setMatches([]);
       setSearched(false);
       setLastQuery("");
@@ -636,7 +633,7 @@ function App() {
       refreshThumb(page);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [workPath],
+    [workPath, historial.refrescar],
   );
 
   /** Tras mutar el documento: refrescar render, miniaturas y limpiar búsqueda. */
@@ -650,7 +647,9 @@ function App() {
     // el docVersion nuevo deja inservible todo el caché: liberar los blobs
     for (const key of [...pageCacheRef.current.keys()]) cacheEvict(key);
     setDocVersion((v) => v + 1);
-  }, []);
+    historial.refrescar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historial.refrescar]);
 
   async function rotatePage(i: number) {
     if (!workPath) return;
@@ -746,6 +745,8 @@ function App() {
       // encabezado y pie van juntos en la UI: quitar ambas bandas
       if (marginalAsk.zona === "header") {
         await removeMarginalText(workPath, "footer", false);
+        // un solo paso de deshacer para las dos bandas
+        await historial.agrupar(2);
       }
       setMarginalAsk(null);
       afterMutation(pageCount);
@@ -1332,10 +1333,19 @@ function App() {
               </div>
               <button
                 className="btn btn-icon"
-                title="Deshacer la última anotación"
-                onClick={undoAnnotation}
+                title={`Deshacer (${MOD}Z)`}
+                disabled={!historial.puedeDeshacer}
+                onClick={historial.deshacer}
               >
                 <Icon name="undo" />
+              </button>
+              <button
+                className="btn btn-icon"
+                title={`Rehacer (⇧${MOD}Z)`}
+                disabled={!historial.puedeRehacer}
+                onClick={historial.rehacer}
+              >
+                <Icon name="redo" />
               </button>
               <button
                 className="btn btn-primary"

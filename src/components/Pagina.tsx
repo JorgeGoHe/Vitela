@@ -88,7 +88,7 @@ type Props = {
   claimSel: (page: number | null) => void;
   requestRender: (page: number, width: number, pv: number) => Promise<string>;
   registerEl: (page: number, el: HTMLDivElement | null) => void;
-  onAnnotated: (page: number, pushUndo?: boolean) => void;
+  onAnnotated: (page: number) => void;
   onPageMutated: (page: number) => void;
   onDocMutated: (newCount: number, nextPage?: number) => void;
   onError: (e: unknown) => void;
@@ -388,9 +388,11 @@ function Pagina({
   // Bloques de texto (solo en modo edición)
   useEffect(() => {
     setNewTextDraft(null);
+    // la tarjeta de edición guarda un object_index que deja de valer si el
+    // documento cambia por debajo (deshacer, rehacer)
+    setBlockDraft(null);
     if (!workPath || !visible || mode !== "edit") {
       setTextBlocks([]);
-      setBlockDraft(null);
       return;
     }
     let cancelled = false;
@@ -605,7 +607,7 @@ function Pagina({
         annotIndex: annot.index,
       });
       setNotePopover(null);
-      onAnnotated(index, false);
+      onAnnotated(index);
     } catch (e) {
       onError(e);
     }
@@ -830,7 +832,7 @@ function Pagina({
         w: r.w,
         h: r.h,
       });
-      onAnnotated(index, false);
+      onAnnotated(index);
     } catch (e) {
       setAnnotDraft(null);
       onError(e);
@@ -901,7 +903,7 @@ function Pagina({
         value: fieldDraft.text,
       });
       setFieldDraft(null);
-      onAnnotated(index, false);
+      onAnnotated(index);
     } catch (e) {
       onError(e);
     }
@@ -916,7 +918,7 @@ function Pagina({
         annotIndex: field.annot_index,
         checked: !field.checked,
       });
-      onAnnotated(index, false);
+      onAnnotated(index);
     } catch (e) {
       onError(e);
     }
