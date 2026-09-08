@@ -318,14 +318,14 @@ mod tests {
             "nombre".into(),
         )
         .expect("crear campo");
-        let campos = crate::get_form_fields(work.clone(), 0).expect("listar");
+        let campos = crate::formularios::get_form_fields(work.clone(), 0).expect("listar");
         assert_eq!(campos.len(), 1);
         assert_eq!(campos[0].name, "nombre");
         assert_eq!(campos[0].kind, "Text");
         assert!((campos[0].x - 100.0).abs() < 1.0);
-        crate::set_form_text(work.clone(), 0, campos[0].annot_index, "Jorge".into())
+        crate::formularios::set_form_text(work.clone(), 0, campos[0].annot_index, "Jorge".into())
             .expect("rellenar");
-        let campos = crate::get_form_fields(work, 0).expect("relistar");
+        let campos = crate::formularios::get_form_fields(work, 0).expect("relistar");
         assert_eq!(campos[0].value, "Jorge");
     }
 
@@ -351,13 +351,13 @@ mod tests {
             "acepto".into(),
         )
         .expect("segunda casilla");
-        let campos = crate::get_form_fields(work.clone(), 0).expect("listar");
+        let campos = crate::formularios::get_form_fields(work.clone(), 0).expect("listar");
         assert_eq!(campos.len(), 2);
         let nombres: Vec<&str> = campos.iter().map(|c| c.name.as_str()).collect();
         assert!(nombres.contains(&"acepto") && nombres.contains(&"acepto-2"), "{nombres:?}");
         let idx = campos.iter().find(|c| c.name == "acepto").unwrap().annot_index;
-        crate::set_form_checked(work.clone(), 0, idx, true).expect("marcar");
-        let campos = crate::get_form_fields(work, 0).expect("relistar");
+        crate::formularios::set_form_checked(work.clone(), 0, idx, true).expect("marcar");
+        let campos = crate::formularios::get_form_fields(work, 0).expect("relistar");
         assert!(campos.iter().find(|c| c.name == "acepto").unwrap().checked);
     }
 
@@ -374,9 +374,9 @@ mod tests {
             "efimero".into(),
         )
         .expect("crear");
-        assert_eq!(crate::get_form_fields(work.clone(), 0).unwrap().len(), 1);
+        assert_eq!(crate::formularios::get_form_fields(work.clone(), 0).unwrap().len(), 1);
         delete_form_field(work.clone(), "efimero".into()).expect("borrar");
-        assert_eq!(crate::get_form_fields(work.clone(), 0).unwrap().len(), 0);
+        assert_eq!(crate::formularios::get_form_fields(work.clone(), 0).unwrap().len(), 0);
         assert!(delete_form_field(work, "no-existe".into()).is_err());
     }
 
@@ -408,9 +408,9 @@ mod tests {
         // exactamente uno de los dos parámetros
         assert!(create_link(work.clone(), 0, r.clone(), None, None).is_err());
         // borrar el primero vía remove_annotation (es una anotación normal)
-        let annots = crate::get_annotations(work.clone(), 0).expect("annots");
+        let annots = crate::anotaciones::get_annotations(work.clone(), 0).expect("annots");
         let link_annot = annots.iter().find(|a| a.kind == "Link").expect("hay Link");
-        crate::remove_annotation(work.clone(), 0, link_annot.index).expect("borrar");
+        crate::anotaciones::remove_annotation(work.clone(), 0, link_annot.index).expect("borrar");
         assert_eq!(crate::documento::get_links(work, 0).expect("relistar").len(), 1);
     }
 }

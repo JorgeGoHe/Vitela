@@ -418,7 +418,7 @@ mod tests {
             false,
         )
         .expect("recortar");
-        let pt = crate::get_page_text(work.clone(), 0).expect("texto");
+        let pt = crate::busqueda::get_page_text(work.clone(), 0).expect("texto");
         assert!((pt.width - 300.0).abs() < 1.0, "ancho {}", pt.width);
         assert!((pt.height - 120.0).abs() < 1.0, "alto {}", pt.height);
         // el primer glifo se movió con el recorte: x ≈ 50-30 = 20

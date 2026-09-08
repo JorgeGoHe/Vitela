@@ -449,7 +449,7 @@ mod tests {
         .expect("abrir con contraseña");
         assert!(info.had_password);
         // la copia de trabajo quedó sin cifrar
-        let texto = crate::get_page_text(info.work_path, 0).expect("texto");
+        let texto = crate::busqueda::get_page_text(info.work_path, 0).expect("texto");
         assert!(!texto.chars.is_empty());
     }
 
@@ -458,7 +458,7 @@ mod tests {
         let pdf = std::env::temp_dir().join("seguridad-flatten-test.pdf");
         crea_pdf(&["Página"], &pdf);
         let work = pdf.to_string_lossy().to_string();
-        crate::add_stroke(
+        crate::anotaciones::add_stroke(
             work.clone(),
             0,
             vec![[100.0, 100.0], [200.0, 200.0], [250.0, 150.0]],
@@ -466,10 +466,10 @@ mod tests {
             None,
         )
         .expect("trazo");
-        assert_eq!(crate::get_annotations(work.clone(), 0).unwrap().len(), 1);
+        assert_eq!(crate::anotaciones::get_annotations(work.clone(), 0).unwrap().len(), 1);
         flatten_pdf(work.clone()).expect("aplanar");
         // la anotación desapareció pero su dibujo quedó en la página
-        assert_eq!(crate::get_annotations(work, 0).unwrap().len(), 0);
+        assert_eq!(crate::anotaciones::get_annotations(work, 0).unwrap().len(), 0);
     }
 
     #[test]
@@ -487,12 +487,12 @@ mod tests {
         let preview =
             redact_area(work.clone(), 0, area.clone(), true).expect("dry run");
         assert_eq!(preview.textos, 1);
-        let texto_antes = crate::get_page_text(work.clone(), 0).unwrap();
+        let texto_antes = crate::busqueda::get_page_text(work.clone(), 0).unwrap();
         assert!(!texto_antes.chars.is_empty());
 
         let informe = redact_area(work.clone(), 0, area, false).expect("redactar");
         assert_eq!(informe.textos, 1);
-        let texto = crate::get_page_text(work, 0).expect("texto tras redactar");
+        let texto = crate::busqueda::get_page_text(work, 0).expect("texto tras redactar");
         assert!(
             texto.chars.is_empty(),
             "el texto sigue siendo extraíble: {} chars",

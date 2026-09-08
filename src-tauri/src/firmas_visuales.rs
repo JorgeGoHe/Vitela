@@ -224,7 +224,7 @@ mod tests {
             .expect("estampar firma");
 
         // la firma aparece como imagen con los bounds pedidos
-        let imgs = crate::get_images(work.clone(), 0).expect("listar imágenes");
+        let imgs = crate::imagenes::get_images(work.clone(), 0).expect("listar imágenes");
         assert_eq!(imgs.len(), 1);
         let img = &imgs[0];
         assert!((img.x - 100.0).abs() < 1.0, "x = {}", img.x);

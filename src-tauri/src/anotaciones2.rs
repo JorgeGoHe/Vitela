@@ -3,7 +3,8 @@
 //! es la única vía que renderiza sin /AP y se borra como anotación) y sellos
 //! (Stamp con borde + texto dentro).
 
-use crate::{on_pdfium_thread, pdfium, save_and_close, ui_rect_to_pdf, Rect};
+use crate::anotaciones::ui_rect_to_pdf;
+use crate::{on_pdfium_thread, pdfium, save_and_close, Rect};
 use pdfium_render::prelude::*;
 
 fn color_de(c: [u8; 4]) -> PdfColor {
@@ -393,7 +394,7 @@ mod tests {
         }];
         add_markup(work.clone(), 0, r.clone(), "underline".into(), None).expect("subrayar");
         add_markup(work.clone(), 0, r, "strikeout".into(), None).expect("tachar");
-        let annots = crate::get_annotations(work, 0).expect("listar");
+        let annots = crate::anotaciones::get_annotations(work, 0).expect("listar");
         let kinds: Vec<&str> = annots.iter().map(|a| a.kind.as_str()).collect();
         assert!(kinds.contains(&"Underline"), "{kinds:?}");
         assert!(kinds.contains(&"Strikeout") || kinds.contains(&"StrikeOut"), "{kinds:?}");
@@ -420,7 +421,7 @@ mod tests {
         .expect("tachar");
         // renderizar con el caché del documento (como hace la UI)
         crate::render_page_b64(work.clone(), 0, 400).expect("render");
-        let annots = crate::get_annotations(work, 0).expect("listar");
+        let annots = crate::anotaciones::get_annotations(work, 0).expect("listar");
         assert_eq!(annots.len(), 1);
         assert_eq!(
             annots[0].color,
@@ -461,7 +462,7 @@ mod tests {
             3.0,
         )
         .expect("flecha");
-        let annots = crate::get_annotations(work.clone(), 0).expect("listar");
+        let annots = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar");
         assert_eq!(annots.len(), 2);
         let img = render_rgba(&work);
         let escala = 600.0 / 595.28;
@@ -469,7 +470,7 @@ mod tests {
         assert!(p[0] > 150 && p[1] < 100, "esperaba rojo dentro del rect, hay {p:?}");
         // las formas llevan /AP desde el principio: listar sus colores tras
         // el render es justo el caso que hacía SIGSEGV en Linux
-        let annots = crate::get_annotations(work, 0).expect("listar tras render");
+        let annots = crate::anotaciones::get_annotations(work, 0).expect("listar tras render");
         assert_eq!(annots[0].color, Some([200, 0, 0, 255]));
         assert_eq!(annots[1].color, Some([0, 0, 200, 255]));
     }
@@ -489,7 +490,7 @@ mod tests {
             22.0,
         )
         .expect("sello");
-        let annots = crate::get_annotations(work.clone(), 0).expect("listar");
+        let annots = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar");
         assert_eq!(annots.len(), 1);
         assert_eq!(annots[0].kind, "Stamp");
         let img = render_rgba(&work);
@@ -504,7 +505,7 @@ mod tests {
                 }
             }
         }
-        let tras = crate::get_annotations(work, 0).expect("listar tras render");
+        let tras = crate::anotaciones::get_annotations(work, 0).expect("listar tras render");
         assert_eq!(tras[0].color, Some([200, 30, 30, 255]), "color del sello tras render");
         assert!(rojos > 200, "el sello apenas pinta ({rojos} píxeles rojos)");
     }
@@ -538,11 +539,11 @@ mod tests {
             22.0,
         )
         .expect("sello");
-        let a = &crate::get_annotations(work.clone(), 0).expect("listar")[0];
+        let a = &crate::anotaciones::get_annotations(work.clone(), 0).expect("listar")[0];
         // moverlo arriba a la izquierda y doblar el tamaño
         let (nx, ny, nw, nh) = (60.0, 100.0, a.w * 2.0, a.h * 2.0);
         transform_annotation(work.clone(), 0, 0, nx, ny, nw, nh).expect("transformar");
-        let b = &crate::get_annotations(work.clone(), 0).expect("listar")[0];
+        let b = &crate::anotaciones::get_annotations(work.clone(), 0).expect("listar")[0];
         assert!((b.x - nx).abs() < 1.0 && (b.y - ny).abs() < 1.0, "bounds {b:?}");
         assert!((b.w - nw).abs() < 1.0 && (b.h - nh).abs() < 1.0, "bounds {b:?}");
         let img = render_rgba(&work);

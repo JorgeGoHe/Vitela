@@ -280,7 +280,7 @@ mod tests {
             informe.despues
         );
         // la imagen sigue ahí con sus bounds
-        let imgs = crate::get_images(work, 0).expect("listar");
+        let imgs = crate::imagenes::get_images(work, 0).expect("listar");
         assert_eq!(imgs.len(), 1);
         assert!((imgs[0].w - 300.0).abs() < 2.0);
     }
