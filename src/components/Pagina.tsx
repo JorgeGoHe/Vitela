@@ -4,7 +4,7 @@
  * datos de forma perezosa cuando entra en el viewport (± un viewport de
  * margen) y mientras tanto ocupa su sitio con un hueco del tamaño real.
  */
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "../ipc";
 import { open } from "../dialogos";
 import {
@@ -262,8 +262,7 @@ function Pagina({
       cancelled = true;
       clearTimeout(t);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, workPath, index, renderWidth, docVersion, annotVersion, pageVersion]);
+  }, [visible, workPath, index, renderWidth, docVersion, annotVersion, pageVersion, requestRender, onError]);
 
   // Al cambiar de modo: fuera borradores y estado transitorio
   useEffect(() => {
@@ -363,8 +362,7 @@ function Pagina({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workPath, index, visible, docVersion, pageVersion]);
+  }, [workPath, index, visible, docVersion, pageVersion, onError]);
 
   // Enlaces de la página (zonas clicables en modo selección)
   useEffect(() => {
@@ -406,8 +404,7 @@ function Pagina({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workPath, index, visible, docVersion, mode, pageVersion]);
+  }, [workPath, index, visible, docVersion, mode, pageVersion, onError]);
 
   // Imágenes de la página (solo en modo imagen). Se precarga también su
   // contenido para que al arrastrar se mueva la imagen, no solo el recuadro.
@@ -447,8 +444,7 @@ function Pagina({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workPath, index, visible, docVersion, mode, pageVersion]);
+  }, [workPath, index, visible, docVersion, mode, pageVersion, onError]);
 
   // Centrar el visor en la coincidencia de búsqueda actual si está aquí.
   // Depende de imgSrc para re-centrar cuando termina el render de la página.
@@ -457,14 +453,14 @@ function Pagina({
     hitRef.current?.scrollIntoView({ block: "center", inline: "center" });
   }, [matches, currentGroup, imgSrc]);
 
-  function copySelection() {
+  const copySelection = useCallback(() => {
     if (!selection || !pageText) return;
     const text = pageText.chars
       .slice(selection.start, selection.end + 1)
       .map((c) => c.ch)
       .join("");
     copyToClipboard(text);
-  }
+  }, [selection, pageText]);
 
   // Copiar selección con ⌘C / Ctrl+C
   useEffect(() => {
@@ -477,8 +473,7 @@ function Pagina({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selection, pageText]);
+  }, [selection, copySelection]);
 
   /** Resalta, subraya o tacha la selección actual. */
   async function markupSelection(kind: "highlight" | "underline" | "strikeout") {

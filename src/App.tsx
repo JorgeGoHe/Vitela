@@ -8,7 +8,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { busyCount, invoke, subscribeBusy } from "./ipc";
-import { usoHistorial } from "./hooks/usoHistorial";
+import { useHistorial } from "./hooks/useHistorial";
 import { destinoDe, esquemaDe, esquemaPermitido } from "./enlaces";
 import { open, save, openUrl } from "./dialogos";
 import {
@@ -110,11 +110,12 @@ function App() {
   const [selOwner, setSelOwner] = useState<number | null>(null);
   // deshacer/rehacer general (instantáneas en el backend); tras restaurar
   // hace falta el refresco completo porque puede cambiar hasta el recuento
-  const historial = usoHistorial({
+  const historial = useHistorial({
     workPath,
     onRestaurado: (n) => afterMutation(n),
     onError: (e) => setError(String(e)),
   });
+  const refrescarHistorial = historial.refrescar;
   const [p12Draft, setP12Draft] = useState<{
     path: string;
     password: string;
@@ -292,7 +293,7 @@ function App() {
     try {
       await setOutline(workPath, nodes);
       setModified(true);
-      historial.refrescar();
+      refrescarHistorial();
     } catch (e) {
       setOutlineState(anterior);
       setError(String(e));
@@ -314,7 +315,7 @@ function App() {
       await setMetadata(workPath, meta);
       setPropsDraft(null);
       setModified(true);
-      historial.refrescar();
+      refrescarHistorial();
     } catch (e) {
       setError(String(e));
     }
@@ -413,23 +414,26 @@ function App() {
   });
 
   /** Saca una entrada del caché revocando su blob URL (no-op para data:). */
-  function cacheEvict(key: string) {
+  const cacheEvict = useCallback((key: string) => {
     const src = pageCacheRef.current.get(key);
     if (src) URL.revokeObjectURL(src);
     pageCacheRef.current.delete(key);
-  }
+  }, []);
 
   /** Guarda un render en el caché de páginas, con tope de entradas. El get
    *  de requestRender refresca la posición: evicción LRU de verdad, para que
    *  volver a un nivel de zoom anterior siga acertando. */
-  function cachePut(key: string, src: string) {
-    const cache = pageCacheRef.current;
-    cache.set(key, src);
-    if (cache.size > 60) {
-      const oldest = cache.keys().next().value;
-      if (oldest) cacheEvict(oldest);
-    }
-  }
+  const cachePut = useCallback(
+    (key: string, src: string) => {
+      const cache = pageCacheRef.current;
+      cache.set(key, src);
+      if (cache.size > 60) {
+        const oldest = cache.keys().next().value;
+        if (oldest) cacheEvict(oldest);
+      }
+    },
+    [cacheEvict],
+  );
 
   // Ancho de página en pantalla: fijo por zoom numérico, o el ancho útil
   // del visor en modo "ajuste". El ancho de render (px físicos) es también
@@ -496,8 +500,7 @@ function App() {
       inFlightRef.current.set(key, p);
       return p;
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [cachePut],
   );
 
   const registerEl = useCallback((page: number, el: HTMLDivElement | null) => {
@@ -568,6 +571,8 @@ function App() {
       y += alturas[i] + PAGE_GAP;
     }
     el.scrollTop = y + a.frac * (alturas[a.page] ?? 0);
+    // solo debe correr cuando cambia el ancho (zoom): alturasPagina y
+    // pageSizes se leen del render actual a propósito
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayWidth]);
 
@@ -611,7 +616,7 @@ function App() {
   }, [workPath, pageCount, docVersion]);
 
   /** Refresca solo la miniatura de una página (tras anotar). */
-  async function refreshThumb(page: number) {
+  const refreshThumb = useCallback(async (page: number) => {
     if (!workPath) return;
     try {
       const src = await renderPageSrc(workPath, page, THUMB_WIDTH, {
@@ -627,28 +632,27 @@ function App() {
     } catch {
       // la miniatura vieja sigue siendo razonable
     }
-  }
+  }, [workPath]);
 
   /** Tras anotar: invalidar el render de esa página sin recargar todo. */
   const afterAnnotate = useCallback(
     (page: number) => {
       setModified(true);
-      historial.refrescar();
+      refrescarHistorial();
       for (const key of [...pageCacheRef.current.keys()]) {
         if (key.split(":")[2] === String(page)) cacheEvict(key);
       }
       setAnnotVersion((v) => v + 1);
       refreshThumb(page);
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [workPath, historial.refrescar],
+    [refrescarHistorial, refreshThumb, cacheEvict],
   );
 
   /** Tras mutar UNA página: re-render y miniatura solo de esa página. */
   const afterPageMutation = useCallback(
     (page: number) => {
       setModified(true);
-      historial.refrescar();
+      refrescarHistorial();
       setMatches([]);
       setSearched(false);
       setLastQuery("");
@@ -662,8 +666,7 @@ function App() {
       }
       refreshThumb(page);
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [workPath, historial.refrescar],
+    [refrescarHistorial, refreshThumb, cacheEvict],
   );
 
   /** Tras mutar el documento: refrescar render, miniaturas y limpiar búsqueda. */
@@ -677,9 +680,8 @@ function App() {
     // el docVersion nuevo deja inservible todo el caché: liberar los blobs
     for (const key of [...pageCacheRef.current.keys()]) cacheEvict(key);
     setDocVersion((v) => v + 1);
-    historial.refrescar();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historial.refrescar]);
+    refrescarHistorial();
+  }, [refrescarHistorial, cacheEvict]);
 
   async function rotatePage(i: number) {
     if (!workPath) return;

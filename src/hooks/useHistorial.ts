@@ -12,7 +12,7 @@ import {
  * trabajo antes de cada mutación; aquí solo se llevan los contadores y se
  * pide el refresco completo de la UI cuando se restaura una instantánea.
  */
-export function usoHistorial(opts: {
+export function useHistorial(opts: {
   workPath: string | null;
   /** Tras deshacer o rehacer: refresco general (el recuento puede cambiar). */
   onRestaurado: (pageCount: number) => void;
