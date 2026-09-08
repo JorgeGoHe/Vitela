@@ -1145,7 +1145,7 @@ pub(crate) fn fuente_por_nombre(doc: &mut PdfDocument<'static>, nombre: &str) ->
     // de PDFium se identifica como "Arial"): usar la estándar, que además
     // extrae bien los acentos (los TTF cargados con FPDFText_LoadFont no
     // llevan ToUnicode y la extracción pierde los no-ASCII).
-    if !n.contains("helvetica") && !n.contains("arial") && !n.is_empty() {
+    if !n.contains("helvetica") && !n.contains("arial") && !n.contains("chrom sans") && !n.is_empty() {
         // best effort: TTF del sistema con ese nombre (Georgia, Verdana…)
         let base = nombre
             .split(['-', ','])
@@ -1176,6 +1176,25 @@ pub(crate) fn fuente_por_nombre(doc: &mut PdfDocument<'static>, nombre: &str) ->
     }
 }
 
+/// Nombre de familia tal como lo enseña la UI. Las fuentes internas de
+/// PDFium cambian de nombre entre builds (la Helvetica builtin era «Arial»
+/// y desde ~chromium/8000 es «Chrom Sans OTF»): se devuelven las estándar,
+/// que además son las que `fuente_por_nombre` sabe volver a cargar.
+pub(crate) fn normaliza_familia(familia: &str) -> String {
+    let f = familia.trim();
+    let n = f.to_lowercase();
+    if n.contains("chrom sans") || n.starts_with("arial") || n == "helvetica" {
+        return "Helvetica".into();
+    }
+    if n.contains("chrom serif") || n == "times" || n.starts_with("times new") {
+        return "Times".into();
+    }
+    if n.contains("chrom mono") || n.starts_with("courier") {
+        return "Courier".into();
+    }
+    f.to_string()
+}
+
 /// Familia de fuente más usada por los objetos de texto de una página.
 pub(crate) fn familia_dominante(doc: &PdfDocument<'static>, page_index: u16) -> Option<String> {
     let page = doc.pages().get(page_index).ok()?;
@@ -1184,7 +1203,7 @@ pub(crate) fn familia_dominante(doc: &PdfDocument<'static>, page_index: u16) -> 
     for i in 0..objects.len() {
         if let Ok(obj) = objects.get(i) {
             if let Some(t) = obj.as_text_object() {
-                let familia = t.font().family();
+                let familia = normaliza_familia(&t.font().family());
                 if !familia.is_empty() {
                     *cuentas.entry(familia).or_insert(0) += 1;
                 }
@@ -1225,7 +1244,7 @@ fn get_text_blocks(path: String, page_index: u16) -> Result<Vec<TextBlock>, Stri
                     w: b.right().value - b.left().value,
                     h: b.top().value - b.bottom().value,
                     font_size: t.unscaled_font_size().value,
-                    font_family: t.font().family(),
+                    font_family: normaliza_familia(&t.font().family()),
                 });
             }
             Ok(out)
@@ -1726,6 +1745,17 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn normaliza_nombres_de_fuentes_internas() {
+        assert_eq!(normaliza_familia("Arial"), "Helvetica");
+        assert_eq!(normaliza_familia("Chrom Sans OTF"), "Helvetica");
+        assert_eq!(normaliza_familia("Helvetica"), "Helvetica");
+        assert_eq!(normaliza_familia("Chrom Serif OTF"), "Times");
+        assert_eq!(normaliza_familia("Times New Roman"), "Times");
+        assert_eq!(normaliza_familia("Chrom Mono OTF"), "Courier");
+        assert_eq!(normaliza_familia("Georgia"), "Georgia");
+    }
+
+    #[test]
     fn hilo_pdfium_reentrante() {
         // una llamada anidada se ejecuta en línea y devuelve su valor; sin el
         // guardián de reentrada este test se quedaría colgado para siempre
@@ -2172,12 +2202,9 @@ pub(crate) mod tests {
             .iter()
             .find(|b| b.text.contains("Detectada"))
             .expect("bloque automático");
-        assert!(
-            auto.font_family.to_lowercase().contains("helvetica")
-                || auto.font_family.to_lowercase().contains("arial"),
-            "familia detectada: {:?}",
-            auto.font_family
-        );
+        // la builtin de PDFium se llama «Arial» o «Chrom Sans OTF» según el
+        // build: normaliza_familia la devuelve siempre como Helvetica
+        assert_eq!(auto.font_family, "Helvetica", "familia detectada");
 
         // fuente elegida a mano
         add_text_block(
