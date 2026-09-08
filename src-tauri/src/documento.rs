@@ -2,7 +2,7 @@
 //! y enlaces. La lectura usa PDFium; la escritura (outline, metadatos) se
 //! hace con lopdf porque PDFium no la expone.
 
-use crate::{on_pdfium_thread, invalidate_doc_cache, with_doc};
+use crate::{cirugia, on_pdfium_thread, with_doc};
 use lopdf::{Dictionary, Document as LoDoc, Object, ObjectId, StringFormat};
 use pdfium_render::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -68,95 +68,91 @@ fn cadena_pdf(text: &str) -> Object {
 /// Reescribe el árbol /Outlines completo con lopdf.
 #[tauri::command(async)]
 pub fn set_outline(work_path: String, nodes: Vec<OutlineNode>) -> Result<(), String> {
-    let mut doc =
-        LoDoc::load(&work_path).map_err(|e| format!("No se pudo leer el PDF: {e}"))?;
-    let paginas: Vec<ObjectId> = doc.get_pages().values().copied().collect();
+    cirugia(&work_path, move |doc| {
+        let paginas: Vec<ObjectId> = doc.get_pages().values().copied().collect();
 
-    fn construye(
-        doc: &mut LoDoc,
-        nodes: &[OutlineNode],
-        parent: ObjectId,
-        paginas: &[ObjectId],
-    ) -> Result<(Option<ObjectId>, Option<ObjectId>, i64), String> {
-        let mut primero = None;
-        let mut anterior: Option<ObjectId> = None;
-        let mut total = 0i64;
-        for node in nodes {
-            let id = doc.add_object(Dictionary::new());
-            if primero.is_none() {
-                primero = Some(id);
-            }
-            let (hijo_primero, hijo_ultimo, hijos) =
-                construye(doc, &node.children, id, paginas)?;
-            let mut d = Dictionary::new();
-            d.set("Title", cadena_pdf(&node.title));
-            d.set("Parent", Object::Reference(parent));
-            if let Some(p) = node.page_index {
-                if let Some(page_id) = paginas.get(p as usize) {
-                    d.set(
-                        "Dest",
-                        Object::Array(vec![
-                            Object::Reference(*page_id),
-                            Object::Name(b"XYZ".to_vec()),
-                            Object::Null,
-                            Object::Null,
-                            Object::Null,
-                        ]),
-                    );
+        fn construye(
+            doc: &mut LoDoc,
+            nodes: &[OutlineNode],
+            parent: ObjectId,
+            paginas: &[ObjectId],
+        ) -> Result<(Option<ObjectId>, Option<ObjectId>, i64), String> {
+            let mut primero = None;
+            let mut anterior: Option<ObjectId> = None;
+            let mut total = 0i64;
+            for node in nodes {
+                let id = doc.add_object(Dictionary::new());
+                if primero.is_none() {
+                    primero = Some(id);
                 }
-            }
-            if let Some(h) = hijo_primero {
-                d.set("First", Object::Reference(h));
-            }
-            if let Some(h) = hijo_ultimo {
-                d.set("Last", Object::Reference(h));
-                d.set("Count", hijos);
-            }
-            if let Some(prev) = anterior {
-                d.set("Prev", Object::Reference(prev));
-                // encadenar el Next del anterior
-                if let Ok(pd) = doc.get_object_mut(prev).and_then(|o| o.as_dict_mut()) {
-                    pd.set("Next", Object::Reference(id));
+                let (hijo_primero, hijo_ultimo, hijos) =
+                    construye(doc, &node.children, id, paginas)?;
+                let mut d = Dictionary::new();
+                d.set("Title", cadena_pdf(&node.title));
+                d.set("Parent", Object::Reference(parent));
+                if let Some(p) = node.page_index {
+                    if let Some(page_id) = paginas.get(p as usize) {
+                        d.set(
+                            "Dest",
+                            Object::Array(vec![
+                                Object::Reference(*page_id),
+                                Object::Name(b"XYZ".to_vec()),
+                                Object::Null,
+                                Object::Null,
+                                Object::Null,
+                            ]),
+                        );
+                    }
                 }
+                if let Some(h) = hijo_primero {
+                    d.set("First", Object::Reference(h));
+                }
+                if let Some(h) = hijo_ultimo {
+                    d.set("Last", Object::Reference(h));
+                    d.set("Count", hijos);
+                }
+                if let Some(prev) = anterior {
+                    d.set("Prev", Object::Reference(prev));
+                    // encadenar el Next del anterior
+                    if let Ok(pd) = doc.get_object_mut(prev).and_then(|o| o.as_dict_mut()) {
+                        pd.set("Next", Object::Reference(id));
+                    }
+                }
+                *doc.get_object_mut(id)
+                    .and_then(|o| o.as_dict_mut())
+                    .map_err(|e| e.to_string())? = d;
+                anterior = Some(id);
+                total += 1 + hijos;
             }
-            *doc.get_object_mut(id)
-                .and_then(|o| o.as_dict_mut())
-                .map_err(|e| e.to_string())? = d;
-            anterior = Some(id);
-            total += 1 + hijos;
+            Ok((primero, anterior, total))
         }
-        Ok((primero, anterior, total))
-    }
 
-    let outlines_id = doc.add_object(Dictionary::new());
-    let (primero, ultimo, total) = construye(&mut doc, &nodes, outlines_id, &paginas)?;
-    let mut outlines = Dictionary::new();
-    outlines.set("Type", Object::Name(b"Outlines".to_vec()));
-    if let Some(p) = primero {
-        outlines.set("First", Object::Reference(p));
-    }
-    if let Some(u) = ultimo {
-        outlines.set("Last", Object::Reference(u));
-    }
-    outlines.set("Count", total);
-    *doc.get_object_mut(outlines_id)
-        .and_then(|o| o.as_dict_mut())
-        .map_err(|e| e.to_string())? = outlines;
+        let outlines_id = doc.add_object(Dictionary::new());
+        let (primero, ultimo, total) = construye(doc, &nodes, outlines_id, &paginas)?;
+        let mut outlines = Dictionary::new();
+        outlines.set("Type", Object::Name(b"Outlines".to_vec()));
+        if let Some(p) = primero {
+            outlines.set("First", Object::Reference(p));
+        }
+        if let Some(u) = ultimo {
+            outlines.set("Last", Object::Reference(u));
+        }
+        outlines.set("Count", total);
+        *doc.get_object_mut(outlines_id)
+            .and_then(|o| o.as_dict_mut())
+            .map_err(|e| e.to_string())? = outlines;
 
-    let catalog_id = doc
-        .trailer
-        .get(b"Root")
-        .and_then(|o| o.as_reference())
-        .map_err(|e| e.to_string())?;
-    doc.get_object_mut(catalog_id)
-        .and_then(|o| o.as_dict_mut())
-        .map_err(|e| e.to_string())?
-        .set("Outlines", Object::Reference(outlines_id));
-
-    doc.save(&work_path)
-        .map_err(|e| format!("No se pudo guardar: {e}"))?;
-    on_pdfium_thread(invalidate_doc_cache);
-    Ok(())
+        let catalog_id = doc
+            .trailer
+            .get(b"Root")
+            .and_then(|o| o.as_reference())
+            .map_err(|e| e.to_string())?;
+        doc.get_object_mut(catalog_id)
+            .and_then(|o| o.as_dict_mut())
+            .map_err(|e| e.to_string())?
+            .set("Outlines", Object::Reference(outlines_id));
+        Ok(())
+    })
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -193,36 +189,33 @@ pub fn get_metadata(path: String) -> Result<Metadata, String> {
 /// Escribe título, autor, asunto y palabras clave en /Info (lopdf).
 #[tauri::command(async)]
 pub fn set_metadata(work_path: String, meta: Metadata) -> Result<(), String> {
-    let mut doc =
-        LoDoc::load(&work_path).map_err(|e| format!("No se pudo leer el PDF: {e}"))?;
-    let mut info = match doc.trailer.get(b"Info") {
-        Ok(Object::Reference(rid)) => doc
-            .get_object(*rid)
-            .ok()
-            .and_then(|o| o.as_dict().ok())
-            .cloned()
-            .unwrap_or_default(),
-        Ok(Object::Dictionary(d)) => d.clone(),
-        _ => Dictionary::new(),
-    };
-    for (clave, valor) in [
-        ("Title", &meta.title),
-        ("Author", &meta.author),
-        ("Subject", &meta.subject),
-        ("Keywords", &meta.keywords),
-    ] {
-        if valor.trim().is_empty() {
-            info.remove(clave.as_bytes());
-        } else {
-            info.set(clave, cadena_pdf(valor.trim()));
+    cirugia(&work_path, move |doc| {
+        let mut info = match doc.trailer.get(b"Info") {
+            Ok(Object::Reference(rid)) => doc
+                .get_object(*rid)
+                .ok()
+                .and_then(|o| o.as_dict().ok())
+                .cloned()
+                .unwrap_or_default(),
+            Ok(Object::Dictionary(d)) => d.clone(),
+            _ => Dictionary::new(),
+        };
+        for (clave, valor) in [
+            ("Title", &meta.title),
+            ("Author", &meta.author),
+            ("Subject", &meta.subject),
+            ("Keywords", &meta.keywords),
+        ] {
+            if valor.trim().is_empty() {
+                info.remove(clave.as_bytes());
+            } else {
+                info.set(clave, cadena_pdf(valor.trim()));
+            }
         }
-    }
-    let info_id = doc.add_object(info);
-    doc.trailer.set("Info", Object::Reference(info_id));
-    doc.save(&work_path)
-        .map_err(|e| format!("No se pudo guardar: {e}"))?;
-    on_pdfium_thread(invalidate_doc_cache);
-    Ok(())
+        let info_id = doc.add_object(info);
+        doc.trailer.set("Info", Object::Reference(info_id));
+        Ok(())
+    })
 }
 
 #[derive(Serialize)]
@@ -340,6 +333,8 @@ mod tests {
             },
         )
         .expect("escribir metadatos");
+        // guardado atómico: no queda el temporal de la cirugía
+        assert!(!std::path::Path::new(&format!("{work}.tmp")).exists());
         let m = get_metadata(work).expect("leer metadatos");
         assert_eq!(m.title, "Informe años núñez");
         assert_eq!(m.author, "Jorge");
