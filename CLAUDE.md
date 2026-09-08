@@ -143,6 +143,18 @@ compila los instaladores a mano o al etiquetar `v*`.
   `firma.rs`, `firmas_visuales.rs`, `historial.rs`, `puente_dev.rs`.
   `generate_handler!` y `despachar` referencian los comandos por ruta de
   módulo (con re-exports no funciona el macro).
+- **Estructura de la UI**: `App.tsx` conserva el ciclo de apertura, la
+  geometría del visor, atajos e impresión; el resto vive en hooks
+  (`src/hooks/`: `useHistorial`, `useRenderCache`, `useMiniaturas`,
+  `useBusqueda`, `useFirmas`, `useHerramienta`) y componentes
+  (`Busqueda`, `OpcionesHerramienta`, `MenuAcciones`, `PanelPaginas`,
+  `Dialogo*`). `Pagina.tsx` conserva el render, el observer y los tres
+  despachadores de ratón (su orden de ramas importa); cada dominio tiene su
+  hook en `src/hooks/pagina/` (`useSeleccionTexto`, `useEnlaces`,
+  `useTexto`, `useFormularios`, `useImagenes`, `useAnotaciones`,
+  `useAreas`, más `geometria.ts` puro) y su capa en
+  `src/components/pagina/`. Los hooks se llaman `use…` (lo exige
+  rules-of-hooks) aunque el resto del identificador vaya en español.
 - **QA como usuario real**: `src/ipc.ts` y `src/dialogos.ts` son shims — en
   Tauri delegan en la API oficial; en un navegador normal hablan con el
   puente HTTP de desarrollo (`src-tauri/src/puente_dev.rs`, puerto 1422,
