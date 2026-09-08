@@ -240,6 +240,18 @@ pub fn create_form_field(
     })
 }
 
+/// Solo se escriben enlaces web y de correo; sin esquema se asume https.
+fn normaliza_uri(u: &str) -> Result<String, String> {
+    let u = u.trim();
+    let con_esquema = if u.contains(':') { u.to_string() } else { format!("https://{u}") };
+    let esquema = con_esquema.split(':').next().unwrap_or("").to_ascii_lowercase();
+    if matches!(esquema.as_str(), "http" | "https" | "mailto") {
+        Ok(con_esquema)
+    } else {
+        Err(format!("Solo se admiten enlaces http, https o mailto (no «{esquema}»)"))
+    }
+}
+
 /// Crea un enlace en la página: a una URL externa o a otra página.
 #[tauri::command(async)]
 pub fn create_link(
@@ -249,7 +261,7 @@ pub fn create_link(
     uri: Option<String>,
     dest_page: Option<u16>,
 ) -> Result<(), String> {
-    let uri = uri.filter(|u| !u.trim().is_empty());
+    let uri = uri.filter(|u| !u.trim().is_empty()).map(|u| normaliza_uri(&u)).transpose()?;
     if uri.is_some() == dest_page.is_some() {
         return Err("Indica o una URL o una página de destino (solo una)".into());
     }
@@ -407,11 +419,20 @@ mod tests {
         assert!(links.iter().any(|l| l.dest_page == Some(1)));
         // exactamente uno de los dos parámetros
         assert!(create_link(work.clone(), 0, r.clone(), None, None).is_err());
+        // esquemas peligrosos fuera; sin esquema se asume https
+        assert!(create_link(work.clone(), 0, r.clone(), Some("file:///etc/passwd".into()), None)
+            .is_err());
+        assert!(create_link(work.clone(), 0, r.clone(), Some("javascript:alert(1)".into()), None)
+            .is_err());
+        create_link(work.clone(), 0, r.clone(), Some("ejemplo.org/x".into()), None)
+            .expect("sin esquema");
+        let links = crate::documento::get_links(work.clone(), 0).expect("listar");
+        assert!(links.iter().any(|l| l.uri.as_deref() == Some("https://ejemplo.org/x")));
         // borrar el primero vía remove_annotation (es una anotación normal)
         let annots = crate::anotaciones::get_annotations(work.clone(), 0).expect("annots");
         let link_annot = annots.iter().find(|a| a.kind == "Link").expect("hay Link");
         crate::anotaciones::remove_annotation(work.clone(), 0, link_annot.index).expect("borrar");
-        assert_eq!(crate::documento::get_links(work, 0).expect("relistar").len(), 1);
+        assert_eq!(crate::documento::get_links(work, 0).expect("relistar").len(), 2);
     }
 }
 

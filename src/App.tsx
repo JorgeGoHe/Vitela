@@ -9,6 +9,7 @@ import {
 } from "react";
 import { busyCount, invoke, subscribeBusy } from "./ipc";
 import { usoHistorial } from "./hooks/usoHistorial";
+import { destinoDe, esquemaDe, esquemaPermitido } from "./enlaces";
 import { open, save, openUrl } from "./dialogos";
 import {
   addBlankPage,
@@ -154,6 +155,8 @@ function App() {
     owner: string;
   } | null>(null);
   const [flattenAsk, setFlattenAsk] = useState(false);
+  // enlace externo pendiente de confirmar (los URI del PDF no son de fiar)
+  const [linkAsk, setLinkAsk] = useState<string | null>(null);
   const [printPages, setPrintPages] = useState<string[] | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportFmt, setExportFmt] = useState<"png" | "jpeg">("png");
@@ -1170,12 +1173,25 @@ function App() {
   }, [matches]);
 
   const mostrarError = useCallback((e: unknown) => setError(String(e)), []);
-  const onLinkUri = useCallback(
-    (uri: string) => {
-      openUrl(uri).catch((e) => setError(String(e)));
-    },
-    [],
-  );
+  const onLinkUri = useCallback((uri: string) => {
+    if (!esquemaPermitido(uri)) {
+      const e = esquemaDe(uri);
+      setError(
+        e
+          ? `Enlace bloqueado: no se abren enlaces «${e.replace(/:$/, "")}»`
+          : "Enlace bloqueado: la dirección no es válida",
+      );
+      return;
+    }
+    setLinkAsk(uri.trim());
+  }, []);
+
+  function openConfirmedLink() {
+    if (!linkAsk) return;
+    const uri = linkAsk;
+    setLinkAsk(null);
+    openUrl(uri).catch((e) => setError(String(e)));
+  }
   const onSigStamped = useCallback(() => {
     setActiveSig(null);
     // la firma estampada es una imagen: el modo imagen permite retocarla
@@ -1813,6 +1829,25 @@ function App() {
               </button>
               <button className="btn btn-primary" onClick={applyFlatten}>
                 Aplanar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {linkAsk && (
+        <div className="modal-backdrop" onClick={() => setLinkAsk(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Abrir enlace externo</h3>
+            <p className="modal-file">{destinoDe(linkAsk)}</p>
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              {linkAsk}
+            </p>
+            <div className="card-actions">
+              <button className="btn" onClick={() => setLinkAsk(null)}>
+                Cancelar
+              </button>
+              <button className="btn btn-primary" onClick={openConfirmedLink}>
+                Abrir
               </button>
             </div>
           </div>
