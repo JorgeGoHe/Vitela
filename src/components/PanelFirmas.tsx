@@ -51,6 +51,7 @@ export default function PanelFirmas({
                   <button
                     className="btn btn-icon sign-delete"
                     title="Borrar esta firma"
+                    aria-label={`Borrar la firma «${f.name}»`}
                     onClick={() => onDelete(f.id)}
                   >
                     ✕

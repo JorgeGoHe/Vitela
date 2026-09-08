@@ -143,6 +143,9 @@ export default function DibujarFirma({
     <div className="modal-backdrop" onClick={onClose}>
       <div
         className="modal modal-firma"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Dibujar firma"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key === "Escape") onClose();

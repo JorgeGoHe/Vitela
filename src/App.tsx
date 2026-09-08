@@ -1292,6 +1292,8 @@ function App() {
             <button
               className="btn btn-icon"
               title={sidebarVisible ? "Ocultar el panel lateral" : "Mostrar el panel lateral"}
+              aria-label={sidebarVisible ? "Ocultar el panel lateral" : "Mostrar el panel lateral"}
+              aria-expanded={sidebarVisible}
               onClick={() => setSidebarVisible((v) => !v)}
             >
               <Icon name="panel" size={14} />
@@ -1325,6 +1327,7 @@ function App() {
                       key={m.id}
                       className={`btn${mode === m.id ? " on" : ""}`}
                       title={m.hint}
+                      aria-pressed={mode === m.id}
                       onClick={() => selectMode(m.id)}
                     >
                       <Icon name={m.icon} size={14} />
@@ -1365,10 +1368,20 @@ function App() {
                     </span>
                     {matches.length > 0 && (
                       <>
-                        <button className="btn btn-icon" onClick={() => gotoMatch(-1)}>
+                        <button
+                          className="btn btn-icon"
+                          title="Coincidencia anterior"
+                          aria-label="Coincidencia anterior"
+                          onClick={() => gotoMatch(-1)}
+                        >
                           <Icon name="up" size={13} />
                         </button>
-                        <button className="btn btn-icon" onClick={() => gotoMatch(1)}>
+                        <button
+                          className="btn btn-icon"
+                          title="Coincidencia siguiente"
+                          aria-label="Coincidencia siguiente"
+                          onClick={() => gotoMatch(1)}
+                        >
                           <Icon name="down" size={13} />
                         </button>
                       </>
@@ -1379,6 +1392,7 @@ function App() {
               <button
                 className="btn btn-icon"
                 title={`Deshacer (${MOD}Z)`}
+                aria-label="Deshacer"
                 disabled={!historial.puedeDeshacer}
                 onClick={historial.deshacer}
               >
@@ -1387,6 +1401,7 @@ function App() {
               <button
                 className="btn btn-icon"
                 title={`Rehacer (⇧${MOD}Z)`}
+                aria-label="Rehacer"
                 disabled={!historial.puedeRehacer}
                 onClick={historial.rehacer}
               >
@@ -1404,6 +1419,9 @@ function App() {
                 <button
                   className="btn btn-icon"
                   title="Más acciones"
+                  aria-label="Más acciones"
+                  aria-haspopup="menu"
+                  aria-expanded={menuOpen}
                   onClick={() => setMenuOpen((o) => !o)}
                 >
                   ⋯
@@ -1640,7 +1658,7 @@ function App() {
       {error && (
         <div className="banner-error">
           <p title={error}>{error}</p>
-          <button className="btn btn-icon" onClick={() => setError(null)}>
+          <button className="btn btn-icon" aria-label="Cerrar el aviso" onClick={() => setError(null)}>
             <Icon name="close" size={13} />
           </button>
         </div>
@@ -1648,7 +1666,7 @@ function App() {
       {notice && (
         <div className="banner-notice">
           <p title={notice}>{notice}</p>
-          <button className="btn btn-icon" onClick={() => setNotice(null)}>
+          <button className="btn btn-icon" aria-label="Cerrar el aviso" onClick={() => setNotice(null)}>
             <Icon name="close" size={13} />
           </button>
         </div>
@@ -1656,7 +1674,13 @@ function App() {
 
       {p12Draft && (
         <div className="modal-backdrop" onClick={() => setP12Draft(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Contraseña del .p12"
+            onClick={(e) => e.stopPropagation()}
+          >
             <h3>Contraseña del .p12</h3>
             <p className="modal-file">{p12Draft.path.split(/[\\/]/).pop()}</p>
             <input
@@ -1718,7 +1742,13 @@ function App() {
       )}
       {pwdDraft && (
         <div className="modal-backdrop" onClick={() => setPwdDraft(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Documento protegido"
+            onClick={(e) => e.stopPropagation()}
+          >
             <h3>Documento protegido</h3>
             <p className="modal-file">{pwdDraft.path.split(/[\\/]/).pop()}</p>
             <input
@@ -1751,7 +1781,13 @@ function App() {
       )}
       {protectDraft && (
         <div className="modal-backdrop" onClick={() => setProtectDraft(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Proteger con contraseña"
+            onClick={(e) => e.stopPropagation()}
+          >
             <h3>Proteger con contraseña</h3>
             <input
               type="password"
@@ -1791,7 +1827,17 @@ function App() {
       )}
       {marginalAsk && (
         <div className="modal-backdrop" onClick={() => setMarginalAsk(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={
+              marginalAsk.zona === "watermark"
+                ? "Quitar la marca de agua"
+                : "Quitar encabezados y pies"
+            }
+            onClick={(e) => e.stopPropagation()}
+          >
             <h3>
               {marginalAsk.zona === "watermark"
                 ? "Quitar la marca de agua"
@@ -1817,7 +1863,13 @@ function App() {
       )}
       {flattenAsk && (
         <div className="modal-backdrop" onClick={() => setFlattenAsk(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Aplanar anotaciones y formularios"
+            onClick={(e) => e.stopPropagation()}
+          >
             <h3>Aplanar anotaciones y formularios</h3>
             <p className="modal-file" style={{ whiteSpace: "normal" }}>
               Los sellos, formas, trazos y campos rellenados pasan a ser
@@ -1838,7 +1890,13 @@ function App() {
       )}
       {linkAsk && (
         <div className="modal-backdrop" onClick={() => setLinkAsk(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Abrir enlace externo"
+            onClick={(e) => e.stopPropagation()}
+          >
             <h3>Abrir enlace externo</h3>
             <p className="modal-file">{destinoDe(linkAsk)}</p>
             <p className="modal-file" style={{ whiteSpace: "normal" }}>
@@ -1873,7 +1931,13 @@ function App() {
       )}
       {exportOpen && (
         <div className="modal-backdrop" onClick={() => setExportOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Exportar como imágenes"
+            onClick={(e) => e.stopPropagation()}
+          >
             <h3>Exportar como imágenes</h3>
             <div className="card-row">
               <select
@@ -1910,7 +1974,13 @@ function App() {
       )}
       {compressOpen && (
         <div className="modal-backdrop" onClick={() => setCompressOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Reducir tamaño del PDF"
+            onClick={(e) => e.stopPropagation()}
+          >
             <h3>Reducir tamaño del PDF</h3>
             <div className="card-row">
               <select
@@ -1979,6 +2049,8 @@ function App() {
                 className={`swatch${drawColor === c ? " on" : ""}`}
                 style={{ background: c }}
                 title={NOMBRE_COLOR[c] ?? c}
+                aria-label={NOMBRE_COLOR[c] ?? c}
+                aria-pressed={drawColor === c}
                 onClick={() => cambiaColorAccion("dibujo", c)}
               />
             ))}
@@ -2036,6 +2108,8 @@ function App() {
                 className={`swatch${shapeColor === c ? " on" : ""}`}
                 style={{ background: c }}
                 title={NOMBRE_COLOR[c] ?? c}
+                aria-label={NOMBRE_COLOR[c] ?? c}
+                aria-pressed={shapeColor === c}
                 onClick={() => cambiaColorAccion("forma", c)}
               />
             ))}
@@ -2109,6 +2183,8 @@ function App() {
                 className={`swatch${stampColor === c ? " on" : ""}`}
                 style={{ background: c }}
                 title={NOMBRE_COLOR[c] ?? c}
+                aria-label={NOMBRE_COLOR[c] ?? c}
+                aria-pressed={stampColor === c}
                 onClick={() => cambiaColorAccion("sello", c)}
               />
             ))}
@@ -2294,6 +2370,8 @@ function App() {
             <div className="nav-pill">
               <button
                 className="btn btn-icon"
+                title="Página anterior"
+                aria-label="Página anterior"
                 disabled={pageIndex === 0}
                 onClick={() => gotoPage(pageIndex - 1)}
               >
@@ -2304,6 +2382,8 @@ function App() {
               </span>
               <button
                 className="btn btn-icon"
+                title="Página siguiente"
+                aria-label="Página siguiente"
                 disabled={pageIndex >= pageCount - 1}
                 onClick={() => gotoPage(pageIndex + 1)}
               >
@@ -2312,6 +2392,8 @@ function App() {
               <div className="sep" />
               <button
                 className="btn btn-icon"
+                title={`Reducir (${MOD}−)`}
+                aria-label="Reducir"
                 onClick={() =>
                   setZoom(Math.max(0.5, Math.round((zoomNum - 0.25) * 4) / 4))
                 }
@@ -2321,6 +2403,8 @@ function App() {
               <span>{Math.round(zoomNum * 100)}%</span>
               <button
                 className="btn btn-icon"
+                title={`Ampliar (${MOD}+)`}
+                aria-label="Ampliar"
                 onClick={() =>
                   setZoom(Math.min(4, Math.round((zoomNum + 0.25) * 4) / 4))
                 }
@@ -2330,6 +2414,7 @@ function App() {
               <button
                 className={`btn${zoom === "ajuste" ? " on" : ""}`}
                 title="Ajustar la página al ancho de la ventana"
+                aria-pressed={zoom === "ajuste"}
                 onClick={() =>
                   setZoom((z) => (z === "ajuste" ? 1 : "ajuste"))
                 }

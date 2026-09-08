@@ -87,12 +87,14 @@ export default function PanelMarcadores({
             <span className="bm-actions">
               <button
                 title="Renombrar"
+                aria-label={`Renombrar «${n.title}»`}
                 onClick={() => setEditing({ path, text: n.title })}
               >
                 ✎
               </button>
               <button
                 title="Eliminar marcador"
+                aria-label={`Eliminar el marcador «${n.title}»`}
                 onClick={() => onChange(actualiza(outline, path, () => null))}
               >
                 ✕

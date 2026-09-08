@@ -30,7 +30,13 @@ export default function DialogoEncabezado({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal modal-hf" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal modal-hf"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Encabezado y pie de página"
+        onClick={(e) => e.stopPropagation()}
+      >
         <h3>Encabezado y pie de página</h3>
         <span className="card-label">Encabezado</span>
         <div className="hf-grid">

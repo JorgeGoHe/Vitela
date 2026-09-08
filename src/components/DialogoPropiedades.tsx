@@ -28,7 +28,13 @@ export default function DialogoPropiedades({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Propiedades del documento"
+        onClick={(e) => e.stopPropagation()}
+      >
         <h3>Propiedades del documento</h3>
         {campo("title", "Título")}
         {campo("author", "Autor")}

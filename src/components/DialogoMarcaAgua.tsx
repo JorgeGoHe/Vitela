@@ -31,7 +31,13 @@ export default function DialogoMarcaAgua({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Marca de agua"
+        onClick={(e) => e.stopPropagation()}
+      >
         <h3>Marca de agua</h3>
         <input
           type="text"
