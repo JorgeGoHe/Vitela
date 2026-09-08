@@ -2,13 +2,17 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
 } from "react";
 import { busyCount, invoke, subscribeBusy } from "./ipc";
 import { useHistorial } from "./hooks/useHistorial";
+import { useRenderCache } from "./hooks/useRenderCache";
+import { useMiniaturas } from "./hooks/useMiniaturas";
+import { useBusqueda } from "./hooks/useBusqueda";
+import { useFirmas } from "./hooks/useFirmas";
+import { useHerramienta } from "./hooks/useHerramienta";
 import { destinoDe, esquemaDe, esquemaPermitido } from "./enlaces";
 import { open, save, openUrl } from "./dialogos";
 import {
@@ -16,14 +20,9 @@ import {
   removeMarginalText,
   addHeaderFooter,
   addWatermark,
-  deleteStoredSignature,
   duplicatePage,
-  importSignatureFile,
   insertPdfAt,
-  listStoredSignatures,
   renderPageSrc,
-  saveStoredSignature,
-  type FirmaGuardada,
   type HeaderFooter,
 } from "./api";
 import {
@@ -39,41 +38,30 @@ import {
   type Metadata,
   type OutlineNode,
 } from "./api";
-import {
-  ANNOT_COLORS,
-  hexToRgba,
-  NOMBRE_COLOR,
-  type Mode,
-  type PageSize,
-  type SearchMatch,
-  type ShapeKind,
-  cargaColores,
-  guardaColor,
-} from "./tipos";
+import { hexToRgba, type Mode, type PageSize } from "./tipos";
 import Icon from "./components/Icon";
-import Pagina, { type PageMatch, type ToolProps } from "./components/Pagina";
+import Busqueda from "./components/Busqueda";
+import OpcionesHerramienta from "./components/OpcionesHerramienta";
+import MenuAcciones from "./components/MenuAcciones";
+import PanelPaginas from "./components/PanelPaginas";
+import Pagina from "./components/Pagina";
 import PanelFirmas from "./components/PanelFirmas";
 import DibujarFirma from "./components/DibujarFirma";
 import DialogoMarcaAgua from "./components/DialogoMarcaAgua";
 import DialogoEncabezado from "./components/DialogoEncabezado";
 import PanelMarcadores from "./components/PanelMarcadores";
 import DialogoPropiedades from "./components/DialogoPropiedades";
+import DialogoContrasena from "./components/DialogoContrasena";
+import DialogoProteger from "./components/DialogoProteger";
+import DialogoConfirmar from "./components/DialogoConfirmar";
+import DialogoExportar from "./components/DialogoExportar";
+import DialogoComprimir from "./components/DialogoComprimir";
 import "./App.css";
 
 const BASE_WIDTH = 900;
-const THUMB_WIDTH = 240;
 /** Separación vertical entre páginas y padding superior del visor (px). */
 const PAGE_GAP = 24;
 const VIEWER_PAD_TOP = 28;
-
-const SHAPE_COLORS = ANNOT_COLORS;
-const STAMP_PRESETS = [
-  "APROBADO",
-  "BORRADOR",
-  "CONFIDENCIAL",
-  "REVISADO",
-  "URGENTE",
-];
 
 /** Tecla modificadora en los tooltips de atajos. */
 const MOD = navigator.platform.startsWith("Mac") ? "⌘" : "Ctrl+";
@@ -92,12 +80,18 @@ function App() {
   const [sidebarVisible, setSidebarVisible] = useState(
     window.innerWidth >= 900,
   );
-  const [thumbs, setThumbs] = useState<(string | null)[]>([]);
+  const { thumbs, setThumbs, refreshThumb } = useMiniaturas(
+    workPath,
+    pageCount,
+    docVersion,
+  );
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
-  const pageCacheRef = useRef<Map<string, string>>(new Map());
-  const inFlightRef = useRef<Map<string, Promise<string>>>(new Map());
+  const { requestRender, evictPage, evictAll } = useRenderCache(
+    workPath,
+    docVersion,
+  );
   const pageElsRef = useRef<Map<number, HTMLDivElement>>(new Map());
   const scrollRafRef = useRef<number | null>(null);
   // ancla del scroll (página superior visible y fracción ya desplazada)
@@ -120,24 +114,6 @@ function App() {
     path: string;
     password: string;
   } | null>(null);
-  const [drawColor, setDrawColor] = useState(() => cargaColores().dibujo ?? "#c0392b");
-  const [drawWidth, setDrawWidth] = useState(2);
-  const [markupPending, setMarkupPending] = useState<string | null>(null);
-  const [markupColors, setMarkupColors] = useState(() => {
-    const c = cargaColores();
-    return {
-      resaltar: c.resaltar ?? "#f5c400",
-      subrayar: c.subrayar ?? "#2ea043",
-      tachar: c.tachar ?? "#c0392b",
-    };
-  });
-  const [shapeKind, setShapeKind] = useState<ShapeKind>("rect");
-  const [shapeColor, setShapeColor] = useState(() => cargaColores().forma ?? "#c0392b");
-  const [shapeFill, setShapeFill] = useState(false);
-  const [shapeWidth, setShapeWidth] = useState(2);
-  const [stampText, setStampText] = useState(STAMP_PRESETS[0]);
-  const [stampCustom, setStampCustom] = useState("");
-  const [stampColor, setStampColor] = useState(() => cargaColores().sello ?? "#c0392b");
   const [wmOpen, setWmOpen] = useState(false);
   const [marginalAsk, setMarginalAsk] = useState<{
     zona: "watermark" | "header" | "footer";
@@ -168,27 +144,31 @@ function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [outline, setOutlineState] = useState<OutlineNode[]>([]);
   const [propsDraft, setPropsDraft] = useState<Metadata | null>(null);
-  const [firmas, setFirmas] = useState<FirmaGuardada[]>([]);
-  const [activeSig, setActiveSig] = useState<{
-    png: string;
-    ratio: number;
-  } | null>(null);
-  const [drawingSig, setDrawingSig] = useState(false);
-
-  const [query, setQuery] = useState("");
-  const [lastQuery, setLastQuery] = useState("");
-  const [matches, setMatches] = useState<SearchMatch[]>([]);
-  const [matchIdx, setMatchIdx] = useState(0);
-  const [searched, setSearched] = useState(false);
+  const {
+    firmas,
+    activeSig,
+    setActiveSig,
+    drawingSig,
+    setDrawingSig,
+    pickSignature,
+    uploadSignature,
+    saveDrawnSignature,
+    removeSignature,
+    onSigStamped,
+  } = useFirmas({
+    mode,
+    setMode,
+    onError: (e) => setError(String(e)),
+  });
+  const herramienta = useHerramienta(activeSig);
+  const tool = herramienta.tool;
 
   async function openPath(path: string, password?: string) {
     try {
       setError(null);
       setThumbs([]);
       setPageSizes([]);
-      setMatches([]);
-      setSearched(false);
-      setQuery("");
+      busqueda.limpiar(true);
       setModified(false);
       const anterior = workPath;
       const info = await invoke<{ page_count: number; work_path: string }>(
@@ -226,15 +206,12 @@ function App() {
     setPageSizes([]);
     setThumbs([]);
     setPageVersions([]);
-    setMatches([]);
-    setSearched(false);
-    setQuery("");
-    setLastQuery("");
+    busqueda.limpiar(true);
     setModified(false);
     setMode("select");
     setPageIndex(0);
     setOutlineState([]);
-    for (const key of [...pageCacheRef.current.keys()]) cacheEvict(key);
+    evictAll();
     setDocVersion((v) => v + 1);
     invoke("close_document", { workPath: anterior }).catch((e) => setError(String(e)));
   }
@@ -338,22 +315,6 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [mode]);
 
-  // Biblioteca de firmas al entrar en modo firma; Esc cancela el estampado
-  useEffect(() => {
-    if (mode !== "firmar") return;
-    listStoredSignatures()
-      .then(setFirmas)
-      .catch((e) => setError(String(e)));
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        setActiveSig(null);
-        setMode("select");
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [mode]);
-
   // Ancho útil del visor para el zoom "ajustar a ventana" (redondeado a
   // múltiplos de 16px y con debounce para no invalidar el caché de renders
   // en cada píxel del arrastre de la ventana)
@@ -413,28 +374,6 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  /** Saca una entrada del caché revocando su blob URL (no-op para data:). */
-  const cacheEvict = useCallback((key: string) => {
-    const src = pageCacheRef.current.get(key);
-    if (src) URL.revokeObjectURL(src);
-    pageCacheRef.current.delete(key);
-  }, []);
-
-  /** Guarda un render en el caché de páginas, con tope de entradas. El get
-   *  de requestRender refresca la posición: evicción LRU de verdad, para que
-   *  volver a un nivel de zoom anterior siga acertando. */
-  const cachePut = useCallback(
-    (key: string, src: string) => {
-      const cache = pageCacheRef.current;
-      cache.set(key, src);
-      if (cache.size > 60) {
-        const oldest = cache.keys().next().value;
-        if (oldest) cacheEvict(oldest);
-      }
-    },
-    [cacheEvict],
-  );
-
   // Ancho de página en pantalla: fijo por zoom numérico, o el ancho útil
   // del visor en modo "ajuste". El ancho de render (px físicos) es también
   // la clave del caché: unifica ambos modos.
@@ -443,65 +382,7 @@ function App() {
   const displayWidth = zoom === "ajuste" ? fitWidth : BASE_WIDTH * zoom;
   const ocupado = useSyncExternalStore(subscribeBusy, busyCount) > 0;
 
-  function cambiaColorAccion(
-    accion: "dibujo" | "forma" | "sello",
-    color: string,
-  ) {
-    guardaColor(accion, color);
-    if (accion === "dibujo") setDrawColor(color);
-    else if (accion === "forma") setShapeColor(color);
-    else setStampColor(color);
-  }
-
-  const onMarkupUsed = useCallback(
-    (kind: "highlight" | "underline" | "strikeout", color: string) => {
-      const accion =
-        kind === "highlight"
-          ? "resaltar"
-          : kind === "underline"
-            ? "subrayar"
-            : "tachar";
-      guardaColor(accion, color);
-      setMarkupColors((c) => ({ ...c, [accion]: color }));
-      setMarkupPending(null);
-    },
-    [],
-  );
   const zoomNum = zoom === "ajuste" ? displayWidth / BASE_WIDTH : zoom;
-
-  // el estado del documento en un ref para que requestRender sea estable
-  const docRef = useRef({ workPath, docVersion });
-  docRef.current = { workPath, docVersion };
-
-  /** Render de una página vía el caché global, con deduplicación de las
-   *  peticiones en vuelo. Lo consumen las Paginas visibles. */
-  const requestRender = useCallback(
-    (page: number, width: number, pv: number): Promise<string> => {
-      const { workPath, docVersion } = docRef.current;
-      if (!workPath) return Promise.reject("Sin documento");
-      const key = `${docVersion}:${pv}:${page}:${width}`;
-      const cached = pageCacheRef.current.get(key);
-      if (cached) {
-        // refrescar la posición en el Map (LRU)
-        pageCacheRef.current.delete(key);
-        pageCacheRef.current.set(key, cached);
-        return Promise.resolve(cached);
-      }
-      const enVuelo = inFlightRef.current.get(key);
-      if (enVuelo) return enVuelo;
-      const p = renderPageSrc(workPath, page, width)
-        .then((src) => {
-          cachePut(key, src);
-          return src;
-        })
-        .finally(() => {
-          inFlightRef.current.delete(key);
-        });
-      inFlightRef.current.set(key, p);
-      return p;
-    },
-    [cachePut],
-  );
 
   const registerEl = useCallback((page: number, el: HTMLDivElement | null) => {
     if (el) pageElsRef.current.set(page, el);
@@ -524,6 +405,13 @@ function App() {
     },
     [pageCount],
   );
+
+  const busqueda = useBusqueda({
+    workPath,
+    gotoPage,
+    onError: (e) => setError(String(e)),
+  });
+  const limpiarBusqueda = busqueda.limpiar;
 
   // Seguimiento del scroll: la página cuyo centro queda más cerca del centro
   // del visor es la "actual" (píldora y sidebar), sin provocar scroll.
@@ -576,76 +464,16 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayWidth]);
 
-  // Miniaturas de la barra lateral (secuencial, en segundo plano)
-  useEffect(() => {
-    if (!workPath || pageCount === 0) return;
-    let cancelled = false;
-    // conservar las miniaturas viejas mientras llegan las nuevas (sin
-    // parpadeo a placeholders); solo la primera carga parte de null
-    setThumbs((t) => {
-      const next = t.slice(0, pageCount);
-      while (next.length < pageCount) next.push(null);
-      return next;
-    });
-    (async () => {
-      for (let i = 0; i < pageCount; i++) {
-        if (cancelled) return;
-        try {
-          const src = await renderPageSrc(workPath, i, THUMB_WIDTH, {
-            background: true,
-          });
-          if (cancelled) {
-            URL.revokeObjectURL(src);
-            return;
-          }
-          setThumbs((t) => {
-            const next = [...t];
-            const previa = next[i];
-            if (previa) URL.revokeObjectURL(previa);
-            next[i] = src;
-            return next;
-          });
-        } catch {
-          // miniatura fallida: se queda el placeholder
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [workPath, pageCount, docVersion]);
-
-  /** Refresca solo la miniatura de una página (tras anotar). */
-  const refreshThumb = useCallback(async (page: number) => {
-    if (!workPath) return;
-    try {
-      const src = await renderPageSrc(workPath, page, THUMB_WIDTH, {
-        background: true,
-      });
-      setThumbs((t) => {
-        const next = [...t];
-        const previa = next[page];
-        if (previa) URL.revokeObjectURL(previa);
-        next[page] = src;
-        return next;
-      });
-    } catch {
-      // la miniatura vieja sigue siendo razonable
-    }
-  }, [workPath]);
-
   /** Tras anotar: invalidar el render de esa página sin recargar todo. */
   const afterAnnotate = useCallback(
     (page: number) => {
       setModified(true);
       refrescarHistorial();
-      for (const key of [...pageCacheRef.current.keys()]) {
-        if (key.split(":")[2] === String(page)) cacheEvict(key);
-      }
+      evictPage(page);
       setAnnotVersion((v) => v + 1);
       refreshThumb(page);
     },
-    [refrescarHistorial, refreshThumb, cacheEvict],
+    [refrescarHistorial, refreshThumb, evictPage],
   );
 
   /** Tras mutar UNA página: re-render y miniatura solo de esa página. */
@@ -653,35 +481,29 @@ function App() {
     (page: number) => {
       setModified(true);
       refrescarHistorial();
-      setMatches([]);
-      setSearched(false);
-      setLastQuery("");
+      limpiarBusqueda();
       setPageVersions((v) => {
         const next = [...v];
         next[page] = (next[page] ?? 0) + 1;
         return next;
       });
-      for (const key of [...pageCacheRef.current.keys()]) {
-        if (key.split(":")[2] === String(page)) cacheEvict(key);
-      }
+      evictPage(page);
       refreshThumb(page);
     },
-    [refrescarHistorial, refreshThumb, cacheEvict],
+    [refrescarHistorial, refreshThumb, evictPage, limpiarBusqueda],
   );
 
   /** Tras mutar el documento: refrescar render, miniaturas y limpiar búsqueda. */
   const afterMutation = useCallback((newCount: number, nextPage?: number) => {
     setPageCount(newCount);
     setModified(true);
-    setMatches([]);
-    setSearched(false);
-    setLastQuery("");
+    limpiarBusqueda();
     setPageIndex((p) => Math.max(0, Math.min(nextPage ?? p, newCount - 1)));
     // el docVersion nuevo deja inservible todo el caché: liberar los blobs
-    for (const key of [...pageCacheRef.current.keys()]) cacheEvict(key);
+    evictAll();
     setDocVersion((v) => v + 1);
     refrescarHistorial();
-  }, [refrescarHistorial, cacheEvict]);
+  }, [refrescarHistorial, evictAll, limpiarBusqueda]);
 
   async function rotatePage(i: number) {
     if (!workPath) return;
@@ -1080,100 +902,6 @@ function App() {
     }
   }
 
-  /** Activa una firma para estamparla (guarda su relación de aspecto). */
-  function pickSignature(f: FirmaGuardada) {
-    const img = new Image();
-    img.onload = () =>
-      setActiveSig({
-        png: f.png_base64,
-        ratio: img.height / Math.max(1, img.width),
-      });
-    img.src = `data:image/png;base64,${f.png_base64}`;
-  }
-
-  async function uploadSignature() {
-    const sel = await open({
-      filters: [
-        {
-          name: "Imagen",
-          extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"],
-        },
-      ],
-      multiple: false,
-      title: "Imagen de tu firma (PNG con transparencia funciona mejor)",
-    });
-    if (typeof sel !== "string") return;
-    try {
-      const f = await importSignatureFile(sel);
-      setFirmas((l) => [f, ...l]);
-      pickSignature(f);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function saveDrawnSignature(name: string, png: string) {
-    try {
-      const f = await saveStoredSignature(name, png);
-      setDrawingSig(false);
-      setFirmas((l) => [f, ...l]);
-      pickSignature(f);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function removeSignature(id: string) {
-    try {
-      await deleteStoredSignature(id);
-      setFirmas((l) => l.filter((f) => f.id !== id));
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function runSearch() {
-    if (!workPath) return;
-    if (!query.trim()) {
-      setMatches([]);
-      setSearched(false);
-      setLastQuery("");
-      return;
-    }
-    try {
-      const res = await invoke<SearchMatch[]>("search_pdf", {
-        path: workPath,
-        query,
-      });
-      setMatches(res);
-      setMatchIdx(0);
-      setSearched(true);
-      setLastQuery(query);
-      if (res.length > 0) gotoPage(res[0].page_index);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  function gotoMatch(delta: number) {
-    if (matches.length === 0) return;
-    const next = (matchIdx + delta + matches.length) % matches.length;
-    setMatchIdx(next);
-    gotoPage(matches[next].page_index);
-  }
-
-  // Coincidencias agrupadas por página, con su índice global para saber
-  // cuál es la actual
-  const matchesByPage = useMemo(() => {
-    const m = new Map<number, PageMatch[]>();
-    matches.forEach((match, i) => {
-      const list = m.get(match.page_index) ?? [];
-      list.push({ rects: match.rects, groupIndex: i });
-      m.set(match.page_index, list);
-    });
-    return m;
-  }, [matches]);
-
   const mostrarError = useCallback((e: unknown) => setError(String(e)), []);
   const onLinkUri = useCallback((uri: string) => {
     if (!esquemaPermitido(uri)) {
@@ -1194,47 +922,6 @@ function App() {
     setLinkAsk(null);
     openUrl(uri).catch((e) => setError(String(e)));
   }
-  const onSigStamped = useCallback(() => {
-    setActiveSig(null);
-    // la firma estampada es una imagen: el modo imagen permite retocarla
-    setMode("image");
-  }, []);
-
-  // memoizado para que Pagina (React.memo) no re-renderice todas las páginas
-  // en cada cambio de estado de App
-  const tool: ToolProps = useMemo(
-    () => ({
-      drawColor,
-      drawWidth,
-      markupPending,
-      onMarkupPending: setMarkupPending,
-      markupColors,
-      onMarkupUsed,
-      shapeKind,
-      shapeColor,
-      shapeFill,
-      shapeWidth,
-      stampText,
-      stampCustom,
-      stampColor,
-      activeSig,
-    }),
-    [
-      drawColor,
-      drawWidth,
-      markupPending,
-      markupColors,
-      onMarkupUsed,
-      shapeKind,
-      shapeColor,
-      shapeFill,
-      shapeWidth,
-      stampText,
-      stampCustom,
-      stampColor,
-      activeSig,
-    ],
-  );
 
   // separador de ruta multiplataforma (macOS "/" y Windows "\")
   const fileName = originalPath?.split(/[\\/]/).pop() ?? null;
@@ -1343,52 +1030,16 @@ function App() {
         <div className="toolbar-right">
           {pageCount > 0 && (
             <>
-              <div className="search">
-                <Icon name="search" size={13} />
-                <input
-                  type="text"
-                  placeholder="Buscar"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key !== "Enter") return;
-                    if (searched && matches.length > 0 && query === lastQuery) {
-                      gotoMatch(e.shiftKey ? -1 : 1);
-                    } else {
-                      runSearch();
-                    }
-                  }}
-                />
-                {searched && (
-                  <>
-                    <span className="match-count">
-                      {matches.length > 0
-                        ? `${matchIdx + 1}/${matches.length}`
-                        : "0"}
-                    </span>
-                    {matches.length > 0 && (
-                      <>
-                        <button
-                          className="btn btn-icon"
-                          title="Coincidencia anterior"
-                          aria-label="Coincidencia anterior"
-                          onClick={() => gotoMatch(-1)}
-                        >
-                          <Icon name="up" size={13} />
-                        </button>
-                        <button
-                          className="btn btn-icon"
-                          title="Coincidencia siguiente"
-                          aria-label="Coincidencia siguiente"
-                          onClick={() => gotoMatch(1)}
-                        >
-                          <Icon name="down" size={13} />
-                        </button>
-                      </>
-                    )}
-                  </>
-                )}
-              </div>
+              <Busqueda
+                query={busqueda.query}
+                setQuery={busqueda.setQuery}
+                lastQuery={busqueda.lastQuery}
+                total={busqueda.matches.length}
+                matchIdx={busqueda.matchIdx}
+                searched={busqueda.searched}
+                runSearch={busqueda.runSearch}
+                gotoMatch={busqueda.gotoMatch}
+              />
               <button
                 className="btn btn-icon"
                 title={`Deshacer (${MOD}Z)`}
@@ -1415,241 +1066,43 @@ function App() {
                 <Icon name="save" size={14} />
                 <span className="btn-etiqueta">Guardar</span>
               </button>
-              <div className="menu-wrap">
-                <button
-                  className="btn btn-icon"
-                  title="Más acciones"
-                  aria-label="Más acciones"
-                  aria-haspopup="menu"
-                  aria-expanded={menuOpen}
-                  onClick={() => setMenuOpen((o) => !o)}
-                >
-                  ⋯
-                </button>
-                {menuOpen && (
-                  <>
-                    <div
-                      className="menu-backdrop"
-                      onClick={() => setMenuOpen(false)}
-                    />
-                    <div className="menu">
-                      <div className="menu-titulo">Archivo</div>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          saveFileAs();
-                        }}
-                      >
-                        <Icon name="save" size={14} />
-                        Guardar como…
-                      </button>
-                      <button className="btn" onClick={closeDocument}>
-                        <Icon name="close" size={14} />
-                        Cerrar documento
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          addPdf();
-                        }}
-                      >
-                        <Icon name="merge" size={14} />
-                        Añadir PDF…
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          extractCurrentPage();
-                        }}
-                      >
-                        <Icon name="extract" size={14} />
-                        Extraer página…
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          insertPdfHere();
-                        }}
-                      >
-                        <Icon name="merge" size={14} />
-                        Insertar PDF aquí…
-                      </button>
-                      <div className="menu-titulo">Documento</div>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          selectMode("select");
-                          setMode("crop");
-                        }}
-                      >
-                        <Icon name="crop" size={14} />
-                        Recortar página…
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          setWmOpen(true);
-                        }}
-                      >
-                        <Icon name="water" size={14} />
-                        Marca de agua…
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          setHfOpen(true);
-                        }}
-                      >
-                        <Icon name="hf" size={14} />
-                        Encabezado, pie y numeración…
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          askRemoveMarginal("watermark");
-                        }}
-                      >
-                        <Icon name="water" size={14} />
-                        Quitar marca de agua…
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          askRemoveMarginal("header");
-                        }}
-                      >
-                        <Icon name="hf" size={14} />
-                        Quitar encabezados y pies…
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          openProperties();
-                        }}
-                      >
-                        <Icon name="doc" size={14} />
-                        Propiedades del documento…
-                      </button>
-                      <div className="menu-titulo">Seguridad</div>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          signPdf();
-                        }}
-                      >
-                        <Icon name="sign" size={14} />
-                        Firma digital (certificado)…
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          setProtectDraft({ user: "", owner: "" });
-                        }}
-                      >
-                        <Icon name="lock" size={14} />
-                        Proteger con contraseña…
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          setFlattenAsk(true);
-                        }}
-                      >
-                        <Icon name="flatten" size={14} />
-                        Aplanar anotaciones…
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          selectMode("select");
-                          setMode("redact");
-                        }}
-                      >
-                        <Icon name="redact" size={14} />
-                        Redactar (censurar)…
-                      </button>
-                      <div className="menu-titulo">Insertar</div>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          selectMode("select");
-                          setMode("form-new");
-                        }}
-                      >
-                        <Icon name="field" size={14} />
-                        Añadir campo de formulario…
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          selectMode("select");
-                          setMode("link-new");
-                        }}
-                      >
-                        <Icon name="link" size={14} />
-                        Añadir enlace…
-                      </button>
-                      <div className="menu-titulo">Salida</div>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          printDocument();
-                        }}
-                      >
-                        <Icon name="printer" size={14} />
-                        Imprimir…
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          setExportOpen(true);
-                        }}
-                      >
-                        <Icon name="image" size={14} />
-                        Exportar como imágenes…
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          exportPlainText();
-                        }}
-                      >
-                        <Icon name="extract" size={14} />
-                        Exportar texto…
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          setMenuOpen(false);
-                          setCompressOpen(true);
-                        }}
-                      >
-                        <Icon name="shrink" size={14} />
-                        Reducir tamaño…
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
+              <MenuAcciones
+                abierto={menuOpen}
+                onToggle={() => setMenuOpen((o) => !o)}
+                onCerrar={() => setMenuOpen(false)}
+                saveFileAs={saveFileAs}
+                closeDocument={closeDocument}
+                addPdf={addPdf}
+                extractCurrentPage={extractCurrentPage}
+                insertPdfHere={insertPdfHere}
+                recortarPagina={() => {
+                  selectMode("select");
+                  setMode("crop");
+                }}
+                abrirMarcaAgua={() => setWmOpen(true)}
+                abrirEncabezado={() => setHfOpen(true)}
+                askRemoveMarginal={askRemoveMarginal}
+                openProperties={openProperties}
+                signPdf={signPdf}
+                abrirProteger={() => setProtectDraft({ user: "", owner: "" })}
+                abrirAplanar={() => setFlattenAsk(true)}
+                redactar={() => {
+                  selectMode("select");
+                  setMode("redact");
+                }}
+                nuevoCampo={() => {
+                  selectMode("select");
+                  setMode("form-new");
+                }}
+                nuevoEnlace={() => {
+                  selectMode("select");
+                  setMode("link-new");
+                }}
+                printDocument={printDocument}
+                abrirExportar={() => setExportOpen(true)}
+                exportPlainText={exportPlainText}
+                abrirComprimir={() => setCompressOpen(true)}
+              />
             </>
           )}
         </div>
@@ -1673,39 +1126,15 @@ function App() {
       )}
 
       {p12Draft && (
-        <div className="modal-backdrop" onClick={() => setP12Draft(null)}>
-          <div
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Contraseña del .p12"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3>Contraseña del .p12</h3>
-            <p className="modal-file">{p12Draft.path.split(/[\\/]/).pop()}</p>
-            <input
-              type="password"
-              autoFocus
-              placeholder="Contraseña"
-              value={p12Draft.password}
-              onChange={(e) =>
-                setP12Draft({ ...p12Draft, password: e.target.value })
-              }
-              onKeyDown={(e) => {
-                if (e.key === "Enter") signWithP12();
-                if (e.key === "Escape") setP12Draft(null);
-              }}
-            />
-            <div className="card-actions">
-              <button className="btn" onClick={() => setP12Draft(null)}>
-                Cancelar
-              </button>
-              <button className="btn btn-primary" onClick={signWithP12}>
-                Firmar
-              </button>
-            </div>
-          </div>
-        </div>
+        <DialogoContrasena
+          titulo="Contraseña del .p12"
+          fichero={p12Draft.path}
+          valor={p12Draft.password}
+          onChange={(v) => setP12Draft({ ...p12Draft, password: v })}
+          onConfirm={signWithP12}
+          onClose={() => setP12Draft(null)}
+          etiqueta="Firmar"
+        />
       )}
 
       {mode === "firmar" && !activeSig && !drawingSig && (
@@ -1741,108 +1170,33 @@ function App() {
         />
       )}
       {pwdDraft && (
-        <div className="modal-backdrop" onClick={() => setPwdDraft(null)}>
-          <div
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Documento protegido"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3>Documento protegido</h3>
-            <p className="modal-file">{pwdDraft.path.split(/[\\/]/).pop()}</p>
-            <input
-              type="password"
-              autoFocus
-              placeholder="Contraseña del documento"
-              value={pwdDraft.password}
-              onChange={(e) =>
-                setPwdDraft({ ...pwdDraft, password: e.target.value })
-              }
-              onKeyDown={(e) => {
-                if (e.key === "Enter")
-                  openPath(pwdDraft.path, pwdDraft.password);
-                if (e.key === "Escape") setPwdDraft(null);
-              }}
-            />
-            <div className="card-actions">
-              <button className="btn" onClick={() => setPwdDraft(null)}>
-                Cancelar
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={() => openPath(pwdDraft.path, pwdDraft.password)}
-              >
-                Abrir
-              </button>
-            </div>
-          </div>
-        </div>
+        <DialogoContrasena
+          titulo="Documento protegido"
+          fichero={pwdDraft.path}
+          valor={pwdDraft.password}
+          onChange={(v) => setPwdDraft({ ...pwdDraft, password: v })}
+          onConfirm={() => openPath(pwdDraft.path, pwdDraft.password)}
+          onClose={() => setPwdDraft(null)}
+          etiqueta="Abrir"
+          placeholder="Contraseña del documento"
+        />
       )}
       {protectDraft && (
-        <div className="modal-backdrop" onClick={() => setProtectDraft(null)}>
-          <div
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Proteger con contraseña"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3>Proteger con contraseña</h3>
-            <input
-              type="password"
-              autoFocus
-              placeholder="Contraseña (necesaria para abrir)"
-              value={protectDraft.user}
-              onChange={(e) =>
-                setProtectDraft({ ...protectDraft, user: e.target.value })
-              }
-            />
-            <input
-              type="password"
-              placeholder="Contraseña de propietario (opcional)"
-              value={protectDraft.owner}
-              onChange={(e) =>
-                setProtectDraft({ ...protectDraft, owner: e.target.value })
-              }
-            />
-            <p className="modal-file">
-              Cifrado AES-256. Se guarda como una copia protegida; si el
-              documento va a llevar firma digital, fírmalo por separado.
-            </p>
-            <div className="card-actions">
-              <button className="btn" onClick={() => setProtectDraft(null)}>
-                Cancelar
-              </button>
-              <button
-                className="btn btn-primary"
-                disabled={!protectDraft.user}
-                onClick={applyProtect}
-              >
-                Proteger…
-              </button>
-            </div>
-          </div>
-        </div>
+        <DialogoProteger
+          valor={protectDraft}
+          onChange={setProtectDraft}
+          onConfirm={applyProtect}
+          onClose={() => setProtectDraft(null)}
+        />
       )}
       {marginalAsk && (
-        <div className="modal-backdrop" onClick={() => setMarginalAsk(null)}>
-          <div
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label={
-              marginalAsk.zona === "watermark"
-                ? "Quitar la marca de agua"
-                : "Quitar encabezados y pies"
-            }
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3>
-              {marginalAsk.zona === "watermark"
-                ? "Quitar la marca de agua"
-                : "Quitar encabezados y pies"}
-            </h3>
+        <DialogoConfirmar
+          titulo={
+            marginalAsk.zona === "watermark"
+              ? "Quitar la marca de agua"
+              : "Quitar encabezados y pies"
+          }
+          cuerpo={
             <p className="modal-file" style={{ whiteSpace: "normal" }}>
               Se eliminarán {marginalAsk.textos} texto(s)
               {marginalAsk.zona === "watermark"
@@ -1850,68 +1204,44 @@ function App() {
                 : " de los márgenes superior e inferior"}{" "}
               en todo el documento.
             </p>
-            <div className="card-actions">
-              <button className="btn" onClick={() => setMarginalAsk(null)}>
-                Cancelar
-              </button>
-              <button className="btn btn-danger" onClick={applyRemoveMarginal}>
-                Quitar
-              </button>
-            </div>
-          </div>
-        </div>
+          }
+          textoConfirmar="Quitar"
+          peligro
+          onConfirm={applyRemoveMarginal}
+          onClose={() => setMarginalAsk(null)}
+        />
       )}
       {flattenAsk && (
-        <div className="modal-backdrop" onClick={() => setFlattenAsk(false)}>
-          <div
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Aplanar anotaciones y formularios"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3>Aplanar anotaciones y formularios</h3>
+        <DialogoConfirmar
+          titulo="Aplanar anotaciones y formularios"
+          cuerpo={
             <p className="modal-file" style={{ whiteSpace: "normal" }}>
               Los sellos, formas, trazos y campos rellenados pasan a ser
               contenido fijo de la página (ya no se podrán editar ni borrar).
               Ojo: los resaltados, subrayados y notas creados con esta app se
               perderán al aplanar.
             </p>
-            <div className="card-actions">
-              <button className="btn" onClick={() => setFlattenAsk(false)}>
-                Cancelar
-              </button>
-              <button className="btn btn-primary" onClick={applyFlatten}>
-                Aplanar
-              </button>
-            </div>
-          </div>
-        </div>
+          }
+          textoConfirmar="Aplanar"
+          onConfirm={applyFlatten}
+          onClose={() => setFlattenAsk(false)}
+        />
       )}
       {linkAsk && (
-        <div className="modal-backdrop" onClick={() => setLinkAsk(null)}>
-          <div
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Abrir enlace externo"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3>Abrir enlace externo</h3>
-            <p className="modal-file">{destinoDe(linkAsk)}</p>
-            <p className="modal-file" style={{ whiteSpace: "normal" }}>
-              {linkAsk}
-            </p>
-            <div className="card-actions">
-              <button className="btn" onClick={() => setLinkAsk(null)}>
-                Cancelar
-              </button>
-              <button className="btn btn-primary" onClick={openConfirmedLink}>
-                Abrir
-              </button>
-            </div>
-          </div>
-        </div>
+        <DialogoConfirmar
+          titulo="Abrir enlace externo"
+          cuerpo={
+            <>
+              <p className="modal-file">{destinoDe(linkAsk)}</p>
+              <p className="modal-file" style={{ whiteSpace: "normal" }}>
+                {linkAsk}
+              </p>
+            </>
+          }
+          textoConfirmar="Abrir"
+          onConfirm={openConfirmedLink}
+          onClose={() => setLinkAsk(null)}
+        />
       )}
       {mode === "redact" && (
         <div className="sign-hint">
@@ -1930,96 +1260,24 @@ function App() {
         </div>
       )}
       {exportOpen && (
-        <div className="modal-backdrop" onClick={() => setExportOpen(false)}>
-          <div
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Exportar como imágenes"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3>Exportar como imágenes</h3>
-            <div className="card-row">
-              <select
-                className="size-select"
-                value={exportFmt}
-                onChange={(e) => setExportFmt(e.target.value as "png" | "jpeg")}
-              >
-                <option value="png">PNG</option>
-                <option value="jpeg">JPEG</option>
-              </select>
-              <select
-                className="size-select"
-                value={exportDpi}
-                onChange={(e) => setExportDpi(Number(e.target.value))}
-              >
-                {[96, 150, 200, 300].map((d) => (
-                  <option key={d} value={d}>
-                    {d} ppp
-                  </option>
-                ))}
-              </select>
-            </div>
-            <p className="modal-file">Una imagen por página del documento.</p>
-            <div className="card-actions">
-              <button className="btn" onClick={() => setExportOpen(false)}>
-                Cancelar
-              </button>
-              <button className="btn btn-primary" onClick={exportImages}>
-                Elegir carpeta…
-              </button>
-            </div>
-          </div>
-        </div>
+        <DialogoExportar
+          fmt={exportFmt}
+          setFmt={setExportFmt}
+          dpi={exportDpi}
+          setDpi={setExportDpi}
+          onConfirm={exportImages}
+          onClose={() => setExportOpen(false)}
+        />
       )}
       {compressOpen && (
-        <div className="modal-backdrop" onClick={() => setCompressOpen(false)}>
-          <div
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Reducir tamaño del PDF"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3>Reducir tamaño del PDF</h3>
-            <div className="card-row">
-              <select
-                className="size-select"
-                title="Calidad JPEG"
-                value={compressQuality}
-                onChange={(e) => setCompressQuality(Number(e.target.value))}
-              >
-                <option value={60}>Calidad baja (más pequeño)</option>
-                <option value={75}>Calidad media</option>
-                <option value={85}>Calidad alta</option>
-              </select>
-              <select
-                className="size-select"
-                title="Resolución máxima"
-                value={compressDpi}
-                onChange={(e) => setCompressDpi(Number(e.target.value))}
-              >
-                {[110, 150, 200, 300].map((d) => (
-                  <option key={d} value={d}>
-                    {d} ppp máx.
-                  </option>
-                ))}
-              </select>
-            </div>
-            <p className="modal-file" style={{ whiteSpace: "normal" }}>
-              Recomprime las imágenes del documento (las que tienen
-              transparencia se conservan tal cual). El texto no se toca.
-            </p>
-            <div className="card-actions">
-              <button className="btn" onClick={() => setCompressOpen(false)}>
-                Cancelar
-              </button>
-              <button className="btn btn-primary" onClick={applyCompress}>
-                Comprimir
-              </button>
-            </div>
-          </div>
-        </div>
+        <DialogoComprimir
+          quality={compressQuality}
+          setQuality={setCompressQuality}
+          dpi={compressDpi}
+          setDpi={setCompressDpi}
+          onConfirm={applyCompress}
+          onClose={() => setCompressOpen(false)}
+        />
       )}
       {printPages && (
         <div className="print-pages">
@@ -2039,181 +1297,25 @@ function App() {
           Esc cancela
         </div>
       )}
-      {mode === "draw" && (
-        <div className="tool-options">
-          <span>Trazo</span>
-          <div className="swatches">
-            {SHAPE_COLORS.map((c) => (
-              <button
-                key={c}
-                className={`swatch${drawColor === c ? " on" : ""}`}
-                style={{ background: c }}
-                title={NOMBRE_COLOR[c] ?? c}
-                aria-label={NOMBRE_COLOR[c] ?? c}
-                aria-pressed={drawColor === c}
-                onClick={() => cambiaColorAccion("dibujo", c)}
-              />
-            ))}
-            <label
-              className={`swatch swatch-custom${
-                !SHAPE_COLORS.includes(drawColor) ? " on" : ""
-              }`}
-              title="Color personalizado"
-            >
-              <input
-                type="color"
-                value={drawColor}
-                onChange={(e) => cambiaColorAccion("dibujo", e.target.value)}
-              />
-            </label>
-          </div>
-          <select
-            className="size-select"
-            title="Grosor"
-            value={drawWidth}
-            onChange={(e) => setDrawWidth(Number(e.target.value))}
-          >
-            {[1, 2, 3, 5, 8].map((w) => (
-              <option key={w} value={w}>
-                {w} pt
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-      {mode === "shape" && (
-        <div className="tool-options">
-          <div className="segmented">
-            {(
-              [
-                ["rect", "Rectángulo"],
-                ["ellipse", "Elipse"],
-                ["line", "Línea"],
-                ["arrow", "Flecha"],
-              ] as [ShapeKind, string][]
-            ).map(([k, label]) => (
-              <button
-                key={k}
-                className={`btn${shapeKind === k ? " on" : ""}`}
-                onClick={() => setShapeKind(k)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <div className="swatches">
-            {SHAPE_COLORS.map((c) => (
-              <button
-                key={c}
-                className={`swatch${shapeColor === c ? " on" : ""}`}
-                style={{ background: c }}
-                title={NOMBRE_COLOR[c] ?? c}
-                aria-label={NOMBRE_COLOR[c] ?? c}
-                aria-pressed={shapeColor === c}
-                onClick={() => cambiaColorAccion("forma", c)}
-              />
-            ))}
-            <label
-              className={`swatch swatch-custom${
-                !SHAPE_COLORS.includes(shapeColor) ? " on" : ""
-              }`}
-              title="Color personalizado"
-            >
-              <input
-                type="color"
-                value={shapeColor}
-                onChange={(e) => cambiaColorAccion("forma", e.target.value)}
-              />
-            </label>
-          </div>
-          <label
-            className={`opt-check${
-              shapeKind === "line" || shapeKind === "arrow" ? " disabled" : ""
-            }`}
-          >
-            <input
-              type="checkbox"
-              checked={shapeFill}
-              disabled={shapeKind === "line" || shapeKind === "arrow"}
-              onChange={(e) => setShapeFill(e.target.checked)}
-            />
-            Relleno
-          </label>
-          <select
-            className="size-select"
-            title="Grosor"
-            value={shapeWidth}
-            onChange={(e) => setShapeWidth(Number(e.target.value))}
-          >
-            {[1, 2, 3, 5].map((s) => (
-              <option key={s} value={s}>
-                {s} pt
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-      {mode === "stamp" && (
-        <div className="tool-options">
-          <select
-            className="size-select"
-            value={stampText}
-            onChange={(e) => setStampText(e.target.value)}
-          >
-            {STAMP_PRESETS.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-            <option value="custom">Personalizado…</option>
-          </select>
-          {stampText === "custom" && (
-            <input
-              type="text"
-              className="stamp-input"
-              placeholder="Texto del sello"
-              value={stampCustom}
-              onChange={(e) => setStampCustom(e.target.value.toUpperCase())}
-            />
-          )}
-          <div className="swatches">
-            {["#c0392b", "#2743c0", "#2ea043", "#1d1c18"].map((c) => (
-              <button
-                key={c}
-                className={`swatch${stampColor === c ? " on" : ""}`}
-                style={{ background: c }}
-                title={NOMBRE_COLOR[c] ?? c}
-                aria-label={NOMBRE_COLOR[c] ?? c}
-                aria-pressed={stampColor === c}
-                onClick={() => cambiaColorAccion("sello", c)}
-              />
-            ))}
-            <label
-              className={`swatch swatch-custom${
-                !["#c0392b", "#2743c0", "#2ea043", "#1d1c18"].includes(
-                  stampColor,
-                )
-                  ? " on"
-                  : ""
-              }`}
-              title="Color personalizado"
-            >
-              <input
-                type="color"
-                value={stampColor}
-                onChange={(e) => cambiaColorAccion("sello", e.target.value)}
-              />
-            </label>
-          </div>
-          <span
-            className="sello-preview"
-            style={{ color: stampColor, borderColor: stampColor }}
-          >
-            {(stampText === "custom" ? stampCustom || "SELLO" : stampText)}
-          </span>
-          <span className="opt-hint">Clic en la página para colocarlo</span>
-        </div>
-      )}
+      <OpcionesHerramienta
+        mode={mode}
+        drawColor={herramienta.drawColor}
+        drawWidth={herramienta.drawWidth}
+        setDrawWidth={herramienta.setDrawWidth}
+        shapeKind={herramienta.shapeKind}
+        setShapeKind={herramienta.setShapeKind}
+        shapeColor={herramienta.shapeColor}
+        shapeFill={herramienta.shapeFill}
+        setShapeFill={herramienta.setShapeFill}
+        shapeWidth={herramienta.shapeWidth}
+        setShapeWidth={herramienta.setShapeWidth}
+        stampText={herramienta.stampText}
+        setStampText={herramienta.setStampText}
+        stampCustom={herramienta.stampCustom}
+        setStampCustom={herramienta.setStampCustom}
+        stampColor={herramienta.stampColor}
+        cambiaColorAccion={herramienta.cambiaColorAccion}
+      />
 
       <div className="body">
         {pageCount > 0 && sidebarVisible && (
@@ -2240,85 +1342,19 @@ function App() {
                 onChange={persistOutline}
               />
             )}
-            {sidebarTab === "paginas" &&
-              thumbs.map((src, i) => (
-              <div
-                key={i}
-                className={`thumb${i === pageIndex ? " active" : ""}`}
-                onClick={() => gotoPage(i)}
-              >
-                {src ? (
-                  <img
-                    src={src}
-                    draggable={false}
-                    decoding="async"
-                    alt={`Página ${i + 1}`}
-                  />
-                ) : (
-                  <div className="thumb-placeholder" />
-                )}
-                <span className="thumb-num">{i + 1}</span>
-                <div className="thumb-actions">
-                  <button
-                    title="Subir"
-                    disabled={i === 0}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      movePage(i, i - 1);
-                    }}
-                  >
-                    <Icon name="up" size={13} />
-                  </button>
-                  <button
-                    title="Bajar"
-                    disabled={i === pageCount - 1}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      movePage(i, i + 1);
-                    }}
-                  >
-                    <Icon name="down" size={13} />
-                  </button>
-                  <button
-                    title="Rotar 90°"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      rotatePage(i);
-                    }}
-                  >
-                    <Icon name="rotate" size={13} />
-                  </button>
-                  <button
-                    title="Duplicar página"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      duplicatePageAt(i);
-                    }}
-                  >
-                    <Icon name="copy" size={13} />
-                  </button>
-                  <button
-                    title="Página en blanco después"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      blankPageAfter(i);
-                    }}
-                  >
-                    <Icon name="plus" size={13} />
-                  </button>
-                  <button
-                    title="Eliminar página"
-                    disabled={pageCount <= 1}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deletePage(i);
-                    }}
-                  >
-                    <Icon name="trash" size={13} />
-                  </button>
-                </div>
-              </div>
-            ))}
+            {sidebarTab === "paginas" && (
+              <PanelPaginas
+                thumbs={thumbs}
+                pageIndex={pageIndex}
+                pageCount={pageCount}
+                gotoPage={gotoPage}
+                movePage={movePage}
+                rotatePage={rotatePage}
+                duplicatePageAt={duplicatePageAt}
+                blankPageAfter={blankPageAfter}
+                deletePage={deletePage}
+              />
+            )}
           </aside>
         )}
 
@@ -2348,8 +1384,8 @@ function App() {
                   pageVersion={pageVersions[i] ?? 0}
                   mode={mode}
                   tool={tool}
-                  matches={matchesByPage.get(i)}
-                  currentGroup={matchIdx}
+                  matches={busqueda.matchesByPage.get(i)}
+                  currentGroup={busqueda.matchIdx}
                   selOwner={selOwner}
                   claimSel={setSelOwner}
                   requestRender={requestRender}
