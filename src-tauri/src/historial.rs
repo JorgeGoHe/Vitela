@@ -252,7 +252,7 @@ mod tests {
         assert_eq!(e, HistoryState { undo: 1, redo: 0, page_count: 2 });
         assert_eq!(textos_de(std::path::Path::new(&work))[0], "Dos");
         // el caché se invalidó: el render y el texto ven el estado nuevo
-        assert!(busqueda::get_page_text(work.clone(), 0).unwrap().chars.len() > 0);
+        assert!(!busqueda::get_page_text(work.clone(), 0).unwrap().chars.is_empty());
         assert!(undo(work.clone()).is_ok());
         assert!(undo(work.clone()).is_err(), "sin pasos debe fallar");
         limpia(&work);

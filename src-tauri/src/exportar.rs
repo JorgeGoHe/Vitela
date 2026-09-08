@@ -158,7 +158,6 @@ pub fn compress_pdf(work_path: String, quality: u8, max_dpi: u16) -> Result<Comp
                         continue;
                     }
                     drop(enc);
-                    drop(cursor);
                     candidatas.push(Candidata {
                         index: i,
                         left: b.left().value,

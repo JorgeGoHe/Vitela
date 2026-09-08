@@ -69,7 +69,6 @@ pub fn add_highlight(work_path: String, page_index: u16, rects: Vec<Rect>) -> Re
                 .create_attachment_point_at_end(quad)
                 .map_err(|e| e.to_string())?;
         }
-        drop(annot);
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
@@ -134,7 +133,6 @@ pub fn add_stroke(
             .objects_mut()
             .add_path_object(path)
             .map_err(|e| e.to_string())?;
-        drop(annot);
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
@@ -176,7 +174,6 @@ pub fn add_note(
                 page_h,
             ))
             .map_err(|e| e.to_string())?;
-        drop(annot);
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())

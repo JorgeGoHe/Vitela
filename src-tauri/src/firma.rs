@@ -219,7 +219,7 @@ pub fn sign(
         .map_err(|e| format!("No se pudo serializar: {e}"))?;
     let marker: Vec<u8> = {
         let mut v = vec![b'<'];
-        v.extend(std::iter::repeat(b'0').take(SIG_LEN * 2));
+        v.extend(std::iter::repeat_n(b'0', SIG_LEN * 2));
         v.push(b'>');
         v
     };

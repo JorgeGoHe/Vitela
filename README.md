@@ -48,8 +48,10 @@ documento abierto.
 ## Compilar
 
 Requisitos: [Rust](https://rustup.rs), [Bun](https://bun.sh) y el binario de
-PDFium para tu plataforma (de
-[pdfium-binaries](https://github.com/bblanchon/pdfium-binaries/releases)):
+PDFium para tu plataforma, de
+[pdfium-binaries](https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium%2F8009)
+(versión fija `chromium/8009`, la misma que usa la integración continua;
+otros builds cambian detalles como el nombre de las fuentes internas):
 
 ```bash
 # macOS (arm64): libpdfium.dylib de pdfium-mac-arm64.tgz

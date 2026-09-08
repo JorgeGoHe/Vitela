@@ -480,6 +480,108 @@ fn save_pdf(work_path: String, dest_path: String) -> Result<(), String> {
     })
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .setup(|app| {
+            use tauri::Manager;
+            if let Ok(dir) = app.path().resource_dir() {
+                let _ = RESOURCE_LIB_DIR.set(dir.join("lib"));
+            }
+            if let Ok(dir) = app.path().app_data_dir() {
+                // el identifier cambió con el renombre a Vitela: recuperar
+                // las firmas guardadas bajo el identifier antiguo
+                firmas_visuales::migrar_datos_antiguos(&dir);
+                let _ = firmas_visuales::DIR_DATOS.set(dir);
+            }
+            #[cfg(debug_assertions)]
+            if std::env::var("EDITOR_PDF_PUENTE").as_deref() == Ok("1") {
+                std::thread::spawn(|| puente_dev::arrancar(puente_dev::puerto()));
+            }
+            std::thread::spawn(|| {
+                barre_huerfanos(&std::env::temp_dir(), std::time::Duration::from_secs(24 * 3600));
+            });
+            Ok(())
+        })
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![
+            open_pdf,
+            render_page,
+            busqueda::get_page_text,
+            get_page_sizes,
+            busqueda::search_pdf,
+            paginas::delete_page,
+            paginas::rotate_page,
+            paginas::move_page,
+            paginas::merge_pdf,
+            paginas::extract_pages,
+            save_pdf,
+            anotaciones::add_highlight,
+            anotaciones::add_stroke,
+            anotaciones::add_note,
+            anotaciones::get_annotations,
+            anotaciones::remove_annotation,
+            formularios::get_form_fields,
+            formularios::set_form_text,
+            formularios::set_form_checked,
+            texto::get_text_blocks,
+            texto::edit_text_block,
+            texto::add_text_block,
+            texto::delete_text_block,
+            imagenes::get_images,
+            imagenes::add_image,
+            imagenes::transform_image,
+            imagenes::replace_image,
+            imagenes::delete_image,
+            sign_pdf,
+            sign_pdf_p12,
+            firmas_visuales::stamp_signature,
+            firmas_visuales::import_signature_file,
+            firmas_visuales::save_stored_signature,
+            firmas_visuales::list_stored_signatures,
+            firmas_visuales::delete_stored_signature,
+            imagenes::get_image_data,
+            anotaciones2::add_markup,
+            anotaciones2::add_shape,
+            anotaciones2::add_stamp,
+            anotaciones2::transform_annotation,
+            paginas2::add_blank_page,
+            paginas2::duplicate_page,
+            paginas2::insert_pdf_at,
+            paginas2::crop_page,
+            paginas2::add_watermark,
+            paginas2::add_header_footer,
+            paginas2::remove_marginal_text,
+            documento::get_outline,
+            documento::set_outline,
+            documento::get_metadata,
+            documento::set_metadata,
+            documento::get_links,
+            seguridad::encrypt_pdf,
+            seguridad::flatten_pdf,
+            seguridad::redact_area,
+            exportar::export_pages_png,
+            exportar::export_text,
+            exportar::compress_pdf,
+            formularios2::create_form_field,
+            formularios2::create_link,
+            formularios2::delete_form_field,
+            historial::undo,
+            historial::redo,
+            historial::history_state,
+            historial::squash_history,
+            close_document
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                borra_copias_abiertas();
+            }
+        });
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -695,106 +797,4 @@ pub(crate) mod tests {
         haystack.windows(needle.len()).any(|w| w == needle)
     }
 
-}
-
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    tauri::Builder::default()
-        .setup(|app| {
-            use tauri::Manager;
-            if let Ok(dir) = app.path().resource_dir() {
-                let _ = RESOURCE_LIB_DIR.set(dir.join("lib"));
-            }
-            if let Ok(dir) = app.path().app_data_dir() {
-                // el identifier cambió con el renombre a Vitela: recuperar
-                // las firmas guardadas bajo el identifier antiguo
-                firmas_visuales::migrar_datos_antiguos(&dir);
-                let _ = firmas_visuales::DIR_DATOS.set(dir);
-            }
-            #[cfg(debug_assertions)]
-            if std::env::var("EDITOR_PDF_PUENTE").as_deref() == Ok("1") {
-                std::thread::spawn(|| puente_dev::arrancar(puente_dev::puerto()));
-            }
-            std::thread::spawn(|| {
-                barre_huerfanos(&std::env::temp_dir(), std::time::Duration::from_secs(24 * 3600));
-            });
-            Ok(())
-        })
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![
-            open_pdf,
-            render_page,
-            busqueda::get_page_text,
-            get_page_sizes,
-            busqueda::search_pdf,
-            paginas::delete_page,
-            paginas::rotate_page,
-            paginas::move_page,
-            paginas::merge_pdf,
-            paginas::extract_pages,
-            save_pdf,
-            anotaciones::add_highlight,
-            anotaciones::add_stroke,
-            anotaciones::add_note,
-            anotaciones::get_annotations,
-            anotaciones::remove_annotation,
-            formularios::get_form_fields,
-            formularios::set_form_text,
-            formularios::set_form_checked,
-            texto::get_text_blocks,
-            texto::edit_text_block,
-            texto::add_text_block,
-            texto::delete_text_block,
-            imagenes::get_images,
-            imagenes::add_image,
-            imagenes::transform_image,
-            imagenes::replace_image,
-            imagenes::delete_image,
-            sign_pdf,
-            sign_pdf_p12,
-            firmas_visuales::stamp_signature,
-            firmas_visuales::import_signature_file,
-            firmas_visuales::save_stored_signature,
-            firmas_visuales::list_stored_signatures,
-            firmas_visuales::delete_stored_signature,
-            imagenes::get_image_data,
-            anotaciones2::add_markup,
-            anotaciones2::add_shape,
-            anotaciones2::add_stamp,
-            anotaciones2::transform_annotation,
-            paginas2::add_blank_page,
-            paginas2::duplicate_page,
-            paginas2::insert_pdf_at,
-            paginas2::crop_page,
-            paginas2::add_watermark,
-            paginas2::add_header_footer,
-            paginas2::remove_marginal_text,
-            documento::get_outline,
-            documento::set_outline,
-            documento::get_metadata,
-            documento::set_metadata,
-            documento::get_links,
-            seguridad::encrypt_pdf,
-            seguridad::flatten_pdf,
-            seguridad::redact_area,
-            exportar::export_pages_png,
-            exportar::export_text,
-            exportar::compress_pdf,
-            formularios2::create_form_field,
-            formularios2::create_link,
-            formularios2::delete_form_field,
-            historial::undo,
-            historial::redo,
-            historial::history_state,
-            historial::squash_history,
-            close_document
-        ])
-        .build(tauri::generate_context!())
-        .expect("error while running tauri application")
-        .run(|_app, event| {
-            if let tauri::RunEvent::Exit = event {
-                borra_copias_abiertas();
-            }
-        });
 }

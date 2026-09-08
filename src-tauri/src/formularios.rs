@@ -216,8 +216,8 @@ mod tests {
         let xref_pos = out.len();
         out.extend_from_slice(format!("xref\n0 {}\n", objs.len() + 1).as_bytes());
         out.extend_from_slice(b"0000000000 65535 f \n");
-        for i in 1..=objs.len() {
-            out.extend_from_slice(format!("{:010} 00000 n \n", offsets[i]).as_bytes());
+        for off in offsets.iter().skip(1).take(objs.len()) {
+            out.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
         }
         out.extend_from_slice(
             format!(

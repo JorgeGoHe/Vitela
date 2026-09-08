@@ -98,6 +98,8 @@ pub fn add_markup(
 /// Forma geométrica entre dos puntos (coords de UI): rectángulo, elipse,
 /// línea o flecha. Va como anotación Ink con el path dentro para que
 /// renderice en cualquier visor y se pueda borrar individualmente.
+// la firma es el contrato con la UI: un argumento por propiedad de la forma
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 pub fn add_shape(
     work_path: String,
@@ -211,7 +213,6 @@ pub fn add_shape(
             .objects_mut()
             .add_path_object(path)
             .map_err(|e| e.to_string())?;
-        drop(annot);
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
@@ -297,7 +298,6 @@ pub fn add_stamp(
             .objects_mut()
             .add_text_object(texto)
             .map_err(|e| e.to_string())?;
-        drop(annot);
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())

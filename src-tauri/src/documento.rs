@@ -25,8 +25,7 @@ fn nodo_de(b: &PdfBookmark) -> OutlineNode {
                 }
                 _ => None,
             })
-        })
-        .map(|i| i as u16);
+        });
     let children = b.iter_direct_children().map(|c| nodo_de(&c)).collect();
     OutlineNode {
         title: b.title().unwrap_or_default(),
@@ -241,19 +240,15 @@ pub fn get_links(path: String, page_index: u16) -> Result<Vec<LinkInfo>, String>
                 let mut uri = None;
                 let mut dest_page = link
                     .destination()
-                    .and_then(|d| d.page_index().ok())
-                    .map(|i| i as u16);
+                    .and_then(|d| d.page_index().ok());
                 if let Some(action) = link.action() {
                     match action {
                         PdfAction::Uri(u) => uri = u.uri().ok(),
-                        PdfAction::LocalDestination(l) => {
-                            if dest_page.is_none() {
-                                dest_page = l
-                                    .destination()
-                                    .ok()
-                                    .and_then(|d| d.page_index().ok())
-                                    .map(|i| i as u16);
-                            }
+                        PdfAction::LocalDestination(l) if dest_page.is_none() => {
+                            dest_page = l
+                                .destination()
+                                .ok()
+                                .and_then(|d| d.page_index().ok());
                         }
                         _ => {}
                     }

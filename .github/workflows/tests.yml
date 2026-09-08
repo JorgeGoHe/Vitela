@@ -1,0 +1,52 @@
+# Tests de Rust, clippy, lint y build de la UI en cada push y pull request.
+# Corre en Linux a propósito: es la plataforma donde PDFium se comporta
+# distinto (p. ej. el SIGSEGV de stroke_color() de pdfium-render).
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+env:
+  PDFIUM_TAG: chromium/8009
+
+jobs:
+  tests:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Dependencias del sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            librsvg2-dev libayatana-appindicator3-dev patchelf \
+            build-essential curl wget file libssl-dev
+
+      - name: Descargar PDFium
+        run: |
+          curl -sL -o pdfium.tgz "https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_TAG}/pdfium-linux-x64.tgz"
+          mkdir -p pdfium-extraido src-tauri/lib
+          tar -xzf pdfium.tgz -C pdfium-extraido
+          cp pdfium-extraido/lib/libpdfium.so src-tauri/lib/
+
+      - name: Tests de Rust
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: UI (lint y build)
+        run: |
+          bun install --frozen-lockfile
+          bun run lint
+          bun run build

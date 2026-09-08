@@ -10,6 +10,11 @@ on:
 permissions:
   contents: write
 
+env:
+  # Versión fija de pdfium-binaries: cada build trae el mismo motor (los
+  # builds cambian comportamiento, p. ej. el nombre de las fuentes internas)
+  PDFIUM_TAG: chromium/8009
+
 jobs:
   build:
     strategy:
@@ -42,7 +47,7 @@ jobs:
       - name: Descargar PDFium
         shell: bash
         run: |
-          curl -sL -o pdfium.tgz "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-${{ matrix.pdfium }}.tgz"
+          curl -sL -o pdfium.tgz "https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_TAG}/pdfium-${{ matrix.pdfium }}.tgz"
           mkdir -p pdfium-extraido src-tauri/lib
           tar -xzf pdfium.tgz -C pdfium-extraido
           cp "pdfium-extraido/${{ matrix.origen }}" src-tauri/lib/
