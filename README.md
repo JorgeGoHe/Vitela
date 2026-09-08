@@ -62,7 +62,12 @@ otros builds cambian detalles como el nombre de las fuentes internas):
 bun install
 bun run tauri dev     # desarrollo
 bun run tauri build   # instalador (.dmg / .exe / .deb / .rpm / .AppImage)
+bun run lint          # ESLint
+cd src-tauri && cargo test && cargo clippy --all-targets -- -D warnings
 ```
+
+La integración continua (`.github/workflows/tests.yml`) ejecuta los tests,
+clippy, el lint y el build de la UI en Linux en cada push.
 
 En Linux, Tauri necesita además las librerías de sistema de WebKitGTK
 (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `librsvg2-dev`…); la lista completa
