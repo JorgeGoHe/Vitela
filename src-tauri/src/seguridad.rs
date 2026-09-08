@@ -109,7 +109,7 @@ fn cifra_objeto(obj: &mut Object, fek: &[u8]) -> Result<(), String> {
 
 /// Protege el PDF con contraseña (AES-256, R6) y lo escribe en `dest_path`.
 /// Si no se da contraseña de propietario se reutiliza la de usuario.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn encrypt_pdf(
     work_path: String,
     dest_path: String,
@@ -127,87 +127,92 @@ pub fn encrypt_pdf(
         .unwrap_or_else(|| user.clone());
     owner.truncate(127);
 
-    let mut doc =
-        LoDoc::load(&work_path).map_err(|e| format!("No se pudo leer el PDF: {e}"))?;
+    // lee la copia de trabajo: en el hilo de PDFium y con el caché
+    // invalidado, para no competir con una mutación concurrente
+    on_pdfium_thread(move || {
+        invalidate_doc_cache();
+        let mut doc =
+            LoDoc::load(&work_path).map_err(|e| format!("No se pudo leer el PDF: {e}"))?;
 
-    // clave de cifrado del fichero y entradas del diccionario Encrypt
-    let fek = aleatorio::<32>()?;
-    let uvs = aleatorio::<8>()?;
-    let uks = aleatorio::<8>()?;
-    let ovs = aleatorio::<8>()?;
-    let oks = aleatorio::<8>()?;
+        // clave de cifrado del fichero y entradas del diccionario Encrypt
+        let fek = aleatorio::<32>()?;
+        let uvs = aleatorio::<8>()?;
+        let uks = aleatorio::<8>()?;
+        let ovs = aleatorio::<8>()?;
+        let oks = aleatorio::<8>()?;
 
-    let mut u = hash_2b(&user, &uvs, &[]);
-    u.extend_from_slice(&uvs);
-    u.extend_from_slice(&uks);
-    let ue = aes256_cbc_iv0_nopad(&hash_2b(&user, &uks, &[]), &fek);
-    let mut o = hash_2b(&owner, &ovs, &u);
-    o.extend_from_slice(&ovs);
-    o.extend_from_slice(&oks);
-    let oe = aes256_cbc_iv0_nopad(&hash_2b(&owner, &oks, &u), &fek);
+        let mut u = hash_2b(&user, &uvs, &[]);
+        u.extend_from_slice(&uvs);
+        u.extend_from_slice(&uks);
+        let ue = aes256_cbc_iv0_nopad(&hash_2b(&user, &uks, &[]), &fek);
+        let mut o = hash_2b(&owner, &ovs, &u);
+        o.extend_from_slice(&ovs);
+        o.extend_from_slice(&oks);
+        let oe = aes256_cbc_iv0_nopad(&hash_2b(&owner, &oks, &u), &fek);
 
-    // permisos: todo permitido (P = -4), metadatos cifrados
-    let p: i64 = -4;
-    let mut perms_block = [0u8; 16];
-    perms_block[0..4].copy_from_slice(&(p as i32).to_le_bytes());
-    perms_block[4..8].copy_from_slice(&[0xFF; 4]);
-    perms_block[8] = b'T';
-    perms_block[9] = b'a';
-    perms_block[10] = b'd';
-    perms_block[11] = b'b';
-    perms_block[12..16].copy_from_slice(&aleatorio::<4>()?);
-    let cipher = aes::Aes256::new_from_slice(&fek).expect("clave AES-256 válida");
-    let mut perms = aes::Block::clone_from_slice(&perms_block);
-    cipher.encrypt_block(&mut perms);
+        // permisos: todo permitido (P = -4), metadatos cifrados
+        let p: i64 = -4;
+        let mut perms_block = [0u8; 16];
+        perms_block[0..4].copy_from_slice(&(p as i32).to_le_bytes());
+        perms_block[4..8].copy_from_slice(&[0xFF; 4]);
+        perms_block[8] = b'T';
+        perms_block[9] = b'a';
+        perms_block[10] = b'd';
+        perms_block[11] = b'b';
+        perms_block[12..16].copy_from_slice(&aleatorio::<4>()?);
+        let cipher = aes::Aes256::new_from_slice(&fek).expect("clave AES-256 válida");
+        let mut perms = aes::Block::clone_from_slice(&perms_block);
+        cipher.encrypt_block(&mut perms);
 
-    // cifrar todas las cadenas y streams del documento
-    let ids: Vec<lopdf::ObjectId> = doc.objects.keys().copied().collect();
-    for id in ids {
-        if let Some(obj) = doc.objects.get_mut(&id) {
-            cifra_objeto(obj, &fek)?;
+        // cifrar todas las cadenas y streams del documento
+        let ids: Vec<lopdf::ObjectId> = doc.objects.keys().copied().collect();
+        for id in ids {
+            if let Some(obj) = doc.objects.get_mut(&id) {
+                cifra_objeto(obj, &fek)?;
+            }
         }
-    }
 
-    let mut cf_std = Dictionary::new();
-    cf_std.set("CFM", Object::Name(b"AESV3".to_vec()));
-    cf_std.set("Length", 32i64);
-    let mut cf = Dictionary::new();
-    cf.set("StdCF", Object::Dictionary(cf_std));
-    let mut enc = Dictionary::new();
-    enc.set("Filter", Object::Name(b"Standard".to_vec()));
-    enc.set("V", 5i64);
-    enc.set("R", 6i64);
-    enc.set("Length", 256i64);
-    enc.set("CF", Object::Dictionary(cf));
-    enc.set("StmF", Object::Name(b"StdCF".to_vec()));
-    enc.set("StrF", Object::Name(b"StdCF".to_vec()));
-    enc.set("U", Object::String(u, StringFormat::Hexadecimal));
-    enc.set("UE", Object::String(ue, StringFormat::Hexadecimal));
-    enc.set("O", Object::String(o, StringFormat::Hexadecimal));
-    enc.set("OE", Object::String(oe, StringFormat::Hexadecimal));
-    enc.set(
-        "Perms",
-        Object::String(perms.to_vec(), StringFormat::Hexadecimal),
-    );
-    enc.set("P", p);
-    enc.set("EncryptMetadata", Object::Boolean(true));
-    let enc_id = doc.add_object(enc);
-    doc.trailer.set("Encrypt", Object::Reference(enc_id));
-    if doc.trailer.get(b"ID").is_err() {
-        let id1 = aleatorio::<16>()?.to_vec();
-        let id2 = aleatorio::<16>()?.to_vec();
-        doc.trailer.set(
-            "ID",
-            Object::Array(vec![
-                Object::String(id1, StringFormat::Hexadecimal),
-                Object::String(id2, StringFormat::Hexadecimal),
-            ]),
+        let mut cf_std = Dictionary::new();
+        cf_std.set("CFM", Object::Name(b"AESV3".to_vec()));
+        cf_std.set("Length", 32i64);
+        let mut cf = Dictionary::new();
+        cf.set("StdCF", Object::Dictionary(cf_std));
+        let mut enc = Dictionary::new();
+        enc.set("Filter", Object::Name(b"Standard".to_vec()));
+        enc.set("V", 5i64);
+        enc.set("R", 6i64);
+        enc.set("Length", 256i64);
+        enc.set("CF", Object::Dictionary(cf));
+        enc.set("StmF", Object::Name(b"StdCF".to_vec()));
+        enc.set("StrF", Object::Name(b"StdCF".to_vec()));
+        enc.set("U", Object::String(u, StringFormat::Hexadecimal));
+        enc.set("UE", Object::String(ue, StringFormat::Hexadecimal));
+        enc.set("O", Object::String(o, StringFormat::Hexadecimal));
+        enc.set("OE", Object::String(oe, StringFormat::Hexadecimal));
+        enc.set(
+            "Perms",
+            Object::String(perms.to_vec(), StringFormat::Hexadecimal),
         );
-    }
+        enc.set("P", p);
+        enc.set("EncryptMetadata", Object::Boolean(true));
+        let enc_id = doc.add_object(enc);
+        doc.trailer.set("Encrypt", Object::Reference(enc_id));
+        if doc.trailer.get(b"ID").is_err() {
+            let id1 = aleatorio::<16>()?.to_vec();
+            let id2 = aleatorio::<16>()?.to_vec();
+            doc.trailer.set(
+                "ID",
+                Object::Array(vec![
+                    Object::String(id1, StringFormat::Hexadecimal),
+                    Object::String(id2, StringFormat::Hexadecimal),
+                ]),
+            );
+        }
 
-    doc.save(&dest_path)
-        .map_err(|e| format!("No se pudo guardar: {e}"))?;
-    Ok(())
+        doc.save(&dest_path)
+            .map_err(|e| format!("No se pudo guardar: {e}"))?;
+        Ok(())
+    })
 }
 
 /// Puente FPDF_FILEWRITE → Vec<u8> para usar FPDF_SaveAsCopy con flags.
@@ -266,7 +271,7 @@ pub(crate) fn guarda_descifrado(
 /// Aplana anotaciones y campos de formulario: pasan a ser contenido fijo de
 /// la página. Ojo: los resaltados/notas propios (sin /AP) desaparecen — la
 /// UI avisa antes.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn flatten_pdf(work_path: String) -> Result<(), String> {
     on_pdfium_thread(move || {
         let pdfium = pdfium()?;
@@ -292,7 +297,7 @@ pub struct RedactReport {
 /// tocan y pinta un rectángulo negro encima. Con `dry_run` solo cuenta qué
 /// caería (para el aviso de la UI). Granularidad de objeto: un bloque de
 /// texto que asome por el área cae entero.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn redact_area(
     work_path: String,
     page_index: u16,

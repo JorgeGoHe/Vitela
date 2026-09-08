@@ -8,7 +8,7 @@ use std::io::Cursor;
 
 /// Exporta todas las páginas como PNG o JPEG al directorio dado, a la
 /// resolución pedida. Devuelve las rutas escritas.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn export_pages_png(
     path: String,
     dest_dir: String,
@@ -54,7 +54,7 @@ pub fn export_pages_png(
 }
 
 /// Vuelca el texto de todas las páginas a un fichero de texto plano.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn export_text(path: String, dest_path: String) -> Result<(), String> {
     on_pdfium_thread(move || {
         with_doc(&path, |doc| {
@@ -83,7 +83,7 @@ pub struct CompressReport {
 /// dada y submuestreando las que superen `max_dpi` respecto a su tamaño en
 /// página. Se saltan las imágenes con transparencia (JPEG la perdería) y las
 /// rotadas (la reinserción solo maneja imágenes sin rotar).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn compress_pdf(work_path: String, quality: u8, max_dpi: u16) -> Result<CompressReport, String> {
     let quality = quality.clamp(30, 95);
     let max_dpi = max_dpi.clamp(72, 600) as f32;

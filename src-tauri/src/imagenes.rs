@@ -6,7 +6,7 @@ use pdfium_render::prelude::*;
 
 /// Contenido de un objeto de imagen como PNG en base64 (con máscaras y
 /// transparencia aplicadas). La UI lo usa como vista previa al arrastrar.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_image_data(path: String, page_index: u16, object_index: u32) -> Result<String, String> {
     on_pdfium_thread(move || {
         with_doc(&path, |doc| {

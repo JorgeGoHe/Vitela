@@ -20,12 +20,20 @@ static RESOURCE_LIB_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
 /// `Send`. Un único hilo propietario garantiza por construcción una sola
 /// instancia y serializa todo el acceso, venga de donde venga la llamada
 /// (comandos de Tauri o tests).
+///
+/// Es reentrante: si ya estamos en el hilo de PDFium, `f` se ejecuta en
+/// línea. Sin esto, un trabajo que por dentro vuelva a llamar aquí se
+/// quedaría esperando a un hilo que está ocupado esperándole a él.
 pub(crate) fn on_pdfium_thread<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static) -> R {
+    if EN_HILO_PDFIUM.with(|c| c.get()) {
+        return f();
+    }
     let tx = PDFIUM_TX.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<Job>();
         std::thread::Builder::new()
             .name("pdfium".into())
             .spawn(move || {
+                EN_HILO_PDFIUM.with(|c| c.set(true));
                 for job in rx {
                     job();
                 }
@@ -42,6 +50,7 @@ pub(crate) fn on_pdfium_thread<R: Send + 'static>(f: impl FnOnce() -> R + Send +
 }
 
 thread_local! {
+    static EN_HILO_PDFIUM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static PDFIUM: RefCell<Option<&'static Pdfium>> = const { RefCell::new(None) };
     static DOC_CACHE: RefCell<Option<(String, PdfDocument<'static>)>> = const { RefCell::new(None) };
 }
@@ -135,12 +144,36 @@ pub(crate) fn save_and_close(doc: PdfDocument<'static>, path: &str) -> Result<()
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
+/// Cirugía con lopdf sobre la copia de trabajo: carga el PDF, ejecuta `f`
+/// y guarda con .tmp + rename, todo dentro del hilo de PDFium. El caché se
+/// invalida ANTES de leer: PDFium mantiene el fichero abierto de forma
+/// perezosa y en Windows el rename fallaría; además, al pasar por el hilo
+/// ningún otro comando puede estar escribiendo la copia a la vez.
+pub(crate) fn cirugia(
+    work_path: &str,
+    f: impl FnOnce(&mut lopdf::Document) -> Result<(), String> + Send + 'static,
+) -> Result<(), String> {
+    let work_path = work_path.to_string();
+    on_pdfium_thread(move || {
+        invalidate_doc_cache();
+        let mut doc = lopdf::Document::load(&work_path)
+            .map_err(|e| format!("No se pudo leer el PDF: {e}"))?;
+        if doc.is_encrypted() {
+            return Err("El documento está cifrado: quita la contraseña antes".into());
+        }
+        f(&mut doc)?;
+        let tmp = format!("{work_path}.tmp");
+        doc.save(&tmp).map_err(|e| format!("No se pudo guardar: {e}"))?;
+        std::fs::rename(&tmp, &work_path).map_err(|e| e.to_string())
+    })
+}
+
 /// Abre un PDF creando una copia de trabajo en temp. Todas las mutaciones
 /// operan sobre la copia; el original solo se toca al guardar. Si el PDF
 /// está cifrado hace falta `password`: la copia de trabajo se guarda ya
 /// descifrada para que el resto de comandos no tengan que saber nada. El
 /// error "PASSWORD_REQUIRED" indica a la UI que pida contraseña.
-#[tauri::command]
+#[tauri::command(async)]
 fn open_pdf(path: String, password: Option<String>) -> Result<DocumentInfo, String> {
     let work = work_copy_path(&path);
     let work_path = work.to_string_lossy().into_owned();
@@ -216,7 +249,7 @@ pub(crate) fn render_page_b64(
 /// Comando de render: los bytes del PNG viajan como IPC binario (sin base64
 /// ni JSON — con páginas grandes el parseo de un JSON de varios MB congelaba
 /// el hilo del webview y dejaba zonas sin pintar al redimensionar la ventana).
-#[tauri::command]
+#[tauri::command(async)]
 fn render_page(
     path: String,
     page_index: u16,
@@ -290,7 +323,7 @@ struct PageSize {
 
 /// Tamaño de todas las páginas en puntos PDF (para el layout del scroll
 /// continuo sin renderizar nada).
-#[tauri::command]
+#[tauri::command(async)]
 fn get_page_sizes(path: String) -> Result<Vec<PageSize>, String> {
     on_pdfium_thread(move || {
         with_doc(&path, |doc| {
@@ -306,7 +339,7 @@ fn get_page_sizes(path: String) -> Result<Vec<PageSize>, String> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_page_text(path: String, page_index: u16) -> Result<PageText, String> {
     on_pdfium_thread(move || {
         with_doc(&path, |doc| {
@@ -373,7 +406,7 @@ fn normaliza_colapsando(chars: impl Iterator<Item = char>) -> Vec<(char, usize)>
 /// Busca `query` en todas las páginas (sin distinguir mayúsculas, sin
 /// solapamientos, y tratando cualquier racha de espacios/saltos de línea como
 /// un espacio) y devuelve los rectángulos de cada coincidencia.
-#[tauri::command]
+#[tauri::command(async)]
 fn search_pdf(path: String, query: String) -> Result<Vec<SearchMatch>, String> {
     let needle: Vec<char> = normaliza_colapsando(query.trim().chars())
         .into_iter()
@@ -424,7 +457,7 @@ fn search_pdf(path: String, query: String) -> Result<Vec<SearchMatch>, String> {
 }
 
 /// Borra una página y devuelve el nuevo número de páginas.
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_page(work_path: String, page_index: u16) -> Result<u16, String> {
     on_pdfium_thread(move || {
         let pdfium = pdfium()?;
@@ -440,7 +473,7 @@ fn delete_page(work_path: String, page_index: u16) -> Result<u16, String> {
 }
 
 /// Rota una página 90° en sentido horario (acumulativo).
-#[tauri::command]
+#[tauri::command(async)]
 fn rotate_page(work_path: String, page_index: u16) -> Result<(), String> {
     on_pdfium_thread(move || {
         let pdfium = pdfium()?;
@@ -463,7 +496,7 @@ fn rotate_page(work_path: String, page_index: u16) -> Result<(), String> {
 
 /// Mueve una página a otra posición reconstruyendo el documento en el nuevo
 /// orden (FPDF_ImportPages respeta el orden del rango dado).
-#[tauri::command]
+#[tauri::command(async)]
 fn move_page(work_path: String, from_index: u16, to_index: u16) -> Result<(), String> {
     if from_index == to_index {
         return Ok(());
@@ -497,7 +530,7 @@ fn move_page(work_path: String, from_index: u16, to_index: u16) -> Result<(), St
 }
 
 /// Añade todas las páginas de otro PDF al final y devuelve el nuevo total.
-#[tauri::command]
+#[tauri::command(async)]
 fn merge_pdf(work_path: String, other_path: String) -> Result<u16, String> {
     on_pdfium_thread(move || {
         let pdfium = pdfium()?;
@@ -516,7 +549,7 @@ fn merge_pdf(work_path: String, other_path: String) -> Result<u16, String> {
 }
 
 /// Extrae las páginas indicadas (índices base 0) a un PDF nuevo.
-#[tauri::command]
+#[tauri::command(async)]
 fn extract_pages(
     work_path: String,
     page_indices: Vec<u16>,
@@ -555,7 +588,7 @@ pub(crate) fn ui_rect_to_pdf(r: &Rect, page_h: f32) -> PdfRect {
 
 /// Crea una anotación de resaltado amarillo sobre los rects dados
 /// (coords de UI en puntos PDF).
-#[tauri::command]
+#[tauri::command(async)]
 fn add_highlight(work_path: String, page_index: u16, rects: Vec<Rect>) -> Result<(), String> {
     if rects.is_empty() {
         return Err("No hay nada que resaltar".into());
@@ -617,7 +650,7 @@ fn add_highlight(work_path: String, page_index: u16, rects: Vec<Rect>) -> Result
 /// (un path dentro de la anotación), de modo que se puede borrar
 /// individualmente. Los puntos vienen en coords de UI (puntos PDF,
 /// origen arriba-izquierda).
-#[tauri::command]
+#[tauri::command(async)]
 fn add_stroke(
     work_path: String,
     page_index: u16,
@@ -679,7 +712,7 @@ fn add_stroke(
 }
 
 /// Crea una nota (anotación de texto) en el punto dado (coords de UI).
-#[tauri::command]
+#[tauri::command(async)]
 fn add_note(
     work_path: String,
     page_index: u16,
@@ -739,7 +772,7 @@ struct AnnotationInfo {
 /// Lista las anotaciones de una página (bounds en coords de UI). La UI las
 /// usa para pintar los iconos de nota, los rects de los resaltados (PDFium no
 /// genera apariencia automática para Text ni Highlight) y para borrar con clic.
-#[tauri::command]
+#[tauri::command(async)]
 fn get_annotations(path: String, page_index: u16) -> Result<Vec<AnnotationInfo>, String> {
     on_pdfium_thread(move || {
         with_doc(&path, |doc| {
@@ -870,7 +903,7 @@ fn colores_annots_lopdf(path: &str, page_index: u16) -> Option<Vec<Option<[u8; 4
 }
 
 /// Elimina la anotación con el índice dado.
-#[tauri::command]
+#[tauri::command(async)]
 fn remove_annotation(work_path: String, page_index: u16, annot_index: u16) -> Result<(), String> {
     on_pdfium_thread(move || {
         let pdfium = pdfium()?;
@@ -906,7 +939,7 @@ struct FormFieldInfo {
 
 /// Lista los campos de formulario (widgets) de una página, con bounds en
 /// coords de UI.
-#[tauri::command]
+#[tauri::command(async)]
 fn get_form_fields(path: String, page_index: u16) -> Result<Vec<FormFieldInfo>, String> {
     on_pdfium_thread(move || {
         with_doc(&path, |doc| {
@@ -966,7 +999,7 @@ fn get_form_fields(path: String, page_index: u16) -> Result<Vec<FormFieldInfo>, 
 }
 
 /// Escribe el valor de un campo de texto de formulario.
-#[tauri::command]
+#[tauri::command(async)]
 fn set_form_text(
     work_path: String,
     page_index: u16,
@@ -998,7 +1031,7 @@ fn set_form_text(
 }
 
 /// Marca o desmarca una casilla (o selecciona un radio button).
-#[tauri::command]
+#[tauri::command(async)]
 fn set_form_checked(
     work_path: String,
     page_index: u16,
@@ -1152,7 +1185,7 @@ pub(crate) fn familia_dominante(doc: &PdfDocument<'static>, page_index: u16) -> 
 
 /// Lista los objetos de texto de una página (bloques editables), con bounds
 /// en coords de UI.
-#[tauri::command]
+#[tauri::command(async)]
 fn get_text_blocks(path: String, page_index: u16) -> Result<Vec<TextBlock>, String> {
     on_pdfium_thread(move || {
         with_doc(&path, |doc| {
@@ -1191,7 +1224,7 @@ fn get_text_blocks(path: String, page_index: u16) -> Result<Vec<TextBlock>, Stri
 /// del texto nuevo, esos caracteres no se verán). Si el texto nuevo tiene
 /// varias líneas, la primera reemplaza al objeto original y las demás se
 /// insertan como objetos nuevos con la misma fuente, colocados debajo.
-#[tauri::command]
+#[tauri::command(async)]
 fn edit_text_block(
     work_path: String,
     page_index: u16,
@@ -1271,7 +1304,7 @@ fn edit_text_block(
 /// texto se inserta como un objeto propio. La fuente puede elegirse por
 /// nombre; sin nombre (o "auto") se detecta la familia dominante de la
 /// página y se aproxima.
-#[tauri::command]
+#[tauri::command(async)]
 fn add_text_block(
     work_path: String,
     page_index: u16,
@@ -1330,7 +1363,7 @@ struct ImageInfo {
 }
 
 /// Lista los objetos de imagen de una página (bounds en coords de UI).
-#[tauri::command]
+#[tauri::command(async)]
 fn get_images(path: String, page_index: u16) -> Result<Vec<ImageInfo>, String> {
     on_pdfium_thread(move || {
         with_doc(&path, |doc| {
@@ -1360,7 +1393,7 @@ fn get_images(path: String, page_index: u16) -> Result<Vec<ImageInfo>, String> {
 /// Inserta una imagen (png/jpg/webp…) con su tamaño natural a 72 dpi,
 /// limitado a caber en la página. El punto dado (coords de UI) es la esquina
 /// superior izquierda.
-#[tauri::command]
+#[tauri::command(async)]
 fn add_image(
     work_path: String,
     page_index: u16,
@@ -1408,7 +1441,7 @@ fn add_image(
 
 /// Mueve y/o redimensiona una imagen a los bounds dados (coords de UI).
 /// Válido para imágenes sin rotación.
-#[tauri::command]
+#[tauri::command(async)]
 fn transform_image(
     work_path: String,
     page_index: u16,
@@ -1455,7 +1488,7 @@ fn transform_image(
 }
 
 /// Reemplaza el contenido de una imagen manteniendo posición y tamaño.
-#[tauri::command]
+#[tauri::command(async)]
 fn replace_image(
     work_path: String,
     page_index: u16,
@@ -1508,7 +1541,7 @@ fn replace_image(
 }
 
 /// Elimina una imagen de la página.
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_image(work_path: String, page_index: u16, object_index: u32) -> Result<(), String> {
     on_pdfium_thread(move || {
         let pdfium = pdfium()?;
@@ -1539,7 +1572,7 @@ fn delete_image(work_path: String, page_index: u16, object_index: u32) -> Result
 }
 
 /// Borra un bloque de texto del content stream.
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_text_block(work_path: String, page_index: u16, object_index: u32) -> Result<(), String> {
     on_pdfium_thread(move || {
         let pdfium = pdfium()?;
@@ -1575,7 +1608,7 @@ mod seguridad;
 
 /// Firma digitalmente la copia de trabajo y escribe el PDF firmado en
 /// `dest_path`. Certificado y clave privada en PEM (RSA sin cifrar).
-#[tauri::command]
+#[tauri::command(async)]
 fn sign_pdf(
     work_path: String,
     dest_path: String,
@@ -1588,11 +1621,25 @@ fn sign_pdf(
     let key_pem = std::fs::read_to_string(&key_pem_path)
         .map_err(|e| format!("No se pudo leer la clave: {e}"))?;
     let cred = firma::credenciales_pem(&cert_pem, &key_pem)?;
-    firma::sign(&work_path, &dest_path, &cred, reason)
+    firmar_en_hilo(work_path, dest_path, cred, reason)
+}
+
+/// La firma lee la copia de trabajo: se hace en el hilo de PDFium, con el
+/// caché invalidado, para no competir con una mutación concurrente.
+fn firmar_en_hilo(
+    work_path: String,
+    dest_path: String,
+    cred: firma::Credenciales,
+    reason: Option<String>,
+) -> Result<(), String> {
+    on_pdfium_thread(move || {
+        invalidate_doc_cache();
+        firma::sign(&work_path, &dest_path, &cred, reason)
+    })
 }
 
 /// Igual que `sign_pdf` pero con un contenedor PKCS#12 (.p12/.pfx).
-#[tauri::command]
+#[tauri::command(async)]
 fn sign_pdf_p12(
     work_path: String,
     dest_path: String,
@@ -1602,7 +1649,7 @@ fn sign_pdf_p12(
 ) -> Result<(), String> {
     let bytes = std::fs::read(&p12_path).map_err(|e| format!("No se pudo leer el .p12: {e}"))?;
     let cred = firma::credenciales_p12(&bytes, &password)?;
-    firma::sign(&work_path, &dest_path, &cred, reason)
+    firmar_en_hilo(work_path, dest_path, cred, reason)
 }
 
 /// Crea un PDF de prueba con una página de texto por cada entrada. Lo usan
@@ -1634,11 +1681,15 @@ pub(crate) fn crea_pdf(textos: &[&str], dest: &std::path::Path) {
 }
 
 /// Vuelca la copia de trabajo en el destino (guardar / guardar como).
-#[tauri::command]
+#[tauri::command(async)]
 fn save_pdf(work_path: String, dest_path: String) -> Result<(), String> {
-    std::fs::copy(&work_path, &dest_path)
-        .map(|_| ())
-        .map_err(|e| format!("No se pudo guardar: {e}"))
+    // en el hilo de PDFium: nadie puede estar renombrando la copia a la vez
+    on_pdfium_thread(move || {
+        invalidate_doc_cache();
+        std::fs::copy(&work_path, &dest_path)
+            .map(|_| ())
+            .map_err(|e| format!("No se pudo guardar: {e}"))
+    })
 }
 
 #[cfg(test)]
@@ -1658,6 +1709,21 @@ pub(crate) mod tests {
                 .map(|p| p.text().map(|t| t.all()).unwrap_or_default())
                 .collect()
         })
+    }
+
+    #[test]
+    fn hilo_pdfium_reentrante() {
+        // una llamada anidada se ejecuta en línea y devuelve su valor; sin el
+        // guardián de reentrada este test se quedaría colgado para siempre
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let v = on_pdfium_thread(|| on_pdfium_thread(|| 21) * 2);
+            let _ = tx.send(v);
+        });
+        let v = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("la llamada anidada se ha colgado");
+        assert_eq!(v, 42);
     }
 
     #[test]

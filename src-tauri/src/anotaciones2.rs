@@ -12,7 +12,7 @@ fn color_de(c: [u8; 4]) -> PdfColor {
 
 /// Marca de texto sobre los rects dados (coords de UI): resaltado, subrayado
 /// o tachado. Igual que `add_highlight` pero con subtipo y color a elegir.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn add_markup(
     work_path: String,
     page_index: u16,
@@ -96,7 +96,7 @@ pub fn add_markup(
 /// Forma geométrica entre dos puntos (coords de UI): rectángulo, elipse,
 /// línea o flecha. Va como anotación Ink con el path dentro para que
 /// renderice en cualquier visor y se pueda borrar individualmente.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn add_shape(
     work_path: String,
     page_index: u16,
@@ -213,7 +213,7 @@ pub fn add_shape(
 
 /// Sello de texto (APROBADO, BORRADOR…): anotación Stamp con un borde y el
 /// texto dentro, centrado en el punto dado (coords de UI).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn add_stamp(
     work_path: String,
     page_index: u16,
@@ -299,7 +299,7 @@ pub fn add_stamp(
 /// Mueve y/o reescala una anotación con apariencia embebida (Stamp o Ink):
 /// transforma los objetos de dentro para que ocupen el rect nuevo (coords de
 /// UI) y actualiza los bounds. Para el resto de tipos solo hay borrado.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn transform_annotation(
     work_path: String,
     page_index: u16,

@@ -7,7 +7,7 @@ use pdfium_render::prelude::*;
 
 /// Inserta una página en blanco en `index`, del mismo tamaño que la página
 /// vecina (o A4 si el documento está vacío). Devuelve el nuevo total.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn add_blank_page(work_path: String, index: u16) -> Result<u16, String> {
     on_pdfium_thread(move || {
         let pdfium = pdfium()?;
@@ -30,7 +30,7 @@ pub fn add_blank_page(work_path: String, index: u16) -> Result<u16, String> {
 }
 
 /// Duplica la página dada (la copia queda justo después). Devuelve el total.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn duplicate_page(work_path: String, page_index: u16) -> Result<u16, String> {
     on_pdfium_thread(move || {
         let pdfium = pdfium()?;
@@ -57,7 +57,7 @@ pub fn duplicate_page(work_path: String, page_index: u16) -> Result<u16, String>
 
 /// Inserta todas las páginas de otro PDF en la posición dada. Devuelve el
 /// total resultante (generaliza `merge_pdf`, que solo añade al final).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn insert_pdf_at(work_path: String, other_path: String, index: u16) -> Result<u16, String> {
     on_pdfium_thread(move || {
         let pdfium = pdfium()?;
@@ -84,7 +84,7 @@ pub fn insert_pdf_at(work_path: String, other_path: String, index: u16) -> Resul
 /// coordenadas de la UI), se normaliza: se traslada el contenido y las
 /// anotaciones y se reescriben MediaBox y CropBox a (0,0,w,h). El contenido
 /// fuera del área no se elimina (solo deja de mostrarse), como en Acrobat.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn crop_page(
     work_path: String,
     page_index: u16,
@@ -193,7 +193,7 @@ fn ancho_estimado(text: &str, size: f32) -> f32 {
 /// centro). Va como contenido de página; para poder quitarla después el alpha
 /// se limita a 240 (así `remove_marginal_text` la reconoce por translucidez
 /// aunque no esté rotada).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn add_watermark(
     work_path: String,
     text: String,
@@ -272,7 +272,7 @@ pub fn add_watermark(
 /// Encabezado y pie en todas las páginas, con tres huecos por zona
 /// (izquierda/centro/derecha). Plantillas: `{n}` número de página, `{total}`
 /// total, `{fecha}` fecha de hoy. Numerar páginas = pie centro con `{n}`.
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 pub fn add_header_footer(
     work_path: String,
@@ -578,7 +578,7 @@ pub struct MarginalReport {
 /// Elimina el texto "marginal" añadido por la app: marca de agua (objetos de
 /// texto con matriz rotada) o encabezados/pies (objetos de texto contenidos
 /// en las bandas superior/inferior de 40 pt). Con `dry_run` solo cuenta.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn remove_marginal_text(
     work_path: String,
     zona: String,

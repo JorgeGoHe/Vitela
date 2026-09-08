@@ -3,7 +3,7 @@
 //! campos no se ofrece en v1 (dejaría huérfanos en /Fields); los enlaces son
 //! anotaciones normales y se borran con remove_annotation.
 
-use crate::{invalidate_doc_cache, on_pdfium_thread, Rect};
+use crate::{cirugia, Rect};
 use lopdf::{Dictionary, Document as LoDoc, Object, ObjectId, Stream, StringFormat};
 
 /// MediaBox de una página, buscando en el propio dict o heredado del árbol.
@@ -73,25 +73,6 @@ fn anade_a_annots(doc: &mut LoDoc, page_id: ObjectId, annot_id: ObjectId) -> Res
     Ok(())
 }
 
-/// Carga el PDF con lopdf, ejecuta `f` y guarda con .tmp + rename. El caché
-/// de PDFium se invalida ANTES (mantiene el fichero abierto de forma perezosa
-/// y en Windows el rename fallaría).
-fn cirugia(
-    work_path: &str,
-    f: impl FnOnce(&mut LoDoc) -> Result<(), String>,
-) -> Result<(), String> {
-    on_pdfium_thread(invalidate_doc_cache);
-    let mut doc =
-        LoDoc::load(work_path).map_err(|e| format!("No se pudo leer el PDF: {e}"))?;
-    if doc.is_encrypted() {
-        return Err("El documento está cifrado: quita la contraseña antes".into());
-    }
-    f(&mut doc)?;
-    let tmp = format!("{work_path}.tmp");
-    doc.save(&tmp).map_err(|e| format!("No se pudo guardar: {e}"))?;
-    std::fs::rename(&tmp, work_path).map_err(|e| e.to_string())
-}
-
 /// Rect de UI (origen arriba-izquierda) a array Rect PDF de la página dada.
 fn rect_pdf(rect: &Rect, mb: &[f32; 4]) -> Object {
     let alto = mb[3] - mb[1];
@@ -106,7 +87,7 @@ fn rect_pdf(rect: &Rect, mb: &[f32; 4]) -> Object {
 }
 
 /// Crea un campo de formulario (texto o casilla) en la página.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_form_field(
     work_path: String,
     page_index: u16,
@@ -121,7 +102,7 @@ pub fn create_form_field(
     if rect.w < 8.0 || rect.h < 8.0 {
         return Err("El área del campo es demasiado pequeña".into());
     }
-    cirugia(&work_path, |doc| {
+    cirugia(&work_path, move |doc| {
         let page_id = *doc
             .get_pages()
             .get(&(page_index as u32 + 1))
@@ -260,7 +241,7 @@ pub fn create_form_field(
 }
 
 /// Crea un enlace en la página: a una URL externa o a otra página.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_link(
     work_path: String,
     page_index: u16,
@@ -272,7 +253,7 @@ pub fn create_link(
     if uri.is_some() == dest_page.is_some() {
         return Err("Indica o una URL o una página de destino (solo una)".into());
     }
-    cirugia(&work_path, |doc| {
+    cirugia(&work_path, move |doc| {
         let paginas = doc.get_pages();
         let page_id = *paginas
             .get(&(page_index as u32 + 1))
@@ -436,9 +417,9 @@ mod tests {
 
 /// Borra un campo de formulario por nombre: quita el widget de los Annots de
 /// su página y la referencia de /Fields del AcroForm.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_form_field(work_path: String, name: String) -> Result<(), String> {
-    cirugia(&work_path, |doc| {
+    cirugia(&work_path, move |doc| {
         // localizar el widget por su T
         let widget_id = doc
             .objects

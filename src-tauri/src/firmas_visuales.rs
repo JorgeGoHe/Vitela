@@ -18,7 +18,7 @@ pub struct FirmaGuardada {
 
 /// Estampa una imagen (base64, normalmente PNG con alfa) en la página con
 /// los bounds dados (coords de UI: origen arriba-izquierda, puntos PDF).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn stamp_signature(
     work_path: String,
     page_index: u16,
@@ -151,7 +151,7 @@ pub(crate) fn listar_firmas_en(dir: &std::path::Path) -> Result<Vec<FirmaGuardad
 /// Importa un fichero de imagen como firma guardada (el diálogo de abrir
 /// devuelve una ruta; la lectura se hace aquí, sin plugin fs). Se re-codifica
 /// a PNG para conservar la transparencia con un formato único.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn import_signature_file(image_path: String) -> Result<FirmaGuardada, String> {
     let img = image::open(&image_path).map_err(|e| format!("No se pudo leer la imagen: {e}"))?;
     let mut buf = std::io::Cursor::new(Vec::new());
@@ -167,19 +167,19 @@ pub fn import_signature_file(image_path: String) -> Result<FirmaGuardada, String
 }
 
 /// Guarda una firma reutilizable en la biblioteca del usuario.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_stored_signature(name: String, png_base64: String) -> Result<FirmaGuardada, String> {
     guardar_firma_en(&dir_de_firmas()?, &name, &png_base64)
 }
 
 /// Lista las firmas guardadas (con su PNG en base64 para las miniaturas).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_stored_signatures() -> Result<Vec<FirmaGuardada>, String> {
     listar_firmas_en(&dir_de_firmas()?)
 }
 
 /// Borra una firma guardada de la biblioteca.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_stored_signature(id: String) -> Result<(), String> {
     if id.contains(['/', '\\', '.']) {
         return Err("Id de firma inválido".into());

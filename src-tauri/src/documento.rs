@@ -36,7 +36,7 @@ fn nodo_de(b: &PdfBookmark) -> OutlineNode {
 }
 
 /// Árbol de marcadores del documento.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_outline(path: String) -> Result<Vec<OutlineNode>, String> {
     on_pdfium_thread(move || {
         with_doc(&path, |doc| {
@@ -66,7 +66,7 @@ fn cadena_pdf(text: &str) -> Object {
 }
 
 /// Reescribe el árbol /Outlines completo con lopdf.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_outline(work_path: String, nodes: Vec<OutlineNode>) -> Result<(), String> {
     let mut doc =
         LoDoc::load(&work_path).map_err(|e| format!("No se pudo leer el PDF: {e}"))?;
@@ -170,7 +170,7 @@ pub struct Metadata {
 }
 
 /// Metadatos del documento (diccionario /Info).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_metadata(path: String) -> Result<Metadata, String> {
     on_pdfium_thread(move || {
         with_doc(&path, |doc| {
@@ -191,7 +191,7 @@ pub fn get_metadata(path: String) -> Result<Metadata, String> {
 }
 
 /// Escribe título, autor, asunto y palabras clave en /Info (lopdf).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_metadata(work_path: String, meta: Metadata) -> Result<(), String> {
     let mut doc =
         LoDoc::load(&work_path).map_err(|e| format!("No se pudo leer el PDF: {e}"))?;
@@ -236,7 +236,7 @@ pub struct LinkInfo {
 }
 
 /// Enlaces de una página (bounds en coords de UI) con su destino.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_links(path: String, page_index: u16) -> Result<Vec<LinkInfo>, String> {
     on_pdfium_thread(move || {
         with_doc(&path, |doc| {
