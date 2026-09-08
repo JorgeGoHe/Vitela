@@ -53,6 +53,7 @@ thread_local! {
     static EN_HILO_PDFIUM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static PDFIUM: RefCell<Option<&'static Pdfium>> = const { RefCell::new(None) };
     static DOC_CACHE: RefCell<Option<(String, PdfDocument<'static>)>> = const { RefCell::new(None) };
+    static LOPDF_CACHE: RefCell<Option<(String, lopdf::Document)>> = const { RefCell::new(None) };
 }
 
 /// Instancia única de PDFium, creada una sola vez y viva todo el proceso.
@@ -104,9 +105,28 @@ pub(crate) fn with_doc<R>(
     })
 }
 
-/// Descarta el documento cacheado. Llamar tras cualquier mutación en disco.
+/// Igual que `with_doc` pero con el documento parseado por lopdf (para lo
+/// que PDFium no expone o no lee bien). Solo desde el hilo de PDFium.
+pub(crate) fn with_lopdf<R>(
+    path: &str,
+    f: impl FnOnce(&lopdf::Document) -> Result<R, String>,
+) -> Result<R, String> {
+    LOPDF_CACHE.with(|cell| {
+        let mut cache = cell.borrow_mut();
+        let stale = !matches!(cache.as_ref(), Some((p, _)) if p == path);
+        if stale {
+            let doc = lopdf::Document::load(path)
+                .map_err(|e| format!("No se pudo leer el PDF: {e}"))?;
+            *cache = Some((path.to_string(), doc));
+        }
+        f(&cache.as_ref().unwrap().1)
+    })
+}
+
+/// Descarta los documentos cacheados. Llamar tras cualquier mutación en disco.
 pub(crate) fn invalidate_doc_cache() {
     DOC_CACHE.with(|cell| *cell.borrow_mut() = None);
+    LOPDF_CACHE.with(|cell| *cell.borrow_mut() = None);
 }
 
 #[derive(Serialize, Debug)]
@@ -810,10 +830,6 @@ fn get_annotations(path: String, page_index: u16) -> Result<Vec<AnnotationInfo>,
                     lee_quads!(a.as_underline_annotation_mut());
                     lee_quads!(a.as_strikeout_annotation_mut());
                 }
-                let color = a
-                    .stroke_color()
-                    .ok()
-                    .map(|c| [c.red(), c.green(), c.blue(), c.alpha()]);
                 out.push(AnnotationInfo {
                     index: i as u16,
                     kind: format!("{:?}", a.annotation_type()),
@@ -823,19 +839,12 @@ fn get_annotations(path: String, page_index: u16) -> Result<Vec<AnnotationInfo>,
                     h: b.top().value - b.bottom().value,
                     contents: a.contents().unwrap_or_default(),
                     rects,
-                    color,
+                    color: None,
                 });
             }
-            if out.iter().any(|a| a.color.is_none()) {
-                if let Some(colores) = colores_annots_lopdf(&path, page_index) {
-                    for a in out.iter_mut() {
-                        if a.color.is_none() {
-                            a.color = colores
-                                .get(a.index as usize)
-                                .copied()
-                                .flatten();
-                        }
-                    }
+            if let Some(colores) = colores_annots_lopdf(&path, page_index) {
+                for a in out.iter_mut() {
+                    a.color = colores.get(a.index as usize).copied().flatten();
                 }
             }
             Ok(out)
@@ -843,14 +852,19 @@ fn get_annotations(path: String, page_index: u16) -> Result<Vec<AnnotationInfo>,
     })
 }
 
-/// Colores /C de las anotaciones de una página leídos con lopdf, alineados
-/// por índice con el orden de /Annots (el mismo que recorre PDFium). Hace
-/// falta porque FPDFAnnot_GetColor se niega a leer el color cuando la
-/// anotación tiene appearance stream — y PDFium se los genera en memoria al
-/// renderizar la página, así que las páginas ya vistas "pierden" el color.
+/// Colores /C (+ /CA como alfa) de las anotaciones de una página leídos con
+/// lopdf, alineados por índice con el orden de /Annots (el mismo que recorre
+/// PDFium). Es la ÚNICA fuente del color, a propósito: `stroke_color()` de
+/// pdfium-render 0.8 castea el handle de la anotación a objeto de página
+/// cuando FPDFAnnot_GetColor falla (anotaciones con appearance stream:
+/// formas, sellos, Ink, y cualquiera tras un render, porque PDFium genera
+/// los /AP en memoria), y en Linux ese cast es un SIGSEGV de toda la app.
 fn colores_annots_lopdf(path: &str, page_index: u16) -> Option<Vec<Option<[u8; 4]>>> {
+    with_lopdf(path, |doc| Ok(colores_annots(doc, page_index))).ok().flatten()
+}
+
+fn colores_annots(doc: &lopdf::Document, page_index: u16) -> Option<Vec<Option<[u8; 4]>>> {
     use lopdf::Object;
-    let doc = lopdf::Document::load(path).ok()?;
     let page_id = *doc.get_pages().get(&(page_index as u32 + 1))?;
     let page = doc.get_object(page_id).ok()?.as_dict().ok()?;
     let annots = match page.get(b"Annots").ok()? {

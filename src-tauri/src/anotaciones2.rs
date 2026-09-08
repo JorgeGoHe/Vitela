@@ -191,6 +191,11 @@ pub fn add_shape(
             .annotations_mut()
             .create_ink_annotation()
             .map_err(|e| e.to_string())?;
+        // /C antes de añadir objetos (con /AP PDFium ya no deja fijarlo);
+        // es lo que lee get_annotations para pintar los overlays
+        annot
+            .set_stroke_color(stroke_color)
+            .map_err(|e| e.to_string())?;
         let margin = stroke_width + 14.0;
         annot
             .set_bounds(PdfRect::new(
@@ -250,6 +255,7 @@ pub fn add_stamp(
             .annotations_mut()
             .create_stamp_annotation()
             .map_err(|e| e.to_string())?;
+        annot.set_stroke_color(c).map_err(|e| e.to_string())?;
         annot
             .set_bounds(PdfRect::new(
                 PdfPoints::new(bottom - 2.0),
@@ -461,6 +467,11 @@ mod tests {
         let escala = 600.0 / 595.28;
         let p = img.get_pixel((160.0 * escala) as u32, (340.0 * escala) as u32);
         assert!(p[0] > 150 && p[1] < 100, "esperaba rojo dentro del rect, hay {p:?}");
+        // las formas llevan /AP desde el principio: listar sus colores tras
+        // el render es justo el caso que hacía SIGSEGV en Linux
+        let annots = crate::get_annotations(work, 0).expect("listar tras render");
+        assert_eq!(annots[0].color, Some([200, 0, 0, 255]));
+        assert_eq!(annots[1].color, Some([0, 0, 200, 255]));
     }
 
     #[test]
@@ -493,6 +504,8 @@ mod tests {
                 }
             }
         }
+        let tras = crate::get_annotations(work, 0).expect("listar tras render");
+        assert_eq!(tras[0].color, Some([200, 30, 30, 255]), "color del sello tras render");
         assert!(rojos > 200, "el sello apenas pinta ({rojos} píxeles rojos)");
     }
 
