@@ -46,7 +46,15 @@ pub fn credenciales_p12(p12_bytes: &[u8], password: &str) -> Result<Credenciales
         password,
         p12_keystore::Pkcs12ImportPolicy::default(),
     )
-    .map_err(|e| format!("No se pudo abrir el .p12 (¿contraseña incorrecta?): {e}"))?;
+    .map_err(|e| {
+        let detalle = e.to_string();
+        // el fallo de MAC es siempre la contraseña; el detalle técnico sobra
+        if detalle.contains("MAC") {
+            "Contraseña del .p12 incorrecta".to_string()
+        } else {
+            format!("No se pudo abrir el .p12 (¿contraseña incorrecta?): {detalle}")
+        }
+    })?;
     let (_alias, chain) = store
         .private_key_chain()
         .ok_or("El .p12 no contiene ninguna clave privada")?;

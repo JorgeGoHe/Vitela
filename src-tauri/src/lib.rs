@@ -835,8 +835,13 @@ pub(crate) mod tests {
             "el PDF firmado debe llevar el SubFilter"
         );
 
-        // contraseña incorrecta debe fallar con error, no colgarse ni abrir
-        assert!(firma::credenciales_p12(p12, "mala").is_err());
+        // contraseña incorrecta debe fallar con un error para el usuario, sin
+        // detalle técnico ni colgarse
+        let e = match firma::credenciales_p12(p12, "mala") {
+            Err(e) => e,
+            Ok(_) => panic!("no debería abrirse con la contraseña mala"),
+        };
+        assert_eq!(e, "Contraseña del .p12 incorrecta");
 
         std::fs::remove_file(&src).ok();
         std::fs::remove_file(&dest).ok();
