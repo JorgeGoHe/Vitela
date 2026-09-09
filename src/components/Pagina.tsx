@@ -92,6 +92,11 @@ type Props = {
   onLinkGoto: (page: number) => void;
   onLinkUri: (uri: string) => void;
   onSigStamped: () => void;
+  /** Suben cuando la fila contextual pide «Añadir texto» o «Insertar
+   *  imagen…»: la página actual abre el borrador sin obligar a descubrir el
+   *  clic en zona libre. */
+  pedirTextoNuevo: number;
+  pedirImagen: number;
 };
 
 function Pagina({
@@ -126,6 +131,8 @@ function Pagina({
   onLinkGoto,
   onLinkUri,
   onSigStamped,
+  pedirTextoNuevo,
+  pedirImagen,
 }: Props) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [visible, setVisible] = useState(false);
@@ -243,6 +250,35 @@ function Pagina({
     onModeChange,
     onSigStamped,
   });
+
+  // «Añadir texto» e «Insertar imagen…» de la fila contextual: los abre la
+  // página actual, en el margen superior izquierdo del área de texto, que es
+  // un sitio libre y previsible. El ref evita que un re-render los repita.
+  const ultimoTextoRef = useRef(pedirTextoNuevo);
+  const ultimaImagenRef = useRef(pedirImagen);
+  useEffect(() => {
+    if (pedirTextoNuevo === ultimoTextoRef.current) return;
+    ultimoTextoRef.current = pedirTextoNuevo;
+    if (!esActual || mode !== "edit") return;
+    texto.setBlockDraft(null);
+    texto.setNewTextDraft({
+      x: Math.min(72, size.width * 0.12),
+      y: Math.min(96, size.height * 0.12),
+      text: "",
+      size: 12,
+      font: "auto",
+    });
+  }, [pedirTextoNuevo, esActual, mode, size, texto]);
+  useEffect(() => {
+    if (pedirImagen === ultimaImagenRef.current) return;
+    ultimaImagenRef.current = pedirImagen;
+    if (!esActual || mode !== "image") return;
+    imagenes.setImagePopover(null);
+    imagenes.insertImageAt(
+      Math.min(72, size.width * 0.12),
+      Math.min(96, size.height * 0.12),
+    );
+  }, [pedirImagen, esActual, mode, size, imagenes]);
 
   // Visibilidad dentro del visor (± un viewport de margen): fuera de ahí la
   // página es solo un hueco y no carga nada.

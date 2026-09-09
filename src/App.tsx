@@ -200,6 +200,9 @@ function App() {
   // el atajo de una pestaña la abre Y le lleva el foco: subir el contador es
   // la señal para el panel (un booleano no distinguiría dos peticiones)
   const [focoComentarios, setFocoComentarios] = useState(0);
+  // peticiones de la fila contextual a la página actual (texto nuevo, imagen)
+  const [pedirTextoNuevo, setPedirTextoNuevo] = useState(0);
+  const [pedirImagen, setPedirImagen] = useState(0);
   const [comentarios, setComentarios] = useState<AnotacionDoc[]>([]);
   const [filtroComentarios, setFiltroComentarios] =
     useState<FiltroComentarios>("todos");
@@ -1742,13 +1745,13 @@ function App() {
       id: "edit",
       icon: "textedit",
       label: "Editar",
-      hint: "Cambia el texto que hay en el PDF",
+      hint: "Cambiar el texto que hay en el PDF",
     },
     {
       id: "image",
       icon: "image",
       label: "Imagen",
-      hint: "Insertar imágenes (clic en zona libre) o editar las existentes (arrastrar mueve, tirador redimensiona, clic abre opciones)",
+      hint: "Insertar y editar las imágenes de la página",
     },
     {
       id: "shape",
@@ -2314,6 +2317,8 @@ function App() {
         freeTextBorder={herramienta.freeTextBorder}
         setFreeTextBorder={herramienta.setFreeTextBorder}
         cambiaColorAccion={herramienta.cambiaColorAccion}
+        anadirTexto={() => setPedirTextoNuevo((n) => n + 1)}
+        insertarImagen={() => setPedirImagen((n) => n + 1)}
       />
 
       <div className="body">
@@ -2469,6 +2474,8 @@ function App() {
                   onLinkGoto={gotoPage}
                   onLinkUri={onLinkUri}
                   onSigStamped={onSigStamped}
+                  pedirTextoNuevo={pedirTextoNuevo}
+                  pedirImagen={pedirImagen}
                 />
               ))}
           </main>

@@ -342,7 +342,9 @@ export function autorComentarios(): string | null {
   return cargaPreferencias().autor.trim() || null;
 }
 
-/** «Jorge · 9 sept 2026» para el popover de un comentario. */
+/** «Jorge · 9 sept 2026, 14:30» para el popover de un comentario. La hora
+ *  va desde que el `/M` que escribe el backend lleva su zona horaria: sin
+ *  ella, dos comentarios del mismo día no se distinguían. */
 export function firmaAnotacion(author: string, modified: string): string {
   const partes: string[] = [];
   if (author) partes.push(author);
@@ -350,10 +352,12 @@ export function firmaAnotacion(author: string, modified: string): string {
     const d = new Date(modified);
     if (!Number.isNaN(d.getTime())) {
       partes.push(
-        d.toLocaleDateString("es-ES", {
+        d.toLocaleString("es-ES", {
           day: "numeric",
           month: "short",
           year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
         }),
       );
     }

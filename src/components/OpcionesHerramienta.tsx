@@ -32,6 +32,8 @@ export default function OpcionesHerramienta({
   freeTextBorder,
   setFreeTextBorder,
   cambiaColorAccion,
+  anadirTexto,
+  insertarImagen,
 }: {
   mode: Mode;
   drawColor: string;
@@ -62,6 +64,10 @@ export default function OpcionesHerramienta({
     accion: "dibujo" | "forma" | "sello" | "cuadro",
     color: string,
   ) => void;
+  /** Abre el borrador de texto nuevo en la página actual (modo Editar). */
+  anadirTexto: () => void;
+  /** Pide una imagen y la coloca en la página actual (modo Imagen). */
+  insertarImagen: () => void;
 }) {
   return (
     <>
@@ -78,6 +84,32 @@ export default function OpcionesHerramienta({
           </label>
           <span className="opt-hint">
             Clic en un campo para rellenarlo · Tab salta al siguiente
+          </span>
+        </div>
+      )}
+      {mode === "edit" && (
+        <div className="tool-options">
+          <span>Texto</span>
+          <button className="btn" onClick={anadirTexto}>
+            <Icon name="textedit" size={14} />
+            Añadir texto
+          </button>
+          <span className="opt-hint">
+            Clic en un texto del PDF para corregirlo · clic en una zona libre
+            para escribir uno nuevo
+          </span>
+        </div>
+      )}
+      {mode === "image" && (
+        <div className="tool-options">
+          <span>Imagen</span>
+          <button className="btn" onClick={insertarImagen}>
+            <Icon name="image" size={14} />
+            Insertar imagen…
+          </button>
+          <span className="opt-hint">
+            Arrastrar mueve · los tiradores redimensionan · clic abre las
+            opciones de la imagen
           </span>
         </div>
       )}
