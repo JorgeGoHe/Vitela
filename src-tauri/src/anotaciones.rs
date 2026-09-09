@@ -950,7 +950,7 @@ pub fn remove_annotation(work_path: String, page_index: u16, annot_index: u16) -
 /// `/Contents`, su `/DA` y su `/BS`. Sin esto, corregir el texto cambiaría
 /// el dato y no lo que se ve. Para el resto de tipos no hay nada que hacer:
 /// ni las notas ni las marcas sacan su apariencia del texto.
-fn regenera_freetext(doc: &mut lopdf::Document, id: lopdf::ObjectId) -> Result<(), String> {
+pub(crate) fn regenera_freetext(doc: &mut lopdf::Document, id: lopdf::ObjectId) -> Result<(), String> {
     use lopdf::Object;
     let annot = doc
         .get_object(id)

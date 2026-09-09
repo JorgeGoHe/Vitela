@@ -537,9 +537,19 @@ pub fn add_free_text(
     })
 }
 
-/// Mueve y/o reescala una anotación con apariencia embebida (Stamp o Ink):
-/// transforma los objetos de dentro para que ocupen el rect nuevo (coords de
-/// UI) y actualiza los bounds. Para el resto de tipos solo hay borrado.
+/// Mueve y/o reescala una anotación, que es lo que hace Acrobat al
+/// arrastrarla o tirar de sus manijas. Cuatro tipos, con tres caminos:
+///
+/// - **Stamp** e **Ink** llevan su dibujo DENTRO de la anotación: hay que
+///   transformar cada objeto para que ocupe el rect nuevo, y después los
+///   bounds.
+/// - **FreeText** se mueve y se redimensiona, y su `/AP` se vuelve a
+///   dibujar con el tamaño nuevo (si no, el borde y las líneas seguirían
+///   siendo los de la caja vieja).
+/// - **Text** solo se mueve: el icono del post-it tiene tamaño fijo en
+///   Acrobat, así que el rect nuevo solo aporta la esquina.
+///
+/// Para el resto de tipos no hay más que borrado.
 #[tauri::command(async)]
 pub fn transform_annotation(
     work_path: String,
@@ -560,12 +570,18 @@ pub fn transform_annotation(
             .map_err(|e| e.to_string())?;
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
         let geo = Geo::de_pagina(&page).propia();
-        let nuevo = geo.ui_rect_a_pdf(&Rect { x, y, w, h });
+        let pedido = geo.ui_rect_a_pdf(&Rect { x, y, w, h });
+        let es_freetext;
         {
             let mut annot = page
                 .annotations_mut()
                 .get(annot_index as usize)
                 .map_err(|e| e.to_string())?;
+            let tipo = annot.annotation_type();
+            es_freetext = tipo == PdfPageAnnotationType::FreeText;
+            // el icono de la nota no se estira: se lleva su caja entera a la
+            // esquina nueva, como el post-it de Acrobat
+            let solo_mover = tipo == PdfPageAnnotationType::Text;
             let viejo = annot.bounds().map_err(|e| e.to_string())?;
             let (vw, vh) = (
                 viejo.right().value - viejo.left().value,
@@ -574,6 +590,16 @@ pub fn transform_annotation(
             if vw <= 0.0 || vh <= 0.0 {
                 return Err("La anotación no tiene tamaño".into());
             }
+            let nuevo = if solo_mover {
+                PdfRect::new(
+                    PdfPoints::new(pedido.top().value - vh),
+                    pedido.left(),
+                    pedido.top(),
+                    PdfPoints::new(pedido.left().value + vw),
+                )
+            } else {
+                pedido
+            };
             // las escalas se calculan en el espacio del PDF: con la página
             // rotada, el ancho de la UI puede ser el alto del PDF
             let sx = (nuevo.right().value - nuevo.left().value) / vw;
@@ -582,23 +608,36 @@ pub fn transform_annotation(
             // colocarlo en el rect nuevo
             let e = nuevo.left().value - viejo.left().value * sx;
             let f = nuevo.bottom().value - viejo.bottom().value * sy;
-            let objects = match (
-                annot.as_stamp_annotation_mut().is_some(),
-                annot.as_ink_annotation_mut().is_some(),
-            ) {
-                (true, _) => annot.as_stamp_annotation_mut().unwrap().objects_mut(),
-                (_, true) => annot.as_ink_annotation_mut().unwrap().objects_mut(),
-                _ => return Err("Esta anotación no se puede transformar".into()),
-            };
-            for i in 0..objects.len() {
-                let mut obj = objects.get(i).map_err(|e| e.to_string())?;
-                obj.transform(sx, 0.0, 0.0, sy, e, f)
-                    .map_err(|e| e.to_string())?;
+            // Text y FreeText no tienen objetos dentro que transformar: su
+            // apariencia se dibuja (o se redibuja) desde el /Rect
+            let interno = annot.as_stamp_annotation_mut().is_some()
+                || annot.as_ink_annotation_mut().is_some();
+            if !interno && !solo_mover && !es_freetext {
+                return Err("Esta anotación no se puede transformar".into());
+            }
+            if interno {
+                let objects = match annot.as_stamp_annotation_mut().is_some() {
+                    true => annot.as_stamp_annotation_mut().unwrap().objects_mut(),
+                    false => annot.as_ink_annotation_mut().unwrap().objects_mut(),
+                };
+                for i in 0..objects.len() {
+                    let mut obj = objects.get(i).map_err(|e| e.to_string())?;
+                    obj.transform(sx, 0.0, 0.0, sy, e, f)
+                        .map_err(|e| e.to_string())?;
+                }
             }
             annot.set_bounds(nuevo).map_err(|e| e.to_string())?;
         }
         drop(page);
         save_and_close(doc, &work_path)?;
+        if es_freetext {
+            // la apariencia del cuadro se dibuja en local (/BBox 0 0 w h):
+            // con el tamaño nuevo hay que rehacerla entera
+            crate::cirugia_en_hilo(&work_path, |doc| {
+                let id = crate::anotaciones::annot_id(doc, page_index, annot_index as usize)?;
+                crate::anotaciones::regenera_freetext(doc, id)
+            })?;
+        }
         // mover un comentario actualiza su fecha de modificación (Acrobat);
         // PDFium escribe una suya en UTC al guardar, así que la reescribimos
         remata_annot_en(&work_path, page_index, Some(annot_index as usize), None, None)
@@ -1053,4 +1092,120 @@ mod tests {
         let en_viejo = rojos_en(&img, 130, 570, 270, 630);
         assert_eq!(en_viejo, 0, "quedan restos del sello en la posición vieja");
     }
+
+    /// Arrastrar una nota o un cuadro de texto es lo que ofrece la UI (el
+    /// icono de la nota es su propia zona de arrastre y el cuadro lleva los
+    /// ocho tiradores), y en Acrobat las dos cosas se mueven. El backend
+    /// solo sabía de Stamp e Ink y devolvía «Esta anotación no se puede
+    /// transformar»: un error rojo en la cara del usuario.
+    #[test]
+    fn mover_una_nota_y_un_cuadro_de_texto() {
+        let tmp = std::env::temp_dir().join("anotaciones2-transform-texto-test.pdf");
+        crea_pdf(&["Hola"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        crate::anotaciones::add_note(
+            work.clone(),
+            0,
+            100.0,
+            100.0,
+            "Nota".into(),
+            Some("Jorge".into()),
+        )
+        .expect("nota");
+        add_free_text(
+            work.clone(),
+            0,
+            Rect { x: 60.0, y: 300.0, w: 200.0, h: 60.0 },
+            "Cuadro".into(),
+            12.0,
+            [0, 0, 0, 255],
+            true,
+            Some("Jorge".into()),
+        )
+        .expect("cuadro de texto");
+
+        let antes = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar");
+        let (i_nota, i_cuadro) = (antes[0].index, antes[1].index);
+        assert_eq!(antes[0].kind, "Text");
+        assert_eq!(antes[1].kind, "FreeText");
+
+        // la nota se mueve (el icono conserva su tamaño, como en Acrobat)
+        transform_annotation(work.clone(), 0, i_nota, 300.0, 400.0, 22.0, 22.0)
+            .expect("mover la nota");
+        // el cuadro se mueve Y se redimensiona
+        transform_annotation(work.clone(), 0, i_cuadro, 100.0, 500.0, 260.0, 90.0)
+            .expect("mover el cuadro de texto");
+
+        let despues = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar");
+        let nota = &despues[0];
+        assert!(
+            (nota.x - 300.0).abs() < 2.0 && (nota.y - 400.0).abs() < 2.0,
+            "la nota quedó en ({:.1},{:.1})",
+            nota.x,
+            nota.y
+        );
+        assert!(
+            (nota.w - 22.0).abs() < 2.0 && (nota.h - 22.0).abs() < 2.0,
+            "el icono de la nota no conserva su tamaño: {:.1}x{:.1}",
+            nota.w,
+            nota.h
+        );
+        let cuadro = &despues[1];
+        assert!(
+            (cuadro.x - 100.0).abs() < 2.0
+                && (cuadro.y - 500.0).abs() < 2.0
+                && (cuadro.w - 260.0).abs() < 2.0
+                && (cuadro.h - 90.0).abs() < 2.0,
+            "el cuadro quedó en ({:.1},{:.1}) {:.1}x{:.1}",
+            cuadro.x,
+            cuadro.y,
+            cuadro.w,
+            cuadro.h
+        );
+        assert_eq!(cuadro.author, "Jorge", "mover no debe tocar el autor");
+
+        // y su apariencia se rehace con el tamaño nuevo: sin esto el /AP
+        // seguiría dibujando el borde de la caja vieja
+        let (bw, bh) = bbox_del_ap(&work, i_cuadro as usize);
+        assert!(
+            (bw - 260.0).abs() < 2.0 && (bh - 90.0).abs() < 2.0,
+            "el /AP del cuadro sigue midiendo {bw:.1}x{bh:.1}"
+        );
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// Tamaño del `/BBox` del `/AP /N` de una anotación de la primera página.
+    fn bbox_del_ap(work: &str, i: usize) -> (f32, f32) {
+        let hacer = || -> Result<(f32, f32), String> {
+            let mut doc = lopdf::Document::load(work).map_err(|e| e.to_string())?;
+            let doc = &mut doc;
+            let id = crate::anotaciones::annot_id(doc, 0, i)?;
+            let annot = doc
+                .get_object(id)
+                .and_then(|o| o.as_dict())
+                .map_err(|e| e.to_string())?;
+            let ap = annot
+                .get(b"AP")
+                .and_then(|o| o.as_dict())
+                .map_err(|e| e.to_string())?
+                .get(b"N")
+                .map_err(|e| e.to_string())?
+                .as_reference()
+                .map_err(|e| e.to_string())?;
+            let caja: Vec<f32> = doc
+                .get_object(ap)
+                .and_then(|o| o.as_stream())
+                .map_err(|e| e.to_string())?
+                .dict
+                .get(b"BBox")
+                .and_then(|o| o.as_array())
+                .map_err(|e| e.to_string())?
+                .iter()
+                .filter_map(|o| o.as_float().ok().or_else(|| o.as_i64().ok().map(|n| n as f32)))
+                .collect();
+            Ok((caja[2] - caja[0], caja[3] - caja[1]))
+        };
+        hacer().expect("leer el /AP")
+    }
+
 }
