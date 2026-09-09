@@ -235,6 +235,8 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "remove_recent" => cmd!(crate::recientes::remove_recent, { path: String }),
         // en el navegador de QA no hay ventana que cerrar
         "confirmar_cierre" => Ok(Value::Null),
+        // ni ficheros pendientes del Finder
+        "ui_lista" => Ok(Value::Null),
         otro => Err(format!("Comando desconocido en el puente: {otro}")),
     }
 }

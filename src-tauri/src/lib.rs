@@ -753,13 +753,15 @@ static ABRIR_PENDIENTE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new
 /// Primer `.pdf` existente de los argumentos de arranque. En Windows y
 /// Linux el doble clic llega así; en macOS llega por `RunEvent::Opened`.
 /// Se ignora el argv[0] (el propio binario) y cualquier opción.
-fn pdf_de_argv<I: IntoIterator<Item = String>>(args: I) -> Option<String> {
+/// Va con `OsString` (`args_os`), no con `String`: `std::env::args()` entra
+/// en pánico al iterar si algún argumento no es UTF-8 válido, y un PDF con
+/// el nombre en latin-1 haría cascar la app al arrancar en vez de abrirse.
+fn pdf_de_argv<I: IntoIterator<Item = std::ffi::OsString>>(args: I) -> Option<String> {
     args.into_iter()
         .skip(1)
+        .map(|a| a.to_string_lossy().into_owned())
         .filter(|a| !a.starts_with('-'))
-        .find(|a| {
-            a.to_lowercase().ends_with(".pdf") && std::path::Path::new(a).is_file()
-        })
+        .find(|a| a.to_lowercase().ends_with(".pdf") && std::path::Path::new(a).is_file())
 }
 
 /// Ruta local de una URL de `RunEvent::Opened` (macOS manda `file://…`).
@@ -778,29 +780,33 @@ fn ruta_de_url(url: &tauri::Url) -> Option<String> {
 /// guarda y se manda en cuanto la página esté lista: los eventos de Tauri
 /// no se encolan, y el `listen` de la UI tarda un instante en registrarse.
 #[cfg(target_os = "macos")]
+/// La UI ya ha registrado su `listen` y los eventos le llegan. Lo pone
+/// `ui_lista`, no `on_page_load`: la página cargada no significa que el JS
+/// esté escuchando, y los eventos de Tauri no se encolan.
+static UI_LISTA: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn pide_abrir(app: &tauri::AppHandle, path: String) {
-    use tauri::{Emitter, Manager};
-    if app.webview_windows().is_empty() {
+    use tauri::Emitter;
+    if !UI_LISTA.load(std::sync::atomic::Ordering::SeqCst) {
+        // arranque en frío: la ventana existe desde `.build()`, pero el
+        // `listen` de la UI todavía no. Se guarda y lo recoge `ui_lista`.
         *ABRIR_PENDIENTE.lock().unwrap_or_else(|e| e.into_inner()) = Some(path);
         return;
     }
     let _ = app.emit(EVENTO_ABRIR, serde_json::json!({ "path": path }));
 }
 
-/// Manda el PDF pendiente cuando la página ya ha cargado. El margen es
-/// para dar tiempo al `listen` de la UI, que se registra por IPC.
-fn manda_pendiente(app: &tauri::AppHandle) {
-    let pendiente = ABRIR_PENDIENTE
+/// La UI avisa de que ya está montada y escuchando, y se lleva de vuelta el
+/// PDF que estuviera esperando (doble clic en el Finder con la app cerrada,
+/// o ruta en la línea de órdenes). A partir de aquí, los ficheros que
+/// lleguen con la app ya abierta van por el evento `abrir-fichero`.
+#[tauri::command(async)]
+fn ui_lista() -> Result<Option<String>, String> {
+    UI_LISTA.store(true, std::sync::atomic::Ordering::SeqCst);
+    Ok(ABRIR_PENDIENTE
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .take();
-    let Some(path) = pendiente else { return };
-    let app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(600));
-        use tauri::Emitter;
-        let _ = app.emit(EVENTO_ABRIR, serde_json::json!({ "path": path }));
-    });
+        .take())
 }
 
 /// Nombre del evento con el que el backend le pregunta a la UI si se puede
@@ -863,14 +869,10 @@ pub fn run() {
                 barre_huerfanos(&std::env::temp_dir(), std::time::Duration::from_secs(24 * 3600));
             });
             // PDF pasado como argumento (doble clic en Windows y Linux)
-            if let Some(path) = pdf_de_argv(std::env::args()) {
+            if let Some(path) = pdf_de_argv(std::env::args_os()) {
                 *ABRIR_PENDIENTE.lock().unwrap_or_else(|e| e.into_inner()) = Some(path);
             }
             Ok(())
-        })
-        .on_page_load(|window, _| {
-            use tauri::Manager;
-            manda_pendiente(window.app_handle());
         })
         // ⌘W y el botón rojo: no se cierra sin que la UI lo confirme
         .on_window_event(|window, event| {
@@ -961,6 +963,7 @@ pub fn run() {
             recientes::touch_recent,
             recientes::remove_recent,
             confirmar_cierre,
+            ui_lista,
             close_document
         ])
         .build(tauri::generate_context!())
@@ -1135,13 +1138,31 @@ pub(crate) mod tests {
         CIERRE_CONFIRMADO.store(antes, Ordering::SeqCst);
     }
 
+    /// Arranque en frío: el PDF del doble clic llega antes de que la UI
+    /// escuche, así que espera guardado y se lo lleva `ui_lista` cuando la
+    /// UI avisa. Los eventos de Tauri no se encolan: emitirlo antes era
+    /// perderlo, y la ventana salía vacía.
+    #[test]
+    fn el_pdf_pendiente_se_lo_lleva_la_ui_al_montarse() {
+        *ABRIR_PENDIENTE.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some("/tmp/doble-clic.pdf".into());
+        assert_eq!(ui_lista().unwrap().as_deref(), Some("/tmp/doble-clic.pdf"));
+        // solo una vez: el segundo montaje no reabre nada
+        assert_eq!(ui_lista().unwrap(), None);
+        assert!(UI_LISTA.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
     #[test]
     fn pdf_de_argv_ignora_el_binario_y_las_opciones() {
         let pdf = std::env::temp_dir().join("editor_pdf_test_argv.pdf");
         crea_pdf(&["Hola"], &pdf);
         let ruta = pdf.to_string_lossy().into_owned();
 
-        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let args = |v: &[&str]| {
+            v.iter()
+                .map(|s| std::ffi::OsString::from(*s))
+                .collect::<Vec<_>>()
+        };
         assert_eq!(
             pdf_de_argv(args(&["/Applications/Vitela.app/…/Vitela", &ruta])),
             Some(ruta.clone())
@@ -1154,6 +1175,16 @@ pub(crate) mod tests {
             None
         );
         assert_eq!(pdf_de_argv(args(&["Vitela"])), None);
+        // un argumento que no es UTF-8 no puede hacer cascar la app
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let raro = std::ffi::OsString::from_vec(vec![0xFF, 0xFE, b'.', b'p', b'd', b'f']);
+            assert_eq!(
+                pdf_de_argv(vec![std::ffi::OsString::from("Vitela"), raro]),
+                None
+            );
+        }
         std::fs::remove_file(&pdf).ok();
     }
 
