@@ -9,7 +9,7 @@ use aes::cipher::{
     block_padding::{NoPadding, Pkcs7},
     BlockEncrypt, BlockEncryptMut, KeyInit, KeyIvInit,
 };
-use lopdf::{Dictionary, Document as LoDoc, Object, StringFormat};
+use lopdf::{Dictionary, Document as LoDoc, Object, ObjectId, Stream, StringFormat};
 use pdfium_render::prelude::*;
 use serde::Serialize;
 use sha2::{Digest, Sha256, Sha384, Sha512};
@@ -269,12 +269,314 @@ pub(crate) fn guarda_descifrado(
         .map_err(|e| format!("No se pudo escribir la copia: {e}"))
 }
 
+
+/// Objeto (posiblemente referencia) resuelto a su diccionario.
+fn dict_de<'a>(doc: &'a LoDoc, obj: &'a Object) -> Option<&'a Dictionary> {
+    match obj {
+        Object::Reference(rid) => doc.get_object(*rid).ok()?.as_dict().ok(),
+        Object::Dictionary(d) => Some(d),
+        _ => None,
+    }
+}
+
+/// Entrada de un widget buscando hacia arriba por /Parent (los campos
+/// heredan FT, V y DA del campo padre).
+fn hereda(doc: &LoDoc, dict: &Dictionary, clave: &[u8]) -> Option<Object> {
+    let mut actual = dict.clone();
+    for _ in 0..32 {
+        if let Ok(v) = actual.get(clave) {
+            return Some(match v {
+                Object::Reference(rid) => doc.get_object(*rid).ok()?.clone(),
+                otro => otro.clone(),
+            });
+        }
+        let Ok(Object::Reference(padre)) = actual.get(b"Parent") else {
+            return None;
+        };
+        actual = doc.get_object(*padre).ok()?.as_dict().ok()?.clone();
+    }
+    None
+}
+
+/// Diccionario AcroForm del catálogo (directo o referencia).
+fn acroform(doc: &LoDoc) -> Option<Dictionary> {
+    let catalog = doc.catalog().ok()?;
+    dict_de(doc, catalog.get(b"AcroForm").ok()?).cloned()
+}
+
+/// Texto de una cadena PDF: UTF-16BE con BOM o PDFDocEncoding (≈ latin-1).
+fn texto_pdf(bytes: &[u8]) -> String {
+    if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
+        let unidades: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&unidades)
+    } else {
+        bytes.iter().map(|&b| b as char).collect()
+    }
+}
+
+/// Estado (nombre) de una casilla a partir de /AS o /V: nombre, o cadena
+/// (PDFium escribe "/Yes" como cadena al marcar desde la API).
+fn estado_de(obj: &Object) -> Option<String> {
+    let s = match obj {
+        Object::Name(n) => String::from_utf8_lossy(n).into_owned(),
+        Object::String(b, _) => texto_pdf(b),
+        _ => return None,
+    };
+    Some(s.trim_start_matches('/').to_string())
+}
+
+/// Tamaño de fuente de una cadena /DA ("/Helv 12 Tf 0 g"); 0 = automático.
+fn tamano_da(da: &str) -> f32 {
+    let tokens: Vec<&str> = da.split_whitespace().collect();
+    tokens
+        .iter()
+        .position(|t| *t == "Tf")
+        .and_then(|i| i.checked_sub(1))
+        .and_then(|i| tokens[i].parse::<f32>().ok())
+        .unwrap_or(0.0)
+}
+
+/// Referencia a la Helvetica de /DR del AcroForm (o una nueva si no hay).
+fn fuente_helvetica(doc: &mut LoDoc) -> ObjectId {
+    let existente = acroform(doc).and_then(|form| {
+        let dr = dict_de(doc, form.get(b"DR").ok()?)?;
+        let fuentes = dict_de(doc, dr.get(b"Font").ok()?)?;
+        match fuentes.get(b"Helv").ok()? {
+            Object::Reference(rid) => Some(Ok(*rid)),
+            Object::Dictionary(d) => Some(Err(d.clone())),
+            _ => None,
+        }
+    });
+    match existente {
+        Some(Ok(rid)) => rid,
+        Some(Err(d)) => doc.add_object(d),
+        None => {
+            let mut helv = Dictionary::new();
+            helv.set("Type", Object::Name(b"Font".to_vec()));
+            helv.set("Subtype", Object::Name(b"Type1".to_vec()));
+            helv.set("BaseFont", Object::Name(b"Helvetica".to_vec()));
+            helv.set("Encoding", Object::Name(b"WinAnsiEncoding".to_vec()));
+            doc.add_object(helv)
+        }
+    }
+}
+
+/// Ids de las anotaciones de una página; las que estén como diccionario
+/// directo dentro de /Annots pasan a objetos indirectos para poder
+/// modificarlas por id.
+fn annots_indirectos(doc: &mut LoDoc, page_id: ObjectId) -> Vec<ObjectId> {
+    let (arr_ref, mut arr) = {
+        let Ok(page) = doc.get_object(page_id).and_then(|o| o.as_dict()) else {
+            return vec![];
+        };
+        match page.get(b"Annots") {
+            Ok(Object::Reference(rid)) => match doc.get_object(*rid).and_then(|o| o.as_array()) {
+                Ok(a) => (Some(*rid), a.clone()),
+                Err(_) => return vec![],
+            },
+            Ok(Object::Array(a)) => (None, a.clone()),
+            _ => return vec![],
+        }
+    };
+    let mut ids = Vec::new();
+    let mut cambiado = false;
+    for item in arr.iter_mut() {
+        match item {
+            Object::Reference(rid) => ids.push(*rid),
+            Object::Dictionary(d) => {
+                let id = doc.add_object(std::mem::take(d));
+                *item = Object::Reference(id);
+                ids.push(id);
+                cambiado = true;
+            }
+            _ => {}
+        }
+    }
+    if cambiado {
+        if let Some(rid) = arr_ref {
+            if let Ok(o) = doc.get_object_mut(rid) {
+                *o = Object::Array(arr);
+            }
+        } else if let Ok(page) = doc.get_object_mut(page_id).and_then(|o| o.as_dict_mut()) {
+            page.set("Annots", Object::Array(arr));
+        }
+    }
+    ids
+}
+
+/// Apariencia normal para un campo de texto sin /AP: XObject con el valor
+/// en Helvetica. Devuelve el diccionario /AP a poner en el widget.
+fn apariencia_texto(
+    doc: &mut LoDoc,
+    widget: &Dictionary,
+    helv: ObjectId,
+    da_form: &str,
+) -> Option<Object> {
+    let rect: Vec<f32> = widget
+        .get(b"Rect")
+        .ok()
+        .and_then(|r| r.as_array().ok())
+        .map(|a| a.iter().filter_map(|o| o.as_float().ok()).collect())?;
+    if rect.len() != 4 {
+        return None;
+    }
+    let w = (rect[2] - rect[0]).abs();
+    let h = (rect[3] - rect[1]).abs();
+    let valor = match hereda(doc, widget, b"V") {
+        Some(Object::String(b, _)) => texto_pdf(&b),
+        _ => String::new(),
+    };
+    let da = match hereda(doc, widget, b"DA") {
+        Some(Object::String(b, _)) => texto_pdf(&b),
+        _ => da_form.to_string(),
+    };
+    let mut size = tamano_da(&da);
+    if size <= 0.0 {
+        size = (h * 0.7).min(12.0);
+    }
+    // WinAnsi ≈ latin-1; lo que no quepa, '?'; escapar \ ( )
+    let mut texto = Vec::with_capacity(valor.len());
+    for c in valor.chars() {
+        match c {
+            '\n' | '\r' | '\t' => texto.push(b' '),
+            '\\' | '(' | ')' => {
+                texto.push(b'\\');
+                texto.push(c as u8);
+            }
+            c if (c as u32) < 0x20 => {}
+            c if (c as u32) <= 0xFF => texto.push(c as u8),
+            _ => texto.push(b'?'),
+        }
+    }
+    let y = ((h - size) / 2.0 + size * 0.22).max(1.0);
+    let mut contenido =
+        format!("/Tx BMC q BT /Helv {size:.2} Tf 0 g 2 {y:.2} Td (").into_bytes();
+    contenido.extend_from_slice(&texto);
+    contenido.extend_from_slice(b") Tj ET Q EMC");
+    let mut fuentes = Dictionary::new();
+    fuentes.set("Helv", Object::Reference(helv));
+    let mut recursos = Dictionary::new();
+    recursos.set("Font", Object::Dictionary(fuentes));
+    let mut d = Dictionary::new();
+    d.set("Type", Object::Name(b"XObject".to_vec()));
+    d.set("Subtype", Object::Name(b"Form".to_vec()));
+    d.set(
+        "BBox",
+        Object::Array(vec![0.into(), 0.into(), w.into(), h.into()]),
+    );
+    d.set("Resources", Object::Dictionary(recursos));
+    let n_id = doc.add_object(Stream::new(d, contenido));
+    let mut ap = Dictionary::new();
+    ap.set("N", Object::Reference(n_id));
+    Some(Object::Dictionary(ap))
+}
+
+/// Estado /AS que debe mostrar una casilla según su /V y los estados de su
+/// /AP /N. `None` si no hay nada que corregir.
+fn estado_casilla(doc: &LoDoc, widget: &Dictionary) -> Option<String> {
+    let ap = dict_de(doc, widget.get(b"AP").ok()?)?;
+    let estados = dict_de(doc, ap.get(b"N").ok()?)?;
+    let claves: Vec<String> = estados
+        .iter()
+        .map(|(k, _)| String::from_utf8_lossy(k).into_owned())
+        .collect();
+    let v = hereda(doc, widget, b"V").as_ref().and_then(estado_de);
+    let actual = widget.get(b"AS").ok().and_then(estado_de);
+    let deseado = match v {
+        Some(v) if claves.contains(&v) => v,
+        Some(_) if claves.iter().any(|k| k == "Off") => "Off".to_string(),
+        _ => actual.clone()?,
+    };
+    let ya_es_nombre = matches!(widget.get(b"AS"), Ok(Object::Name(_)));
+    if ya_es_nombre && actual.as_deref() == Some(deseado.as_str()) {
+        None
+    } else {
+        Some(deseado)
+    }
+}
+
+/// Pasada previa al aplanado (lopdf): FPDFPage_Flatten en modo impresión
+/// descarta toda anotación sin el flag Print y todo widget sin apariencia,
+/// así que aquí se pone el flag a todas (cubre PDFs de fuera y anotaciones
+/// antiguas), se genera /AP a los campos de texto que no lo tengan y se
+/// normaliza /AS de las casillas (PDFium escribe "/Yes" como cadena al
+/// marcarlas y el aplanado no encuentra ese estado).
+fn prepara_para_aplanar(work_path: &str) -> Result<(), String> {
+    let mut doc =
+        LoDoc::load(work_path).map_err(|e| format!("No se pudo leer el PDF: {e}"))?;
+    let da_form = acroform(&doc)
+        .and_then(|f| match f.get(b"DA") {
+            Ok(Object::String(b, _)) => Some(texto_pdf(b)),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let mut helv: Option<ObjectId> = None;
+    let paginas: Vec<ObjectId> = doc.get_pages().values().copied().collect();
+    for page_id in paginas {
+        for annot_id in annots_indirectos(&mut doc, page_id) {
+            let Ok(dict) = doc.get_object(annot_id).and_then(|o| o.as_dict()).cloned() else {
+                continue;
+            };
+            let mut cambios: Vec<(&str, Object)> = Vec::new();
+            let flags = dict.get(b"F").ok().and_then(|f| f.as_i64().ok()).unwrap_or(0);
+            if flags & 4 == 0 {
+                cambios.push(("F", Object::Integer(flags | 4)));
+            }
+            let es_widget = matches!(
+                dict.get(b"Subtype").and_then(|s| s.as_name()),
+                Ok(b"Widget")
+            );
+            if es_widget {
+                let ft = hereda(&doc, &dict, b"FT");
+                match ft.as_ref().and_then(|f| f.as_name().ok()) {
+                    Some(b"Tx") if dict.get(b"AP").is_err() => {
+                        let h = match helv {
+                            Some(h) => h,
+                            None => *helv.insert(fuente_helvetica(&mut doc)),
+                        };
+                        if let Some(ap) = apariencia_texto(&mut doc, &dict, h, &da_form) {
+                            cambios.push(("AP", ap));
+                        }
+                    }
+                    Some(b"Btn") => {
+                        if let Some(estado) = estado_casilla(&doc, &dict) {
+                            cambios.push(("AS", Object::Name(estado.clone().into_bytes())));
+                            if matches!(dict.get(b"V"), Ok(Object::String(..))) {
+                                cambios.push(("V", Object::Name(estado.into_bytes())));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if cambios.is_empty() {
+                continue;
+            }
+            if let Ok(d) = doc.get_object_mut(annot_id).and_then(|o| o.as_dict_mut()) {
+                for (clave, valor) in cambios {
+                    d.set(clave, valor);
+                }
+            }
+        }
+    }
+    let tmp = format!("{work_path}.tmp");
+    doc.save(&tmp)
+        .map_err(|e| format!("No se pudo guardar: {e}"))?;
+    std::fs::rename(&tmp, work_path).map_err(|e| e.to_string())
+}
+
 /// Aplana anotaciones y campos de formulario: pasan a ser contenido fijo de
 /// la página. Ojo: los resaltados/notas propios (sin /AP) desaparecen — la
 /// UI avisa antes.
 #[tauri::command(async)]
 pub fn flatten_pdf(work_path: String) -> Result<(), String> {
     mutacion(work_path, |work_path| on_pdfium_thread(move || {
+        // el caché puede tener el fichero abierto: cerrarlo antes del rename
+        invalidate_doc_cache();
+        prepara_para_aplanar(&work_path)?;
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -478,6 +780,134 @@ mod tests {
         flatten_pdf(work.clone()).expect("aplanar");
         // la anotación desapareció pero su dibujo quedó en la página
         assert_eq!(crate::anotaciones::get_annotations(work, 0).unwrap().len(), 0);
+    }
+
+    /// Cuenta píxeles del render (600 px de ancho) que cumplan `pred`
+    /// dentro del rect dado en coords de UI (puntos).
+    fn pixeles_en(
+        work: &str,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        pred: impl Fn(&image::Rgba<u8>) -> bool,
+    ) -> u32 {
+        let png = crate::render_page_png(work.to_string(), 0, 600).expect("render");
+        let img = image::load_from_memory(&png).expect("PNG").to_rgba8();
+        let escala = 600.0 / 595.28;
+        let mut n = 0;
+        for yy in (y0 * escala) as u32..(y1 * escala) as u32 {
+            for xx in (x0 * escala) as u32..(x1 * escala) as u32 {
+                if pred(img.get_pixel(xx, yy)) {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
+    #[test]
+    fn aplanar_conserva_apariencias_y_valores() {
+        let pdf = std::env::temp_dir().join("seguridad-flatten-todo-test.pdf");
+        crea_pdf(&["Formulario"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+        crate::formularios2::create_form_field(
+            work.clone(),
+            0,
+            "text".into(),
+            Rect { x: 60.0, y: 200.0, w: 250.0, h: 28.0 },
+            "nombre".into(),
+        )
+        .expect("campo de texto");
+        crate::formularios2::create_form_field(
+            work.clone(),
+            0,
+            "checkbox".into(),
+            Rect { x: 60.0, y: 250.0, w: 20.0, h: 20.0 },
+            "acepto".into(),
+        )
+        .expect("casilla");
+        let campos = crate::formularios::get_form_fields(work.clone(), 0).expect("campos");
+        let texto = campos.iter().find(|c| c.name == "nombre").unwrap().annot_index;
+        let casilla = campos.iter().find(|c| c.name == "acepto").unwrap().annot_index;
+        crate::formularios::set_form_text(
+            work.clone(),
+            0,
+            texto,
+            "Relleno antes de aplanar".into(),
+        )
+        .expect("rellenar");
+        crate::formularios::set_form_checked(work.clone(), 0, casilla, true).expect("marcar");
+        crate::anotaciones2::add_stamp(
+            work.clone(),
+            0,
+            "APROBADO".into(),
+            [192, 57, 43, 255],
+            300.0,
+            500.0,
+            22.0,
+        )
+        .expect("sello");
+        crate::anotaciones::add_stroke(
+            work.clone(),
+            0,
+            vec![[100.0, 600.0], [200.0, 620.0], [300.0, 600.0]],
+            Some([46, 160, 67, 255]),
+            Some(4.0),
+        )
+        .expect("trazo");
+        crate::anotaciones2::add_shape(
+            work.clone(),
+            0,
+            "rect".into(),
+            100.0,
+            650.0,
+            250.0,
+            720.0,
+            [39, 67, 192, 255],
+            None,
+            3.0,
+        )
+        .expect("forma");
+        assert_eq!(
+            crate::anotaciones::get_annotations(work.clone(), 0).unwrap().len(),
+            5
+        );
+
+        flatten_pdf(work.clone()).expect("aplanar");
+
+        assert!(crate::anotaciones::get_annotations(work.clone(), 0)
+            .unwrap()
+            .is_empty());
+        assert!(crate::formularios::get_form_fields(work.clone(), 0)
+            .unwrap()
+            .is_empty());
+        let texto: String = crate::busqueda::get_page_text(work.clone(), 0)
+            .unwrap()
+            .chars
+            .iter()
+            .map(|c| c.ch.as_str())
+            .collect();
+        assert!(
+            texto.contains("Relleno antes de aplanar"),
+            "el valor del campo no está en la página: {texto:?}"
+        );
+        let rojos = pixeles_en(&work, 200.0, 470.0, 400.0, 530.0, |p| {
+            p[0] > 150 && p[1] < 110 && p[2] < 110
+        });
+        let verdes = pixeles_en(&work, 90.0, 590.0, 310.0, 630.0, |p| {
+            p[1] > 120 && p[0] < 110 && p[2] < 110
+        });
+        let azules = pixeles_en(&work, 90.0, 640.0, 260.0, 730.0, |p| {
+            p[2] > 150 && p[0] < 110 && p[1] < 110
+        });
+        assert!(rojos > 0, "el sello desapareció al aplanar");
+        assert!(verdes > 0, "el trazo desapareció al aplanar");
+        assert!(azules > 0, "la forma desapareció al aplanar");
+        let marca = pixeles_en(&work, 62.0, 252.0, 78.0, 268.0, |p| {
+            p[0] < 100 && p[1] < 100 && p[2] < 100
+        });
+        assert!(marca > 0, "la marca de la casilla desapareció al aplanar");
     }
 
     #[test]

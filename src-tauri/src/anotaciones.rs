@@ -34,6 +34,8 @@ pub fn add_highlight(work_path: String, page_index: u16, rects: Vec<Rect>) -> Re
             .annotations_mut()
             .create_highlight_annotation()
             .map_err(|e| e.to_string())?;
+        // flag Print: sin él, aplanar (FLAT_PRINT) descarta la anotación
+        annot.set_is_printed(true).map_err(|e| e.to_string())?;
         annot
             .set_stroke_color(PdfColor::new(255, 220, 0, 140))
             .map_err(|e| e.to_string())?;
@@ -103,6 +105,7 @@ pub fn add_stroke(
             .annotations_mut()
             .create_ink_annotation()
             .map_err(|e| e.to_string())?;
+        annot.set_is_printed(true).map_err(|e| e.to_string())?;
         const MARGIN: f32 = 3.0;
         let min_x = points.iter().map(|p| p[0]).fold(f32::MAX, f32::min) - MARGIN;
         let max_x = points.iter().map(|p| p[0]).fold(f32::MIN, f32::max) + MARGIN;
@@ -162,6 +165,7 @@ pub fn add_note(
             .annotations_mut()
             .create_text_annotation(&text)
             .map_err(|e| e.to_string())?;
+        annot.set_is_printed(true).map_err(|e| e.to_string())?;
         const ICON: f32 = 22.0;
         annot
             .set_bounds(ui_rect_to_pdf(

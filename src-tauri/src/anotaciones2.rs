@@ -50,6 +50,8 @@ pub fn add_markup(
         macro_rules! configurar {
             ($annot:expr, $default:expr) => {{
                 let mut annot = $annot.map_err(|e| e.to_string())?;
+                // flag Print: sin él, aplanar (FLAT_PRINT) la descarta
+                annot.set_is_printed(true).map_err(|e| e.to_string())?;
                 annot
                     .set_stroke_color(color_de(color.unwrap_or($default)))
                     .map_err(|e| e.to_string())?;
@@ -195,6 +197,7 @@ pub fn add_shape(
             .annotations_mut()
             .create_ink_annotation()
             .map_err(|e| e.to_string())?;
+        annot.set_is_printed(true).map_err(|e| e.to_string())?;
         // /C antes de añadir objetos (con /AP PDFium ya no deja fijarlo);
         // es lo que lee get_annotations para pintar los overlays
         annot
@@ -258,6 +261,7 @@ pub fn add_stamp(
             .annotations_mut()
             .create_stamp_annotation()
             .map_err(|e| e.to_string())?;
+        annot.set_is_printed(true).map_err(|e| e.to_string())?;
         annot.set_stroke_color(c).map_err(|e| e.to_string())?;
         annot
             .set_bounds(PdfRect::new(
