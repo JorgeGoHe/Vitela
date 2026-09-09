@@ -679,6 +679,32 @@ export function exportText(path: string, destPath: string): Promise<void> {
   return invoke("export_text", { path, destPath });
 }
 
+/** Lo que ha salido en el `.docx` y lo que se ha quedado por el camino.
+ *  `perdido` viene ya escrito en llano por el backend (una frase por cosa
+ *  que no se ha podido llevar): la exportación promete texto e imágenes, no
+ *  maquetación, y el recuento lo dice en vez de cantar un éxito redondo. */
+export type DocxReport = {
+  parrafos: number;
+  imagenes: number;
+  perdido: string[];
+};
+
+/** Exporta a Word (.docx) de forma **aproximada**: un párrafo por bloque de
+ *  texto, con su fuente y su color, las imágenes en su posición aproximada y
+ *  un salto de página por página. No se intentan tablas ni columnas. Sin
+ *  `pageIndices`, el documento entero. */
+export function exportDocx(
+  workPath: string,
+  destPath: string,
+  pageIndices?: number[] | null,
+): Promise<DocxReport> {
+  return invoke("export_docx", {
+    workPath,
+    destPath,
+    pageIndices: pageIndices ?? null,
+  });
+}
+
 export type CompressReport = {
   antes: number;
   despues: number;

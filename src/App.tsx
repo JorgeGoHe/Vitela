@@ -75,6 +75,7 @@ import {
   encryptPdf,
   exportPagesPng,
   exportText,
+  exportDocx,
   flattenPdf,
   getMetadata,
   removeEncryption,
@@ -428,6 +429,8 @@ function App() {
   // no un modal, que es como Vitela cuenta todo lo demás
   const [sesionRota, setSesionRota] = useState<Sesion | null>(null);
   const [descartarAsk, setDescartarAsk] = useState<Sesion | null>(null);
+  // «Exportar a Word»: el aviso de lo que no sale va ANTES de elegir destino
+  const [wordAsk, setWordAsk] = useState(false);
   // «Ayuda ▸ Atajos de teclado»: el único sitio donde están todos escritos
   const [atajosAbiertos, setAtajosAbiertos] = useState(false);
   const {
@@ -2214,6 +2217,38 @@ function App() {
     }
   }
 
+  /** «Word (.docx)…»: exporta lo que `get_text_blocks` sabe —texto e
+   *  imágenes, no maquetación—. El aviso de que es una aproximación se da
+   *  antes de pedir carpeta y nombre: es una función que promete mucho y da
+   *  menos, y descubrirlo con el fichero ya escrito es tarde. */
+  async function exportarWord() {
+    if (!workPath) return;
+    setWordAsk(false);
+    const dest = await save({
+      filters: [{ name: "Word", extensions: ["docx"] }],
+      defaultPath: (originalPath ?? "documento.pdf").replace(/\.pdf$/i, ".docx"),
+      title: "Exportar a Word",
+    });
+    if (!dest) return;
+    try {
+      setNotice("Exportando a Word…", { persistente: true });
+      const r = await exportDocx(workPath, dest);
+      const resumen = `${plural(r.parrafos, "párrafo", "párrafos")} y ${plural(
+        r.imagenes,
+        "imagen",
+        "imágenes",
+      )} en ${dest}`;
+      setNotice(
+        r.perdido.length > 0
+          ? `${resumen} · fuera: ${r.perdido.join(", ")}`
+          : resumen,
+      );
+    } catch (e) {
+      setNotice(null);
+      setError(String(e));
+    }
+  }
+
   async function applyCompress() {
     if (!workPath) return;
     try {
@@ -2660,6 +2695,7 @@ function App() {
     propiedades: openProperties,
     "exportar-imagenes": () => setExportOpen(true),
     "exportar-texto": exportPlainText,
+    "exportar-word": () => setWordAsk(true),
     comprimir: () => setCompressOpen(true),
     /* Ayuda */
     atajos: () => setAtajosAbiertos(true),
@@ -2965,6 +3001,7 @@ function App() {
                 abrirPreferencias={() => setPrefsAbiertas(true)}
                 abrirExportar={() => setExportOpen(true)}
                 exportPlainText={exportPlainText}
+                exportarWord={() => setWordAsk(true)}
                 abrirComprimir={() => setCompressOpen(true)}
               />
             </>
@@ -3184,6 +3221,20 @@ function App() {
             descartarSesion(s);
           }}
           onClose={() => setDescartarAsk(null)}
+        />
+      )}
+      {wordAsk && (
+        <DialogoConfirmar
+          titulo="Exportar a Word"
+          cuerpo={
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              El texto y las imágenes salen; la maquetación de columnas y
+              tablas, no. Para un documento sencillo suele bastar.
+            </p>
+          }
+          textoConfirmar="Exportar de todos modos"
+          onConfirm={exportarWord}
+          onClose={() => setWordAsk(false)}
         />
       )}
       {redactAsk && (

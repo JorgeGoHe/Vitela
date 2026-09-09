@@ -66,6 +66,7 @@ export default function MenuAcciones({
   printDocument,
   abrirExportar,
   exportPlainText,
+  exportarWord,
   abrirComprimir,
 }: {
   /** Últimos ficheros abiertos, la misma lista que el estado vacío. */
@@ -104,6 +105,7 @@ export default function MenuAcciones({
   printDocument: () => void;
   abrirExportar: () => void;
   exportPlainText: () => void;
+  exportarWord: () => void;
   abrirComprimir: () => void;
 }) {
   const botonRef = useRef<HTMLButtonElement | null>(null);
@@ -331,6 +333,11 @@ export default function MenuAcciones({
               icon="extract"
               texto="Exportar texto…"
               onSelect={ejecutar(exportPlainText)}
+            />
+            <Entrada
+              icon="doc"
+              texto="Word (.docx)…"
+              onSelect={ejecutar(exportarWord)}
             />
             <Entrada
               icon="shrink"
