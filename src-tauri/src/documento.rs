@@ -219,6 +219,9 @@ pub fn set_metadata(work_path: String, meta: Metadata) -> Result<(), String> {
 
 #[derive(Serialize)]
 pub struct LinkInfo {
+    /// Índice de la anotación en la página, el que entiende
+    /// `remove_annotation` (para que la UI pueda borrar el enlace).
+    pub annot_index: u16,
     pub x: f32,
     pub y: f32,
     pub w: f32,
@@ -235,7 +238,14 @@ pub fn get_links(path: String, page_index: u16) -> Result<Vec<LinkInfo>, String>
             let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
             let page_h = page.height().value;
             let mut out = Vec::new();
-            for link in page.links().iter() {
+            // se recorren las anotaciones (no `page.links()`) para poder
+            // devolver el índice que entiende `remove_annotation`
+            let annotations = page.annotations();
+            for i in 0..annotations.len() {
+                let Ok(annot) = annotations.get(i) else { continue };
+                let Some(link) = annot.as_link_annotation().and_then(|l| l.link().ok()) else {
+                    continue;
+                };
                 let Ok(r) = link.rect() else { continue };
                 let mut uri = None;
                 let mut dest_page = link
@@ -257,6 +267,7 @@ pub fn get_links(path: String, page_index: u16) -> Result<Vec<LinkInfo>, String>
                     continue;
                 }
                 out.push(LinkInfo {
+                    annot_index: i as u16,
                     x: r.left().value,
                     y: page_h - r.top().value,
                     w: r.right().value - r.left().value,

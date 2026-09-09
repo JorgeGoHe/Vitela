@@ -428,11 +428,21 @@ mod tests {
             .expect("sin esquema");
         let links = crate::documento::get_links(work.clone(), 0).expect("listar");
         assert!(links.iter().any(|l| l.uri.as_deref() == Some("https://ejemplo.org/x")));
-        // borrar el primero vía remove_annotation (es una anotación normal)
+        // el annot_index de get_links es el mismo que da get_annotations
         let annots = crate::anotaciones::get_annotations(work.clone(), 0).expect("annots");
-        let link_annot = annots.iter().find(|a| a.kind == "Link").expect("hay Link");
-        crate::anotaciones::remove_annotation(work.clone(), 0, link_annot.index).expect("borrar");
-        assert_eq!(crate::documento::get_links(work, 0).expect("relistar").len(), 2);
+        let de_annots: Vec<u16> = annots
+            .iter()
+            .filter(|a| a.kind == "Link")
+            .map(|a| a.index)
+            .collect();
+        let de_links: Vec<u16> = links.iter().map(|l| l.annot_index).collect();
+        assert_eq!(de_annots, de_links);
+        // borrar el primero con ese índice (es lo que hace la UI)
+        crate::anotaciones::remove_annotation(work.clone(), 0, links[0].annot_index)
+            .expect("borrar");
+        let quedan = crate::documento::get_links(work, 0).expect("relistar");
+        assert_eq!(quedan.len(), 2);
+        assert!(quedan.iter().all(|l| l.uri != links[0].uri));
     }
 }
 
