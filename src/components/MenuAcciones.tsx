@@ -1,7 +1,38 @@
+import { useEffect, useRef } from "react";
+import { MOD } from "../tipos";
 import Icon from "./Icon";
 
-/** Menú «Más acciones» de la barra superior (Archivo, Documento, Seguridad,
- *  Insertar y Salida). Cada entrada cierra el menú antes de actuar. */
+/** Una entrada del menú: icono, nombre y, si la acción tiene atajo, el
+ *  atajo a la derecha en Fragment Mono (como en los menús de Acrobat). */
+function Entrada({
+  icon,
+  texto,
+  atajo,
+  onSelect,
+}: {
+  icon: string;
+  texto: string;
+  atajo?: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      className="btn"
+      role="menuitem"
+      title={atajo ? `${texto.replace(/…$/, "")} (${atajo})` : undefined}
+      onClick={onSelect}
+    >
+      <Icon name={icon} size={14} />
+      <span className="menu-texto">{texto}</span>
+      {atajo && <span className="menu-atajo dato">{atajo}</span>}
+    </button>
+  );
+}
+
+/** Menú «Acciones» de la barra superior (Archivo, Documento, Seguridad,
+ *  Insertar y Salida). Cada entrada cierra el menú antes de actuar; se
+ *  recorre con ↑/↓, se activa con Enter y Esc lo cierra devolviendo el foco
+ *  al botón. */
 export default function MenuAcciones({
   abierto,
   onToggle,
@@ -52,231 +83,177 @@ export default function MenuAcciones({
   exportPlainText: () => void;
   abrirComprimir: () => void;
 }) {
+  const botonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  // al abrir con teclado o ratón, el foco entra en la primera entrada
+  useEffect(() => {
+    if (!abierto) return;
+    menuRef.current?.querySelector("button")?.focus();
+  }, [abierto]);
+
+  function cerrarYVolver() {
+    onCerrar();
+    botonRef.current?.focus();
+  }
+
+  /** Ejecuta la acción con el menú ya cerrado. */
+  function ejecutar(accion: () => void) {
+    return () => {
+      onCerrar();
+      accion();
+    };
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    const items = Array.from(
+      menuRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+    );
+    if (items.length === 0) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const i = items.indexOf(document.activeElement as HTMLButtonElement);
+      const delta = e.key === "ArrowDown" ? 1 : -1;
+      items[(i + delta + items.length) % items.length].focus();
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      items[0].focus();
+    } else if (e.key === "End") {
+      e.preventDefault();
+      items[items.length - 1].focus();
+    } else if (e.key === "Escape" || e.key === "Tab") {
+      // Esc no debe seguir hasta la app (allí también sale de la herramienta)
+      e.preventDefault();
+      e.stopPropagation();
+      cerrarYVolver();
+    }
+  }
+
   return (
     <div className="menu-wrap">
       <button
-        className="btn btn-icon"
-        title="Más acciones"
-        aria-label="Más acciones"
+        ref={botonRef}
+        className="btn"
+        title="Acciones"
+        aria-label="Acciones"
         aria-haspopup="menu"
         aria-expanded={abierto}
         onClick={onToggle}
       >
-        ⋯
+        <Icon name="more" size={14} />
+        <span className="btn-etiqueta">Acciones</span>
       </button>
       {abierto && (
         <>
           <div className="menu-backdrop" onClick={onCerrar} />
-          <div className="menu">
+          <div
+            className="menu"
+            role="menu"
+            aria-label="Acciones"
+            ref={menuRef}
+            onKeyDown={onKeyDown}
+          >
             <div className="menu-titulo">Archivo</div>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                saveFileAs();
-              }}
-            >
-              <Icon name="save" size={14} />
-              Guardar como…
-            </button>
-            <button className="btn" onClick={closeDocument}>
-              <Icon name="close" size={14} />
-              Cerrar documento
-            </button>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                addPdf();
-              }}
-            >
-              <Icon name="merge" size={14} />
-              Añadir PDF…
-            </button>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                extractCurrentPage();
-              }}
-            >
-              <Icon name="extract" size={14} />
-              Extraer página…
-            </button>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                insertPdfHere();
-              }}
-            >
-              <Icon name="merge" size={14} />
-              Insertar PDF aquí…
-            </button>
+            <Entrada
+              icon="save"
+              texto="Guardar como…"
+              atajo={`⇧${MOD}S`}
+              onSelect={ejecutar(saveFileAs)}
+            />
+            <Entrada icon="close" texto="Cerrar documento" onSelect={closeDocument} />
+            <Entrada icon="merge" texto="Añadir PDF…" onSelect={ejecutar(addPdf)} />
+            <Entrada
+              icon="extract"
+              texto="Extraer página…"
+              onSelect={ejecutar(extractCurrentPage)}
+            />
+            <Entrada
+              icon="merge"
+              texto="Insertar PDF aquí…"
+              onSelect={ejecutar(insertPdfHere)}
+            />
             <div className="menu-titulo">Documento</div>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                recortarPagina();
-              }}
-            >
-              <Icon name="crop" size={14} />
-              Recortar página…
-            </button>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                abrirMarcaAgua();
-              }}
-            >
-              <Icon name="water" size={14} />
-              Marca de agua…
-            </button>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                abrirEncabezado();
-              }}
-            >
-              <Icon name="hf" size={14} />
-              Encabezado, pie y numeración…
-            </button>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                askRemoveMarginal("watermark");
-              }}
-            >
-              <Icon name="water" size={14} />
-              Quitar marca de agua…
-            </button>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                askRemoveMarginal("header");
-              }}
-            >
-              <Icon name="hf" size={14} />
-              Quitar encabezados y pies…
-            </button>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                openProperties();
-              }}
-            >
-              <Icon name="doc" size={14} />
-              Propiedades del documento…
-            </button>
+            <Entrada
+              icon="crop"
+              texto="Recortar página…"
+              onSelect={ejecutar(recortarPagina)}
+            />
+            <Entrada
+              icon="water"
+              texto="Marca de agua…"
+              onSelect={ejecutar(abrirMarcaAgua)}
+            />
+            <Entrada
+              icon="hf"
+              texto="Encabezado, pie y numeración…"
+              onSelect={ejecutar(abrirEncabezado)}
+            />
+            <Entrada
+              icon="water"
+              texto="Quitar marca de agua…"
+              onSelect={ejecutar(() => askRemoveMarginal("watermark"))}
+            />
+            <Entrada
+              icon="hf"
+              texto="Quitar encabezados y pies…"
+              onSelect={ejecutar(() => askRemoveMarginal("header"))}
+            />
+            <Entrada
+              icon="doc"
+              texto="Propiedades del documento…"
+              atajo={`${MOD}D`}
+              onSelect={ejecutar(openProperties)}
+            />
             <div className="menu-titulo">Seguridad</div>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                signPdf();
-              }}
-            >
-              <Icon name="sign" size={14} />
-              Firma digital (certificado)…
-            </button>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                abrirProteger();
-              }}
-            >
-              <Icon name="lock" size={14} />
-              Proteger con contraseña…
-            </button>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                abrirAplanar();
-              }}
-            >
-              <Icon name="flatten" size={14} />
-              Aplanar anotaciones…
-            </button>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                redactar();
-              }}
-            >
-              <Icon name="redact" size={14} />
-              Redactar (censurar)…
-            </button>
+            <Entrada
+              icon="sign"
+              texto="Firma digital (certificado)…"
+              onSelect={ejecutar(signPdf)}
+            />
+            <Entrada
+              icon="lock"
+              texto="Proteger con contraseña…"
+              onSelect={ejecutar(abrirProteger)}
+            />
+            <Entrada
+              icon="flatten"
+              texto="Aplanar anotaciones…"
+              onSelect={ejecutar(abrirAplanar)}
+            />
+            <Entrada
+              icon="redact"
+              texto="Redactar (censurar)…"
+              onSelect={ejecutar(redactar)}
+            />
             <div className="menu-titulo">Insertar</div>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                nuevoCampo();
-              }}
-            >
-              <Icon name="field" size={14} />
-              Añadir campo de formulario…
-            </button>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                nuevoEnlace();
-              }}
-            >
-              <Icon name="link" size={14} />
-              Añadir enlace…
-            </button>
+            <Entrada
+              icon="field"
+              texto="Añadir campo de formulario…"
+              onSelect={ejecutar(nuevoCampo)}
+            />
+            <Entrada icon="link" texto="Añadir enlace…" onSelect={ejecutar(nuevoEnlace)} />
             <div className="menu-titulo">Salida</div>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                printDocument();
-              }}
-            >
-              <Icon name="printer" size={14} />
-              Imprimir…
-            </button>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                abrirExportar();
-              }}
-            >
-              <Icon name="image" size={14} />
-              Exportar como imágenes…
-            </button>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                exportPlainText();
-              }}
-            >
-              <Icon name="extract" size={14} />
-              Exportar texto…
-            </button>
-            <button
-              className="btn"
-              onClick={() => {
-                onCerrar();
-                abrirComprimir();
-              }}
-            >
-              <Icon name="shrink" size={14} />
-              Reducir tamaño…
-            </button>
+            <Entrada
+              icon="printer"
+              texto="Imprimir…"
+              atajo={`${MOD}P`}
+              onSelect={ejecutar(printDocument)}
+            />
+            <Entrada
+              icon="image"
+              texto="Exportar como imágenes…"
+              onSelect={ejecutar(abrirExportar)}
+            />
+            <Entrada
+              icon="extract"
+              texto="Exportar texto…"
+              onSelect={ejecutar(exportPlainText)}
+            />
+            <Entrada
+              icon="shrink"
+              texto="Reducir tamaño…"
+              onSelect={ejecutar(abrirComprimir)}
+            />
           </div>
         </>
       )}

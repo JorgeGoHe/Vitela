@@ -1,3 +1,4 @@
+import { MOD } from "../tipos";
 import Icon from "./Icon";
 
 /** Campo de búsqueda de la barra superior con el contador y las flechas
@@ -28,6 +29,8 @@ export default function Busqueda({
       <input
         type="text"
         placeholder="Buscar"
+        title={`Buscar en el documento (${MOD}F)`}
+        aria-label="Buscar en el documento"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => {

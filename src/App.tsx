@@ -38,7 +38,7 @@ import {
   type Metadata,
   type OutlineNode,
 } from "./api";
-import { hexToRgba, type Mode, type PageSize } from "./tipos";
+import { hexToRgba, MOD, type Mode, type PageSize } from "./tipos";
 import Icon from "./components/Icon";
 import Busqueda from "./components/Busqueda";
 import OpcionesHerramienta from "./components/OpcionesHerramienta";
@@ -62,9 +62,6 @@ const BASE_WIDTH = 900;
 /** Separación vertical entre páginas y padding superior del visor (px). */
 const PAGE_GAP = 24;
 const VIEWER_PAD_TOP = 28;
-
-/** Tecla modificadora en los tooltips de atajos. */
-const MOD = navigator.platform.startsWith("Mac") ? "⌘" : "Ctrl+";
 
 function App() {
   const [originalPath, setOriginalPath] = useState<string | null>(null);
@@ -406,9 +403,17 @@ function App() {
       if (mod && e.key === "o") {
         e.preventDefault();
         openFile();
-      } else if (mod && e.key === "s") {
+      } else if (mod && (e.key === "s" || e.key === "S")) {
         e.preventDefault();
-        if (modified) saveFile();
+        if (e.shiftKey) {
+          if (pageCount > 0) saveFileAs();
+        } else if (modified) saveFile();
+      } else if (mod && e.key === "p" && pageCount > 0) {
+        e.preventDefault();
+        printDocument();
+      } else if (mod && !enCampo && e.key === "d" && pageCount > 0) {
+        e.preventDefault();
+        openProperties();
       } else if (mod && e.key === "f" && pageCount > 0) {
         e.preventDefault();
         (document.querySelector(".search input") as HTMLInputElement)?.focus();
@@ -1069,7 +1074,12 @@ function App() {
     <div className="app">
       <header className="toolbar">
         <div className="toolbar-left">
-          <button className="btn" onClick={openFile}>
+          <button
+            className="btn"
+            title={`Abrir un PDF (${MOD}O)`}
+            aria-label="Abrir un PDF"
+            onClick={openFile}
+          >
             <Icon name="open" />
             <span className="btn-etiqueta">Abrir</span>
           </button>
@@ -1158,6 +1168,8 @@ function App() {
               </button>
               <button
                 className="btn btn-primary"
+                title={modified ? `Guardar (${MOD}S)` : "Sin cambios que guardar"}
+                aria-label="Guardar"
                 disabled={!modified}
                 onClick={saveFile}
               >

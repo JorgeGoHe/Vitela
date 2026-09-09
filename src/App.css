@@ -319,6 +319,17 @@ textarea {
   border-radius: 6px;
 }
 
+.menu-texto {
+  flex: 1;
+  text-align: left;
+}
+
+/* el atajo de cada entrada, como en los menús del sistema */
+.menu-atajo {
+  color: var(--fg-muted);
+  padding-left: 16px;
+}
+
 /* ---------- banner de error ---------- */
 
 .banner-error {

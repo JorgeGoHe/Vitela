@@ -92,6 +92,11 @@ const ICONS: Record<string, string[]> = {
   shrink: ["m15 15 6 6", "m15 9 6-6", "M9 21v-6H3", "M3 9h6V3"],
   water: ["M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7Z"],
   hf: ["M3 5h18", "M3 19h18", "M7 12h10"],
+  more: [
+    "M5 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z",
+    "M12 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z",
+    "M19 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z",
+  ],
 };
 
 export default function Icon({ name, size = 16 }: { name: string; size?: number }) {

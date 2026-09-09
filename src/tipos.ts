@@ -4,6 +4,9 @@
  */
 import type { Rgba } from "./api";
 
+/** Tecla modificadora en los tooltips y los menús («⌘» en Mac, «Ctrl+»). */
+export const MOD = navigator.platform.startsWith("Mac") ? "⌘" : "Ctrl+";
+
 export type CharBox = { ch: string; x: number; y: number; w: number; h: number };
 export type PageText = { width: number; height: number; chars: CharBox[] };
 export type Rect = { x: number; y: number; w: number; h: number };
