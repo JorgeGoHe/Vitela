@@ -174,7 +174,7 @@ fn protecciones() -> std::sync::MutexGuard<'static, std::collections::HashMap<St
     PROTECCIONES.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn anota_proteccion(
+pub(crate) fn anota_proteccion(
     work_path: &str,
     user: String,
     owner: Option<String>,
@@ -250,6 +250,11 @@ pub fn encrypt_pdf(
 ) -> Result<(), String> {
     if user_password.is_empty() {
         return Err("La contraseña no puede estar vacía".into());
+    }
+    // cifrar reescribe el documento entero y movería el /ByteRange de la
+    // firma: mejor decirlo que romperla sin avisar
+    if crate::firma::esta_firmado(&work_path) {
+        return Err(crate::firma::AVISO_FIRMADO.into());
     }
     let permisos = permisos.unwrap_or_default();
     let Some(dest_path) = dest_path else {

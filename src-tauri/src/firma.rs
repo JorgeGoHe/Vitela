@@ -110,6 +110,22 @@ fn build_cms(cred: &Credenciales, digest: &[u8]) -> Result<Vec<u8>, String> {
     signed.to_der().map_err(|e| e.to_string())
 }
 
+/// ¿Lleva el fichero una firma digital? Se mira el `/ByteRange`, que es lo
+/// que distingue a un PDF firmado: cualquier reescritura del cuerpo mueve
+/// los desplazamientos que ese array fija y deja la firma por inválida.
+/// Es el mismo criterio que usa `save_pdf` para copiar byte a byte.
+pub fn esta_firmado(path: &str) -> bool {
+    std::fs::read(path)
+        .map(|b| find_subslice(&b, b"/ByteRange").is_some())
+        .unwrap_or(false)
+}
+
+/// Frase para el usuario cuando una operación destruiría la firma. Ni
+/// «ByteRange» ni «PKCS#7»: qué pasa y qué hacer.
+pub const AVISO_FIRMADO: &str =
+    "El documento está firmado y protegerlo con contraseña invalidaría la firma. \
+     Guarda antes una copia sin firmar y protege esa.";
+
 /// Firma el PDF de `src_path` y escribe el resultado en `dest_path`.
 pub fn sign(
     src_path: &str,

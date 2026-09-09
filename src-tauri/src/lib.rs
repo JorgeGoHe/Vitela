@@ -745,6 +745,12 @@ fn save_pdf(work_path: String, dest_path: String) -> Result<(), String> {
     // «Proteger» se aplica al documento abierto y viaja con Guardar, que es
     // lo que hace Acrobat: si hay protección puesta, el fichero sale cifrado
     if let Some(p) = seguridad::proteccion_de(&work_path) {
+        // la protección se anota antes de firmar y `copia_firmando` no llega
+        // a mirar: sin esta comprobación, guardar cifraría un documento
+        // firmado y lo dejaría con la firma rota
+        if firma::esta_firmado(&work_path) {
+            return Err(firma::AVISO_FIRMADO.into());
+        }
         return seguridad::cifra_a(
             &work_path,
             &dest_path,
@@ -1496,6 +1502,70 @@ pub(crate) mod tests {
 
     fn find_in(haystack: &[u8], needle: &[u8]) -> bool {
         haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+
+    /// Cifrar reescribe el documento entero, y eso mueve los
+    /// desplazamientos que fija el /ByteRange de la firma: el PDF firmado
+    /// quedaba con la firma rota y sin un aviso. `save_pdf` ya tenía el
+    /// cuidado de copiar byte a byte un documento firmado, pero la rama de
+    /// protección salía antes de esa comprobación.
+    #[test]
+    fn proteger_un_pdf_firmado_avisa_en_vez_de_romper_la_firma() {
+        let dir = std::env::temp_dir();
+        let src = dir.join("editor_pdf_test_firmado_proteger_src.pdf");
+        let firmado = dir.join("editor_pdf_test_firmado_proteger.pdf");
+        crea_pdf(&["Contrato"], &src);
+        let cred = firma::credenciales_pem(
+            include_str!("../fixtures/test_cert.pem"),
+            include_str!("../fixtures/test_key.pem"),
+        )
+        .expect("credenciales");
+        firma::sign(&src.to_string_lossy(), &firmado.to_string_lossy(), &cred, None)
+            .expect("firmar");
+        let work = firmado.to_string_lossy().into_owned();
+        let antes = std::fs::read(&firmado).expect("leer firmado");
+
+        // proteger el documento abierto
+        let e = seguridad::encrypt_pdf(work.clone(), None, "secreta".into(), None, None)
+            .expect_err("proteger un PDF firmado tiene que avisar");
+        assert!(e.contains("firmado"), "el aviso debe decir por qué: {e}");
+        assert!(!e.contains("ByteRange"), "nada de jerga: {e}");
+        // …y escribir una copia protegida
+        let copia = dir.join("editor_pdf_test_firmado_proteger_copia.pdf");
+        seguridad::encrypt_pdf(
+            work.clone(),
+            Some(copia.to_string_lossy().into_owned()),
+            "secreta".into(),
+            None,
+            None,
+        )
+        .expect_err("una copia protegida también rompería la firma");
+        assert!(!copia.exists(), "no debe quedar un fichero a medias");
+
+        // la puerta de atrás: protección ya anotada y después Guardar
+        seguridad::anota_proteccion(
+            &work,
+            "secreta".into(),
+            None,
+            seguridad::Permisos::default(),
+        );
+        let dest = dir.join("editor_pdf_test_firmado_proteger_dest.pdf");
+        let e = save_pdf(work.clone(), dest.to_string_lossy().into_owned())
+            .expect_err("guardar cifrando rompería la firma");
+        assert!(e.contains("firmado"), "el aviso al guardar: {e}");
+        seguridad::olvida_proteccion(&work);
+
+        // y el fichero firmado sigue byte a byte como estaba
+        assert_eq!(
+            std::fs::read(&firmado).expect("releer"),
+            antes,
+            "el documento firmado no se ha tocado"
+        );
+
+        std::fs::remove_file(&src).ok();
+        std::fs::remove_file(&firmado).ok();
+        std::fs::remove_file(&dest).ok();
     }
 
 }
