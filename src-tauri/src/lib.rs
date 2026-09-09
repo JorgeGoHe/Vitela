@@ -663,6 +663,12 @@ mod texto;
 
 /// Firma digitalmente la copia de trabajo y escribe el PDF firmado en
 /// `dest_path`. Certificado y clave privada en PEM (RSA sin cifrar).
+///
+/// Con `rect` la firma se ve: el widget deja de ser `[0 0 0 0]` y lleva su
+/// apariencia (la firma manuscrita en PNG si llega, y debajo «Firmado
+/// por …» y la fecha). Sin `rect`, invisible, como hasta ahora.
+// la firma es el contrato con la UI: un argumento por propiedad
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn sign_pdf(
     work_path: String,
@@ -670,13 +676,23 @@ fn sign_pdf(
     cert_pem_path: String,
     key_pem_path: String,
     reason: Option<String>,
+    rect: Option<Rect>,
+    page_index: Option<u16>,
+    signer_name: Option<String>,
+    signature_png: Option<String>,
 ) -> Result<(), String> {
     let cert_pem = std::fs::read_to_string(&cert_pem_path)
         .map_err(|e| mensaje_llano(format!("No se ha podido leer el certificado: {e}")))?;
     let key_pem = std::fs::read_to_string(&key_pem_path)
         .map_err(|e| mensaje_llano(format!("No se ha podido leer la clave: {e}")))?;
     let cred = firma::credenciales_pem(&cert_pem, &key_pem)?;
-    firmar_en_hilo(work_path, dest_path, cred, reason)
+    firmar_en_hilo(
+        work_path,
+        dest_path,
+        cred,
+        reason,
+        firma::Apariencia { rect, page_index, signer_name, signature_png },
+    )
 }
 
 /// La firma lee la copia de trabajo: se hace en el hilo de PDFium, con el
@@ -686,14 +702,16 @@ fn firmar_en_hilo(
     dest_path: String,
     cred: firma::Credenciales,
     reason: Option<String>,
+    apariencia: firma::Apariencia,
 ) -> Result<(), String> {
     on_pdfium_thread(move || {
         invalidate_doc_cache();
-        firma::sign(&work_path, &dest_path, &cred, reason).map_err(mensaje_llano)
+        firma::sign(&work_path, &dest_path, &cred, reason, &apariencia).map_err(mensaje_llano)
     })
 }
 
 /// Igual que `sign_pdf` pero con un contenedor PKCS#12 (.p12/.pfx).
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn sign_pdf_p12(
     work_path: String,
@@ -701,11 +719,21 @@ fn sign_pdf_p12(
     p12_path: String,
     password: String,
     reason: Option<String>,
+    rect: Option<Rect>,
+    page_index: Option<u16>,
+    signer_name: Option<String>,
+    signature_png: Option<String>,
 ) -> Result<(), String> {
     let bytes = std::fs::read(&p12_path)
         .map_err(|e| mensaje_llano(format!("No se ha podido leer el .p12: {e}")))?;
     let cred = firma::credenciales_p12(&bytes, &password)?;
-    firmar_en_hilo(work_path, dest_path, cred, reason)
+    firmar_en_hilo(
+        work_path,
+        dest_path,
+        cred,
+        reason,
+        firma::Apariencia { rect, page_index, signer_name, signature_png },
+    )
 }
 
 /// Crea un PDF de prueba con una página de texto por cada entrada. Lo usan
@@ -974,6 +1002,7 @@ pub fn run() {
             imagenes::replace_image,
             imagenes::delete_image,
             sign_pdf,
+            firma::verify_signatures,
             sign_pdf_p12,
             firmas_visuales::stamp_signature,
             firmas_visuales::import_signature_file,
@@ -1151,7 +1180,7 @@ pub(crate) mod tests {
             ),
             (
                 "firmar con un certificado que no está",
-                sign_pdf(b.clone(), "/tmp/f.pdf".into(), "/tmp/nope.pem".into(), "/tmp/nope.pem".into(), None)
+                sign_pdf(b.clone(), "/tmp/f.pdf".into(), "/tmp/nope.pem".into(), "/tmp/nope.pem".into(), None, None, None, None, None)
                     .unwrap_err(),
             ),
         ];
@@ -1396,6 +1425,7 @@ pub(crate) mod tests {
             &dest.to_string_lossy(),
             &cred,
             Some("Prueba".into()),
+            &firma::Apariencia::default(),
         )
         .expect("firmar");
 
@@ -1479,7 +1509,7 @@ pub(crate) mod tests {
 
         let p12 = include_bytes!("../fixtures/test_bundle.p12");
         let cred = firma::credenciales_p12(p12, "test1234").expect("abrir p12");
-        firma::sign(&src.to_string_lossy(), &dest.to_string_lossy(), &cred, None)
+        firma::sign(&src.to_string_lossy(), &dest.to_string_lossy(), &cred, None, &firma::Apariencia::default())
             .expect("firmar con p12");
         let bytes = std::fs::read(&dest).expect("leer firmado");
         assert!(
@@ -1521,7 +1551,7 @@ pub(crate) mod tests {
             include_str!("../fixtures/test_key.pem"),
         )
         .expect("credenciales");
-        firma::sign(&src.to_string_lossy(), &firmado.to_string_lossy(), &cred, None)
+        firma::sign(&src.to_string_lossy(), &firmado.to_string_lossy(), &cred, None, &firma::Apariencia::default())
             .expect("firmar");
         let work = firmado.to_string_lossy().into_owned();
         let antes = std::fs::read(&firmado).expect("leer firmado");
