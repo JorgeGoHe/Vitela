@@ -468,6 +468,12 @@ function App() {
       setPaginasSel(new Set());
       setViewRotation(0);
       setHayFormularios(false);
+      // las vistas apiladas son del documento que se deja atrás: con otro
+      // de distinto tamaño, «volver» llevaba a un scroll que ya no significa
+      // nada. Y la pestaña «Firmas» no existe en un PDF sin firmar
+      setVistasAtras([]);
+      setVistasAdelante([]);
+      setSidebarTab("paginas");
       // la herramienta armada no es del documento nuevo: Redactar sobre un
       // PDF recién abierto es lo último que quiere nadie
       setMode("select");
@@ -740,6 +746,9 @@ function App() {
     setPaginasSel(new Set());
     setViewRotation(0);
     setHayFormularios(false);
+    setVistasAtras([]);
+    setVistasAdelante([]);
+    setSidebarTab("paginas");
     setFirmasDoc([]);
     setBandaFirmas(false);
     evictAll();
@@ -1171,7 +1180,7 @@ function App() {
         setZoom("ajuste");
       } else if (mod && e.shiftKey && (e.key === "n" || e.key === "N") && pageCount > 0) {
         e.preventDefault();
-        setPageDraft(String(pageIndex + 1));
+        setPageDraft(String(paginaMostrada + 1));
       } else if (mod && e.key === "p" && pageCount > 0) {
         e.preventDefault();
         printDocument();
@@ -1217,9 +1226,9 @@ function App() {
         e.preventDefault();
         if (historial.puedeRehacer) historial.rehacer();
       } else if (!mod && !e.altKey && !enCampo && e.key === "ArrowRight") {
-        gotoPage(pageIndex + 1);
+        gotoPage(paginaVecina(1));
       } else if (!mod && !e.altKey && !enCampo && e.key === "ArrowLeft") {
-        gotoPage(pageIndex - 1);
+        gotoPage(paginaVecina(-1));
       }
     }
     window.addEventListener("keydown", onKey);
@@ -1247,6 +1256,14 @@ function App() {
     0,
     filas.findIndex((f) => f.includes(pageIndex)),
   );
+  // en las presentaciones de dos, Acrobat identifica el pliego por su página
+  // izquierda y ←/→ avanzan el pliego entero: con [0,1] en pantalla, la
+  // primera → pasaba a la 2, que ya estaba a la vista, y no movía nada
+  const paginaMostrada = dobles ? (filas[filaActual]?.[0] ?? pageIndex) : pageIndex;
+  const hayAnterior = dobles ? filaActual > 0 : pageIndex > 0;
+  const haySiguiente = dobles
+    ? filaActual < filas.length - 1
+    : pageIndex < pageCount - 1;
   const filasVisibles = continuo ? filas : filas.slice(filaActual, filaActual + 1);
   const fitWidth = viewerW ? Math.max(320, viewerW - PADDING_VIEWER) : BASE_WIDTH;
   // con dos hojas por fila cada una se queda con la mitad, menos el hueco
@@ -1363,6 +1380,13 @@ function App() {
     [pageCount, continuo],
   );
 
+  /** La página a la que llevan ← y →: el pliego entero en las presentaciones
+   *  de dos, la de al lado en el resto. */
+  function paginaVecina(delta: number): number {
+    if (!dobles) return pageIndex + delta;
+    return filas[filaActual + delta]?.[0] ?? pageIndex;
+  }
+
   /** Salta a la página escrita en la píldora; fuera de rango, gotoPage la
    *  recorta en silencio. */
   function irAPaginaEscrita() {
@@ -1393,26 +1417,37 @@ function App() {
   }
 
   /** Salto largo (enlace, marcador, comentario o coincidencia): apila de
-   *  dónde se viene para que ⌥← devuelva ahí, como en Acrobat. */
+   *  dónde se viene para que ⌥← devuelva ahí, como en Acrobat.
+   *
+   *  El punto de partida se lee AQUÍ y no dentro del updater de `setState`:
+   *  React ejecuta los updaters al procesar la cola, ya después del
+   *  `scrollIntoView` síncrono de `gotoPage`, así que lo que se apilaba era
+   *  el destino y ⌥← no volvía a ninguna parte. */
   function saltarA(page: number) {
-    setVistasAtras((v) => [...v.slice(-49), vistaActual()]);
-    setVistasAdelante([]);
+    const desde = vistaActual();
+    // dos Enter seguidos en la búsqueda apilaban dos veces el mismo sitio
+    if (desde.page !== page) {
+      setVistasAtras((v) => [...v.slice(-49), desde]);
+      setVistasAdelante([]);
+    }
     gotoPage(page);
   }
 
   function atrasVista() {
     if (vistasAtras.length === 0) return;
+    const desde = vistaActual();
     const v = vistasAtras[vistasAtras.length - 1];
     setVistasAtras((p) => p.slice(0, -1));
-    setVistasAdelante((p) => [...p, vistaActual()]);
+    setVistasAdelante((p) => [...p, desde]);
     restaurarVista(v);
   }
 
   function adelanteVista() {
     if (vistasAdelante.length === 0) return;
+    const desde = vistaActual();
     const v = vistasAdelante[vistasAdelante.length - 1];
     setVistasAdelante((p) => p.slice(0, -1));
-    setVistasAtras((p) => [...p, vistaActual()]);
+    setVistasAtras((p) => [...p, desde]);
     restaurarVista(v);
   }
 
@@ -1557,6 +1592,16 @@ function App() {
       el.scrollLeft += rh.left - rv.left + a.fracX * rh.width - a.offsetX;
     }
   }, [displayWidth]);
+
+  // Al cambiar de presentación el visor conserva su scroll y `onViewerScroll`
+  // no llega a correr, así que nadie recalcula la página: se quedaba el
+  // contador de antes con la hoja de después. Acrobat conserva la página.
+  const modoPrevioRef = useRef(modoPagina);
+  useEffect(() => {
+    if (modoPrevioRef.current === modoPagina) return;
+    modoPrevioRef.current = modoPagina;
+    gotoPage(pageIndex);
+  }, [modoPagina, pageIndex, gotoPage]);
 
   /** Tras anotar: invalidar el render de esa página sin recargar todo. */
   const afterAnnotate = useCallback(
@@ -3381,7 +3426,7 @@ function App() {
             onScroll={onViewerScroll}
             onClick={
               // en presentación el clic avanza, como en Acrobat
-              pantallaCompleta ? () => gotoPage(pageIndex + 1) : undefined
+              pantallaCompleta ? () => gotoPage(paginaVecina(1)) : undefined
             }
           >
             {!workPath && (
@@ -3487,10 +3532,10 @@ function App() {
             <div className="nav-pill">
               <button
                 className="btn btn-icon"
-                title="Página anterior"
-                aria-label="Página anterior"
-                disabled={pageIndex === 0}
-                onClick={() => gotoPage(pageIndex - 1)}
+                title={dobles ? "Pliego anterior" : "Página anterior"}
+                aria-label={dobles ? "Pliego anterior" : "Página anterior"}
+                disabled={!hayAnterior}
+                onClick={() => gotoPage(paginaVecina(-1))}
               >
                 <Icon name="chevLeft" size={14} />
               </button>
@@ -3499,9 +3544,9 @@ function App() {
                   className="btn pill-boton"
                   title={`Ir a la página (⇧${MOD}N)`}
                   aria-label="Ir a la página"
-                  onClick={() => setPageDraft(String(pageIndex + 1))}
+                  onClick={() => setPageDraft(String(paginaMostrada + 1))}
                 >
-                  {pageIndex + 1} / {pageCount}
+                  {paginaMostrada + 1} / {pageCount}
                 </button>
               ) : (
                 <input
@@ -3523,10 +3568,10 @@ function App() {
               )}
               <button
                 className="btn btn-icon"
-                title="Página siguiente"
-                aria-label="Página siguiente"
-                disabled={pageIndex >= pageCount - 1}
-                onClick={() => gotoPage(pageIndex + 1)}
+                title={dobles ? "Pliego siguiente" : "Página siguiente"}
+                aria-label={dobles ? "Pliego siguiente" : "Página siguiente"}
+                disabled={!haySiguiente}
+                onClick={() => gotoPage(paginaVecina(1))}
               >
                 <Icon name="chevRight" size={14} />
               </button>
