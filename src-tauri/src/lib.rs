@@ -676,6 +676,7 @@ mod firmas_visuales;
 mod formularios;
 mod formularios2;
 mod historial;
+mod menu;
 mod imagenes;
 mod paginas;
 mod paginas2;
@@ -982,12 +983,19 @@ pub fn run() {
             std::thread::spawn(|| {
                 barre_huerfanos(&std::env::temp_dir(), std::time::Duration::from_secs(24 * 3600));
             });
+            // menú nativo: espejo del menú «Acciones», sin documento abierto
+            if let Err(e) = menu::instala(app.handle(), false) {
+                eprintln!("no se ha podido montar el menú del sistema: {e}");
+            }
             // PDF pasado como argumento (doble clic en Windows y Linux)
             if let Some(path) = pdf_de_argv(std::env::args_os()) {
                 pide_abrir(app.handle(), path);
             }
             Ok(())
         })
+        // el menú nativo no ejecuta nada: manda el id y la UI lo enruta a la
+        // misma función que su botón, para que no haya dos caminos
+        .on_menu_event(|app, event| menu::reenvia(app, event.id().as_ref()))
         // ⌘W y el botón rojo: no se cierra sin que la UI lo confirme
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -1088,6 +1096,7 @@ pub fn run() {
             recientes::remove_recent,
             confirmar_cierre,
             ui_lista,
+            menu::set_menu_state,
             close_document
         ])
         .build(tauri::generate_context!())

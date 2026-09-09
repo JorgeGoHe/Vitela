@@ -247,6 +247,8 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "confirmar_cierre" => Ok(Value::Null),
         // ni ficheros pendientes del Finder
         "ui_lista" => Ok(Value::Null),
+        // ni menú del sistema que atenuar
+        "set_menu_state" => Ok(Value::Null),
         otro => Err(format!("Comando desconocido en el puente: {otro}")),
     }
 }
