@@ -164,6 +164,60 @@ pub struct Metadata {
     pub producer: String,
 }
 
+/// Lo que se puede decir de un PDF sin abrirlo: cuántas páginas trae, qué
+/// ocupa y si está protegido.
+#[derive(Serialize, Debug)]
+pub struct PdfInfo {
+    pub page_count: u16,
+    /// Tamaño del fichero en bytes (la UI lo pasa a KB o MB).
+    pub bytes: u64,
+    /// Lleva contraseña: abrirlo pedirá una.
+    pub encrypted: bool,
+}
+
+/// Ficha rápida de un PDF **sin abrirlo**: no crea copia de trabajo, no
+/// toca el historial y no pasa por PDFium. Es lo que necesita la rejilla de
+/// combinar («12 páginas · 1,4 MB» por fila, para no ordenar a ciegas
+/// ficheros elegidos por el nombre), y también la lista de recientes para
+/// marcar los que están protegidos.
+///
+/// De un documento cifrado se dice lo que se sabe sin la contraseña: que lo
+/// está y lo que ocupa. Nunca se pide contraseña desde aquí.
+#[tauri::command(async)]
+pub fn pdf_info(path: String) -> Result<PdfInfo, String> {
+    let bytes = std::fs::metadata(&path)
+        .map(|m| m.len())
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer «{path}»: {e}")))?;
+    match LoDoc::load(&path) {
+        Ok(doc) => Ok(PdfInfo {
+            page_count: doc.get_pages().len() as u16,
+            bytes,
+            encrypted: doc.is_encrypted(),
+        }),
+        // un PDF con contraseña no se deja leer entero, y eso ya es
+        // información: lo que no se puede es fallar y no decir nada
+        Err(e) if trae_encrypt(&path) => {
+            let _ = e;
+            Ok(PdfInfo {
+                page_count: 0,
+                bytes,
+                encrypted: true,
+            })
+        }
+        Err(e) => Err(crate::mensaje_llano(format!(
+            "No se ha podido leer el PDF: {e}"
+        ))),
+    }
+}
+
+/// ¿Trae el fichero un diccionario `/Encrypt`? Es lo único que se puede
+/// mirar cuando el documento no se deja parsear.
+fn trae_encrypt(path: &str) -> bool {
+    std::fs::read(path)
+        .map(|b| b.windows(8).any(|w| w == b"/Encrypt"))
+        .unwrap_or(false)
+}
+
 /// Metadatos del documento (diccionario /Info).
 #[tauri::command(async)]
 pub fn get_metadata(path: String) -> Result<Metadata, String> {
@@ -304,6 +358,51 @@ pub fn get_links(path: String, page_index: u16) -> Result<Vec<LinkInfo>, String>
 mod tests {
     use super::*;
     use crate::tests::crea_pdf;
+
+    /// La rejilla de combinar ordena ficheros elegidos por el nombre: hay
+    /// que poder decir cuántas páginas trae y qué ocupa cada uno **sin
+    /// abrirlos** (sin copia de trabajo, sin historial y sin pedir
+    /// contraseña).
+    #[test]
+    fn la_ficha_de_un_pdf_se_lee_sin_abrirlo() {
+        let pdf = std::env::temp_dir().join("documento-pdfinfo-test.pdf");
+        crea_pdf(&["Uno", "Dos", "Tres"], &pdf);
+        let ruta = pdf.to_string_lossy().into_owned();
+        let info = pdf_info(ruta.clone()).expect("ficha");
+        assert_eq!(info.page_count, 3);
+        assert_eq!(info.bytes, std::fs::metadata(&pdf).expect("tamaño").len());
+        assert!(info.bytes > 0);
+        assert!(!info.encrypted);
+        // no ha dejado copia de trabajo ni paso de deshacer
+        assert!(
+            crate::historial::history_state(ruta.clone()).expect("historial").undo == 0,
+            "pdf_info no puede tocar el historial"
+        );
+
+        // uno protegido dice que lo está, sin pedir la contraseña
+        let cifrado = std::env::temp_dir().join("documento-pdfinfo-cifrado.pdf");
+        crate::seguridad::encrypt_pdf(
+            ruta.clone(),
+            Some(cifrado.to_string_lossy().into_owned()),
+            "secreto".into(),
+            None,
+            None,
+        )
+        .expect("cifrar");
+        let info = pdf_info(cifrado.to_string_lossy().into_owned()).expect("ficha del cifrado");
+        assert!(info.encrypted, "un PDF con contraseña es «protegido»");
+        assert!(info.bytes > 0);
+
+        // y un fichero que no está lo dice en llano
+        let err = pdf_info("/no/existe/ni-esta.pdf".into()).unwrap_err();
+        assert!(
+            err.contains("no se encuentra") || err.contains("No se encuentra"),
+            "error poco claro: {err}"
+        );
+        assert!(!err.contains("os error"), "jerga en el error: {err}");
+        std::fs::remove_file(&pdf).ok();
+        std::fs::remove_file(&cifrado).ok();
+    }
 
     #[test]
     fn outline_ida_y_vuelta() {

@@ -216,6 +216,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "add_header_footer" => cmd!(paginas2::add_header_footer, { work_path: String, header_left: Option<String>, header_center: Option<String>, header_right: Option<String>, footer_left: Option<String>, footer_center: Option<String>, footer_right: Option<String>, font_size: f32 }),
         "get_outline" => cmd!(documento::get_outline, { path: String }),
         "set_outline" => cmd!(documento::set_outline, { work_path: String, nodes: Vec<documento::OutlineNode> }),
+        "pdf_info" => cmd!(documento::pdf_info, { path: String }),
         "get_metadata" => cmd!(documento::get_metadata, { path: String }),
         "set_metadata" => cmd!(documento::set_metadata, { work_path: String, meta: documento::Metadata }),
         "get_links" => cmd!(documento::get_links, { path: String, page_index: u16 }),

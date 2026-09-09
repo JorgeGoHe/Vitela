@@ -1075,6 +1075,7 @@ pub fn run() {
             paginas2::remove_marginal_text,
             documento::get_outline,
             documento::set_outline,
+            documento::pdf_info,
             documento::get_metadata,
             documento::set_metadata,
             documento::get_links,
