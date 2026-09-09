@@ -105,6 +105,11 @@ const VIEWER_PAD_TOP = 28;
 
 function App() {
   const [originalPath, setOriginalPath] = useState<string | null>(null);
+  // documento sin ruta (los PDF unidos al soltarlos): la barra lo nombra y
+  // ⌘S se comporta como Guardar como, para no machacar ningún original
+  const [nombreProvisional, setNombreProvisional] = useState<string | null>(
+    null,
+  );
   const [workPath, setWorkPath] = useState<string | null>(null);
   const [modified, setModified] = useState(false);
   // el original iba cifrado: la copia de trabajo está en claro y al guardar
@@ -296,6 +301,7 @@ function App() {
       setPaginasSel(new Set());
       setViewRotation(0);
       setHayFormularios(false);
+      setNombreProvisional(null);
       setOriginalPath(path);
       setWorkPath(info.work_path);
       setPageCount(info.page_count);
@@ -385,9 +391,11 @@ function App() {
         // un solo paso de deshacer para toda la unión
         if (pdfs.length > 2) await historial.agrupar(pdfs.length - 1);
         afterMutation(count);
-        setNotice(
-          `${pdfs.length} PDF unidos en uno; usa Guardar como para conservarlo`,
-        );
+        // documento nuevo, como el «Combinar archivos» de Acrobat: sin ruta,
+        // así que ⌘S pide destino y ninguno de los originales corre peligro
+        setOriginalPath(null);
+        setNombreProvisional("Documento combinado");
+        setNotice(`${pdfs.length} PDF unidos en un documento nuevo`);
       } catch (e) {
         setError(String(e));
       }
@@ -401,7 +409,7 @@ function App() {
 
   /** Guarda y, solo si el guardado ha ido bien, cierra. */
   async function guardarYSalir() {
-    const ok = await (originalPath ? saveFile() : saveFileAs());
+    const ok = await guardar();
     if (!ok) return;
     setCerrarAsk(false);
     confirmarCierre();
@@ -455,7 +463,7 @@ function App() {
       continuar();
       return;
     }
-    (originalPath ? saveFile() : saveFileAs()).then((ok) => {
+    guardar().then((ok) => {
       if (ok) continuar();
     });
   }
@@ -475,6 +483,7 @@ function App() {
     setNotice(null);
     setWorkPath(null);
     setOriginalPath(null);
+    setNombreProvisional(null);
     setPageCount(0);
     setPageSizes([]);
     setThumbs([]);
@@ -693,7 +702,7 @@ function App() {
         e.preventDefault();
         if (e.shiftKey) {
           if (pageCount > 0) saveFileAs();
-        } else if (modified) saveFile();
+        } else if (modified) guardar();
       } else if (mod && e.key === ",") {
         e.preventDefault();
         setPrefsDraft(cargaPreferencias());
@@ -1458,6 +1467,7 @@ function App() {
         setDocPassword(null);
       }
       setOriginalPath(dest);
+      setNombreProvisional(null);
       setModified(false);
       return true;
     } catch (e) {
@@ -1486,11 +1496,18 @@ function App() {
     return guardarEn(originalPath);
   }
 
+  /** ⌘S y el botón Guardar: un documento sin ruta (el combinado) pide
+   *  destino en vez de escribir encima de nada. */
+  function guardar(): Promise<boolean> {
+    return originalPath ? saveFile() : saveFileAs();
+  }
+
   async function saveFileAs(): Promise<boolean> {
     if (!workPath) return false;
     const dest = await save({
       filters: [{ name: "PDF", extensions: ["pdf"] }],
-      defaultPath: originalPath ?? "documento.pdf",
+      defaultPath:
+        originalPath ?? (nombreProvisional ? "combinado.pdf" : "documento.pdf"),
       title: "Guardar como",
     });
     if (!dest) return false;
@@ -1601,7 +1618,7 @@ function App() {
   }
 
   // separador de ruta multiplataforma (macOS "/" y Windows "\")
-  const fileName = originalPath?.split(/[\\/]/).pop() ?? null;
+  const fileName = originalPath?.split(/[\\/]/).pop() ?? nombreProvisional;
 
   const MODES: { id: Mode; icon: string; label: string; hint: string }[] = [
     { id: "select", icon: "select", label: "Seleccionar", hint: "Seleccionar texto" },
@@ -1764,10 +1781,16 @@ function App() {
               </button>
               <button
                 className="btn btn-primary"
-                title={modified ? `Guardar (${MOD}S)` : "Sin cambios que guardar"}
+                title={
+                  !modified
+                    ? "Sin cambios que guardar"
+                    : originalPath
+                      ? `Guardar (${MOD}S)`
+                      : `Guardar: este documento todavía no tiene fichero, se pedirá dónde (${MOD}S)`
+                }
                 aria-label="Guardar"
                 disabled={!modified}
-                onClick={saveFile}
+                onClick={guardar}
               >
                 <Icon name="save" size={14} />
                 <span className="btn-etiqueta">Guardar</span>
