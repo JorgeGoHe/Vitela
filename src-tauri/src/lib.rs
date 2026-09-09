@@ -565,6 +565,14 @@ impl Geo {
         Geo { x0, y0, w, h, rot }
     }
 
+    /// La misma caja pero SIN rotación: es el «espacio propio» de la
+    /// página, donde trabajan los comandos que escriben. La UI convierte
+    /// con la `rotation` de `get_page_sizes` antes de mandar; los que leen
+    /// devuelven el espacio de la página vista.
+    pub(crate) fn propia(&self) -> Geo {
+        Geo { rot: 0, ..*self }
+    }
+
     /// Un punto de la UI a coordenadas PDF.
     pub(crate) fn ui_a_pdf(&self, x: f32, y: f32) -> (f32, f32) {
         let (ax, ay) = match self.rot {

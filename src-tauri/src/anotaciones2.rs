@@ -32,7 +32,7 @@ pub fn add_markup(
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let geo = Geo::de_pagina(&page);
+        let geo = Geo::de_pagina(&page).propia();
         let left = rects.iter().map(|r| r.x).fold(f32::MAX, f32::min);
         let top = rects.iter().map(|r| r.y).fold(f32::MAX, f32::min);
         let right = rects.iter().map(|r| r.x + r.w).fold(f32::MIN, f32::max);
@@ -127,7 +127,7 @@ pub fn add_shape(
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let geo = Geo::de_pagina(&page);
+        let geo = Geo::de_pagina(&page).propia();
         let stroke_color = color_de(stroke);
         let width = PdfPoints::new(stroke_width.max(0.5));
         let fill_color = fill.map(color_de);
@@ -254,16 +254,25 @@ pub fn add_stamp(
             .map_err(|e| e.to_string())?;
         let font = doc.fonts_mut().helvetica_bold();
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let geo = Geo::de_pagina(&page);
+        let vista = Geo::de_pagina(&page);
+        let rot = vista.rot;
+        // el punto llega en el espacio propio de la página (sin rotar)
+        let geo = vista.propia();
         let size = font_size.clamp(8.0, 96.0);
         // Helvetica Bold en mayúsculas ronda 0.66 em de media por carácter
         let text_w = text.chars().count() as f32 * size * 0.66;
         let pad = size * 0.45;
         let w = text_w + pad * 2.0;
         let h = size + pad * 2.0;
-        // la caja se calcula en coords de UI (centrada en el clic) y se
-        // convierte entera: en una página rotada cambia hasta la orientación
-        let caja = geo.ui_rect_a_pdf(&Rect { x: x - w / 2.0, y: y - h / 2.0, w, h });
+        // si la página se ve girada, el sello va cruzado en la página para
+        // leerse derecho en pantalla, que es lo que hace Acrobat
+        let (cw, ch) = if rot == 90 || rot == 270 { (h, w) } else { (w, h) };
+        let caja = geo.ui_rect_a_pdf(&Rect {
+            x: x - cw / 2.0,
+            y: y - ch / 2.0,
+            w: cw,
+            h: ch,
+        });
         let c = color_de(color);
 
         let mut annot = page
@@ -291,10 +300,22 @@ pub fn add_stamp(
         let mut texto = PdfPageTextObject::new(&doc, &text, font, PdfPoints::new(size))
             .map_err(|e| e.to_string())?;
         texto.set_fill_color(c).map_err(|e| e.to_string())?;
-        // origen del texto = izquierda de la línea base, en coords de UI…
-        let (tx, ty) = geo.ui_a_pdf(x - w / 2.0 + pad, y + h / 2.0 - pad - size * 0.14);
-        // …y girado al revés que la página, para que se lea derecho
-        let rad = (geo.rot as f32).to_radians();
+        // el texto se gira al revés que la página y arranca en la esquina
+        // que, en pantalla, es la de abajo a la izquierda de la línea base
+        let (izq, aba, der, arr) = (
+            caja.left().value,
+            caja.bottom().value,
+            caja.right().value,
+            caja.top().value,
+        );
+        let base = size * 0.14;
+        let (tx, ty) = match rot {
+            90 => (der - pad - base, aba + pad),
+            180 => (der - pad, arr - pad - base),
+            270 => (izq + pad + base, arr - pad),
+            _ => (izq + pad, aba + pad + base),
+        };
+        let rad = (rot as f32).to_radians();
         let (sen, cos) = (rad.sin(), rad.cos());
         texto
             .transform(cos, sen, -sen, cos, tx, ty)
@@ -537,7 +558,7 @@ pub fn transform_annotation(
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let geo = Geo::de_pagina(&page);
+        let geo = Geo::de_pagina(&page).propia();
         let nuevo = geo.ui_rect_a_pdf(&Rect { x, y, w, h });
         {
             let mut annot = page
@@ -609,7 +630,7 @@ mod tests {
         }
     }
 
-    /// ¿Hay tinta en el render alrededor de ese punto en coordenadas de UI?
+    /// ¿Hay tinta en el render alrededor de ese punto de la página VISTA?
     /// Es el único juez: la UI dibuja sus overlays sobre el render.
     fn hay_tinta(work: &str, x: f32, y: f32) -> bool {
         let sizes = crate::get_page_sizes(work.to_string()).expect("tamaños");
@@ -631,10 +652,29 @@ mod tests {
         false
     }
 
+    /// Lo que hace la UI antes de mandar: pasa un punto de la página vista
+    /// al espacio propio de la página, con la `rotation` de
+    /// `get_page_sizes`. Los comandos que escriben esperan ese espacio.
+    fn vista_a_pagina(work: &str, x: f32, y: f32) -> (f32, f32) {
+        let s = &crate::get_page_sizes(work.to_string()).expect("tamaños")[0];
+        let (vw, vh) = (s.width, s.height);
+        match s.rotation {
+            90 => (y, vw - x),
+            180 => (vw - x, vh - y),
+            270 => (vh - y, x),
+            _ => (x, y),
+        }
+    }
+
     /// En una página rotada, lo que se pone donde se pulsa tiene que caer
-    /// donde se pulsó: `page.height()` de PDFium ya viene rotada y el
-    /// `/Rect` de la anotación no, así que voltear la `y` con ella
-    /// descolocaba sellos, trazos, formas y resaltados 246 pt en una A4.
+    /// donde se pulsó: `page.height()` de PDFium devuelve la altura YA
+    /// rotada mientras que el `/Rect` de la anotación no lo está, así que
+    /// voltear la `y` con ella descolocaba sellos, trazos, formas y
+    /// resaltados 246 pt en una A4 girada.
+    ///
+    /// Reparto: la UI convierte el punto de vista al espacio propio de la
+    /// página antes de mandar (`vista_a_pagina`), y `get_annotations`
+    /// devuelve el rect ya en el espacio de la página vista.
     #[test]
     fn las_anotaciones_caen_donde_se_pulsa_en_una_pagina_rotada() {
         for veces in 0..4u8 {
@@ -644,7 +684,8 @@ mod tests {
             let work = pdf.to_string_lossy().to_string();
             gira(&work, veces);
 
-            add_stamp(work.clone(), 0, "X".into(), [192, 57, 43, 255], 100.0, 200.0, 22.0, None)
+            let (sx, sy) = vista_a_pagina(&work, 100.0, 200.0);
+            add_stamp(work.clone(), 0, "X".into(), [192, 57, 43, 255], sx, sy, 22.0, None)
                 .expect("sello");
             assert!(
                 hay_tinta(&work, 100.0, 200.0),
@@ -656,11 +697,13 @@ mod tests {
                 "con /Rotate {grados}: el sello se lee en ({cx:.1},{cy:.1})"
             );
 
-            // trazo: sus puntos van uno a uno
+            // trazo: la UI convierte punto a punto
+            let a = vista_a_pagina(&work, 300.0, 400.0);
+            let b = vista_a_pagina(&work, 340.0, 400.0);
             crate::anotaciones::add_stroke(
                 work.clone(),
                 0,
-                vec![[300.0, 400.0], [340.0, 400.0]],
+                vec![[a.0, a.1], [b.0, b.1]],
                 Some([0, 0, 255, 255]),
                 Some(3.0),
                 None,
@@ -672,10 +715,17 @@ mod tests {
             );
 
             // marca de texto: el /AP se pinta sobre los quads
+            let (rx, ry) = vista_a_pagina(&work, 60.0, 500.0);
+            let (rx2, ry2) = vista_a_pagina(&work, 180.0, 516.0);
             crate::anotaciones::add_highlight(
                 work.clone(),
                 0,
-                vec![Rect { x: 60.0, y: 500.0, w: 120.0, h: 16.0 }],
+                vec![Rect {
+                    x: rx.min(rx2),
+                    y: ry.min(ry2),
+                    w: (rx2 - rx).abs(),
+                    h: (ry2 - ry).abs(),
+                }],
                 None,
             )
             .expect("resaltar");
@@ -689,7 +739,7 @@ mod tests {
                     && (a.rects[0].y - 500.0).abs() < 1.0
                     && (a.rects[0].w - 120.0).abs() < 1.0
                     && (a.rects[0].h - 16.0).abs() < 1.0,
-                "con /Rotate {grados}: quad en {:?}",
+                "con /Rotate {grados}: quad leído en {:?}",
                 a.rects[0]
             );
             std::fs::remove_file(&pdf).ok();
@@ -717,12 +767,15 @@ mod tests {
 
         let sizes = crate::get_page_sizes(work.clone()).expect("tamaños");
         assert_eq!(sizes[0].rotation, 90, "get_page_sizes debe dar la rotación");
+        assert!(
+            (sizes[0].width - 841.89).abs() < 1.0 && (sizes[0].height - 595.28).abs() < 1.0,
+            "el tamaño que devuelve get_page_sizes ya viene rotado: {}×{}",
+            sizes[0].width,
+            sizes[0].height
+        );
         std::fs::remove_file(&pdf).ok();
     }
 
-    /// El cuadro de texto de Acrobat: comentario encima del documento, con
-    /// su borde y su texto, que sale en la lista de comentarios y se puede
-    /// editar, mover y borrar como cualquier otro.
     #[test]
     fn cuadro_de_texto_con_apariencia_y_texto() {
         let pdf = std::env::temp_dir().join("anotaciones2-freetext-test.pdf");

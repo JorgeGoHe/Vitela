@@ -73,29 +73,12 @@ pub(crate) fn anade_a_annots(doc: &mut LoDoc, page_id: ObjectId, annot_id: Objec
     Ok(())
 }
 
-/// `/Rotate` de la página (heredable, como el MediaBox).
-fn rotacion(doc: &LoDoc, page_id: ObjectId) -> u16 {
-    let mut actual = page_id;
-    for _ in 0..32 {
-        let Ok(dict) = doc.get_object(actual).and_then(|o| o.as_dict()) else {
-            break;
-        };
-        if let Ok(r) = dict.get(b"Rotate").and_then(|o| o.as_i64()) {
-            return r.rem_euclid(360) as u16;
-        }
-        match dict.get(b"Parent") {
-            Ok(Object::Reference(rid)) => actual = *rid,
-            _ => break,
-        }
-    }
-    0
-}
-
-/// Geometría de la página para convertir las coordenadas de la UI, con su
-/// rotación: sin ella, en una página girada el campo o el enlace caen fuera.
+/// Geometría de la página para convertir las coordenadas que manda la UI.
+/// Los comandos que escriben trabajan en el espacio PROPIO de la página
+/// (sin rotar), que es la caja de la página con `/Rotate` a cero.
 pub(crate) fn geo_pagina(doc: &LoDoc, page_id: ObjectId) -> Result<crate::Geo, String> {
     let mb = media_box(doc, page_id)?;
-    Ok(crate::Geo::nueva(&mb, rotacion(doc, page_id)))
+    Ok(crate::Geo::nueva(&mb, 0))
 }
 
 /// Rect de UI (origen arriba-izquierda) a array Rect PDF de la página dada.
@@ -168,23 +151,12 @@ pub fn create_form_field(
             "BC",
             Object::Array(vec![0.into(), 0.into(), 0.into()]),
         );
-        if geo.rot != 0 {
-            // /R gira el widget al revés que la página para que se lea
-            // derecho, que es lo que hace Acrobat
-            mk.set("R", Object::Integer(geo.rot as i64));
-        }
         widget.set("MK", Object::Dictionary(mk));
         let mut bs = Dictionary::new();
         bs.set("W", Object::Integer(1));
         bs.set("S", Object::Name(b"S".to_vec()));
         widget.set("BS", Object::Dictionary(bs));
-        // la apariencia va en el espacio del PDF: con la página rotada, el
-        // ancho de la UI es el alto del PDF
-        let caja = geo.ui_rect_a_pdf(&rect);
-        let (ancho, alto) = (
-            caja.right().value - caja.left().value,
-            caja.top().value - caja.bottom().value,
-        );
+        let (ancho, alto) = (rect.w, rect.h);
         match kind.as_str() {
             "text" => {
                 widget.set("FT", Object::Name(b"Tx".to_vec()));
@@ -393,9 +365,9 @@ mod tests {
     use super::*;
     use crate::tests::crea_pdf;
 
-    /// En una página rotada, el campo y el enlace tienen que quedar donde
-    /// se dibujó el área: el `/Rect` vive en el espacio SIN rotar, así que
-    /// hay que convertirlo, no volcarlo tal cual.
+    /// En una página rotada, el campo y el enlace se escriben en el espacio
+    /// PROPIO de la página (sin rotar, que es la UI quien convierte) y se
+    /// leen en el de la página vista, que es donde la UI los pinta.
     #[test]
     fn campos_y_enlaces_en_una_pagina_rotada() {
         let pdf = std::env::temp_dir().join("formularios2-rotada-test.pdf");
@@ -403,40 +375,35 @@ mod tests {
         let work = pdf.to_string_lossy().to_string();
         crate::paginas::rotate_page(work.clone(), 0).expect("girar 90°");
 
+        // rect en el espacio propio de la página (A4 sin rotar, 595×842)
         let area = Rect { x: 100.0, y: 400.0, w: 150.0, h: 30.0 };
         create_form_field(work.clone(), 0, "text".into(), area.clone(), "nombre".into())
             .expect("crear campo");
         create_link(
             work.clone(),
             0,
-            Rect { x: 100.0, y: 200.0, w: 150.0, h: 30.0 },
+            area.clone(),
             Some("https://ejemplo.org".into()),
             None,
         )
         .expect("crear enlace");
 
+        // leídos en la página vista (842×595): (100,400) propia → (412,100)
+        let esperado = |x: f32, y: f32, w: f32, h: f32, que: &str| {
+            assert!(
+                (x - 412.0).abs() < 1.0
+                    && (y - 100.0).abs() < 1.0
+                    && (w - 30.0).abs() < 1.0
+                    && (h - 150.0).abs() < 1.0,
+                "{que} se lee en ({x},{y}) {w}×{h}"
+            );
+        };
         let campo = &crate::formularios::get_form_fields(work.clone(), 0).expect("listar")[0];
-        assert!(
-            (campo.x - 100.0).abs() < 1.0
-                && (campo.y - 400.0).abs() < 1.0
-                && (campo.w - 150.0).abs() < 1.0
-                && (campo.h - 30.0).abs() < 1.0,
-            "el campo se lee en ({},{}) {}×{}",
-            campo.x,
-            campo.y,
-            campo.w,
-            campo.h
-        );
+        esperado(campo.x, campo.y, campo.w, campo.h, "el campo");
         let enlace = &crate::documento::get_links(work.clone(), 0).expect("enlaces")[0];
-        assert!(
-            (enlace.x - 100.0).abs() < 1.0 && (enlace.y - 200.0).abs() < 1.0,
-            "el enlace se lee en ({},{})",
-            enlace.x,
-            enlace.y
-        );
+        esperado(enlace.x, enlace.y, enlace.w, enlace.h, "el enlace");
 
-        // y en el fichero, el /Rect está dentro de la página sin rotar:
-        // (100,400) de la UI con /Rotate 90 es (400,100) en el PDF
+        // y en el fichero, el /Rect es el de la página sin rotar
         let doc = LoDoc::load(&work).expect("cargar");
         let page_id = *doc.get_pages().get(&1).expect("página 1");
         let annots = doc
@@ -461,10 +428,10 @@ mod tests {
             })
             .collect();
         assert!(
-            (r[0] - 400.0).abs() < 1.0
-                && (r[1] - 100.0).abs() < 1.0
-                && (r[2] - 430.0).abs() < 1.0
-                && (r[3] - 250.0).abs() < 1.0,
+            (r[0] - 100.0).abs() < 1.0
+                && (r[1] - 412.0).abs() < 1.0
+                && (r[2] - 250.0).abs() < 1.0
+                && (r[3] - 442.0).abs() < 1.0,
             "/Rect del campo: {r:?}"
         );
         std::fs::remove_file(&pdf).ok();

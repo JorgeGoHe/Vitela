@@ -25,7 +25,9 @@ pub fn add_highlight(
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let geo = Geo::de_pagina(&page);
+        // los comandos que escriben trabajan en el espacio propio de la
+        // página (sin rotar); la UI convierte antes de mandar
+        let geo = Geo::de_pagina(&page).propia();
         let mut annot = page
             .annotations_mut()
             .create_highlight_annotation()
@@ -98,9 +100,7 @@ pub fn add_stroke(
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let geo = Geo::de_pagina(&page);
-        // los puntos van uno a uno: así el trazo sale igual que se dibujó
-        // aunque la página esté rotada
+        let geo = Geo::de_pagina(&page).propia();
         let puntos: Vec<(f32, f32)> = points.iter().map(|p| geo.ui_a_pdf(p[0], p[1])).collect();
         let mut annot = page
             .annotations_mut()
@@ -167,7 +167,7 @@ pub fn add_note(
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let geo = Geo::de_pagina(&page);
+        let geo = Geo::de_pagina(&page).propia();
         let mut annot = page
             .annotations_mut()
             .create_text_annotation(&text)
