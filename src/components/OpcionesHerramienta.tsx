@@ -23,6 +23,9 @@ export default function OpcionesHerramienta({
   stampCustom,
   setStampCustom,
   stampColor,
+  hayFormularios,
+  resaltarCampos,
+  setResaltarCampos,
   freeTextColor,
   freeTextSize,
   setFreeTextSize,
@@ -46,6 +49,10 @@ export default function OpcionesHerramienta({
   stampCustom: string;
   setStampCustom: (t: string) => void;
   stampColor: string;
+  /** El documento tiene campos: solo entonces sale la fila de Seleccionar. */
+  hayFormularios: boolean;
+  resaltarCampos: boolean;
+  setResaltarCampos: (v: boolean) => void;
   freeTextColor: string;
   freeTextSize: number;
   setFreeTextSize: (s: number) => void;
@@ -58,6 +65,22 @@ export default function OpcionesHerramienta({
 }) {
   return (
     <>
+      {mode === "select" && hayFormularios && (
+        <div className="tool-options">
+          <span>Formulario</span>
+          <label className="opt-check">
+            <input
+              type="checkbox"
+              checked={resaltarCampos}
+              onChange={(e) => setResaltarCampos(e.target.checked)}
+            />
+            Resaltar campos
+          </label>
+          <span className="opt-hint">
+            Clic en un campo para rellenarlo · Tab salta al siguiente
+          </span>
+        </div>
+      )}
       {mode === "draw" && (
         <div className="tool-options">
           <span>Trazo</span>

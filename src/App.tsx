@@ -57,8 +57,10 @@ import {
 import {
   ATAJO_PANEL,
   cargaPreferencias,
+  cargaResaltarCampos,
   formateaRango,
   hexToRgba,
+  guardaResaltarCampos,
   MOD,
   parseRango,
   type FiltroComentarios,
@@ -192,6 +194,11 @@ function App() {
   // giro SOLO de la vista (⇧⌘+ / ⇧⌘−): no toca el fichero y se pierde al
   // cerrar, como en Acrobat
   const [viewRotation, setViewRotation] = useState(0);
+  // «Resaltar campos existentes» de Acrobat: encendido por defecto
+  const [resaltarCampos, setResaltarCampos] = useState(cargaResaltarCampos);
+  const [hayFormularios, setHayFormularios] = useState(false);
+  // el aviso de «se puede rellenar» sale una vez por documento
+  const avisoFormRef = useRef<string | null>(null);
   // comentario elegido en el panel: la página lo abre en su popover
   const [annotSel, setAnnotSel] = useState<{
     page: number;
@@ -283,6 +290,7 @@ function App() {
       }
       setPaginasSel(new Set());
       setViewRotation(0);
+      setHayFormularios(false);
       setOriginalPath(path);
       setWorkPath(info.work_path);
       setPageCount(info.page_count);
@@ -477,6 +485,7 @@ function App() {
     setAnnotSel(null);
     setPaginasSel(new Set());
     setViewRotation(0);
+    setHayFormularios(false);
     evictAll();
     setDocVersion((v) => v + 1);
     invoke("close_document", { workPath: anterior }).catch((e) => setError(String(e)));
@@ -1500,6 +1509,17 @@ function App() {
     (texto: string) => setNotice(texto),
     [setNotice],
   );
+  /** Una página ha cargado sus campos: encender el resaltado y avisar. */
+  const onFormularios = useCallback(
+    (n: number) => {
+      if (n === 0) return;
+      setHayFormularios(true);
+      if (!workPath || avisoFormRef.current === workPath) return;
+      avisoFormRef.current = workPath;
+      setNotice("Este documento se puede rellenar");
+    },
+    [workPath, setNotice],
+  );
   const onLinkUri = useCallback((uri: string) => {
     if (!esquemaPermitido(uri)) {
       const e = esquemaDe(uri);
@@ -2044,6 +2064,12 @@ function App() {
         stampCustom={herramienta.stampCustom}
         setStampCustom={herramienta.setStampCustom}
         stampColor={herramienta.stampColor}
+        hayFormularios={hayFormularios}
+        resaltarCampos={resaltarCampos}
+        setResaltarCampos={(v) => {
+          guardaResaltarCampos(v);
+          setResaltarCampos(v);
+        }}
         freeTextColor={herramienta.freeTextColor}
         freeTextSize={herramienta.freeTextSize}
         setFreeTextSize={herramienta.setFreeTextSize}
@@ -2195,6 +2221,8 @@ function App() {
                   onDocMutated={afterMutation}
                   onError={mostrarError}
                   onNotice={mostrarAviso}
+                  onFormularios={onFormularios}
+                  resaltarCampos={resaltarCampos}
                   onModeChange={setMode}
                   onLinkGoto={gotoPage}
                   onLinkUri={onLinkUri}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "../../ipc";
-import { createFormField, deleteFormField } from "../../api";
+import { createFormField, deleteFormField, setFormChoice } from "../../api";
 import type { FormFieldInfo, Mode, PageSize, Rect } from "../../tipos";
 import { rectAPagina } from "./geometria";
 
@@ -20,6 +20,8 @@ export function useFormularios(ctx: {
   onAnnotated: (page: number) => void;
   onPageMutated: (page: number) => void;
   onError: (e: unknown) => void;
+  /** Cuántos campos tiene esta página (para avisar de que se puede rellenar). */
+  onFormularios: (n: number) => void;
   onModeChange: (m: Mode) => void;
 }) {
   const {
@@ -34,6 +36,7 @@ export function useFormularios(ctx: {
     onAnnotated,
     onPageMutated,
     onError,
+    onFormularios,
     onModeChange,
   } = ctx;
   const [formFields, setFormFields] = useState<FormFieldInfo[]>([]);
@@ -46,6 +49,9 @@ export function useFormularios(ctx: {
   const formLiveRef = useRef<Rect | null>(null);
   const [formName, setFormName] = useState("campo");
   const [formKind, setFormKind] = useState<"text" | "checkbox">("text");
+  // campo que hay que abrir en cuanto lleguen los datos frescos: al tabular,
+  // guardar el valor recarga la lista y borraría el borrador recién puesto
+  const proximoRef = useRef<number | null>(null);
 
   // Al cambiar de modo: fuera borradores
   useEffect(() => {
@@ -62,7 +68,14 @@ export function useFormularios(ctx: {
     setFieldDraft(null);
     invoke<FormFieldInfo[]>("get_form_fields", { path: workPath, pageIndex: index })
       .then((f) => {
-        if (!cancelled) setFormFields(f);
+        if (cancelled) return;
+        setFormFields(f);
+        onFormularios(f.length);
+        const prox = proximoRef.current;
+        proximoRef.current = null;
+        if (prox === null) return;
+        const campo = f.find((x) => x.annot_index === prox);
+        if (campo) setFieldDraft({ field: campo, text: campo.value });
       })
       .catch(() => {
         if (!cancelled) setFormFields([]);
@@ -70,7 +83,15 @@ export function useFormularios(ctx: {
     return () => {
       cancelled = true;
     };
-  }, [workPath, index, visible, docVersion, annotVersion, pageVersion]);
+  }, [
+    workPath,
+    index,
+    visible,
+    docVersion,
+    annotVersion,
+    pageVersion,
+    onFormularios,
+  ]);
 
   async function submitFieldDraft() {
     if (!workPath || !fieldDraft) return;
@@ -82,6 +103,46 @@ export function useFormularios(ctx: {
         value: fieldDraft.text,
       });
       setFieldDraft(null);
+      onAnnotated(index);
+    } catch (e) {
+      onError(e);
+    }
+  }
+
+  /** Campo de texto anterior o siguiente en el orden de lectura (por `y` y
+   *  luego por `x`), que es como tabula Acrobat. */
+  function campoVecino(delta: number): FormFieldInfo | null {
+    if (!fieldDraft) return null;
+    const orden = [...formFields].sort((a, b) => a.y - b.y || a.x - b.x);
+    let i = orden.findIndex(
+      (f) => f.annot_index === fieldDraft.field.annot_index,
+    );
+    if (i < 0) return null;
+    for (i += delta; i >= 0 && i < orden.length; i += delta) {
+      if (orden[i].kind === "Text") return orden[i];
+    }
+    return null;
+  }
+
+  /** Tab y ⇧Tab: confirman lo escrito y abren el campo siguiente/anterior. */
+  function tabulaCampo(delta: number) {
+    if (!fieldDraft) return;
+    const siguiente = campoVecino(delta);
+    if (fieldDraft.text === fieldDraft.field.value) {
+      // sin cambios no hace falta escribir (ni gastar un paso de historial)
+      setFieldDraft(
+        siguiente ? { field: siguiente, text: siguiente.value } : null,
+      );
+      return;
+    }
+    proximoRef.current = siguiente ? siguiente.annot_index : null;
+    submitFieldDraft();
+  }
+
+  async function elegirOpcion(field: FormFieldInfo, value: string) {
+    if (!workPath) return;
+    try {
+      await setFormChoice(workPath, index, field.annot_index, value);
       onAnnotated(index);
     } catch (e) {
       onError(e);
@@ -153,6 +214,8 @@ export function useFormularios(ctx: {
     formKind,
     setFormKind,
     submitFieldDraft,
+    tabulaCampo,
+    elegirOpcion,
     toggleFormCheck,
     onFieldClick,
     removeFormField,

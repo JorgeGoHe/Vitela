@@ -140,6 +140,16 @@ export function getDocumentAnnotations(path: string): Promise<AnotacionDoc[]> {
   return invoke("get_document_annotations", { path });
 }
 
+/** Elige el valor de un desplegable o de una lista del formulario. */
+export function setFormChoice(
+  workPath: string,
+  pageIndex: number,
+  fieldIndex: number,
+  value: string,
+): Promise<void> {
+  return invoke("set_form_choice", { workPath, pageIndex, fieldIndex, value });
+}
+
 /** Borra varias páginas en una sola mutación (un solo paso de deshacer);
  *  devuelve el total que queda. */
 export function deletePages(

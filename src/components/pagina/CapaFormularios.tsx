@@ -9,13 +9,19 @@ type Props = {
   formularios: Formularios;
   scale: number;
   displayWidth: number;
+  /** «Resaltar campos existentes» de Acrobat. */
+  resaltarCampos: boolean;
 };
+
+/** Los que se rellenan eligiendo, no escribiendo. */
+const ELECCION = ["ComboBox", "ListBox"];
 
 export default function CapaFormularios({
   mode,
   formularios,
   scale,
   displayWidth,
+  resaltarCampos,
 }: Props) {
   const {
     formFields,
@@ -28,6 +34,8 @@ export default function CapaFormularios({
     formKind,
     setFormKind,
     submitFieldDraft,
+    tabulaCampo,
+    elegirOpcion,
     onFieldClick,
     removeFormField,
     applyFormField,
@@ -35,24 +43,61 @@ export default function CapaFormularios({
   return (
     <>
       {mode === "select" &&
-        formFields.map((f) => (
-          <div
-            key={`f${f.annot_index}`}
-            className="form-field"
-            title={f.name}
-            style={{
-              left: f.x * scale,
-              top: f.y * scale,
-              width: f.w * scale,
-              height: f.h * scale,
-            }}
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onFieldClick(f);
-            }}
-          />
-        ))}
+        formFields.map((f) => {
+          const caja = {
+            left: f.x * scale,
+            top: f.y * scale,
+            width: f.w * scale,
+            height: f.h * scale,
+          };
+          // desplegables y listas se rellenan con un select nativo encima del
+          // campo, con las opciones que trae el PDF
+          if (ELECCION.includes(f.kind)) {
+            return (
+              <select
+                key={`f${f.annot_index}`}
+                className={`form-field form-choice${resaltarCampos ? " resaltado" : ""}`}
+                title={f.name}
+                aria-label={f.name}
+                style={caja}
+                value={f.value}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => elegirOpcion(f, e.target.value)}
+              >
+                {!f.options.includes(f.value) && (
+                  <option value={f.value}>{f.value || "—"}</option>
+                )}
+                {f.options.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+            );
+          }
+          return (
+            <div
+              key={`f${f.annot_index}`}
+              className={`form-field${resaltarCampos ? " resaltado" : ""}`}
+              role="button"
+              tabIndex={0}
+              title={f.name}
+              aria-label={f.name}
+              style={caja}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                onFieldClick(f);
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                onFieldClick(f);
+              }}
+            />
+          );
+        })}
       {fieldDraft && (
         <div
           className="card"
@@ -70,11 +115,18 @@ export default function CapaFormularios({
               setFieldDraft({ ...fieldDraft, text: e.target.value })
             }
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
+              if (e.key === "Tab") {
+                // Tab confirma y salta al campo siguiente, como en Acrobat
+                e.preventDefault();
+                tabulaCampo(e.shiftKey ? -1 : 1);
+              } else if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 submitFieldDraft();
+              } else if (e.key === "Escape") {
+                // revierte: el valor del PDF no se ha tocado
+                e.stopPropagation();
+                setFieldDraft(null);
               }
-              if (e.key === "Escape") setFieldDraft(null);
             }}
           />
           <div className="card-actions">

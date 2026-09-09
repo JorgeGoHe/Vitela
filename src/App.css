@@ -825,9 +825,27 @@ textarea {
   transition: background 120ms ease;
 }
 
-.form-field:hover {
+/* «Resaltar campos existentes»: un PDF rellenable se nota que lo es sin
+   tener que pasear el ratón por encima */
+.form-field.resaltado {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.form-field:hover,
+.form-field:focus-visible {
   outline: 2px dashed var(--accent);
   background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+/* desplegables y listas: un select nativo encima del campo */
+.form-choice {
+  border: none;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 0 2px;
+  outline-offset: 0;
 }
 
 .text-block {

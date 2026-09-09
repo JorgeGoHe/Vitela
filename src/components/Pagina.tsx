@@ -84,6 +84,10 @@ type Props = {
   onDocMutated: (newCount: number, nextPage?: number) => void;
   onError: (e: unknown) => void;
   onNotice: (texto: string) => void;
+  /** Cuántos campos de formulario tiene esta página. */
+  onFormularios: (n: number) => void;
+  /** «Resaltar campos existentes»: los pinta aunque no se pase el ratón. */
+  resaltarCampos: boolean;
   onModeChange: (m: Mode) => void;
   onLinkGoto: (page: number) => void;
   onLinkUri: (uri: string) => void;
@@ -116,6 +120,8 @@ function Pagina({
   onDocMutated,
   onError,
   onNotice,
+  onFormularios,
+  resaltarCampos,
   onModeChange,
   onLinkGoto,
   onLinkUri,
@@ -173,6 +179,7 @@ function Pagina({
     onAnnotated,
     onPageMutated,
     onError,
+    onFormularios,
     onModeChange,
   });
   const imagenes = useImagenes({
@@ -697,6 +704,7 @@ function Pagina({
             formularios={formularios}
             scale={scale}
             displayWidth={displayWidth}
+            resaltarCampos={resaltarCampos}
           />
           <CapaAnotaciones
             mode={mode}

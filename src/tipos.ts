@@ -41,8 +41,11 @@ export type AnnotationInfo = {
 export type FormFieldInfo = {
   annot_index: number;
   name: string;
+  /** "Text", "Checkbox", "RadioButton", "ComboBox" o "ListBox". */
   kind: string;
   value: string;
+  /** Opciones del desplegable o de la lista; vacío en el resto. */
+  options: string[];
   checked: boolean;
   x: number;
   y: number;
@@ -303,6 +306,19 @@ export function cargaOpcionesBusqueda(): OpcionesBusqueda {
 
 export function guardaOpcionesBusqueda(o: OpcionesBusqueda) {
   localStorage.setItem(CLAVE_BUSQUEDA, JSON.stringify(o));
+}
+
+/* ---- resaltado de los campos de formulario (localStorage) ---- */
+
+const CLAVE_CAMPOS = "editorPdf.resaltarCampos";
+
+/** «Resaltar campos existentes» de Acrobat: encendido por defecto. */
+export function cargaResaltarCampos(): boolean {
+  return localStorage.getItem(CLAVE_CAMPOS) !== "0";
+}
+
+export function guardaResaltarCampos(v: boolean) {
+  localStorage.setItem(CLAVE_CAMPOS, v ? "1" : "0");
 }
 
 /* ---- memoria de color por acción (persistida en localStorage) ---- */
