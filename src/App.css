@@ -1161,6 +1161,9 @@ textarea {
   white-space: nowrap;
 }
 
+/* las páginas rasterizadas para el diálogo del sistema: solo existen para
+   el papel, y viven fuera de `.app` (portal al body) porque aquí abajo la
+   app entera se esconde */
 .print-pages {
   display: none;
 }
@@ -1178,6 +1181,11 @@ textarea {
     display: block;
     width: 100%;
     page-break-after: always;
+  }
+
+  /* sin esto el salto de la última hoja saca un folio en blanco de propina */
+  .print-pages img:last-child {
+    page-break-after: auto;
   }
 }
 

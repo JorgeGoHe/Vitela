@@ -7,6 +7,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   busyCount,
   invoke,
@@ -1074,6 +1075,13 @@ function App() {
       const tag = (e.target as HTMLElement)?.tagName;
       const enCampo = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
       if (e.key === "Escape" && !mod) {
+        // preparando la impresión, Esc la cancela: es el trabajo largo que
+        // hay en marcha, y hasta ahora solo se paraba con el botón de la banda
+        if (printCancelRef.current) {
+          e.preventDefault();
+          printCancelRef.current.cancelado = true;
+          return;
+        }
         // en pantalla completa la primera salida es la de la presentación
         if (pantallaCompleta) {
           e.preventDefault();
@@ -1927,11 +1935,15 @@ function App() {
       } catch (e) {
         setError(String(e));
       }
-      // liberar los blob URLs de las páginas ya impresas
-      for (const p of printPages) URL.revokeObjectURL(p.src);
       setPrintPages(null);
     }, 200);
-    return () => clearTimeout(t);
+    // los blob URLs se liberan en la limpieza, no dentro del temporizador:
+    // ahí se los llevaba el `clearTimeout` si llegaba otra preparación antes
+    // de los 200 ms, y quedaban vivos hasta cerrar la app
+    return () => {
+      clearTimeout(t);
+      for (const p of printPages) URL.revokeObjectURL(p.src);
+    };
   }, [printPages]);
 
   async function exportImages() {
@@ -3123,18 +3135,24 @@ function App() {
           onClose={() => setPrintOpen(false)}
         />
       )}
-      {printPages && (
-        <div className="print-pages">
-          {printPages.map((p, i) => (
-            <img
-              key={i}
-              src={p.src}
-              alt={`Página ${i + 1}`}
-              style={p.anchoIn ? { width: `${p.anchoIn}in` } : undefined}
-            />
-          ))}
-        </div>
-      )}
+      {/* Fuera de `.app` a propósito: el `@media print` esconde `.app`
+          entera, y un ancestro en `display:none` saca todo su subárbol de la
+          caja de renderizado —ningún `display:block` del descendiente lo
+          rescata—. Dentro, la hoja salía en blanco. */}
+      {printPages &&
+        createPortal(
+          <div className="print-pages">
+            {printPages.map((p, i) => (
+              <img
+                key={i}
+                src={p.src}
+                alt={`Página ${i + 1}`}
+                style={p.anchoIn ? { width: `${p.anchoIn}in` } : undefined}
+              />
+            ))}
+          </div>,
+          document.body,
+        )}
       {mode === "crop" && (
         <div className="sign-hint">
           Arrastra para marcar el área que quieres conservar · Esc cancela
