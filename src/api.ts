@@ -620,6 +620,12 @@ export function unmarkRedaction(
   return invoke("unmark_redaction", { workPath, pageIndex, annotIndex });
 }
 
+/** Quita TODAS las marcas del documento en una sola mutación (un ⌘Z las
+ *  devuelve) y responde cuántas ha quitado. */
+export function unmarkAllRedactions(workPath: string): Promise<number> {
+  return invoke("unmark_all_redactions", { workPath });
+}
+
 /** Aplica todas las marcas en una sola mutación; con `dryRun` solo cuenta
  *  lo que se iría. */
 export function applyRedactions(

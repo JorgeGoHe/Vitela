@@ -50,6 +50,7 @@ import {
   splitPdf,
   sanitizePdf,
   unmarkRedaction,
+  unmarkAllRedactions,
   rotatePages,
   recoverSession,
   removeRecent,
@@ -940,21 +941,13 @@ function App() {
     }
   }
 
-  /** Quita todas las marcas de golpe, en un solo paso de deshacer. */
+  /** Quita todas las marcas de golpe, en un solo paso de deshacer. El
+   *  backend lo hace en UNA mutación y ya recorre las anotaciones de mayor
+   *  a menor: la UI no repite ni el bucle ni el orden. */
   async function quitarTodasLasMarcas() {
     if (!workPath || marcasRedact.length === 0) return;
-    // de mayor a menor: quitar una anotación corre los índices de las que
-    // van detrás en el mismo `/Annots`
-    const orden = [...marcasRedact].sort(
-      (a, b) => b.page_index - a.page_index || b.annot_index - a.annot_index,
-    );
     try {
-      let hechas = 0;
-      for (const m of orden) {
-        await unmarkRedaction(workPath, m.page_index, m.annot_index);
-        hechas++;
-      }
-      if (hechas > 1) await historial.agrupar(hechas);
+      const hechas = await unmarkAllRedactions(workPath);
       refrescarMarcas();
       afterMutation(pageCount);
       setNotice(
