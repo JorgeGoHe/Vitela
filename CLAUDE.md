@@ -50,6 +50,10 @@ compila los instaladores a mano o al etiquetar `v*`.
   se copia byte a byte, sin pasar por lopdf: reescribirlo movería el
   `/ByteRange` e invalidaría la firma. Si hay protección puesta (ver
   «Protección»), en vez de copiar cifra al destino.
+- **Documento sin ruta**: unir varios PDF soltados produce un documento
+  nuevo con `originalPath = null` (la barra lo llama «Documento
+  combinado»); ⌘S y el botón Guardar caen entonces en Guardar como, para
+  no escribir encima de ninguno de los originales.
 - **Copia de trabajo**: `open_pdf(path)` copia el documento a temp y devuelve
   `{ page_count, work_path, had_password }`. Todos los demás comandos operan
   sobre `work_path`; el original solo se toca con `save_pdf(work_path,
@@ -185,9 +189,17 @@ compila los instaladores a mano o al etiquetar `v*`.
   `add_blank_page`, `duplicate_page`, `insert_pdf_at`, `crop_page`
   (normaliza MediaBox para no desalinear coordenadas), `add_watermark`,
   `add_header_footer` (paginas2.rs); `get/set_outline`, `get/set_metadata`,
-  `get_links` (documento.rs); `encrypt_pdf` (AES-256 R6 propio con
-  RustCrypto — lopdf 0.34 no escribe cifrado), `flatten_pdf`, `redact_area`
-  (seguridad.rs; ver «Protección» abajo); `export_pages_png`, `export_text`, `compress_pdf`
+  `get_links` (documento.rs); `set_annotation_contents`,
+  `set_annotation_color`, `get_document_annotations`, `add_free_text`
+  (comentarios editables, panel de comentarios y cuadro de texto);
+  `delete_pages`, `rotate_pages` (lote, un solo paso de deshacer) y
+  `extract_pages` con `delete_after`; `set_form_choice` (desplegables y
+  listas, con `options` en `get_form_fields`); `remove_encryption`;
+  `encrypt_pdf` (AES-256 R6 propio con RustCrypto — lopdf 0.34 no escribe
+  cifrado; `dest_path` opcional: sin él NO cifra la copia de trabajo, anota
+  la protección y la aplica `save_pdf` al guardar; acepta `permisos`; ver
+  «Protección» abajo), `flatten_pdf`, `redact_area`
+  (seguridad.rs); `export_pages_png`, `export_text`, `compress_pdf`
   (exportar.rs); `stamp_signature` + biblioteca de firmas
   (firmas_visuales.rs; `DIR_DATOS` OnceLock en vez de AppHandle);
   `get_image_data` (imagenes.rs); `create_form_field` y `create_link`
@@ -259,10 +271,17 @@ compila los instaladores a mano o al etiquetar `v*`.
   `DIR_DATOS/recientes.json`. Solo se guardan ruta y fecha; `name`, `dir`
   y `exists` se recalculan al listar. `open_pdf` NO toca la lista: la
   llama la UI tras abrir con éxito (un PDF protegido cuya contraseña se
-  cancela no se ha abierto). Una lista corrupta o un `DIR_DATOS` sin
+  cancela no se ha abierto). La UI **revalida la lista cada vez que la
+  enseña** (al desplegar el menú y al volver al estado vacío) y, si abrir
+  un reciente falla porque ya no está, lo quita con `remove_recent`. Una lista corrupta o un `DIR_DATOS` sin
   fijar devuelven vacío, nunca un error.
 - **Eventos hacia la UI** (los dos con `listen`; en el navegador de QA no
   existen, los shims de `ipc.ts` los dejan en nada):
+  - **Arranque con fichero**: al montar, la UI llama al comando `ui_lista()`
+    (sin argumentos, devuelve `string | null`) y abre la ruta que traiga.
+    Los eventos de Tauri no se encolan, así que el arranque en frío (doble
+    clic en el Finder con la app cerrada) no puede depender del evento; el
+    evento sirve para los ficheros que llegan con la app ya abierta.
   - `abrir-fichero` con `{ path }` — doble clic en el Finder/Explorador o
     PDF en la línea de órdenes. `bundle.fileAssociations` declara la
     extensión; en Windows y Linux llega por `std::env::args_os()` (con
@@ -311,10 +330,13 @@ compila los instaladores a mano o al etiquetar `v*`.
   (`src/hooks/`: `useHistorial`, `useRenderCache`, `useMiniaturas`,
   `useBusqueda`, `useFirmas`, `useHerramienta`, `useModal`) y componentes
   (`Busqueda`, `OpcionesHerramienta`, `MenuAcciones`, `PanelPaginas`,
-  `Dialogo*`). **Todo modal usa `useModal`** (Esc cierra, Enter confirma,
-  foco inicial en el primer campo o en la acción principal, trampa de
-  foco): un `Dialogo*` nuevo pone su `ref` y su `onKeyDown` en el `.modal`
-  y no vuelve a escuchar teclas por su cuenta. `Pagina.tsx` conserva el
+  `PanelMarcadores`, `PanelComentarios`, `Dialogo*`). El sidebar tiene tres
+  pestañas —Páginas, Marcadores y Comentarios— y por eso mide 200 px.
+  **Todo modal usa `useModal`** (Esc cierra —también con el foco fuera del
+  diálogo, gracias a un listener en fase de captura—, Enter confirma, foco
+  inicial en el primer campo o en la acción principal, trampa de foco): un
+  `Dialogo*` nuevo pone su `ref` y su `onKeyDown` en el `.modal` y no vuelve
+  a escuchar teclas por su cuenta. `Pagina.tsx` conserva el
   render, el observer y los tres despachadores de ratón (su orden de ramas
   importa, y el doble/triple clic se despacha en el de `mousedown` por
   `e.detail`); cada dominio tiene su
@@ -323,6 +345,21 @@ compila los instaladores a mano o al etiquetar `v*`.
   `useAreas`, más `geometria.ts` puro) y su capa en
   `src/components/pagina/`. Los hooks se llaman `use…` (lo exige
   rules-of-hooks) aunque el resto del identificador vaya en español.
+- **Dos sistemas de coordenadas** (`hooks/pagina/geometria.ts`): el
+  **espacio de la vista** —el del render, el ratón y todos los overlays— y
+  el **espacio propio de la página**, que es en el que están escritas las
+  anotaciones. Se diferencian solo si la página lleva `/Rotate`
+  (`get_page_sizes` devuelve `rotation` por página y `width`/`height` ya
+  girados). `puntoAPagina`/`rectAPagina` convierten los gestos del ratón
+  antes de mandarlos a cualquier comando que escriba;
+  `puntoAVista`/`rectAVista` traen al overlay lo que llega en espacio de
+  página (`get_page_text`, `get_text_blocks`, `get_images`).
+  `get_annotations`, `get_links` y `get_form_fields` ya llegan en espacio
+  de vista y no se tocan. Con `/Rotate 0` todo es la identidad.
+- **Giro de la vista** (`viewRotation`, estado de `App`): ⇧⌘+ y ⇧⌘− giran
+  la hoja con un `transform` y la caja exterior intercambia alto y ancho;
+  no toca el fichero, no marca el documento como modificado y se pierde al
+  cerrar. `pagePoint`/`puntoEnCapa` lo deshacen antes de traducir un gesto.
 - **Eventos de ventana** (`src/ipc.ts`, todos detrás de `hayTauri` y
   no-op en el navegador de QA): `onAbrirFichero` (evento `abrir-fichero`:
   doble clic en el Finder o argumento de arranque), `onArrastreFicheros`
@@ -332,17 +369,28 @@ compila los instaladores a mano o al etiquetar `v*`.
   comando `confirmar_cierre`, y en QA se dispara con
   `window.__vitelaCerrar()`).
 - **Preferencias y memoria de la UI** en `localStorage` (`src/tipos.ts`):
-  colores por acción, opciones de búsqueda (`Aa` y `|ab|`) y preferencias
+  colores por acción, opciones de búsqueda (`Aa` y `|ab|`), «Resaltar
+  campos» de los formularios (encendido por defecto) y preferencias
   (`autor` de los comentarios, que se manda como `author` en cada comando
   que crea una anotación).
-- **Atajos de teclado** (`App.tsx`, un solo `useEffect`; con un modal
-  abierto solo pasa Escape): ⌘O abrir · ⌘S guardar · ⇧⌘S guardar como ·
-  ⌘P imprimir · ⌘D propiedades · ⌘, preferencias · ⌘F buscar · ⌘G y ⇧⌘G
-  coincidencia siguiente/anterior · ⌘Z y ⇧⌘Z deshacer/rehacer · ⌘+ y ⌘−
-  zoom (sin Shift: ⇧⌘+/⇧⌘− quedan para girar la vista) · ⌘0 ajustar ·
-  ⌘1 al 100 % · ⇧⌘N ir a la página · ←/→ página anterior y siguiente ·
-  Esc sale de cualquier herramienta · Supr borra la anotación
-  seleccionada · ⌘A todo el texto de la página · ⌘C copiar la selección.
+- **Avisos**: `setNotice(texto, { persistente: true })` para el progreso
+  («Comprimiendo…»), que se queda hasta que lo sustituye su resultado; sin
+  la opción, el aviso se va solo a los 6 s. Aviso y error se limpian al
+  abrir y al cerrar documento: son del documento que los provocó.
+- **Atajos de teclado** (`App.tsx`, un solo `useEffect`; con un modal o el
+  menú «Acciones» abiertos solo pasa Escape): ⌘O abrir · ⌘S guardar ·
+  ⇧⌘S guardar como · ⌘P imprimir · ⌘D propiedades · ⌘, preferencias ·
+  ⌘F buscar · ⌘G y ⇧⌘G coincidencia siguiente/anterior · ⌘Z y ⇧⌘Z
+  deshacer/rehacer (no llaman al backend si no hay historial) · ⌘+ y ⌘−
+  zoom · ⇧⌘+ y ⇧⌘− giran la vista · ⌘0 página entera, ⌘1 al 100 % y ⌘2
+  al ancho (los tres de Acrobat) · ⌥⌘1 plegar el panel lateral ·
+  ⇧⌘N ir a la página · ←/→ página anterior y siguiente · Esc quita las
+  coincidencias de búsqueda y, si no hay, sale de la herramienta · Supr
+  borra la anotación seleccionada · ⌘A todo el texto de la página (dentro
+  del panel de páginas, seleccionarlas todas) · ⌘C copiar la selección.
+  En los borradores de comentario y de cuadro de texto Enter salta de
+  línea y ⌘Enter confirma; en un campo de formulario Tab y ⇧Tab confirman
+  y saltan al campo siguiente o anterior.
 - **QA como usuario real**: `src/ipc.ts` y `src/dialogos.ts` son shims — en
   Tauri delegan en la API oficial; en un navegador normal hablan con el
   puente HTTP de desarrollo (`src-tauri/src/puente_dev.rs`, puerto 1422,
