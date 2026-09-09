@@ -131,6 +131,181 @@ pub fn add_note(
     }))
 }
 
+/// **AC-046.** `FPDF_ImportPages` copia el grafo de objetos de las
+/// anotaciones recursivamente, y el par `/Popup` ↔ `/Parent` de una nota es
+/// un **ciclo de referencias** —legal en el spec, lo escriben Acrobat y
+/// Vitela— que le revienta la pila: importar una página con una nota
+/// adhesiva mataba el proceso entero con SIGSEGV, se llevaba por delante el
+/// trabajo sin guardar y en la app empaquetada cerraba Vitela.
+///
+/// Por eso **todos los caminos de importación** abren la fuente por aquí:
+/// si el PDF lleva ventanas emergentes se prepara una copia sin ellas en el
+/// temporal y se importa de esa. Después, el destino pasa por
+/// [`repon_popups`] y la nota recupera su post-it, así que fuera de Vitela
+/// se ve igual que antes.
+///
+/// Nunca falla: si el PDF no se deja leer con lopdf (o va cifrado) devuelve
+/// la ruta original y la importación sigue como siempre.
+pub(crate) struct FuenteImportable {
+    ruta: String,
+    temporal: bool,
+}
+
+impl FuenteImportable {
+    /// La ruta de la que hay que importar.
+    pub(crate) fn ruta(&self) -> &str {
+        &self.ruta
+    }
+}
+
+impl Drop for FuenteImportable {
+    fn drop(&mut self) {
+        if self.temporal {
+            let _ = std::fs::remove_file(&self.ruta);
+        }
+    }
+}
+
+/// Ver [`FuenteImportable`].
+pub(crate) fn fuente_importable(origen: &str) -> FuenteImportable {
+    let tal_cual = || FuenteImportable {
+        ruta: origen.to_string(),
+        temporal: false,
+    };
+    let Ok(mut doc) = lopdf::Document::load(origen) else {
+        return tal_cual();
+    };
+    if doc.is_encrypted() || !quita_popups(&mut doc) {
+        return tal_cual();
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let destino = std::env::temp_dir().join(format!("vitela-importar-{nanos}.pdf"));
+    match doc.save(&destino) {
+        Ok(_) => FuenteImportable {
+            ruta: destino.to_string_lossy().into_owned(),
+            temporal: true,
+        },
+        Err(_) => tal_cual(),
+    }
+}
+
+/// Deshace el ciclo: quita la clave `/Popup` de las anotaciones y saca las
+/// anotaciones `/Popup` de los `/Annots` de cada página. Devuelve si ha
+/// tocado algo (si no, no hace falta copiar el fichero).
+pub(crate) fn quita_popups(doc: &mut lopdf::Document) -> bool {
+    use lopdf::Object;
+    let paginas: Vec<(u32, lopdf::ObjectId)> =
+        doc.get_pages().into_iter().collect();
+    let mut tocado = false;
+    for (numero, page_id) in paginas {
+        let Some(lista) = lista_annots(doc, (numero - 1) as u16) else {
+            continue;
+        };
+        let mut tocado_aqui = false;
+        let mut quedan: Vec<Object> = Vec::new();
+        let mut ids: Vec<lopdf::ObjectId> = Vec::new();
+        for entrada in lista {
+            let dict = match &entrada {
+                Object::Reference(rid) => doc.get_object(*rid).ok().and_then(|o| o.as_dict().ok()),
+                Object::Dictionary(d) => Some(d),
+                _ => None,
+            };
+            let es_popup = dict
+                .and_then(|d| d.get(b"Subtype").ok())
+                .and_then(|s| s.as_name().ok())
+                .map(|n| n == b"Popup")
+                .unwrap_or(false);
+            if es_popup {
+                tocado_aqui = true;
+                continue;
+            }
+            if let Object::Reference(rid) = entrada {
+                ids.push(rid);
+            }
+            quedan.push(entrada);
+        }
+        for id in ids {
+            if let Ok(d) = doc.get_object_mut(id).and_then(|o| o.as_dict_mut()) {
+                if d.has(b"Popup") {
+                    d.remove(b"Popup");
+                    tocado_aqui = true;
+                }
+            }
+        }
+        if !tocado_aqui {
+            continue;
+        }
+        tocado = true;
+        // el /Annots puede estar por referencia o en línea
+        let por_referencia = doc
+            .get_object(page_id)
+            .and_then(|o| o.as_dict())
+            .ok()
+            .and_then(|p| match p.get(b"Annots") {
+                Ok(Object::Reference(rid)) => Some(*rid),
+                _ => None,
+            });
+        match por_referencia {
+            Some(rid) => {
+                if let Ok(arr) = doc.get_object_mut(rid).and_then(|o| o.as_array_mut()) {
+                    *arr = quedan;
+                }
+            }
+            None => {
+                if let Ok(p) = doc.get_object_mut(page_id).and_then(|o| o.as_dict_mut()) {
+                    p.set("Annots", Object::Array(quedan));
+                }
+            }
+        }
+    }
+    tocado
+}
+
+/// Repone la ventana emergente de las notas que no la tengan: las que
+/// acaban de llegar de una importación (ver [`fuente_importable`]) y las de
+/// los PDFs que nunca la llevaron. Se calcula del `/Rect` de la nota, así
+/// que sale donde saldría si la hubiera creado Vitela.
+pub(crate) fn repon_popups(doc: &mut lopdf::Document) -> Result<(), String> {
+    use lopdf::Object;
+    let paginas: Vec<(u32, lopdf::ObjectId)> = doc.get_pages().into_iter().collect();
+    for (numero, _) in paginas {
+        let page_index = (numero - 1) as u16;
+        let Some(lista) = lista_annots(doc, page_index) else {
+            continue;
+        };
+        let notas: Vec<lopdf::ObjectId> = lista
+            .iter()
+            .filter_map(|entrada| match entrada {
+                Object::Reference(rid) => {
+                    let d = doc.get_object(*rid).ok()?.as_dict().ok()?;
+                    let es_nota = d
+                        .get(b"Subtype")
+                        .ok()?
+                        .as_name()
+                        .ok()
+                        .map(|n| n == b"Text")
+                        .unwrap_or(false);
+                    (es_nota && !d.has(b"Popup")).then_some(*rid)
+                }
+                _ => None,
+            })
+            .collect();
+        for id in notas {
+            anade_popup(doc, page_index, id)?;
+        }
+    }
+    Ok(())
+}
+
+/// [`repon_popups`] sobre un fichero: para el destino de una importación,
+/// que puede ser la copia de trabajo o un PDF recién escrito.
+pub(crate) fn repon_popups_en(path: &str) -> Result<(), String> {
+    crate::cirugia_en_hilo(path, repon_popups)
+}
+
 /// Ventana emergente de un comentario (`/Popup` con `/Open false`), a la
 /// derecha del icono: es lo que abren Acrobat y Vista Previa al pulsarlo.
 /// El popup no es un comentario — `get_annotations` no lo lista — y se

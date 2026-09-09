@@ -1,6 +1,6 @@
 //! Gestión de páginas: borrar, rotar, mover, unir y extraer (FPDF_ImportPages).
 
-use crate::{on_pdfium_thread, pdfium, save_and_close, with_doc};
+use crate::{on_pdfium_thread, pdfium, save_and_close};
 use crate::historial::mutacion;
 use pdfium_render::prelude::*;
 
@@ -136,8 +136,11 @@ pub fn move_page(work_path: String, from_index: u16, to_index: u16) -> Result<()
     }
     mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
+        // AC-046: importar de una copia sin las ventanas de las notas
+        // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
+        let fuente = crate::anotaciones::fuente_importable(&work_path);
         let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
+            .load_pdf_from_file(fuente.ruta(), None)
             .map_err(|e| e.to_string())?;
         let count = doc.pages().len();
         if from_index >= count || to_index >= count {
@@ -158,7 +161,7 @@ pub fn move_page(work_path: String, from_index: u16, to_index: u16) -> Result<()
             .map_err(|e| e.to_string())?;
         drop(doc);
         save_and_close(new_doc, &work_path)?;
-        Ok(())
+        crate::anotaciones::repon_popups_en(&work_path)
     }))
 }
 
@@ -170,13 +173,17 @@ pub fn merge_pdf(work_path: String, other_path: String) -> Result<u16, String> {
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
+        // AC-046: importar de una copia sin las ventanas de las notas
+        // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
+        let fuente = crate::anotaciones::fuente_importable(&other_path);
         let other = pdfium
-            .load_pdf_from_file(&other_path, None)
+            .load_pdf_from_file(fuente.ruta(), None)
             .map_err(|e| e.to_string())?;
         doc.pages_mut().append(&other).map_err(|e| e.to_string())?;
         let count = doc.pages().len();
         drop(other);
         save_and_close(doc, &work_path)?;
+        crate::anotaciones::repon_popups_en(&work_path)?;
         Ok(count)
     }))
 }
@@ -201,14 +208,23 @@ pub fn extract_pages(
     // extraer y borrar es UNA operación: un solo paso de deshacer, y si el
     // borrado falla el documento se queda como estaba
     let cuerpo = move |work_path: String| on_pdfium_thread(move || {
-        with_doc(&work_path, |doc| {
+        {
+            // AC-046: importar de una copia sin las ventanas de las notas
+            // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
+            let fuente = crate::anotaciones::fuente_importable(&work_path);
+            let doc = pdfium()?
+                .load_pdf_from_file(fuente.ruta(), None)
+                .map_err(crate::mensaje_llano)?;
             let mut new_doc = pdfium()?.create_new_pdf().map_err(|e| e.to_string())?;
             new_doc
                 .pages_mut()
-                .copy_pages_from_document(doc, &range, 0)
+                .copy_pages_from_document(&doc, &range, 0)
                 .map_err(|e| e.to_string())?;
-            new_doc.save_to_file(&dest_path).map_err(|e| e.to_string())
-        })?;
+            new_doc.save_to_file(&dest_path).map_err(|e| {
+                crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}"))
+            })?;
+        }
+        crate::anotaciones::repon_popups_en(&dest_path)?;
         if borrar {
             borra_paginas(&work_path, &page_indices)?;
         }
@@ -246,29 +262,35 @@ pub fn extract_each_page(
         let dir = dest_dir.clone();
         let work = work_path.clone();
         let escritos: Vec<String> = on_pdfium_thread(move || {
-            with_doc(&work, |doc| {
-                let total = doc.pages().len();
-                if let Some(fuera) = indices.iter().find(|i| **i >= total) {
-                    return Err(format!("La página {} ya no está en el documento", fuera + 1));
-                }
-                let mut escritos = Vec::new();
-                for i in &indices {
-                    let destino = std::path::Path::new(&dir).join(format!("pagina-{}.pdf", i + 1));
-                    let mut nuevo = pdfium()?.create_new_pdf().map_err(|e| e.to_string())?;
-                    nuevo
-                        .pages_mut()
-                        .copy_pages_from_document(doc, &(i + 1).to_string(), 0)
-                        .map_err(|e| e.to_string())?;
-                    nuevo.save_to_file(&destino).map_err(|e| {
-                        crate::mensaje_llano(format!(
-                            "No se ha podido escribir {}: {e}",
-                            destino.display()
-                        ))
-                    })?;
-                    escritos.push(destino.to_string_lossy().into_owned());
-                }
-                Ok(escritos)
-            })
+            // AC-046: importar de una copia sin las ventanas de las notas
+            // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
+            let fuente = crate::anotaciones::fuente_importable(&work);
+            let doc = pdfium()?
+                .load_pdf_from_file(fuente.ruta(), None)
+                .map_err(crate::mensaje_llano)?;
+            let total = doc.pages().len();
+            if let Some(fuera) = indices.iter().find(|i| **i >= total) {
+                return Err(format!("La página {} ya no está en el documento", fuera + 1));
+            }
+            let mut escritos = Vec::new();
+            for i in &indices {
+                let destino = std::path::Path::new(&dir).join(format!("pagina-{}.pdf", i + 1));
+                let mut nuevo = pdfium()?.create_new_pdf().map_err(|e| e.to_string())?;
+                nuevo
+                    .pages_mut()
+                    .copy_pages_from_document(&doc, &(i + 1).to_string(), 0)
+                    .map_err(|e| e.to_string())?;
+                nuevo.save_to_file(&destino).map_err(|e| {
+                    crate::mensaje_llano(format!(
+                        "No se ha podido escribir {}: {e}",
+                        destino.display()
+                    ))
+                })?;
+                let escrito = destino.to_string_lossy().into_owned();
+                crate::anotaciones::repon_popups_en(&escrito)?;
+                escritos.push(escrito);
+            }
+            Ok(escritos)
         })?;
         if borrar {
             let indices = page_indices.clone();
@@ -285,6 +307,109 @@ pub fn extract_each_page(
 
 #[cfg(test)]
 mod tests {
+
+    /// **AC-046 (crítico).** Importar una página que lleva una nota adhesiva
+    /// mataba el proceso entero con `SIGSEGV`: la nota y su ventana `/Popup`
+    /// se apuntan la una a la otra —un ciclo legal que escriben Acrobat y
+    /// Vitela— y `FPDF_ImportPages` copia el grafo de anotaciones
+    /// recursivamente hasta reventar la pila. Se llevaba por delante el
+    /// trabajo sin guardar y, en la app empaquetada, cerraba Vitela.
+    ///
+    /// Este test pasa una nota por **todos** los comandos que importan
+    /// páginas. Si alguno vuelve a caer no falla: mata el proceso de los
+    /// tests, que es exactamente el aviso que hacía falta y que ningún ciclo
+    /// había dado.
+    #[test]
+    fn importar_una_pagina_con_una_nota_no_mata_el_proceso() {
+        let dir = std::env::temp_dir();
+        let con_nota = dir.join("ac046-con-nota.pdf");
+        crea_pdf(&["Con nota", "Segunda"], &con_nota);
+        let cn = con_nota.to_string_lossy().into_owned();
+        crate::anotaciones::add_note(cn.clone(), 0, 100.0, 200.0, "Una nota".into(), Some("Ana".into()))
+            .expect("nota");
+
+        // un documento aparte al que importarla
+        let destino = dir.join("ac046-destino.pdf");
+        crea_pdf(&["Destino"], &destino);
+        let d = destino.to_string_lossy().into_owned();
+
+        // 1. merge_pdf (Añadir PDF…)
+        assert_eq!(merge_pdf(d.clone(), cn.clone()).expect("merge_pdf"), 3);
+        // la nota llega y sigue siendo UNA anotación (el popup no cuenta)
+        let notas = crate::anotaciones::get_annotations(d.clone(), 1).expect("anotaciones");
+        assert_eq!(notas.len(), 1, "la nota importada: {notas:?}");
+        assert_eq!(notas[0].contents, "Una nota");
+        assert!(
+            tiene_popup(&d, 1),
+            "la ventana emergente se repone tras importar: sin ella la nota \
+             pierde su post-it en Acrobat y en Vista Previa"
+        );
+
+        // 2. merge_many (Combinar ficheros…)
+        assert_eq!(
+            crate::paginas2::merge_many(d.clone(), vec![cn.clone()], None).expect("merge_many"),
+            5
+        );
+        // 3. insert_pdf_at
+        assert_eq!(
+            crate::paginas2::insert_pdf_at(d.clone(), cn.clone(), 0).expect("insert_pdf_at"),
+            7
+        );
+        // 4. duplicate_page sobre la página que lleva la nota
+        assert_eq!(
+            crate::paginas2::duplicate_page(d.clone(), 0).expect("duplicate_page"),
+            8
+        );
+        // 5. replace_pages
+        crate::paginas2::replace_pages(d.clone(), vec![7], cn.clone(), None)
+            .expect("replace_pages");
+        // 6. move_page
+        move_page(d.clone(), 0, 3).expect("move_page");
+        // 7. extract_pages a un fichero nuevo
+        let extraido = dir.join("ac046-extraido.pdf");
+        extract_pages(d.clone(), vec![3], extraido.to_string_lossy().into_owned(), None)
+            .expect("extract_pages");
+        assert!(tiene_popup(&extraido.to_string_lossy(), 0), "y en el extraído también");
+        // 8. extract_each_page y split_pdf, que escriben varios ficheros
+        let carpeta = dir.join("ac046-sueltas");
+        std::fs::create_dir_all(&carpeta).expect("carpeta");
+        extract_each_page(
+            d.clone(),
+            vec![3],
+            carpeta.to_string_lossy().into_owned(),
+            None,
+        )
+        .expect("extract_each_page");
+        crate::paginas2::split_pdf(
+            d.clone(),
+            carpeta.to_string_lossy().into_owned(),
+            "cada".into(),
+            Some(2),
+        )
+        .expect("split_pdf");
+
+        std::fs::remove_dir_all(&carpeta).ok();
+        for f in [&con_nota, &destino, &extraido] {
+            std::fs::remove_file(f).ok();
+        }
+    }
+
+    /// ¿La primera nota de esa página tiene su ventana emergente?
+    fn tiene_popup(path: &str, page_index: u16) -> bool {
+        let doc = lopdf::Document::load(path).expect("leer el PDF");
+        let Some(annots) = crate::anotaciones::lista_annots(&doc, page_index) else {
+            return false;
+        };
+        annots.iter().any(|a| {
+            let lopdf::Object::Reference(rid) = a else { return false };
+            let Ok(d) = doc.get_object(*rid).and_then(|o| o.as_dict()) else {
+                return false;
+            };
+            d.get(b"Subtype").and_then(|s| s.as_name()).map(|n| n == b"Text").unwrap_or(false)
+                && d.has(b"Popup")
+        })
+    }
+
     use super::*;
     #[allow(unused_imports)]
     use crate::tests::{crea_pdf, textos_de};

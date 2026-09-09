@@ -39,8 +39,11 @@ pub fn duplicate_page(work_path: String, page_index: u16) -> Result<u16, String>
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
         // segundo handle del mismo fichero, solo lectura, en el mismo hilo
+        // AC-046: importar de una copia sin las ventanas de las notas
+        // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
+        let fuente = crate::anotaciones::fuente_importable(&work_path);
         let origen = pdfium
-            .load_pdf_from_file(&work_path, None)
+            .load_pdf_from_file(fuente.ruta(), None)
             .map_err(|e| e.to_string())?;
         doc.pages_mut()
             .copy_pages_from_document(
@@ -52,6 +55,7 @@ pub fn duplicate_page(work_path: String, page_index: u16) -> Result<u16, String>
         drop(origen);
         let nuevo = doc.pages().len();
         save_and_close(doc, &work_path)?;
+        crate::anotaciones::repon_popups_en(&work_path)?;
         Ok(nuevo)
     }))
 }
@@ -65,8 +69,11 @@ pub fn insert_pdf_at(work_path: String, other_path: String, index: u16) -> Resul
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
+        // AC-046: importar de una copia sin las ventanas de las notas
+        // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
+        let fuente = crate::anotaciones::fuente_importable(&other_path);
         let other = pdfium
-            .load_pdf_from_file(&other_path, None)
+            .load_pdf_from_file(fuente.ruta(), None)
             .map_err(|e| e.to_string())?;
         let rango = format!("1-{}", other.pages().len());
         let index = index.min(doc.pages().len());
@@ -76,6 +83,7 @@ pub fn insert_pdf_at(work_path: String, other_path: String, index: u16) -> Resul
         drop(other);
         let nuevo = doc.pages().len();
         save_and_close(doc, &work_path)?;
+        crate::anotaciones::repon_popups_en(&work_path)?;
         Ok(nuevo)
     }))
 }
@@ -993,8 +1001,11 @@ pub fn replace_pages(
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
             .map_err(crate::mensaje_llano)?;
+        // AC-046: importar de una copia sin las ventanas de las notas
+        // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
+        let fuente = crate::anotaciones::fuente_importable(&other_path);
         let other = pdfium
-            .load_pdf_from_file(&other_path, None)
+            .load_pdf_from_file(fuente.ruta(), None)
             .map_err(crate::mensaje_llano)?;
         let total = doc.pages().len();
         let mut viejas: Vec<u16> = page_indices.clone();
@@ -1035,6 +1046,7 @@ pub fn replace_pages(
             return Err("Un documento no puede quedarse sin páginas".into());
         }
         save_and_close(doc, &work_path)?;
+        crate::anotaciones::repon_popups_en(&work_path)?;
         Ok(nuevo)
     }))
 }
@@ -1082,6 +1094,12 @@ pub fn split_pdf(
             }
             _ => return Err("Modo de división desconocido".into()),
         };
+        // AC-046: dividir de una copia sin las ventanas de las notas
+        // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
+        let fuente = crate::anotaciones::fuente_importable(&work_path);
+        let origen = pdfium()?
+            .load_pdf_from_file(fuente.ruta(), None)
+            .map_err(crate::mensaje_llano)?;
         let mut escritos: Vec<String> = Vec::new();
         for (n, inicio) in cortes.iter().enumerate() {
             let fin = cortes.get(n + 1).copied().unwrap_or(total);
@@ -1091,20 +1109,20 @@ pub fn split_pdf(
             let destino =
                 std::path::Path::new(&dest_dir).join(format!("parte-{}.pdf", escritos.len() + 1));
             let rango = format!("{}-{}", inicio + 1, fin);
-            crate::with_doc(&work_path, |doc| {
-                let mut nuevo = pdfium()?.create_new_pdf().map_err(crate::mensaje_llano)?;
-                nuevo
-                    .pages_mut()
-                    .copy_pages_from_document(doc, &rango, 0)
-                    .map_err(crate::mensaje_llano)?;
-                nuevo.save_to_file(&destino).map_err(|e| {
-                    crate::mensaje_llano(format!(
-                        "No se ha podido escribir {}: {e}",
-                        destino.display()
-                    ))
-                })
+            let mut nuevo = pdfium()?.create_new_pdf().map_err(crate::mensaje_llano)?;
+            nuevo
+                .pages_mut()
+                .copy_pages_from_document(&origen, &rango, 0)
+                .map_err(crate::mensaje_llano)?;
+            nuevo.save_to_file(&destino).map_err(|e| {
+                crate::mensaje_llano(format!(
+                    "No se ha podido escribir {}: {e}",
+                    destino.display()
+                ))
             })?;
-            escritos.push(destino.to_string_lossy().into_owned());
+            let escrito = destino.to_string_lossy().into_owned();
+            crate::anotaciones::repon_popups_en(&escrito)?;
+            escritos.push(escrito);
         }
         Ok(escritos)
     })
@@ -1125,8 +1143,11 @@ pub fn merge_many(work_path: String, others: Vec<String>, at: Option<u16>) -> Re
             .map_err(crate::mensaje_llano)?;
         let mut destino = at.unwrap_or(u16::MAX).min(doc.pages().len());
         for otro in &others {
+            // AC-046: importar de una copia sin las ventanas de las notas
+            // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
+            let fuente = crate::anotaciones::fuente_importable(otro);
             let other = pdfium
-                .load_pdf_from_file(otro, None)
+                .load_pdf_from_file(fuente.ruta(), None)
                 .map_err(|e| crate::mensaje_llano(format!("No se ha podido abrir {otro}: {e}")))?;
             let paginas = other.pages().len();
             let rango = format!("1-{paginas}");
@@ -1139,6 +1160,7 @@ pub fn merge_many(work_path: String, others: Vec<String>, at: Option<u16>) -> Re
         }
         let nuevo = doc.pages().len();
         save_and_close(doc, &work_path)?;
+        crate::anotaciones::repon_popups_en(&work_path)?;
         Ok(nuevo)
     }))
 }
