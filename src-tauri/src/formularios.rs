@@ -427,7 +427,7 @@ mod tests {
 
         // sin valor, el desplegable está en blanco
         let tinta = |w: &str| {
-            let png = render_page_png(w.to_string(), 0, 600).expect("render");
+            let png = render_page_png(w.to_string(), 0, 600, true).expect("render");
             let img = image::load_from_memory(&png).expect("PNG").to_rgba8();
             let escala = 600.0 / 595.0;
             let mut n = 0;
@@ -507,7 +507,7 @@ mod tests {
         );
         assert!(fields.iter().find(|f| f.name == "acepto").unwrap().checked);
 
-        render_page_b64(work.clone(), 0, 200).expect("render con formulario");
+        render_page_b64(work.clone(), 0, 200, None).expect("render con formulario");
         std::fs::remove_file(&tmp).ok();
     }
 }

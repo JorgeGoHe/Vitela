@@ -431,7 +431,7 @@ mod tests {
             .expect("listar final")
             .is_empty());
 
-        render_page_b64(work.clone(), 0, 200).expect("render tras imágenes");
+        render_page_b64(work.clone(), 0, 200, None).expect("render tras imágenes");
         for f in [&tmp, &png, &png2] {
             std::fs::remove_file(f).ok();
         }
@@ -480,12 +480,12 @@ mod tests {
                 .collect()
         };
         let antes = bounds(&get_images(work.clone(), 0).expect("bounds antes"));
-        let render_antes = crate::render_page_png(work.clone(), 0, 400).expect("render antes");
+        let render_antes = crate::render_page_png(work.clone(), 0, 400, true).expect("render antes");
 
         get_image_data(work.clone(), 0, idx).expect("vista previa");
 
         let despues = bounds(&get_images(work.clone(), 0).expect("bounds después"));
-        let render_despues = crate::render_page_png(work.clone(), 0, 400).expect("render después");
+        let render_despues = crate::render_page_png(work.clone(), 0, 400, true).expect("render después");
         assert_eq!(antes, despues, "la vista previa movió la imagen");
         assert!(
             render_antes == render_despues,

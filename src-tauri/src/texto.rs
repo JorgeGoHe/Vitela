@@ -409,7 +409,7 @@ mod tests {
         let blocks = get_text_blocks(work.clone(), 0).expect("listar tras borrar");
         assert!(blocks.is_empty(), "quedan {} bloques", blocks.len());
 
-        render_page_b64(work.clone(), 0, 200).expect("render tras editar");
+        render_page_b64(work.clone(), 0, 200, None).expect("render tras editar");
         std::fs::remove_file(&tmp).ok();
     }
 

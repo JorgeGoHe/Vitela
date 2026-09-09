@@ -553,7 +553,7 @@ mod tests {
     fn negro_en(work: &str, pagina: u16, r: &Rect) -> bool {
         let sizes = crate::get_page_sizes(work.to_string()).expect("tamaños");
         let escala = 600.0 / sizes[pagina as usize].width;
-        let png = crate::render_page_png(work.to_string(), pagina, 600).expect("render");
+        let png = crate::render_page_png(work.to_string(), pagina, 600, true).expect("render");
         let img = image::load_from_memory(&png).expect("PNG").to_rgba8();
         let (x, y) = (
             ((r.x + r.w / 2.0) * escala) as u32,

@@ -1235,10 +1235,10 @@ mod tests {
                 .unwrap();
             image::load_from_memory(&bytes).unwrap().to_rgba8()
         };
-        let antes = decode(render_page_b64(work.clone(), 0, 200).unwrap());
+        let antes = decode(render_page_b64(work.clone(), 0, 200, None).unwrap());
         // trazo horizontal que pasa por (150, 120) pt
         add_stroke(work.clone(), 0, vec![[50.0, 120.0], [250.0, 120.0]], None, None, None).expect("trazo");
-        let despues = decode(render_page_b64(work.clone(), 0, 200).unwrap());
+        let despues = decode(render_page_b64(work.clone(), 0, 200, None).unwrap());
         let px = (150.0f32 * 200.0 / 595.0) as u32;
         let py = (120.0f32 * 200.0 / 595.0) as u32;
         let mut cambiado = false;
@@ -1356,7 +1356,7 @@ mod tests {
         assert_eq!(get_annotations(work.clone(), 0).expect("listar").len(), 1);
 
         // el render con anotaciones no debe fallar
-        render_page_b64(work.clone(), 0, 200).expect("render con anotaciones");
+        render_page_b64(work.clone(), 0, 200, None).expect("render con anotaciones");
 
         std::fs::remove_file(&tmp).ok();
     }
@@ -1374,6 +1374,37 @@ mod tests_apariencia {
         let img = image::load_from_memory(png).expect("PNG").to_rgba8();
         let escala = ancho_px as f32 / 595.0;
         img.get_pixel((x_pt * escala) as u32, (y_pt * escala) as u32).0
+    }
+
+    /// «Comentarios y formularios: solo el documento» del diálogo de
+    /// impresión de Acrobat: lo mismo pero sin las marcas. `render_page`
+    /// pasaba siempre la bandera FPDF_ANNOT, así que no había forma de
+    /// imprimir sin los resaltados.
+    #[test]
+    fn el_render_puede_dejar_fuera_las_anotaciones() {
+        let tmp = std::env::temp_dir().join("render-sin-anotaciones-test.pdf");
+        crea_pdf(&["Hola"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        add_highlight(
+            work.clone(),
+            0,
+            vec![crate::Rect { x: 40.0, y: 300.0, w: 200.0, h: 30.0 }],
+            None,
+        )
+        .expect("resaltar");
+
+        let con = crate::render_page_png(work.clone(), 0, 300, true).expect("render con marcas");
+        let sin = crate::render_page_png(work.clone(), 0, 300, false).expect("render sin marcas");
+        // el centro del rect resaltado, en puntos PDF
+        let (px, py) = (140.0, 315.0);
+        let a = pixel(&con, 300, px, py);
+        let b = pixel(&sin, 300, px, py);
+        assert_ne!(a, b, "sin marcas el resaltado no puede seguir ahí");
+        assert!(
+            b[0] > 240 && b[1] > 240 && b[2] > 240,
+            "sin marcas queda el papel: {b:?}"
+        );
+        std::fs::remove_file(&tmp).ok();
     }
 
     /// Diccionario de la anotación `i` de la primera página, leído del
@@ -1479,7 +1510,7 @@ mod tests_apariencia {
         // zona en blanco de la página, lejos del texto
         add_highlight(work.clone(), 0, vec![caja(300.0)], None).expect("resaltar");
 
-        let png = render_page_png(work.clone(), 0, 300).expect("render");
+        let png = render_page_png(work.clone(), 0, 300, true).expect("render");
         let [r, g, b, _] = pixel(&png, 300, 300.0, 310.0);
         assert!(
             r > 200 && g > 150 && b < 120,
@@ -1579,7 +1610,7 @@ mod tests_apariencia {
         add_highlight(work.clone(), 0, vec![caja(300.0)], None).expect("resaltar");
         crate::seguridad::flatten_pdf(work.clone()).expect("aplanar");
 
-        let png = render_page_png(work.clone(), 0, 300).expect("render");
+        let png = render_page_png(work.clone(), 0, 300, true).expect("render");
         let [r, g, b, _] = pixel(&png, 300, 300.0, 310.0);
         assert!(
             r > 200 && g > 150 && b < 120,
@@ -1607,7 +1638,7 @@ mod tests_apariencia {
         )
         .expect("subrayar");
 
-        let png = render_page_png(work.clone(), 0, 300).expect("render");
+        let png = render_page_png(work.clone(), 0, 300, true).expect("render");
         let [_, _, base, _] = pixel(&png, 300, 300.0, 319.0);
         assert!(base > 150, "el subrayado no se ve en la base del quad");
         let [r, g, b, _] = pixel(&png, 300, 300.0, 308.0);
@@ -1634,7 +1665,7 @@ mod tests_apariencia {
         )
         .expect("tachar");
 
-        let png = render_page_png(work.clone(), 0, 300).expect("render");
+        let png = render_page_png(work.clone(), 0, 300, true).expect("render");
         let [medio, _, _, _] = pixel(&png, 300, 300.0, 310.0);
         assert!(medio > 150, "el tachado no se ve a media altura");
         let [r, g, b, _] = pixel(&png, 300, 300.0, 302.0);
@@ -1776,7 +1807,7 @@ mod tests_apariencia {
 
         set_annotation_color(work.clone(), 0, 0, [90, 200, 250, 255]).expect("recolorear");
 
-        let [r, g, b, _] = pixel(&render_page_png(work.clone(), 0, 300).expect("render"), 300, 300.0, 310.0);
+        let [r, g, b, _] = pixel(&render_page_png(work.clone(), 0, 300, true).expect("render"), 300, 300.0, 310.0);
         assert!(
             b > 200 && r < 160,
             "el resaltado sigue sin ser azul: rgb({r},{g},{b})"

@@ -245,7 +245,7 @@ mod tests {
 
         // el render compone el alfa: la mitad izquierda pinta rojo, la
         // derecha deja el fondo blanco
-        let png = crate::render_page_png(work, 0, 600).expect("render");
+        let png = crate::render_page_png(work, 0, 600, true).expect("render");
         let rendered = image::load_from_memory(&png).expect("leer render").to_rgba8();
         let escala = 600.0 / 595.28; // página A4 de crea_pdf: 595.28 pt de ancho
         let alto = rendered.height() as f32;

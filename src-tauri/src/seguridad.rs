@@ -1193,7 +1193,7 @@ mod tests {
         y1: f32,
         pred: impl Fn(&image::Rgba<u8>) -> bool,
     ) -> u32 {
-        let png = crate::render_page_png(work.to_string(), 0, 600).expect("render");
+        let png = crate::render_page_png(work.to_string(), 0, 600, true).expect("render");
         let img = image::load_from_memory(&png).expect("PNG").to_rgba8();
         let escala = 600.0 / 595.28;
         let mut n = 0;

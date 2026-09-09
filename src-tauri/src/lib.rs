@@ -436,10 +436,15 @@ fn open_pdf(path: String, password: Option<String>) -> Result<DocumentInfo, Stri
 }
 
 /// Renderiza una página a PNG (bytes) con el ancho pedido en píxeles.
+///
+/// `con_anotaciones` es lo que Acrobat llama «Comentarios y formularios» en
+/// su diálogo de impresión: con `false` salen el documento y los campos de
+/// formulario rellenados, pero no los resaltados, las notas ni los trazos.
 pub(crate) fn render_page_png(
     path: String,
     page_index: u16,
     width: i32,
+    con_anotaciones: bool,
 ) -> Result<Vec<u8>, String> {
     on_pdfium_thread(move || {
         with_doc(&path, |doc| {
@@ -449,7 +454,7 @@ pub(crate) fn render_page_png(
                     &PdfRenderConfig::new()
                         .set_target_width(width)
                         .render_form_data(true)
-                        .render_annotations(true),
+                        .render_annotations(con_anotaciones),
                 )
                 .map_err(|e| e.to_string())?;
             let mut png = Vec::new();
@@ -467,8 +472,9 @@ pub(crate) fn render_page_b64(
     path: String,
     page_index: u16,
     width: i32,
+    with_annotations: Option<bool>,
 ) -> Result<String, String> {
-    render_page_png(path, page_index, width)
+    render_page_png(path, page_index, width, with_annotations.unwrap_or(true))
         .map(|png| base64::engine::general_purpose::STANDARD.encode(png))
 }
 
@@ -480,8 +486,10 @@ fn render_page(
     path: String,
     page_index: u16,
     width: i32,
+    with_annotations: Option<bool>,
 ) -> Result<tauri::ipc::Response, String> {
-    render_page_png(path, page_index, width).map(tauri::ipc::Response::new)
+    render_page_png(path, page_index, width, with_annotations.unwrap_or(true))
+        .map(tauri::ipc::Response::new)
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1156,14 +1164,14 @@ pub(crate) mod tests {
 
         let casos: Vec<(&str, String)> = vec![
             ("abrir un fichero dañado", open_pdf(d.clone(), None).unwrap_err()),
-            ("renderizar un fichero dañado", render_page_b64(d.clone(), 0, 100).unwrap_err()),
+            ("renderizar un fichero dañado", render_page_b64(d.clone(), 0, 100, None).unwrap_err()),
             (
                 "listar anotaciones de un fichero dañado",
                 anotaciones::get_annotations(d.clone(), 0).unwrap_err(),
             ),
             ("borrar una página que no existe", paginas::delete_page(b.clone(), 9).unwrap_err()),
             ("girar una página que no existe", paginas::rotate_page(b.clone(), 9).unwrap_err()),
-            ("renderizar una página que no existe", render_page_b64(b.clone(), 9, 100).unwrap_err()),
+            ("renderizar una página que no existe", render_page_b64(b.clone(), 9, 100, None).unwrap_err()),
             (
                 "extraer a una carpeta que no existe",
                 paginas::extract_pages(b.clone(), vec![0], "/nope/x.pdf".into(), None).unwrap_err(),
@@ -1418,7 +1426,7 @@ pub(crate) mod tests {
     fn renderiza_pagina() {
         let tmp = std::env::temp_dir().join("editor_pdf_test_render.pdf");
         crea_pdf(&["Hola"], &tmp);
-        let png_b64 = render_page_b64(tmp.to_string_lossy().into_owned(), 0, 200).expect("render");
+        let png_b64 = render_page_b64(tmp.to_string_lossy().into_owned(), 0, 200, None).expect("render");
         std::fs::remove_file(&tmp).ok();
         let png = base64::engine::general_purpose::STANDARD
             .decode(&png_b64)

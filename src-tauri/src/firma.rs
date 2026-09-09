@@ -806,7 +806,7 @@ mod tests {
     fn hay_tinta(path: &str, pagina: u16, r: &crate::Rect) -> bool {
         let sizes = crate::get_page_sizes(path.to_string()).expect("tamaños");
         let escala = 600.0 / sizes[pagina as usize].width;
-        let png = crate::render_page_png(path.to_string(), pagina, 600).expect("render");
+        let png = crate::render_page_png(path.to_string(), pagina, 600, true).expect("render");
         let img = image::load_from_memory(&png).expect("PNG").to_rgba8();
         let (x0, y0) = ((r.x * escala) as u32 + 2, (r.y * escala) as u32 + 2);
         let (x1, y1) = (
