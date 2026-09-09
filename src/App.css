@@ -1733,6 +1733,31 @@ textarea {
   color: var(--fg-muted);
 }
 
+/* adjuntos: una fila por fichero, con su tamaño en Fragment Mono */
+.adj-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.adj-nombre {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.adj-dato,
+.adj-descripcion {
+  color: var(--fg-muted);
+}
+
+.adj-descripcion {
+  overflow-wrap: anywhere;
+}
+
 /* un hilo: el comentario, sus acciones y sus respuestas indentadas */
 .com-hilo {
   display: flex;

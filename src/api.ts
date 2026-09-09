@@ -809,6 +809,56 @@ export function exportDocx(
   });
 }
 
+/* ---- adjuntos y capas ---- */
+
+/** Un fichero incrustado en el PDF (`/EmbeddedFiles`). */
+export type Adjunto = {
+  name: string;
+  bytes: number;
+  /** Fecha de creación tal como la trae el `/Filespec`, o vacía. */
+  created: string;
+  description: string;
+};
+
+export function listAttachments(path: string): Promise<Adjunto[]> {
+  return invoke("list_attachments", { path });
+}
+
+/** Saca el adjunto a un fichero del disco, byte a byte. */
+export function saveAttachment(
+  path: string,
+  index: number,
+  destPath: string,
+): Promise<void> {
+  return invoke("save_attachment", { path, index, destPath });
+}
+
+export function addAttachment(
+  workPath: string,
+  filePath: string,
+  description: string,
+): Promise<void> {
+  return invoke("add_attachment", { workPath, filePath, description });
+}
+
+/** Una capa del documento (`/OCProperties /OCGs`). */
+export type Capa = { name: string; visible: boolean };
+
+export function listLayers(path: string): Promise<Capa[]> {
+  return invoke("list_layers", { path });
+}
+
+/** Apaga o enciende una capa. **Cambia el fichero**: PDFium respeta el
+ *  `/OCProperties /D /OFF` del documento al renderizar, así que ocultar una
+ *  capa es escribir en él. Por eso deja su paso de deshacer y la UI lo dice. */
+export function setLayerVisible(
+  workPath: string,
+  index: number,
+  visible: boolean,
+): Promise<void> {
+  return invoke("set_layer_visible", { workPath, index, visible });
+}
+
 export type CompressReport = {
   antes: number;
   despues: number;

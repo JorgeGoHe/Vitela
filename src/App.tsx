@@ -77,6 +77,13 @@ import {
   exportText,
   exportDocx,
   exportComments,
+  listAttachments,
+  saveAttachment,
+  addAttachment,
+  listLayers,
+  setLayerVisible,
+  type Adjunto,
+  type Capa,
   replyAnnotation,
   setAnnotationState,
   type EstadoComentario,
@@ -136,6 +143,8 @@ import PanelPaginas from "./components/PanelPaginas";
 import Pagina from "./components/Pagina";
 import PanelFirmas from "./components/PanelFirmas";
 import PanelFirmasDoc from "./components/PanelFirmasDoc";
+import PanelAdjuntos from "./components/PanelAdjuntos";
+import PanelCapas from "./components/PanelCapas";
 import DialogoFirmar from "./components/DialogoFirmar";
 import DibujarFirma from "./components/DibujarFirma";
 import DialogoMarcaAgua, {
@@ -322,8 +331,13 @@ function App() {
   } | null>(null);
   const [hfOpen, setHfOpen] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<
-    "paginas" | "marcadores" | "comentarios" | "firmas"
+    "paginas" | "marcadores" | "comentarios" | "firmas" | "adjuntos" | "capas"
   >("paginas");
+  // lo que el documento lleva dentro y hasta ahora solo se sabía borrar: sus
+  // pestañas salen únicamente cuando hay algo que enseñar (con seis fijas a
+  // 200 px no cabe ninguna)
+  const [adjuntos, setAdjuntos] = useState<Adjunto[]>([]);
+  const [capas, setCapas] = useState<Capa[]>([]);
   // firmas del fichero abierto y la banda que las resume, que se cierra y
   // no vuelve hasta el documento siguiente
   const [firmasDoc, setFirmasDoc] = useState<FirmaInfo[]>([]);
@@ -1078,10 +1092,85 @@ function App() {
     };
   }, [workPath, docVersion, annotVersion]);
 
+  // Adjuntos y capas del documento abierto. Se releen con cada cambio: unir
+  // un PDF trae los suyos y sanitizar se los lleva
+  useEffect(() => {
+    if (!workPath) {
+      setAdjuntos([]);
+      setCapas([]);
+      return;
+    }
+    let cancelled = false;
+    listAttachments(workPath)
+      .then((a) => {
+        if (!cancelled) setAdjuntos(a);
+      })
+      .catch(() => {
+        if (!cancelled) setAdjuntos([]);
+      });
+    listLayers(workPath)
+      .then((c) => {
+        if (!cancelled) setCapas(c);
+      })
+      .catch(() => {
+        if (!cancelled) setCapas([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workPath, docVersion]);
+
+  /** Saca un adjunto al disco, tal cual: los mismos bytes que hay dentro. */
+  async function guardarAdjunto(index: number, a: Adjunto) {
+    if (!workPath) return;
+    const dest = await save({ defaultPath: a.name, title: "Guardar el adjunto" });
+    if (!dest) return;
+    try {
+      await saveAttachment(workPath, index, dest);
+      setNotice(`Adjunto guardado en ${dest}`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function anadirAdjunto() {
+    if (!workPath) return;
+    const sel = await open({ multiple: false, title: "Añadir un adjunto" });
+    if (typeof sel !== "string") return;
+    try {
+      await addAttachment(workPath, sel, "");
+      afterMutation(pageCount);
+      setNotice(`Adjunto añadido · ${MOD}Z para deshacer`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  /** Apagar una capa escribe en el documento (PDFium respeta el `/OFF` del
+   *  fichero al renderizar): por eso deja su paso de deshacer y se dice. */
+  async function cambiarCapa(index: number, visible: boolean) {
+    if (!workPath) return;
+    try {
+      await setLayerVisible(workPath, index, visible);
+      afterMutation(pageCount);
+      setNotice(
+        `${visible ? "Capa encendida" : "Capa apagada"} · cambia el documento · ${MOD}Z lo devuelve`,
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   /** Abre una pestaña del panel lateral y le lleva el foco: con el teclado
    *  se llega a la lista sin pasar por el ratón. */
   function abrirPestana(
-    tab: "paginas" | "marcadores" | "comentarios" | "firmas",
+    tab:
+      | "paginas"
+      | "marcadores"
+      | "comentarios"
+      | "firmas"
+      | "adjuntos"
+      | "capas",
   ) {
     setSidebarVisible(true);
     setSidebarTab(tab);
@@ -3668,9 +3757,39 @@ function App() {
                   Firmas
                 </button>
               )}
+              {adjuntos.length > 0 && (
+                <button
+                  className={`btn${sidebarTab === "adjuntos" ? " on" : ""}`}
+                  title="Ficheros que lleva dentro el documento"
+                  aria-pressed={sidebarTab === "adjuntos"}
+                  onClick={() => abrirPestana("adjuntos")}
+                >
+                  Adjuntos
+                </button>
+              )}
+              {capas.length > 0 && (
+                <button
+                  className={`btn${sidebarTab === "capas" ? " on" : ""}`}
+                  title="Capas del documento"
+                  aria-pressed={sidebarTab === "capas"}
+                  onClick={() => abrirPestana("capas")}
+                >
+                  Capas
+                </button>
+              )}
             </div>
             {sidebarTab === "firmas" && (
               <PanelFirmasDoc firmas={firmasDoc} onGoto={saltarA} />
+            )}
+            {sidebarTab === "adjuntos" && (
+              <PanelAdjuntos
+                adjuntos={adjuntos}
+                onGuardar={guardarAdjunto}
+                onAnadir={anadirAdjunto}
+              />
+            )}
+            {sidebarTab === "capas" && (
+              <PanelCapas capas={capas} onToggle={cambiarCapa} />
             )}
             {sidebarTab === "comentarios" && (
               <PanelComentarios
