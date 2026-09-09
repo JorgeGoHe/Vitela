@@ -942,6 +942,7 @@ pub fn run() {
             paginas::move_page,
             paginas::merge_pdf,
             paginas::extract_pages,
+            paginas::extract_each_page,
             paginas::delete_pages,
             paginas::rotate_pages,
             save_pdf,

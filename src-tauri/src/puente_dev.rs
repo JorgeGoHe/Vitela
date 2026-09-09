@@ -164,6 +164,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "move_page" => cmd!(paginas::move_page, { work_path: String, from_index: u16, to_index: u16 }),
         "merge_pdf" => cmd!(paginas::merge_pdf, { work_path: String, other_path: String }),
         "extract_pages" => cmd!(paginas::extract_pages, { work_path: String, page_indices: Vec<u16>, dest_path: String, delete_after: Option<bool> }),
+        "extract_each_page" => cmd!(paginas::extract_each_page, { work_path: String, page_indices: Vec<u16>, dest_dir: String, delete_after: Option<bool> }),
         "delete_pages" => cmd!(paginas::delete_pages, { work_path: String, page_indices: Vec<u16> }),
         "rotate_pages" => cmd!(paginas::rotate_pages, { work_path: String, page_indices: Vec<u16>, quarter_turns: i8 }),
         "save_pdf" => cmd!(crate::save_pdf, { work_path: String, dest_path: String }),

@@ -210,20 +210,24 @@ pub(crate) fn olvida_proteccion(work_path: &str) {
 /// barrer cualquier `/Encrypt` que quedara en el fichero.
 #[tauri::command(async)]
 pub fn remove_encryption(work_path: String) -> Result<(), String> {
-    olvida_proteccion(&work_path);
-    on_pdfium_thread(move || {
-        invalidate_doc_cache();
-        let mut doc = LoDoc::load(&work_path).map_err(|e| {
-            crate::mensaje_llano(format!("No se ha podido leer el documento: {e}"))
-        })?;
-        if doc.trailer.get(b"Encrypt").is_err() {
-            return Ok(());
-        }
-        doc.trailer.remove(b"Encrypt");
-        let tmp = format!("{work_path}.tmp");
-        doc.save(&tmp)
-            .map_err(|e| crate::mensaje_llano(format!("No se ha podido guardar: {e}")))?;
-        std::fs::rename(&tmp, &work_path).map_err(crate::mensaje_llano)
+    // escribe la copia de trabajo, así que va envuelta en `mutacion` como
+    // todas: quitar la contraseña deja su paso y ⌘Z lo devuelve
+    crate::historial::mutacion(work_path, |work_path| {
+        olvida_proteccion(&work_path);
+        on_pdfium_thread(move || {
+            invalidate_doc_cache();
+            let mut doc = LoDoc::load(&work_path).map_err(|e| {
+                crate::mensaje_llano(format!("No se ha podido leer el documento: {e}"))
+            })?;
+            if doc.trailer.get(b"Encrypt").is_err() {
+                return Ok(());
+            }
+            doc.trailer.remove(b"Encrypt");
+            let tmp = format!("{work_path}.tmp");
+            doc.save(&tmp)
+                .map_err(|e| crate::mensaje_llano(format!("No se ha podido guardar: {e}")))?;
+            std::fs::rename(&tmp, &work_path).map_err(crate::mensaje_llano)
+        })
     })
 }
 
@@ -1392,4 +1396,41 @@ mod tests {
             texto.chars.len()
         );
     }
+
+    /// Regla del proyecto (historial.rs): todo comando que escriba la copia
+    /// de trabajo envuelve su cuerpo en `mutacion`. `remove_encryption`
+    /// escribía por su cuenta, así que el usuario quitaba la contraseña,
+    /// pulsaba ⌘Z y no pasaba nada.
+    #[test]
+    fn quitar_la_proteccion_deja_un_paso_de_deshacer() {
+        let pdf = std::env::temp_dir().join("seguridad-quitar-historial-test.pdf");
+        crate::tests::crea_pdf(&["Uno", "Dos"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        let pasos =
+            |w: &str| crate::historial::history_state(w.to_string()).expect("historial").undo;
+        let antes = pasos(&work);
+
+        encrypt_pdf(work.clone(), None, "secreta".into(), None, None).expect("proteger");
+        assert!(proteccion_de(&work).is_some(), "la protección queda anotada");
+
+        remove_encryption(work.clone()).expect("quitar la protección");
+        assert!(proteccion_de(&work).is_none(), "la protección se olvida");
+        assert_eq!(
+            pasos(&work),
+            antes + 1,
+            "quitar la contraseña tiene que dejar su paso de deshacer"
+        );
+
+        // y el documento sigue entero y legible después del paso
+        let dest = std::env::temp_dir().join("seguridad-quitar-historial-dest.pdf");
+        crate::save_pdf(work.clone(), dest.to_string_lossy().into_owned()).expect("guardar");
+        assert_eq!(
+            crate::tests::textos_de(&dest).len(),
+            2,
+            "guardar tras quitar la protección da el documento en claro"
+        );
+        std::fs::remove_file(&pdf).ok();
+        std::fs::remove_file(&dest).ok();
+    }
+
 }

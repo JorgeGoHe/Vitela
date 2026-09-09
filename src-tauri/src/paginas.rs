@@ -221,6 +221,68 @@ pub fn extract_pages(
     }
 }
 
+/// «Un fichero por página»: extrae cada página pedida a su propio PDF en
+/// `dest_dir` (`pagina-N.pdf`, con N el número de la página en el original)
+/// y, si se pide, las borra del documento. Devuelve las rutas escritas.
+///
+/// Es UNA operación: la UI hacía una llamada por página más un borrado
+/// aparte, así que un fallo a mitad dejaba ficheros escritos, el documento
+/// intacto y nadie avisado. Aquí se escriben todos primero —si uno falla no
+/// se ha tocado el documento— y el borrado va dentro de la misma mutación:
+/// un solo paso de deshacer.
+#[tauri::command(async)]
+pub fn extract_each_page(
+    work_path: String,
+    page_indices: Vec<u16>,
+    dest_dir: String,
+    delete_after: Option<bool>,
+) -> Result<Vec<String>, String> {
+    if page_indices.is_empty() {
+        return Err("No hay páginas que extraer".into());
+    }
+    let borrar = delete_after.unwrap_or(false);
+    let cuerpo = move |work_path: String| {
+        let indices = page_indices.clone();
+        let dir = dest_dir.clone();
+        let work = work_path.clone();
+        let escritos: Vec<String> = on_pdfium_thread(move || {
+            with_doc(&work, |doc| {
+                let total = doc.pages().len();
+                if let Some(fuera) = indices.iter().find(|i| **i >= total) {
+                    return Err(format!("La página {} ya no está en el documento", fuera + 1));
+                }
+                let mut escritos = Vec::new();
+                for i in &indices {
+                    let destino = std::path::Path::new(&dir).join(format!("pagina-{}.pdf", i + 1));
+                    let mut nuevo = pdfium()?.create_new_pdf().map_err(|e| e.to_string())?;
+                    nuevo
+                        .pages_mut()
+                        .copy_pages_from_document(doc, &(i + 1).to_string(), 0)
+                        .map_err(|e| e.to_string())?;
+                    nuevo.save_to_file(&destino).map_err(|e| {
+                        crate::mensaje_llano(format!(
+                            "No se ha podido escribir {}: {e}",
+                            destino.display()
+                        ))
+                    })?;
+                    escritos.push(destino.to_string_lossy().into_owned());
+                }
+                Ok(escritos)
+            })
+        })?;
+        if borrar {
+            let indices = page_indices.clone();
+            on_pdfium_thread(move || borra_paginas(&work_path, &indices))?;
+        }
+        Ok(escritos)
+    };
+    if borrar {
+        mutacion(work_path, cuerpo)
+    } else {
+        cuerpo(work_path)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,4 +409,56 @@ mod tests {
             std::fs::remove_file(f).ok();
         }
     }
+
+    /// «Un fichero por página» era una llamada a `extract_pages` por página
+    /// más un `delete_pages` aparte: si algo fallaba a mitad quedaban
+    /// ficheros escritos y el documento intacto, sin decirlo. Es una sola
+    /// operación con un solo paso de deshacer.
+    #[test]
+    fn un_fichero_por_pagina_es_una_sola_operacion() {
+        let pdf = std::env::temp_dir().join("editor_pdf_test_por_pagina.pdf");
+        crea_pdf(&["Uno", "Dos", "Tres", "Cuatro"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        let dir = std::env::temp_dir().join("vitela-por-pagina-test");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).expect("carpeta");
+        let pasos =
+            |w: &str| crate::historial::history_state(w.to_string()).expect("historial").undo;
+        let antes = pasos(&work);
+
+        let escritos = extract_each_page(
+            work.clone(),
+            vec![0, 1, 2],
+            dir.to_string_lossy().into_owned(),
+            Some(true),
+        )
+        .expect("un fichero por página");
+
+        assert_eq!(escritos.len(), 3, "un fichero por página pedida");
+        for (n, ruta) in escritos.iter().enumerate() {
+            let t = textos_de(std::path::Path::new(ruta));
+            assert_eq!(t.len(), 1, "cada fichero lleva una página");
+            let esperado = ["Uno", "Dos", "Tres"][n];
+            assert!(t[0].contains(esperado), "{ruta} debería llevar {esperado}");
+        }
+        assert_eq!(textos_de(&pdf).len(), 1, "las extraídas se han borrado");
+        assert_eq!(pasos(&work), antes + 1, "extraer y borrar es UN paso");
+
+        crate::historial::undo(work.clone()).expect("deshacer");
+        assert_eq!(textos_de(&pdf).len(), 4, "⌘Z devuelve el documento entero");
+
+        // y si el destino no vale, no se escribe nada a medias
+        let fallo = extract_each_page(
+            work.clone(),
+            vec![0, 1],
+            dir.join("no-existe").to_string_lossy().into_owned(),
+            Some(true),
+        );
+        assert!(fallo.is_err(), "una carpeta que no existe tiene que fallar");
+        assert_eq!(textos_de(&pdf).len(), 4, "el documento se queda como estaba");
+
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_file(&pdf).ok();
+    }
+
 }
