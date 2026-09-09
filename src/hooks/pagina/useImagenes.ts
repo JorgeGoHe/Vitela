@@ -38,6 +38,10 @@ export function useImagenes(ctx: {
   const [images, setImages] = useState<ImageInfo[]>([]);
   const [imgPreviews, setImgPreviews] = useState<Record<number, string>>({});
   const [imgDraft, setImgDraft] = useState<ImageInfo | null>(null);
+  // espejo del borrador: en un arrastre en un solo frame el estado de React
+  // aún no se ha re-renderizado al llegar el mouseup y imgDraft iría un
+  // frame por detrás (como annotLiveRef y el resto de *LiveRef)
+  const imgLiveRef = useRef<ImageInfo | null>(null);
   const [imagePopover, setImagePopover] = useState<ImageInfo | null>(null);
   const imgActionRef = useRef<ImgAction | null>(null);
   // parche que tapa la copia original (quemada en el bitmap) durante un
@@ -48,6 +52,7 @@ export function useImagenes(ctx: {
   useEffect(() => {
     setImagePopover(null);
     setImgDraft(null);
+    imgLiveRef.current = null;
     imgActionRef.current = null;
     setImgPatch(null);
   }, [mode]);
@@ -250,6 +255,7 @@ export function useImagenes(ctx: {
       moved: false,
     };
     setImagePopover(null);
+    imgLiveRef.current = im;
     setImgDraft(im);
     setImgPatch({
       rect: { x: im.x, y: im.y, w: im.w, h: im.h },
@@ -262,6 +268,7 @@ export function useImagenes(ctx: {
     imgPreviews,
     imgDraft,
     setImgDraft,
+    imgLiveRef,
     imagePopover,
     setImagePopover,
     imgActionRef,

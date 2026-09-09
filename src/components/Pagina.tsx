@@ -359,12 +359,12 @@ function Pagina({
       const dx = x - a.startX;
       const dy = y - a.startY;
       if (Math.abs(dx) + Math.abs(dy) > 1) a.moved = true;
-      if (a.kind === "move") {
-        imagenes.setImgDraft({ ...a.orig, x: a.orig.x + dx, y: a.orig.y + dy });
-      } else {
-        const r = resizeRect(a.orig, a.handle ?? "se", dx, dy, e.shiftKey);
-        imagenes.setImgDraft({ ...a.orig, ...r });
-      }
+      const d =
+        a.kind === "move"
+          ? { ...a.orig, x: a.orig.x + dx, y: a.orig.y + dy }
+          : { ...a.orig, ...resizeRect(a.orig, a.handle ?? "se", dx, dy, e.shiftKey) };
+      imagenes.imgLiveRef.current = d;
+      imagenes.setImgDraft(d);
       return;
     }
     if (mode === "draw") {
@@ -537,7 +537,8 @@ function Pagina({
     if (mode === "image" && imagenes.imgActionRef.current) {
       const a = imagenes.imgActionRef.current;
       imagenes.imgActionRef.current = null;
-      const draft = imagenes.imgDraft;
+      const draft = imagenes.imgLiveRef.current ?? imagenes.imgDraft;
+      imagenes.imgLiveRef.current = null;
       if (!a.moved) {
         // clic simple: abrir el popover de la imagen
         imagenes.setImgDraft(null);
