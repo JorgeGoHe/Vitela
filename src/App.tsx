@@ -315,6 +315,10 @@ function App() {
       setPaginasSel(new Set());
       setViewRotation(0);
       setHayFormularios(false);
+      // la herramienta armada no es del documento nuevo: Redactar sobre un
+      // PDF recién abierto es lo último que quiere nadie
+      setMode("select");
+      setActiveSig(null);
       setNombreProvisional(null);
       setOriginalPath(path);
       setWorkPath(info.work_path);
@@ -345,6 +349,9 @@ function App() {
     (texto: string | null, opts?: { persistente?: boolean }) => {
       setNoticeTexto(texto);
       setNoticePersistente(!!opts?.persistente);
+      // si algo ha salido bien, la banda roja de antes ya no cuenta: se
+      // quedaba en pantalla a través de operaciones correctas
+      if (texto) setError(null);
     },
     [],
   );
@@ -1075,6 +1082,7 @@ function App() {
   const afterMutation = useCallback((newCount: number, nextPage?: number) => {
     setPageCount(newCount);
     setModified(true);
+    setError(null);
     limpiarBusqueda();
     setPageIndex((p) => Math.max(0, Math.min(nextPage ?? p, newCount - 1)));
     // el docVersion nuevo deja inservible todo el caché: liberar los blobs
@@ -1285,8 +1293,10 @@ function App() {
       setHadPassword(false);
       setDocPassword(null);
       setModified(true);
+      // la protección no entra en el historial (vive en un mapa por
+      // work_path, que no cambia al deshacer): el aviso dice cómo se quita
       setNotice(
-        "Se protegerá al guardar: a partir de entonces el fichero pedirá la contraseña para abrirse",
+        "Se protegerá al guardar · Quitar la contraseña, en Seguridad",
       );
     } catch (e) {
       setError(String(e));
@@ -1580,6 +1590,7 @@ function App() {
       setOriginalPath(dest);
       setNombreProvisional(null);
       setModified(false);
+      setNotice(`Guardado en ${dest}`);
       return true;
     } catch (e) {
       setError(String(e));
@@ -1662,6 +1673,7 @@ function App() {
     const dest = await pickSignedDest();
     if (!dest) return;
     try {
+      setNotice("Firmando…", { persistente: true });
       await invoke("sign_pdf", {
         workPath,
         destPath: dest,
@@ -1669,7 +1681,11 @@ function App() {
         keyPemPath: keyPath,
         reason: null,
       });
+      // la firma va a OTRO fichero, que no se abre: sin aviso, la única
+      // forma de saber si ha funcionado era ir al Finder
+      setNotice(`Firmado y guardado en ${dest}`);
     } catch (e) {
+      setNotice(null);
       setError(String(e));
     }
   }
@@ -1679,6 +1695,7 @@ function App() {
     const dest = await pickSignedDest();
     if (!dest) return;
     try {
+      setNotice("Firmando…", { persistente: true });
       await invoke("sign_pdf_p12", {
         workPath,
         destPath: dest,
@@ -1687,7 +1704,9 @@ function App() {
         reason: null,
       });
       setP12Draft(null);
+      setNotice(`Firmado y guardado en ${dest}`);
     } catch (e) {
+      setNotice(null);
       setError(String(e));
     }
   }
