@@ -1,5 +1,7 @@
-import { MOD, type OpcionesBusqueda } from "../tipos";
+import { MOD, type OpcionesBusqueda, type SearchMatch } from "../tipos";
+import CajonBusqueda from "./CajonBusqueda";
 import Icon from "./Icon";
+import type { Reemplazador } from "../hooks/useReemplazo";
 
 /** Campo de búsqueda de la barra superior con el contador y las flechas
  *  para saltar entre coincidencias (Enter repite el salto; ⇧Enter va atrás). */
@@ -15,6 +17,11 @@ export default function Busqueda({
   opciones,
   cambiaOpcion,
   gotoMatch,
+  matches,
+  irAMatch,
+  cajonAbierto,
+  setCajonAbierto,
+  reemplazo,
 }: {
   query: string;
   setQuery: (q: string) => void;
@@ -30,7 +37,14 @@ export default function Busqueda({
   opciones: OpcionesBusqueda;
   cambiaOpcion: (clave: keyof OpcionesBusqueda) => void;
   gotoMatch: (delta: number) => void;
+  /** Las coincidencias con su frase de contexto, para la lista del cajón. */
+  matches: SearchMatch[];
+  irAMatch: (i: number) => void;
+  cajonAbierto: boolean;
+  setCajonAbierto: (v: boolean) => void;
+  reemplazo: Reemplazador;
 }) {
+  const hayCajon = searched && total > 0;
   return (
     <div className="search">
       <Icon name="search" size={13} />
@@ -48,6 +62,12 @@ export default function Busqueda({
             e.stopPropagation();
             limpiar(true);
             e.currentTarget.blur();
+            return;
+          }
+          // con el cajón abierto, ↑ y ↓ recorren la lista sin salir del campo
+          if (hayCajon && cajonAbierto && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+            e.preventDefault();
+            gotoMatch(e.key === "ArrowDown" ? 1 : -1);
             return;
           }
           if (e.key !== "Enter") return;
@@ -99,9 +119,31 @@ export default function Busqueda({
               >
                 <Icon name="down" size={13} />
               </button>
+              <button
+                className={`btn btn-icon${cajonAbierto ? " on" : ""}`}
+                title={
+                  cajonAbierto
+                    ? "Ocultar la lista de resultados"
+                    : "Ver la lista de resultados y reemplazar"
+                }
+                aria-label="Lista de resultados y reemplazar"
+                aria-expanded={cajonAbierto}
+                onClick={() => setCajonAbierto(!cajonAbierto)}
+              >
+                <Icon name="more" size={13} />
+              </button>
             </>
           )}
         </>
+      )}
+      {hayCajon && cajonAbierto && (
+        <CajonBusqueda
+          matches={matches}
+          matchIdx={matchIdx}
+          query={lastQuery}
+          irAMatch={irAMatch}
+          reemplazo={reemplazo}
+        />
       )}
     </div>
   );

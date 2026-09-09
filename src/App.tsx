@@ -23,6 +23,7 @@ import { useHistorial } from "./hooks/useHistorial";
 import { useRenderCache } from "./hooks/useRenderCache";
 import { useMiniaturas } from "./hooks/useMiniaturas";
 import { useBusqueda } from "./hooks/useBusqueda";
+import { useReemplazo } from "./hooks/useReemplazo";
 import { useFirmas } from "./hooks/useFirmas";
 import { useHerramienta } from "./hooks/useHerramienta";
 import { destinoDe, esquemaDe, esquemaPermitido } from "./enlaces";
@@ -526,6 +527,12 @@ function App() {
       if (texto) setError(null);
     },
     [],
+  );
+
+  const mostrarError = useCallback((e: unknown) => setError(String(e)), []);
+  const mostrarAviso = useCallback(
+    (texto: string) => setNotice(texto),
+    [setNotice],
   );
 
   const refrescarRecientes = useCallback(() => {
@@ -1481,6 +1488,8 @@ function App() {
   });
   const limpiarBusqueda = busqueda.limpiar;
   hayCoincidenciasRef.current = busqueda.matches.length > 0;
+  // el cajón de resultados va plegado: quien solo quiere buscar no paga nada
+  const [cajonBusqueda, setCajonBusqueda] = useState(false);
 
   // Seguimiento del scroll: la página cuyo centro queda más cerca del centro
   // del visor es la "actual" (píldora y sidebar), sin provocar scroll.
@@ -1588,6 +1597,18 @@ function App() {
     setDocVersion((v) => v + 1);
     refrescarHistorial();
   }, [refrescarHistorial, evictAll, limpiarBusqueda]);
+
+  const reemplazo = useReemplazo({
+    workPath,
+    query: busqueda.lastQuery,
+    matchCase: busqueda.opciones.matchCase,
+    matches: busqueda.matches,
+    matchIdx: busqueda.matchIdx,
+    pageCount,
+    onNotice: setNotice,
+    onError: mostrarError,
+    afterMutation,
+  });
 
   async function rotatePage(i: number) {
     if (!workPath) return;
@@ -2485,11 +2506,6 @@ function App() {
     [],
   );
 
-  const mostrarError = useCallback((e: unknown) => setError(String(e)), []);
-  const mostrarAviso = useCallback(
-    (texto: string) => setNotice(texto),
-    [setNotice],
-  );
   /** Una página ha cargado sus campos: encender el resaltado y avisar. */
   const onFormularios = useCallback(
     (n: number) => {
@@ -2676,6 +2692,11 @@ function App() {
                 opciones={busqueda.opciones}
                 cambiaOpcion={busqueda.cambiaOpcion}
                 gotoMatch={busqueda.gotoMatch}
+                matches={busqueda.matches}
+                irAMatch={busqueda.irAMatch}
+                cajonAbierto={cajonBusqueda}
+                setCajonAbierto={setCajonBusqueda}
+                reemplazo={reemplazo}
               />
               <button
                 className="btn btn-icon"

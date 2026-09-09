@@ -25,7 +25,14 @@ export type PageSize = {
   /** /Rotate de la página: 0, 90, 180 o 270 grados en sentido horario. */
   rotation: number;
 };
-export type SearchMatch = { page_index: number; rects: Rect[] };
+export type SearchMatch = {
+  page_index: number;
+  rects: Rect[];
+  /** La frase alrededor de la coincidencia (30 caracteres a cada lado), que
+   *  solo llega si la búsqueda se pidió con `context`. */
+  before?: string;
+  after?: string;
+};
 export type Selection = { start: number; end: number };
 export type AnnotationInfo = {
   index: number;

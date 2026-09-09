@@ -303,6 +303,7 @@ textarea {
 }
 
 .search {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -345,6 +346,106 @@ textarea {
 .search .btn.on {
   background: var(--btn-active);
   color: var(--accent);
+}
+
+/* el cajón de resultados: cuelga del propio campo de búsqueda, no de un
+   panel nuevo, y va plegado por defecto */
+.search-cajon {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: min(420px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+  z-index: 40;
+  color: var(--fg);
+}
+
+.search-resumen {
+  color: var(--fg-muted);
+}
+
+.search-resultados {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.search-resultado {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.search-resultado:hover {
+  background: var(--btn-hover);
+}
+
+.search-resultado.on {
+  background: var(--btn-active);
+}
+
+.search-pagina {
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.search-frase {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+/* la coincidencia va en el acento, no en el amarillo del navegador */
+.search-frase mark {
+  background: transparent;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.search-reemplazo {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.search-reemplazo input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 5px 6px;
+  outline: none;
+}
+
+.search-reemplazo input:focus {
+  border-color: var(--accent);
 }
 
 .match-count {

@@ -64,6 +64,14 @@ export function useBusqueda(opts: {
     if (searched) runSearch(next);
   }
 
+  /** Va a una coincidencia concreta: es lo que hace un clic en la lista del
+   *  cajón, donde no se recorre de una en una. */
+  function irAMatch(i: number) {
+    if (i < 0 || i >= matches.length) return;
+    setMatchIdx(i);
+    opts.gotoPage(matches[i].page_index);
+  }
+
   function gotoMatch(delta: number) {
     if (matches.length === 0) return;
     const next = (matchIdx + delta + matches.length) % matches.length;
@@ -94,6 +102,7 @@ export function useBusqueda(opts: {
     opciones,
     cambiaOpcion,
     gotoMatch,
+    irAMatch,
     matchesByPage,
     limpiar,
   };

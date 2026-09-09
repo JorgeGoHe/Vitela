@@ -1,5 +1,5 @@
 import { invoke } from "./ipc";
-import type { AnnotationInfo, SearchMatch } from "./tipos";
+import type { AnnotationInfo, SearchMatch, TextBlock } from "./tipos";
 
 /** Firma manuscrita guardada en la biblioteca del usuario. */
 export type FirmaGuardada = {
@@ -28,14 +28,45 @@ export function deleteStoredSignature(id: string): Promise<void> {
 }
 
 /** Busca en todo el documento. `matchCase` y `wholeWord` son las dos
- *  opciones de la búsqueda de Acrobat; por defecto van apagadas. */
+ *  opciones de la búsqueda de Acrobat; por defecto van apagadas. Con
+ *  `context` cada coincidencia trae además la frase de alrededor, que es lo
+ *  que hace legible la lista de resultados. */
 export function searchPdf(
   path: string,
   query: string,
   matchCase: boolean,
   wholeWord: boolean,
+  context = true,
 ): Promise<SearchMatch[]> {
-  return invoke("search_pdf", { path, query, matchCase, wholeWord });
+  return invoke("search_pdf", { path, query, matchCase, wholeWord, context });
+}
+
+/** Bloques de texto de una página, tal como están en el content stream. */
+export function getTextBlocks(
+  path: string,
+  pageIndex: number,
+): Promise<TextBlock[]> {
+  return invoke("get_text_blocks", { path, pageIndex });
+}
+
+/** Una sustitución: en qué bloque, qué sale y qué entra. */
+export type Reemplazo = {
+  page_index: number;
+  /** `object_index` del bloque dentro de su página (`get_text_blocks`). */
+  block_index: number;
+  from: string;
+  to: string;
+};
+
+/** Reemplaza texto en varios bloques a la vez: el lote entero en UNA sola
+ *  mutación, así que un ⌘Z lo devuelve de una vez. Devuelve cuántos bloques
+ *  ha cambiado; los que no se pueden reescribir se saltan sin romper el
+ *  resto. */
+export function replaceText(
+  workPath: string,
+  matches: Reemplazo[],
+): Promise<number> {
+  return invoke("replace_text", { workPath, matches });
 }
 
 /** Fichero abierto hace poco (la lista vive en el backend, máx. 8). */
