@@ -513,10 +513,16 @@ pub struct FirmaInfo {
     pub cert_issuer: String,
     pub not_before: String,
     pub not_after: String,
+    /// El certificado está **fuera de su periodo de validez**, por
+    /// cualquiera de los dos lados: caducado o todavía sin entrar en vigor
+    /// (`not_yet_valid` distingue cuál, para que la frase de la UI sea la
+    /// que toca). Un certificado que aún no valía no se marcaba, y la
+    /// tarjeta lo daba por bueno.
     pub expired: bool,
-    /// Autofirmado: nadie más responde por ese certificado. Vitela no
-    /// consulta el llavero del sistema, así que esto y `expired` es todo lo
-    /// que se puede decir del certificado sin mentir.
+    /// Caso raro pero real (relojes mal puestos, certificados emitidos con
+    /// fecha futura): el certificado todavía no había entrado en vigor.
+    pub not_yet_valid: bool,
+    /// Autofirmado: nadie más responde por ese certificado.
     pub self_signed: bool,
     pub page_index: Option<u16>,
     /// Rectángulo del widget en el espacio de la página VISTA, como el
@@ -695,6 +701,7 @@ fn lee_firma(
         not_before: String::new(),
         not_after: String::new(),
         expired: false,
+        not_yet_valid: false,
         self_signed: false,
         page_index,
         rect,
@@ -730,6 +737,7 @@ fn lee_firma(
         info.not_before = cms.not_before;
         info.not_after = cms.not_after;
         info.expired = cms.expired;
+        info.not_yet_valid = cms.not_yet_valid;
         info.self_signed = cms.self_signed;
         info.algoritmo = cms.algoritmo;
         // el hash del /ByteRange se calcula con el algoritmo que declara la
@@ -828,7 +836,22 @@ struct DatosCms {
     not_before: String,
     not_after: String,
     expired: bool,
+    not_yet_valid: bool,
     self_signed: bool,
+}
+
+/// ¿El certificado está fuera de su periodo de validez, y por qué lado?
+/// Devuelve `(fuera, todavia_no)`: lo segundo distingue «caducado el …» de
+/// «todavía no era válido». Se mira **`not_before` además de `not_after`**:
+/// un certificado emitido con fecha futura (reloj mal puesto al emitirlo)
+/// no vale, y hasta el ciclo 5 Vitela lo daba por bueno.
+fn fuera_de_vigor(
+    not_before: std::time::SystemTime,
+    not_after: std::time::SystemTime,
+    ahora: std::time::SystemTime,
+) -> (bool, bool) {
+    let todavia_no = ahora < not_before;
+    (todavia_no || ahora > not_after, todavia_no)
 }
 
 /// Saca del PKCS#7 el hash firmado, el certificado **del firmante** (el que
@@ -884,7 +907,11 @@ fn lee_cms(der_con_relleno: &[u8]) -> Option<DatosCms> {
     let iso = |t: &x509_cert::time::Time| {
         chrono::DateTime::<chrono::Utc>::from(t.to_system_time()).to_rfc3339()
     };
-    let not_after_st = cert.tbs_certificate.validity.not_after.to_system_time();
+    let (fuera, todavia_no) = fuera_de_vigor(
+        cert.tbs_certificate.validity.not_before.to_system_time(),
+        cert.tbs_certificate.validity.not_after.to_system_time(),
+        std::time::SystemTime::now(),
+    );
     Some(DatosCms {
         digest,
         hash,
@@ -895,7 +922,8 @@ fn lee_cms(der_con_relleno: &[u8]) -> Option<DatosCms> {
         issuer,
         not_before: iso(&cert.tbs_certificate.validity.not_before),
         not_after: iso(&cert.tbs_certificate.validity.not_after),
-        expired: std::time::SystemTime::now() > not_after_st,
+        expired: fuera,
+        not_yet_valid: todavia_no,
     })
 }
 
@@ -1082,6 +1110,68 @@ mod tests {
             include_str!("../fixtures/test_key.pem"),
         )
         .expect("credenciales de prueba")
+    }
+
+    /// **R20.** Una firma buena seguida de un cambio legítimo —rellenar un
+    /// campo, una segunda firma, el DSS de una firma con LTV— no es una
+    /// manipulación: el `/ByteRange` deja de cubrir el fichero (hay bytes
+    /// detrás que la firma no avala) pero el hash de lo firmado sigue
+    /// cuadrando. El backend tiene que decir las dos cosas por separado
+    /// para que la UI no lo pinte en rojo.
+    #[test]
+    fn una_revision_detras_deja_la_firma_valida_y_el_fichero_sin_cubrir() {
+        let dir = std::env::temp_dir();
+        let src = dir.join("firma-revision-src.pdf");
+        let dest = dir.join("firma-revision-out.pdf");
+        crea_pdf(&["Contrato"], &src);
+        sign(
+            &src.to_string_lossy(),
+            &dest.to_string_lossy(),
+            &credenciales(),
+            None,
+            &Apariencia::default(),
+        )
+        .expect("firmar");
+        let f = &verify_signatures(dest.to_string_lossy().into_owned()).expect("verificar")[0];
+        assert!(f.covers_whole_file && f.estado == ESTADO_OK, "recién firmado");
+
+        // una revisión detrás: bytes añadidos al final, sin tocar lo firmado
+        let con_revision = dir.join("firma-revision-mas.pdf");
+        let mut bytes = std::fs::read(&dest).expect("leer firmado");
+        bytes.extend_from_slice(b"\n% revision anadida despues de firmar\n");
+        std::fs::write(&con_revision, &bytes).expect("escribir");
+
+        let f = &verify_signatures(con_revision.to_string_lossy().into_owned())
+            .expect("verificar")[0];
+        assert!(
+            !f.covers_whole_file,
+            "la firma ya no cubre el fichero entero: hay contenido detrás"
+        );
+        assert!(f.digest_ok, "lo que la firma cubre no ha cambiado");
+        assert_eq!(
+            f.estado, ESTADO_OK,
+            "una revisión detrás no es una manipulación (algoritmo: {})",
+            f.algoritmo
+        );
+        for p in [&src, &dest, &con_revision] {
+            std::fs::remove_file(p).ok();
+        }
+    }
+
+    /// **R20.** El periodo de validez tiene dos extremos y hasta el ciclo 5
+    /// solo se miraba uno: un certificado emitido con fecha futura salía
+    /// «en vigor».
+    #[test]
+    fn un_certificado_que_todavia_no_ha_entrado_en_vigor_no_esta_en_vigor() {
+        use std::time::{Duration, SystemTime};
+        let ahora = SystemTime::now();
+        let dia = Duration::from_secs(24 * 3600);
+        // en vigor: empezó ayer y acaba mañana
+        assert_eq!(fuera_de_vigor(ahora - dia, ahora + dia, ahora), (false, false));
+        // caducado: acabó ayer
+        assert_eq!(fuera_de_vigor(ahora - 2 * dia, ahora - dia, ahora), (true, false));
+        // todavía no: empieza mañana
+        assert_eq!(fuera_de_vigor(ahora + dia, ahora + 2 * dia, ahora), (true, true));
     }
 
     /// El certificado de la firma ECDSA de prueba (P-256), y su clave.
