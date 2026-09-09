@@ -176,7 +176,10 @@ function App() {
   const [compressOpen, setCompressOpen] = useState(false);
   const [compressQuality, setCompressQuality] = useState(75);
   const [compressDpi, setCompressDpi] = useState(150);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNoticeTexto] = useState<string | null>(null);
+  // los avisos de progreso («Comprimiendo…») no se van solos: mientras dura
+  // el trabajo son el único indicio de que la app no está colgada
+  const [noticePersistente, setNoticePersistente] = useState(false);
   const [recientes, setRecientes] = useState<Reciente[]>([]);
   // ficheros soltados de golpe: abrir el primero o unirlos
   const [dropAsk, setDropAsk] = useState<string[] | null>(null);
@@ -258,6 +261,16 @@ function App() {
       return null;
     }
   }
+
+  /** Muestra un aviso en la banda superior. Con `persistente` se queda hasta
+   *  que otro aviso lo sustituye (progreso); si no, se va solo a los 6 s. */
+  const setNotice = useCallback(
+    (texto: string | null, opts?: { persistente?: boolean }) => {
+      setNoticeTexto(texto);
+      setNoticePersistente(!!opts?.persistente);
+    },
+    [],
+  );
 
   const refrescarRecientes = useCallback(() => {
     listRecent()
@@ -957,7 +970,7 @@ function App() {
   async function printDocument() {
     if (!workPath) return;
     try {
-      setNotice("Preparando la impresión…");
+      setNotice("Preparando la impresión…", { persistente: true });
       const pages: string[] = [];
       for (let i = 0; i < pageCount; i++) {
         const width = Math.round(((pageSizes[i]?.width ?? 595) * 200) / 72);
@@ -972,17 +985,18 @@ function App() {
   }
 
   // Los avisos de éxito se van solos a los 6 s con un desvanecido corto
-  // (U-14); los errores se quedan hasta que se cierran a mano.
+  // (U-14); los errores se quedan hasta que se cierran a mano, y los de
+  // progreso hasta que el trabajo termina y los sustituye su resultado.
   useEffect(() => {
-    if (!notice) return;
+    if (!notice || noticePersistente) return;
     setNoticeSaliendo(false);
     const irse = setTimeout(() => setNoticeSaliendo(true), 6000);
-    const quitar = setTimeout(() => setNotice(null), 6200);
+    const quitar = setTimeout(() => setNoticeTexto(null), 6200);
     return () => {
       clearTimeout(irse);
       clearTimeout(quitar);
     };
-  }, [notice]);
+  }, [notice, noticePersistente]);
 
   // cuando las páginas de impresión están montadas, abrir el diálogo
   useEffect(() => {
@@ -1010,7 +1024,7 @@ function App() {
     if (typeof dir !== "string") return;
     try {
       setExportOpen(false);
-      setNotice("Exportando imágenes…");
+      setNotice("Exportando imágenes…", { persistente: true });
       const rutas = await exportPagesPng(workPath, dir, exportDpi, exportFmt);
       setNotice(`${rutas.length} imagen(es) exportadas a ${dir}`);
     } catch (e) {
@@ -1042,7 +1056,7 @@ function App() {
     if (!workPath) return;
     try {
       setCompressOpen(false);
-      setNotice("Comprimiendo…");
+      setNotice("Comprimiendo…", { persistente: true });
       const r = await compressPdf(workPath, compressQuality, compressDpi);
       // por debajo de 1 MB dos decimales de MB no distinguen nada: KB
       const tam = (n: number) =>
