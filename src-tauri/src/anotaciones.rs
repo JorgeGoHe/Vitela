@@ -19,7 +19,12 @@ pub(crate) fn ui_rect_to_pdf(r: &Rect, page_h: f32) -> PdfRect {
 /// Crea una anotación de resaltado amarillo sobre los rects dados
 /// (coords de UI en puntos PDF).
 #[tauri::command(async)]
-pub fn add_highlight(work_path: String, page_index: u16, rects: Vec<Rect>) -> Result<(), String> {
+pub fn add_highlight(
+    work_path: String,
+    page_index: u16,
+    rects: Vec<Rect>,
+    author: Option<String>,
+) -> Result<(), String> {
     if rects.is_empty() {
         return Err("No hay nada que resaltar".into());
     }
@@ -73,11 +78,8 @@ pub fn add_highlight(work_path: String, page_index: u16, rects: Vec<Rect>) -> Re
         }
         drop(page);
         save_and_close(doc, &work_path)?;
-        // segundo pase: PDFium no escribe la apariencia del resaltado
-        cirugia_en_hilo(&work_path, |doc| {
-            let i = ultima_annot(doc, page_index)?;
-            escribe_apariencia_marca(doc, page_index, i, EstiloMarca::Resaltado)
-        })
+        // segundo pase: PDFium no escribe ni la apariencia ni /T y /M
+        remata_annot(&work_path, page_index, Some(EstiloMarca::Resaltado), author)
     }))
 }
 
@@ -92,6 +94,7 @@ pub fn add_stroke(
     points: Vec<[f32; 2]>,
     color: Option<[u8; 4]>,
     width: Option<f32>,
+    author: Option<String>,
 ) -> Result<(), String> {
     if points.len() < 2 {
         return Err("Trazo demasiado corto".into());
@@ -147,7 +150,7 @@ pub fn add_stroke(
             .map_err(|e| e.to_string())?;
         drop(page);
         save_and_close(doc, &work_path)?;
-        Ok(())
+        remata_annot(&work_path, page_index, None, author)
     }))
 }
 
@@ -159,6 +162,7 @@ pub fn add_note(
     x: f32,
     y: f32,
     text: String,
+    author: Option<String>,
 ) -> Result<(), String> {
     if text.trim().is_empty() {
         return Err("La nota está vacía".into());
@@ -189,7 +193,7 @@ pub fn add_note(
             .map_err(|e| e.to_string())?;
         drop(page);
         save_and_close(doc, &work_path)?;
-        Ok(())
+        remata_annot(&work_path, page_index, None, author)
     }))
 }
 
@@ -439,6 +443,92 @@ pub(crate) fn ultima_annot(doc: &lopdf::Document, page_index: u16) -> Result<usi
     n.checked_sub(1).ok_or_else(|| "La página no tiene anotaciones".into())
 }
 
+/// Autor de un comentario: el que manda la UI (preferencia del usuario) o,
+/// si no lo manda, el nombre de usuario del sistema — Acrobat tampoco
+/// pregunta la primera vez.
+pub(crate) fn autor_o_sistema(author: Option<String>) -> String {
+    let dado = author.map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
+    dado
+        .or_else(|| std::env::var("USER").ok())
+        .or_else(|| std::env::var("USERNAME").ok())
+        .or_else(|| std::env::var("LOGNAME").ok())
+        .map(|a| a.trim().to_string())
+        .filter(|a| !a.is_empty())
+        .unwrap_or_else(|| "Usuario".into())
+}
+
+/// Fecha actual en el formato de fecha del PDF: `D:YYYYMMDDHHmmSS`.
+pub(crate) fn fecha_pdf_ahora() -> String {
+    chrono::Local::now().format("D:%Y%m%d%H%M%S").to_string()
+}
+
+/// `D:YYYYMMDDHHmmSS…` → ISO 8601 (`YYYY-MM-DDTHH:MM:SS`). Lo que no
+/// encaje se devuelve vacío: la UI solo tiene que saber pintarlo o no.
+pub(crate) fn fecha_pdf_a_iso(fecha: &str) -> String {
+    let d: Vec<char> = fecha
+        .trim_start_matches("D:")
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    if d.len() < 8 {
+        return String::new();
+    }
+    let t: String = d.iter().collect();
+    let mut iso = format!("{}-{}-{}", &t[0..4], &t[4..6], &t[6..8]);
+    if d.len() >= 14 {
+        iso.push_str(&format!("T{}:{}:{}", &t[8..10], &t[10..12], &t[12..14]));
+    }
+    iso
+}
+
+/// Segundo pase con lopdf sobre la anotación recién creada por PDFium (la
+/// última de la página): su apariencia, si es una marca de texto, y la
+/// firma `/T` + `/M` que Acrobat pone en todos los comentarios.
+///
+/// Debe llamarse desde dentro de la `mutacion` y del hilo de PDFium, justo
+/// después de `save_and_close`.
+pub(crate) fn remata_annot(
+    work_path: &str,
+    page_index: u16,
+    estilo: Option<EstiloMarca>,
+    author: Option<String>,
+) -> Result<(), String> {
+    let autor = autor_o_sistema(author);
+    let fecha = fecha_pdf_ahora();
+    cirugia_en_hilo(work_path, move |doc| {
+        let i = ultima_annot(doc, page_index)?;
+        if let Some(estilo) = estilo {
+            escribe_apariencia_marca(doc, page_index, i, estilo)?;
+        }
+        let id = annot_id(doc, page_index, i)?;
+        let annot = doc
+            .get_object_mut(id)
+            .and_then(|o| o.as_dict_mut())
+            .map_err(|e| e.to_string())?;
+        annot.set("T", crate::documento::cadena_pdf(&autor));
+        annot.set("M", lopdf::Object::string_literal(fecha));
+        Ok(())
+    })
+}
+
+/// Decodifica una cadena PDF (literal en PDFDocEncoding o UTF-16BE con BOM).
+fn texto_de_cadena_pdf(o: &lopdf::Object) -> String {
+    let lopdf::Object::String(bytes, _) = o else {
+        return String::new();
+    };
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        let unidades: Vec<u16> = bytes[2..]
+            .chunks(2)
+            .filter(|c| c.len() == 2)
+            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&unidades)
+    } else {
+        // PDFDocEncoding coincide con Latin-1 en todo lo imprimible
+        bytes.iter().map(|b| *b as char).collect()
+    }
+}
+
 #[derive(Serialize, Debug)]
 pub struct AnnotationInfo {
     pub index: u16,
@@ -453,6 +543,19 @@ pub struct AnnotationInfo {
     /// Color de trazo de la anotación (para que la UI pinte los overlays
     /// con el color real, no uno fijo).
     pub color: Option<[u8; 4]>,
+    /// Autor del comentario (`/T`); vacío si la anotación no lo lleva.
+    pub author: String,
+    /// Fecha de modificación (`/M`) en ISO 8601; vacía si no la lleva.
+    pub modified: String,
+}
+
+/// Lo que se lee con lopdf de cada anotación de la página: el color (que
+/// PDFium no puede leer sin arriesgar un SIGSEGV) y la firma del autor.
+#[derive(Default, Clone)]
+pub struct DatosAnnot {
+    pub color: Option<[u8; 4]>,
+    pub author: String,
+    pub modified: String,
 }
 
 /// Lista las anotaciones de una página (bounds en coords de UI). La UI las
@@ -506,11 +609,17 @@ pub fn get_annotations(path: String, page_index: u16) -> Result<Vec<AnnotationIn
                     contents: a.contents().unwrap_or_default(),
                     rects,
                     color: None,
+                    author: String::new(),
+                    modified: String::new(),
                 });
             }
-            if let Some(colores) = colores_annots_lopdf(&path, page_index) {
+            if let Some(datos) = datos_annots_lopdf(&path, page_index) {
                 for a in out.iter_mut() {
-                    a.color = colores.get(a.index as usize).copied().flatten();
+                    if let Some(d) = datos.get(a.index as usize) {
+                        a.color = d.color;
+                        a.author.clone_from(&d.author);
+                        a.modified.clone_from(&d.modified);
+                    }
                 }
             }
             Ok(out)
@@ -518,18 +627,22 @@ pub fn get_annotations(path: String, page_index: u16) -> Result<Vec<AnnotationIn
     })
 }
 
-/// Colores /C (+ /CA como alfa) de las anotaciones de una página leídos con
-/// lopdf, alineados por índice con el orden de /Annots (el mismo que recorre
-/// PDFium). Es la ÚNICA fuente del color, a propósito: `stroke_color()` de
+/// Color (`/C` + `/CA` como alfa), autor (`/T`) y fecha (`/M`) de las
+/// anotaciones de una página leídos con lopdf, alineados por índice con el
+/// orden de /Annots (el mismo que recorre PDFium).
+///
+/// Para el color es la ÚNICA fuente, a propósito: `stroke_color()` de
 /// pdfium-render 0.8 castea el handle de la anotación a objeto de página
 /// cuando FPDFAnnot_GetColor falla (anotaciones con appearance stream:
-/// formas, sellos, Ink, y cualquiera tras un render, porque PDFium genera
-/// los /AP en memoria), y en Linux ese cast es un SIGSEGV de toda la app.
-pub fn colores_annots_lopdf(path: &str, page_index: u16) -> Option<Vec<Option<[u8; 4]>>> {
-    with_lopdf(path, |doc| Ok(colores_annots(doc, page_index))).ok().flatten()
+/// formas, sellos, Ink, marcas de texto, y cualquiera tras un render), y en
+/// Linux ese cast es un SIGSEGV de toda la app.
+pub fn datos_annots_lopdf(path: &str, page_index: u16) -> Option<Vec<DatosAnnot>> {
+    with_lopdf(path, |doc| Ok(datos_annots(doc, page_index)))
+        .ok()
+        .flatten()
 }
 
-pub fn colores_annots(doc: &lopdf::Document, page_index: u16) -> Option<Vec<Option<[u8; 4]>>> {
+pub fn datos_annots(doc: &lopdf::Document, page_index: u16) -> Option<Vec<DatosAnnot>> {
     use lopdf::Object;
     let page_id = *doc.get_pages().get(&(page_index as u32 + 1))?;
     let page = doc.get_object(page_id).ok()?.as_dict().ok()?;
@@ -538,48 +651,62 @@ pub fn colores_annots(doc: &lopdf::Document, page_index: u16) -> Option<Vec<Opti
         Object::Array(a) => a.clone(),
         _ => return None,
     };
-    let num = |o: &Object| -> Option<f32> {
-        match o {
-            Object::Integer(i) => Some(*i as f32),
-            Object::Real(r) => Some(*r),
-            _ => None,
-        }
-    };
     Some(
         annots
             .iter()
             .map(|a| {
                 let dict = match a {
-                    Object::Reference(rid) => doc.get_object(*rid).ok()?.as_dict().ok()?,
-                    Object::Dictionary(d) => d,
-                    _ => return None,
-                };
-                let c = match dict.get(b"C").ok()? {
-                    Object::Array(v) => v,
-                    _ => return None,
-                };
-                let alpha = dict
-                    .get(b"CA")
-                    .ok()
-                    .and_then(num)
-                    .map(|a| (a * 255.0) as u8)
-                    .unwrap_or(255);
-                match c.len() {
-                    3 => Some([
-                        (num(&c[0])? * 255.0) as u8,
-                        (num(&c[1])? * 255.0) as u8,
-                        (num(&c[2])? * 255.0) as u8,
-                        alpha,
-                    ]),
-                    1 => {
-                        let g = (num(&c[0])? * 255.0) as u8;
-                        Some([g, g, g, alpha])
+                    Object::Reference(rid) => {
+                        match doc.get_object(*rid).ok().and_then(|o| o.as_dict().ok()) {
+                            Some(d) => d,
+                            None => return DatosAnnot::default(),
+                        }
                     }
-                    _ => None,
+                    Object::Dictionary(d) => d,
+                    _ => return DatosAnnot::default(),
+                };
+                DatosAnnot {
+                    color: color_annot(dict),
+                    author: dict
+                        .get(b"T")
+                        .map(texto_de_cadena_pdf)
+                        .unwrap_or_default(),
+                    modified: dict
+                        .get(b"M")
+                        .map(|o| fecha_pdf_a_iso(&texto_de_cadena_pdf(o)))
+                        .unwrap_or_default(),
                 }
             })
             .collect(),
     )
+}
+
+/// Color de una anotación a partir de `/C` (+ `/CA` como alfa).
+fn color_annot(dict: &lopdf::Dictionary) -> Option<[u8; 4]> {
+    use lopdf::Object;
+    let c = match dict.get(b"C").ok()? {
+        Object::Array(v) => v,
+        _ => return None,
+    };
+    let alpha = dict
+        .get(b"CA")
+        .ok()
+        .and_then(numero)
+        .map(|a| (a * 255.0) as u8)
+        .unwrap_or(255);
+    match c.len() {
+        3 => Some([
+            (numero(&c[0])? * 255.0) as u8,
+            (numero(&c[1])? * 255.0) as u8,
+            (numero(&c[2])? * 255.0) as u8,
+            alpha,
+        ]),
+        1 => {
+            let g = (numero(&c[0])? * 255.0) as u8;
+            Some([g, g, g, alpha])
+        }
+        _ => None,
+    }
 }
 
 /// Elimina la anotación con el índice dado.
@@ -626,7 +753,7 @@ mod tests {
         };
         let antes = decode(render_page_b64(work.clone(), 0, 200).unwrap());
         // trazo horizontal que pasa por (150, 120) pt
-        add_stroke(work.clone(), 0, vec![[50.0, 120.0], [250.0, 120.0]], None, None).expect("trazo");
+        add_stroke(work.clone(), 0, vec![[50.0, 120.0], [250.0, 120.0]], None, None, None).expect("trazo");
         let despues = decode(render_page_b64(work.clone(), 0, 200).unwrap());
         let px = (150.0f32 * 200.0 / 595.0) as u32;
         let py = (120.0f32 * 200.0 / 595.0) as u32;
@@ -643,6 +770,7 @@ mod tests {
             0,
             vec![[50.0, 200.0], [250.0, 200.0]],
             Some([46, 160, 67, 255]),
+            None,
             None,
         )
         .expect("trazo con color");
@@ -677,6 +805,7 @@ mod tests {
                     h: 14.0,
                 },
             ],
+            None,
         )
         .expect("resaltar");
         let annots = get_annotations(work.clone(), 0).expect("listar");
@@ -707,9 +836,10 @@ mod tests {
                 w: 100.0,
                 h: 14.0,
             }],
+            None,
         )
         .expect("resaltar");
-        add_note(work.clone(), 0, 200.0, 100.0, "Una nota".into()).expect("añadir nota");
+        add_note(work.clone(), 0, 200.0, 100.0, "Una nota".into(), None).expect("añadir nota");
         let annots = get_annotations(work.clone(), 0).expect("listar anotaciones");
         assert_eq!(annots.len(), 2, "anotaciones: {:?}", annots.len());
         let nota = annots.iter().find(|a| a.kind == "Text").expect("nota");
@@ -720,6 +850,7 @@ mod tests {
             work.clone(),
             0,
             vec![[10.0, 10.0], [50.0, 40.0], [90.0, 10.0]],
+            None,
             None,
             None,
         )
@@ -806,7 +937,7 @@ mod tests_apariencia {
         crea_pdf(&["Hola"], &tmp);
         let work = tmp.to_string_lossy().into_owned();
         // zona en blanco de la página, lejos del texto
-        add_highlight(work.clone(), 0, vec![caja(300.0)]).expect("resaltar");
+        add_highlight(work.clone(), 0, vec![caja(300.0)], None).expect("resaltar");
 
         let png = render_page_png(work.clone(), 0, 300).expect("render");
         let [r, g, b, _] = pixel(&png, 300, 300.0, 310.0);
@@ -828,13 +959,84 @@ mod tests_apariencia {
     }
 
     #[test]
+    fn autor_y_fecha_en_las_anotaciones() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_autor.pdf");
+        crea_pdf(&["Hola"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+
+        // sin autor: el nombre de usuario del sistema, nunca vacío
+        add_note(work.clone(), 0, 200.0, 100.0, "Una nota".into(), None).expect("nota");
+        let a = &get_annotations(work.clone(), 0).expect("listar")[0];
+        assert!(!a.author.is_empty(), "el autor no puede quedar vacío");
+        assert!(
+            a.modified.starts_with(&format!("{}-", chrono::Local::now().format("%Y"))),
+            "fecha ISO 8601 esperada, llegó {:?}",
+            a.modified
+        );
+
+        // con autor explícito, en todos los creadores de anotaciones
+        add_highlight(work.clone(), 0, vec![caja(300.0)], Some("Jorge".into())).expect("resaltar");
+        add_stroke(
+            work.clone(),
+            0,
+            vec![[10.0, 10.0], [50.0, 40.0]],
+            None,
+            None,
+            Some("Jorge".into()),
+        )
+        .expect("trazo");
+        crate::anotaciones2::add_markup(
+            work.clone(),
+            0,
+            vec![caja(400.0)],
+            "underline".into(),
+            None,
+            Some("Jorge".into()),
+        )
+        .expect("subrayar");
+        crate::anotaciones2::add_shape(
+            work.clone(),
+            0,
+            "rect".into(),
+            10.0,
+            500.0,
+            80.0,
+            560.0,
+            [0, 0, 0, 255],
+            None,
+            1.0,
+            Some("Jorge".into()),
+        )
+        .expect("forma");
+        crate::anotaciones2::add_stamp(
+            work.clone(),
+            0,
+            "APROBADO".into(),
+            [0, 0, 0, 255],
+            10.0,
+            600.0,
+            14.0,
+            Some("Jorge".into()),
+        )
+        .expect("sello");
+
+        let annots = get_annotations(work.clone(), 0).expect("listar");
+        assert_eq!(annots.len(), 6);
+        for a in annots.iter().skip(1) {
+            assert_eq!(a.author, "Jorge", "anotación {:?} sin autor", a.kind);
+            assert!(!a.modified.is_empty(), "anotación {:?} sin fecha", a.kind);
+        }
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
     fn aplanar_conserva_el_resaltado() {
         // con /AP escrito, aplanar ya no borra las marcas: es lo que
         // permite quitar del diálogo la advertencia de que se pierden
         let tmp = std::env::temp_dir().join("editor_pdf_test_ap_aplanado.pdf");
         crea_pdf(&["Hola"], &tmp);
         let work = tmp.to_string_lossy().into_owned();
-        add_highlight(work.clone(), 0, vec![caja(300.0)]).expect("resaltar");
+        add_highlight(work.clone(), 0, vec![caja(300.0)], None).expect("resaltar");
         crate::seguridad::flatten_pdf(work.clone()).expect("aplanar");
 
         let png = render_page_png(work.clone(), 0, 300).expect("render");
@@ -861,6 +1063,7 @@ mod tests_apariencia {
             vec![caja(300.0)],
             "underline".into(),
             Some([0, 0, 255, 255]),
+            None,
         )
         .expect("subrayar");
 
@@ -887,6 +1090,7 @@ mod tests_apariencia {
             vec![caja(300.0)],
             "strikeout".into(),
             Some([255, 0, 0, 255]),
+            None,
         )
         .expect("tachar");
 

@@ -52,7 +52,7 @@ pub fn get_outline(path: String) -> Result<Vec<OutlineNode>, String> {
 
 /// Codifica un texto como cadena PDF: literal si es ASCII, UTF-16BE con BOM
 /// en caso contrario (los acentos en literal UTF-8 se leerían mal).
-fn cadena_pdf(text: &str) -> Object {
+pub(crate) fn cadena_pdf(text: &str) -> Object {
     if text.is_ascii() {
         Object::string_literal(text)
     } else {

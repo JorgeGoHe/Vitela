@@ -283,7 +283,7 @@ mod tests {
     #[test]
     fn anotacion_deshacer_rehacer_y_rama_nueva() {
         let work = fixture("anotacion", &["Página"]);
-        anotaciones::add_note(work.clone(), 0, 100.0, 100.0, "hola".into()).unwrap();
+        anotaciones::add_note(work.clone(), 0, 100.0, 100.0, "hola".into(), None).unwrap();
         assert_eq!(anotaciones::get_annotations(work.clone(), 0).unwrap().len(), 1);
         undo(work.clone()).unwrap();
         assert_eq!(anotaciones::get_annotations(work.clone(), 0).unwrap().len(), 0);
@@ -291,7 +291,7 @@ mod tests {
         assert_eq!(anotaciones::get_annotations(work.clone(), 0).unwrap().len(), 1);
         undo(work.clone()).unwrap();
         // una mutación nueva descarta la rama de rehacer y sus ficheros
-        anotaciones::add_stroke(work.clone(), 0, vec![[10.0, 10.0], [50.0, 50.0]], None, None)
+        anotaciones::add_stroke(work.clone(), 0, vec![[10.0, 10.0], [50.0, 50.0]], None, None, None)
             .unwrap();
         let e = history_state(work.clone()).unwrap();
         assert_eq!((e.undo, e.redo), (1, 0));
@@ -378,7 +378,7 @@ mod tests {
         crate::texto::add_text_block(work.clone(), 0, 60.0, 400.0, "Nuevo".into(), 12.0, None)
             .unwrap();
         cuenta(&work);
-        crate::anotaciones2::add_stamp(work.clone(), 0, "OK".into(), [200, 0, 0, 255], 200.0, 200.0, 20.0)
+        crate::anotaciones2::add_stamp(work.clone(), 0, "OK".into(), [200, 0, 0, 255], 200.0, 200.0, 20.0, None)
             .unwrap();
         cuenta(&work);
         crate::paginas2::add_blank_page(work.clone(), 1).unwrap();

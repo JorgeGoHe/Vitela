@@ -3,9 +3,9 @@
 //! es la única vía que renderiza sin /AP y se borra como anotación) y sellos
 //! (Stamp con borde + texto dentro).
 
-use crate::anotaciones::{escribe_apariencia_marca, ui_rect_to_pdf, ultima_annot, EstiloMarca};
+use crate::anotaciones::{remata_annot, ui_rect_to_pdf, EstiloMarca};
 use crate::historial::mutacion;
-use crate::{cirugia_en_hilo, on_pdfium_thread, pdfium, save_and_close, Rect};
+use crate::{on_pdfium_thread, pdfium, save_and_close, Rect};
 use pdfium_render::prelude::*;
 
 fn color_de(c: [u8; 4]) -> PdfColor {
@@ -21,6 +21,7 @@ pub fn add_markup(
     rects: Vec<Rect>,
     kind: String,
     color: Option<[u8; 4]>,
+    author: Option<String>,
 ) -> Result<(), String> {
     if rects.is_empty() {
         return Err("No hay nada que marcar".into());
@@ -100,10 +101,7 @@ pub fn add_markup(
         save_and_close(doc, &work_path)?;
         // segundo pase: PDFium genera la apariencia en memoria pero no la
         // escribe, así que la marca no existiría fuera de Vitela
-        cirugia_en_hilo(&work_path, |doc| {
-            let i = ultima_annot(doc, page_index)?;
-            escribe_apariencia_marca(doc, page_index, i, estilo)
-        })
+        remata_annot(&work_path, page_index, Some(estilo), author)
     }))
 }
 
@@ -124,6 +122,7 @@ pub fn add_shape(
     stroke: [u8; 4],
     fill: Option<[u8; 4]>,
     stroke_width: f32,
+    author: Option<String>,
 ) -> Result<(), String> {
     mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
@@ -228,12 +227,14 @@ pub fn add_shape(
             .map_err(|e| e.to_string())?;
         drop(page);
         save_and_close(doc, &work_path)?;
-        Ok(())
+        remata_annot(&work_path, page_index, None, author)
     }))
 }
 
 /// Sello de texto (APROBADO, BORRADOR…): anotación Stamp con un borde y el
 /// texto dentro, centrado en el punto dado (coords de UI).
+// la firma es el contrato con la UI: un argumento por propiedad del sello
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 pub fn add_stamp(
     work_path: String,
@@ -243,6 +244,7 @@ pub fn add_stamp(
     x: f32,
     y: f32,
     font_size: f32,
+    author: Option<String>,
 ) -> Result<(), String> {
     let text = text.trim().to_string();
     if text.is_empty() {
@@ -314,7 +316,7 @@ pub fn add_stamp(
             .map_err(|e| e.to_string())?;
         drop(page);
         save_and_close(doc, &work_path)?;
-        Ok(())
+        remata_annot(&work_path, page_index, None, author)
     }))
 }
 
@@ -407,8 +409,8 @@ mod tests {
             w: 120.0,
             h: 16.0,
         }];
-        add_markup(work.clone(), 0, r.clone(), "underline".into(), None).expect("subrayar");
-        add_markup(work.clone(), 0, r, "strikeout".into(), None).expect("tachar");
+        add_markup(work.clone(), 0, r.clone(), "underline".into(), None, None).expect("subrayar");
+        add_markup(work.clone(), 0, r, "strikeout".into(), None, None).expect("tachar");
         let annots = crate::anotaciones::get_annotations(work, 0).expect("listar");
         let kinds: Vec<&str> = annots.iter().map(|a| a.kind.as_str()).collect();
         assert!(kinds.contains(&"Underline"), "{kinds:?}");
@@ -432,6 +434,7 @@ mod tests {
             vec![Rect { x: 50.0, y: 690.0, w: 120.0, h: 16.0 }],
             "strikeout".into(),
             Some([192, 57, 43, 255]),
+            None,
         )
         .expect("tachar");
         // renderizar con el caché del documento (como hace la UI)
@@ -462,6 +465,7 @@ mod tests {
             [200, 0, 0, 255],
             Some([200, 0, 0, 255]),
             2.0,
+            None,
         )
         .expect("rect");
         add_shape(
@@ -475,6 +479,7 @@ mod tests {
             [0, 0, 200, 255],
             None,
             3.0,
+            None,
         )
         .expect("flecha");
         let annots = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar");
@@ -503,6 +508,7 @@ mod tests {
             300.0,
             400.0,
             22.0,
+            None,
         )
         .expect("sello");
         let annots = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar");
@@ -552,6 +558,7 @@ mod tests {
             200.0,
             600.0,
             22.0,
+            None,
         )
         .expect("sello");
         let a = &crate::anotaciones::get_annotations(work.clone(), 0).expect("listar")[0];

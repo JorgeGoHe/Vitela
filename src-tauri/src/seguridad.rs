@@ -774,6 +774,7 @@ mod tests {
             vec![[100.0, 100.0], [200.0, 200.0], [250.0, 150.0]],
             None,
             None,
+            None,
         )
         .expect("trazo");
         assert_eq!(crate::anotaciones::get_annotations(work.clone(), 0).unwrap().len(), 1);
@@ -846,6 +847,7 @@ mod tests {
             300.0,
             500.0,
             22.0,
+            None,
         )
         .expect("sello");
         crate::anotaciones::add_stroke(
@@ -854,6 +856,7 @@ mod tests {
             vec![[100.0, 600.0], [200.0, 620.0], [300.0, 600.0]],
             Some([46, 160, 67, 255]),
             Some(4.0),
+            None,
         )
         .expect("trazo");
         crate::anotaciones2::add_shape(
@@ -867,6 +870,7 @@ mod tests {
             [39, 67, 192, 255],
             None,
             3.0,
+            None,
         )
         .expect("forma");
         assert_eq!(
