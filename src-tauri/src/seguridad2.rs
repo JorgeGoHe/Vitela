@@ -198,23 +198,87 @@ fn caja_de(annot: &Dictionary) -> Option<[f32; 4]> {
     ])
 }
 
-/// Quita una marca sin aplicarla («Quitar todas las marcas» va llamando a
-/// esta). `mark_index` es el índice de la anotación en la página, el mismo
-/// que devuelve `mark_redaction` y trae `list_redactions`.
+/// Quita una marca sin aplicarla. `annot_index` es el índice de la
+/// anotación dentro de `/Annots` de esa página —el que devuelve
+/// `mark_redaction` y trae `list_redactions`, el mismo que manejan
+/// `get_annotations`, `transform_annotation` y `remove_annotation`—, **no**
+/// el ordinal de la marca entre las marcas de la página: en una página con
+/// un resaltado delante los dos números dejan de coincidir y quitar una
+/// marca borraría la anotación de al lado.
 #[tauri::command(async)]
-pub fn unmark_redaction(work_path: String, page_index: u16, mark_index: u16) -> Result<(), String> {
+pub fn unmark_redaction(
+    work_path: String,
+    page_index: u16,
+    annot_index: u16,
+) -> Result<(), String> {
     cirugia(&work_path, move |doc| {
         let annots = crate::anotaciones::lista_annots(doc, page_index)
             .ok_or("La página no tiene anotaciones")?;
         let a = annots
-            .get(mark_index as usize)
+            .get(annot_index as usize)
             .ok_or("Esa marca ya no está")?;
         let annot = dict_de(doc, a).ok_or("Esa marca ya no está")?;
         if !es_marca(&annot) {
             return Err("Esa anotación no es una marca de redacción".into());
         }
-        crate::anotaciones::quita_annot(doc, page_index, mark_index as usize)
+        crate::anotaciones::quita_annot(doc, page_index, annot_index as usize)
     })
+}
+
+/// Quita todas las marcas del documento de una vez. Es «Quitar todas las
+/// marcas» de Acrobat: una sola mutación —y por tanto un solo ⌘Z— en vez de
+/// N reescrituras del PDF que además dejarían el trabajo a medias si una
+/// fallara. Devuelve cuántas ha quitado.
+#[tauri::command(async)]
+pub fn unmark_all_redactions(work_path: String) -> Result<u16, String> {
+    let cuenta = std::sync::Arc::new(std::sync::Mutex::new(0u16));
+    let salida = cuenta.clone();
+    cirugia(&work_path, move |doc| {
+        let marcas = marcas_de(doc);
+        if marcas.is_empty() {
+            return Err("No hay ninguna marca de redacción que quitar".into());
+        }
+        *cuenta.lock().unwrap() = marcas.len() as u16;
+        // de mayor a menor: quitar una mueve los índices de las siguientes
+        let mut por_pagina: std::collections::BTreeMap<u16, Vec<u16>> = Default::default();
+        for m in marcas {
+            por_pagina.entry(m.page_index).or_default().push(m.annot_index);
+        }
+        for (p, mut indices) in por_pagina {
+            indices.sort_unstable();
+            for i in indices.into_iter().rev() {
+                crate::anotaciones::quita_annot(doc, p, i as usize)?;
+            }
+        }
+        Ok(())
+    })?;
+    let n = *salida.lock().unwrap();
+    Ok(n)
+}
+
+/// Rehace el `/AP` de una marca de redacción con el tamaño que tenga ahora
+/// su `/Rect`. El borde se dibuja en local (`/BBox 0 0 w h`), así que al
+/// mover o redimensionar la marca hay que volver a dibujarlo: es lo que
+/// llama `transform_annotation` cuando la anotación es una marca.
+pub(crate) fn regenera_marca(doc: &mut LoDoc, id: lopdf::ObjectId) -> Result<(), String> {
+    let annot = doc
+        .get_object(id)
+        .and_then(|o| o.as_dict())
+        .map_err(|e| e.to_string())?
+        .clone();
+    if !es_marca(&annot) {
+        return Ok(());
+    }
+    let caja = caja_de(&annot).ok_or("La marca no tiene caja")?;
+    let ap_id = apariencia_marca(doc, caja[2] - caja[0], caja[3] - caja[1]);
+    let d = doc
+        .get_object_mut(id)
+        .and_then(|o| o.as_dict_mut())
+        .map_err(|e| e.to_string())?;
+    let mut ap = Dictionary::new();
+    ap.set("N", Object::Reference(ap_id));
+    d.set("AP", Object::Dictionary(ap));
+    Ok(())
 }
 
 /// Aplica todas las marcas del documento: por cada zona borra los objetos
@@ -344,8 +408,8 @@ fn tapa_zonas(
         page.regenerate_content().map_err(crate::mensaje_llano)?;
     }
     if dry_run {
+        // el ensayo no ha tocado nada: el documento cacheado sigue valiendo
         drop(doc);
-        crate::invalidate_doc_cache();
         return Ok((textos, imagenes));
     }
     crate::save_and_close(doc, work_path)?;
@@ -638,6 +702,120 @@ mod tests {
             .map(|c| c.ch.as_str())
             .collect();
         assert!(texto.contains("Confidencial"), "⌘Z devuelve el lote entero");
+        std::fs::remove_file(&pdf).ok();
+    }
+
+    /// Quitar una marca tiene que quitar ESA marca. El índice que viaja es
+    /// el de `/Annots` de la página, no el ordinal de la marca entre las
+    /// marcas: en una página con un resaltado delante los dos números se
+    /// separan y «Quitar marca» borraba la anotación de al lado (o daba
+    /// «esa anotación no es una marca de redacción»).
+    #[test]
+    fn quitar_una_marca_con_un_resaltado_delante_no_toca_el_resaltado() {
+        let pdf = std::env::temp_dir().join("seguridad2-desmarcar-test.pdf");
+        crea_pdf(&["Confidencial"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+
+        // el resaltado va PRIMERO: a partir de aquí el ordinal de la marca
+        // entre las marcas (0) y su índice en /Annots (1) no coinciden
+        crate::anotaciones::add_highlight(
+            work.clone(),
+            0,
+            vec![Rect { x: 40.0, y: 300.0, w: 120.0, h: 14.0 }],
+            None,
+        )
+        .expect("resaltar");
+        let zona = Rect { x: 40.0, y: 120.0, w: 160.0, h: 40.0 };
+        mark_redaction(work.clone(), 0, zona).expect("marcar");
+
+        let marcas = list_redactions(work.clone()).expect("listar");
+        assert_eq!(marcas.len(), 1);
+        assert_eq!(marcas[0].annot_index, 1, "la marca es la segunda de /Annots");
+
+        unmark_redaction(work.clone(), 0, marcas[0].annot_index).expect("quitar la marca");
+        assert!(list_redactions(work.clone()).expect("listar").is_empty());
+        let quedan = crate::anotaciones::get_annotations(work.clone(), 0).expect("anotaciones");
+        assert_eq!(quedan.len(), 1, "solo se va la marca: {quedan:?}");
+        assert_eq!(quedan[0].kind, "Highlight", "el resaltado sigue donde estaba");
+        std::fs::remove_file(&pdf).ok();
+    }
+
+    /// «Quitar todas las marcas» es una sola operación: un ⌘Z las devuelve
+    /// todas, y si algo fallara no quedaría el documento a medio limpiar.
+    #[test]
+    fn quitar_todas_las_marcas_es_un_solo_paso_y_respeta_lo_demas() {
+        let pdf = std::env::temp_dir().join("seguridad2-desmarcar-todas-test.pdf");
+        crea_pdf(&["Confidencial", "Segunda"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        crate::anotaciones::add_note(work.clone(), 0, 300.0, 300.0, "Ojo".into(), None)
+            .expect("nota");
+        mark_redaction(work.clone(), 0, Rect { x: 40.0, y: 120.0, w: 160.0, h: 40.0 })
+            .expect("marcar");
+        mark_redaction(work.clone(), 0, Rect { x: 40.0, y: 400.0, w: 100.0, h: 30.0 })
+            .expect("marcar");
+        mark_redaction(work.clone(), 1, Rect { x: 60.0, y: 200.0, w: 100.0, h: 30.0 })
+            .expect("marcar");
+        assert_eq!(list_redactions(work.clone()).expect("listar").len(), 3);
+
+        let antes = pasos(&work);
+        assert_eq!(unmark_all_redactions(work.clone()).expect("quitar todas"), 3);
+        assert!(list_redactions(work.clone()).expect("listar").is_empty());
+        assert_eq!(pasos(&work), antes + 1, "quitar todas es UN paso");
+        let quedan = crate::anotaciones::get_annotations(work.clone(), 0).expect("anotaciones");
+        assert_eq!(quedan.len(), 1, "la nota no se toca: {quedan:?}");
+
+        crate::historial::undo(work.clone()).expect("deshacer");
+        assert_eq!(
+            list_redactions(work.clone()).expect("listar").len(),
+            3,
+            "⌘Z devuelve las tres marcas de una vez"
+        );
+        std::fs::remove_file(&pdf).ok();
+    }
+
+    /// El contrato decía «se selecciona, se mueve y se borra como cualquier
+    /// otra anotación» y moverla daba error: `transform_annotation` no
+    /// trataba los `Square`. Al moverla, lo que se aplica es la zona nueva.
+    #[test]
+    fn la_marca_de_redaccion_se_mueve_y_se_aplica_donde_se_deja() {
+        let pdf = std::env::temp_dir().join("seguridad2-mover-marca-test.pdf");
+        crea_pdf(&["Confidencial"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        // se marca una zona vacía y después se arrastra encima del texto
+        let vacia = Rect { x: 300.0, y: 500.0, w: 120.0, h: 40.0 };
+        let sobre_el_texto = Rect { x: 40.0, y: 120.0, w: 160.0, h: 40.0 };
+        let i = mark_redaction(work.clone(), 0, vacia).expect("marcar");
+        crate::anotaciones2::transform_annotation(
+            work.clone(),
+            0,
+            i,
+            sobre_el_texto.x,
+            sobre_el_texto.y,
+            sobre_el_texto.w,
+            sobre_el_texto.h,
+        )
+        .expect("mover la marca");
+
+        let marcas = list_redactions(work.clone()).expect("listar");
+        assert_eq!(marcas.len(), 1, "sigue siendo una marca de redacción");
+        assert!(
+            (marcas[0].rect.x - sobre_el_texto.x).abs() < 1.5
+                && (marcas[0].rect.y - sobre_el_texto.y).abs() < 1.5
+                && (marcas[0].rect.w - sobre_el_texto.w).abs() < 1.5,
+            "la marca se ha quedado en {:?}",
+            marcas[0].rect
+        );
+        apply_redactions(work.clone(), false).expect("aplicar");
+        let texto: String = crate::busqueda::get_page_text(work.clone(), 0)
+            .expect("texto")
+            .chars
+            .iter()
+            .map(|c| c.ch.as_str())
+            .collect();
+        assert!(
+            !texto.contains("Confidencial"),
+            "se aplica donde se dejó la marca: {texto:?}"
+        );
         std::fs::remove_file(&pdf).ok();
     }
 

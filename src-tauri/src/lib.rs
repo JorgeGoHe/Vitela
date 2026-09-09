@@ -1085,6 +1085,7 @@ pub fn run() {
             seguridad2::mark_redaction,
             seguridad2::list_redactions,
             seguridad2::unmark_redaction,
+            seguridad2::unmark_all_redactions,
             seguridad2::apply_redactions,
             seguridad2::sanitize_pdf,
             exportar::export_pages_png,

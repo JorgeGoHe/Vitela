@@ -587,6 +587,9 @@ pub fn add_free_text(
 ///   siendo los de la caja vieja).
 /// - **Text** solo se mueve: el icono del post-it tiene tamaño fijo en
 ///   Acrobat, así que el rect nuevo solo aporta la esquina.
+/// - **Square** son las marcas de redacción: se mueven y se redimensionan
+///   como cualquier otro comentario (el contrato lo prometía y no era
+///   verdad) y su `/AP` —el borde rojo, dibujado en local— se rehace.
 ///
 /// Para el resto de tipos no hay más que borrado.
 #[tauri::command(async)]
@@ -611,6 +614,7 @@ pub fn transform_annotation(
         let geo = Geo::de_pagina(&page).propia();
         let pedido = geo.ui_rect_a_pdf(&Rect { x, y, w, h });
         let es_freetext;
+        let es_square;
         {
             let mut annot = page
                 .annotations_mut()
@@ -618,6 +622,7 @@ pub fn transform_annotation(
                 .map_err(|e| e.to_string())?;
             let tipo = annot.annotation_type();
             es_freetext = tipo == PdfPageAnnotationType::FreeText;
+            es_square = tipo == PdfPageAnnotationType::Square;
             // el icono de la nota no se estira: se lleva su caja entera a la
             // esquina nueva, como el post-it de Acrobat
             let solo_mover = tipo == PdfPageAnnotationType::Text;
@@ -651,7 +656,7 @@ pub fn transform_annotation(
             // apariencia se dibuja (o se redibuja) desde el /Rect
             let interno = annot.as_stamp_annotation_mut().is_some()
                 || annot.as_ink_annotation_mut().is_some();
-            if !interno && !solo_mover && !es_freetext {
+            if !interno && !solo_mover && !es_freetext && !es_square {
                 return Err("Esta anotación no se puede transformar".into());
             }
             if interno {
@@ -675,6 +680,13 @@ pub fn transform_annotation(
             crate::cirugia_en_hilo(&work_path, |doc| {
                 let id = crate::anotaciones::annot_id(doc, page_index, annot_index as usize)?;
                 crate::anotaciones::regenera_freetext(doc, id)
+            })?;
+        }
+        if es_square {
+            // lo mismo con el borde rojo de la marca de redacción
+            crate::cirugia_en_hilo(&work_path, |doc| {
+                let id = crate::anotaciones::annot_id(doc, page_index, annot_index as usize)?;
+                crate::seguridad2::regenera_marca(doc, id)
             })?;
         }
         // mover un comentario actualiza su fecha de modificación (Acrobat);
