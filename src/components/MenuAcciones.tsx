@@ -53,6 +53,8 @@ export default function MenuAcciones({
   abrirPreferencias,
   signPdf,
   abrirProteger,
+  puedeQuitarProteccion,
+  quitarProteccion,
   abrirAplanar,
   redactar,
   nuevoCampo,
@@ -82,6 +84,9 @@ export default function MenuAcciones({
   abrirPreferencias: () => void;
   signPdf: () => void;
   abrirProteger: () => void;
+  /** Solo se ofrece quitar la contraseña si el documento la tiene. */
+  puedeQuitarProteccion: boolean;
+  quitarProteccion: () => void;
   abrirAplanar: () => void;
   redactar: () => void;
   nuevoCampo: () => void;
@@ -251,6 +256,13 @@ export default function MenuAcciones({
               texto="Proteger con contraseña…"
               onSelect={ejecutar(abrirProteger)}
             />
+            {puedeQuitarProteccion && (
+              <Entrada
+                icon="lock"
+                texto="Quitar la contraseña…"
+                onSelect={ejecutar(quitarProteccion)}
+              />
+            )}
             <Entrada
               icon="flatten"
               texto="Fijar las anotaciones en la página…"

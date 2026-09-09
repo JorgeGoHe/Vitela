@@ -48,6 +48,8 @@ import {
   exportText,
   flattenPdf,
   getMetadata,
+  removeEncryption,
+  TODO_PERMITIDO,
   getOutline,
   setMetadata,
   setOutline,
@@ -83,7 +85,9 @@ import PanelComentarios from "./components/PanelComentarios";
 import DialogoExtraer from "./components/DialogoExtraer";
 import DialogoPropiedades from "./components/DialogoPropiedades";
 import DialogoContrasena from "./components/DialogoContrasena";
-import DialogoProteger from "./components/DialogoProteger";
+import DialogoProteger, {
+  type ProtegerDraft,
+} from "./components/DialogoProteger";
 import DialogoConfirmar from "./components/DialogoConfirmar";
 import DialogoExportar from "./components/DialogoExportar";
 import DialogoComprimir from "./components/DialogoComprimir";
@@ -208,10 +212,10 @@ function App() {
     path: string;
     password: string;
   } | null>(null);
-  const [protectDraft, setProtectDraft] = useState<{
-    user: string;
-    owner: string;
-  } | null>(null);
+  const [protectDraft, setProtectDraft] = useState<ProtegerDraft | null>(null);
+  // el documento de trabajo va cifrado: la barra lo dice y se puede quitar
+  const [protegido, setProtegido] = useState(false);
+  const [quitarProtAsk, setQuitarProtAsk] = useState(false);
   const [flattenAsk, setFlattenAsk] = useState(false);
   // enlace externo pendiente de confirmar (los URI del PDF no son de fiar)
   const [linkAsk, setLinkAsk] = useState<string | null>(null);
@@ -281,6 +285,7 @@ function App() {
       busqueda.limpiar(true);
       setModified(false);
       setPwdDraft(null);
+      setProtegido(info.had_password);
       setHadPassword(info.had_password);
       setDocPassword(info.had_password ? (password ?? null) : null);
       if (info.had_password) {
@@ -478,6 +483,7 @@ function App() {
     setModified(false);
     setHadPassword(false);
     setDocPassword(null);
+    setProtegido(false);
     setMode("select");
     setPageIndex(0);
     setOutlineState([]);
@@ -1148,8 +1154,46 @@ function App() {
     }
   }
 
+  /** Los permisos solo se restringen si hay contraseña de permisos: sin
+   *  ella el fichero no puede sostener ninguna restricción. */
+  function permisosDe(d: ProtegerDraft) {
+    return d.owner.trim()
+      ? { imprimir: d.imprimir, copiar: d.copiar, editar: d.editar }
+      : TODO_PERMITIDO;
+  }
+
+  /** Protege el documento abierto: viaja con ⌘S y ⌘Z lo devuelve. */
   async function applyProtect() {
     if (!workPath || !protectDraft || !protectDraft.user) return;
+    const d = protectDraft;
+    try {
+      await encryptPdf({
+        workPath,
+        destPath: null,
+        userPassword: d.user,
+        ownerPassword: d.owner || null,
+        permisos: permisosDe(d),
+      });
+      setProtectDraft(null);
+      setProtegido(true);
+      // la copia de trabajo ya va cifrada: guardarla la escribe cifrada
+      setHadPassword(false);
+      setDocPassword(null);
+      afterMutation(pageCount);
+      setNotice(
+        "Protegido. La contraseña se pedirá la próxima vez que se abra",
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  /** Segunda opción del mismo diálogo: una copia protegida aparte. */
+  async function applyProtectCopy() {
+    // se valida antes de abrir el diálogo del sistema: nadie elige carpeta
+    // para descubrir después que faltaba la contraseña
+    if (!workPath || !protectDraft || !protectDraft.user) return;
+    const d = protectDraft;
     const dest = await save({
       filters: [{ name: "PDF", extensions: ["pdf"] }],
       defaultPath: (originalPath ?? "documento.pdf").replace(
@@ -1163,11 +1207,27 @@ function App() {
       await encryptPdf({
         workPath,
         destPath: dest,
-        userPassword: protectDraft.user,
-        ownerPassword: protectDraft.owner || null,
+        userPassword: d.user,
+        ownerPassword: d.owner || null,
+        permisos: permisosDe(d),
       });
       setProtectDraft(null);
       setNotice(`Copia protegida guardada en ${dest}`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function applyQuitarProteccion() {
+    if (!workPath) return;
+    try {
+      await removeEncryption(workPath);
+      setQuitarProtAsk(false);
+      setProtegido(false);
+      setHadPassword(false);
+      setDocPassword(null);
+      afterMutation(pageCount);
+      setNotice("Contraseña quitada: el fichero se abre sin pedir nada");
     } catch (e) {
       setError(String(e));
     }
@@ -1624,6 +1684,15 @@ function App() {
               {modified ? " •" : ""}
             </span>
           )}
+          {protegido && (
+            <span
+              className="candado"
+              title="Protegido con contraseña: se pedirá al abrirlo"
+              aria-label="Documento protegido con contraseña"
+            >
+              <Icon name="lock" size={13} />
+            </span>
+          )}
           {ocupado && <span className="status dato">trabajando…</span>}
         </div>
 
@@ -1723,7 +1792,15 @@ function App() {
                 askRemoveMarginal={askRemoveMarginal}
                 openProperties={openProperties}
                 signPdf={signPdf}
-                abrirProteger={() => setProtectDraft({ user: "", owner: "" })}
+                abrirProteger={() =>
+                  setProtectDraft({
+                    user: "",
+                    owner: "",
+                    ...TODO_PERMITIDO,
+                  })
+                }
+                puedeQuitarProteccion={protegido}
+                quitarProteccion={() => setQuitarProtAsk(true)}
                 abrirAplanar={() => setFlattenAsk(true)}
                 redactar={() => {
                   selectMode("select");
@@ -1832,7 +1909,23 @@ function App() {
           valor={protectDraft}
           onChange={setProtectDraft}
           onConfirm={applyProtect}
+          onCopia={applyProtectCopy}
           onClose={() => setProtectDraft(null)}
+        />
+      )}
+      {quitarProtAsk && (
+        <DialogoConfirmar
+          titulo="Quitar la contraseña"
+          cuerpo={
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              El documento dejará de estar cifrado: cualquiera podrá abrir el
+              fichero y hacer con él lo que quiera.
+            </p>
+          }
+          textoConfirmar="Quitar la contraseña"
+          peligro
+          onConfirm={applyQuitarProteccion}
+          onClose={() => setQuitarProtAsk(false)}
         />
       )}
       {marginalAsk && (

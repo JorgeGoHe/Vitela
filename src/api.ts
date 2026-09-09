@@ -364,14 +364,37 @@ export function getLinks(
   return invoke("get_links", { path, pageIndex });
 }
 
-/** Protege con contraseña (AES-256) escribiendo una copia en destPath. */
+/** Qué deja hacer el fichero protegido; los tres van a `true` salvo que se
+ *  restrinjan con contraseña de permisos. */
+export type Permisos = { imprimir: boolean; copiar: boolean; editar: boolean };
+
+export const TODO_PERMITIDO: Permisos = {
+  imprimir: true,
+  copiar: true,
+  editar: true,
+};
+
+/** Protege con contraseña (AES-256). Sin `destPath` cifra la copia de
+ *  trabajo, así que el documento en pantalla queda protegido y ⌘Z lo
+ *  devuelve; con destino escribe una copia y deja el original como está. */
 export function encryptPdf(args: {
   workPath: string;
-  destPath: string;
+  destPath?: string | null;
   userPassword: string;
   ownerPassword?: string | null;
+  permisos?: Permisos;
 }): Promise<void> {
-  return invoke("encrypt_pdf", { ownerPassword: null, ...args });
+  return invoke("encrypt_pdf", {
+    destPath: null,
+    ownerPassword: null,
+    permisos: TODO_PERMITIDO,
+    ...args,
+  });
+}
+
+/** Quita el cifrado del documento de trabajo. */
+export function removeEncryption(workPath: string): Promise<void> {
+  return invoke("remove_encryption", { workPath });
 }
 
 /** Aplana anotaciones y formularios a contenido fijo. */

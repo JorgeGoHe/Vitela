@@ -1755,6 +1755,13 @@ textarea {
   font-size: 11px;
 }
 
+/* el documento va cifrado: se dice, no se insinúa */
+.candado {
+  display: inline-flex;
+  align-items: center;
+  color: var(--fg-muted);
+}
+
 
 /* ===== mesa de trabajo: marcas de esquina y estado vacío ===== */
 
