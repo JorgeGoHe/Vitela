@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { cargaColores, guardaColor, type ShapeKind } from "../tipos";
-import type { ToolProps } from "../components/Pagina";
+import type { Alineacion } from "../api";
+import type { MarcaRellenar, ToolProps } from "../components/Pagina";
 
 export const STAMP_PRESETS = [
   "APROBADO",
@@ -38,15 +39,28 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
   );
   const [freeTextSize, setFreeTextSize] = useState(12);
   const [freeTextBorder, setFreeTextBorder] = useState(true);
+  // color y alineación del texto del documento (modo Editar). `null` es
+  // «como esté»: editar un párrafo no debe recolorearlo sin querer
+  const [textColor, setTextColor] = useState<string | null>(null);
+  const [textAlign, setTextAlign] = useState<Alineacion | null>(null);
+  // marca de «rellenar y firmar» armada, si la hay
+  const [fillMark, setFillMark] = useState<MarcaRellenar | null>(null);
+  const [fillColor, setFillColor] = useState(
+    () => cargaColores().marca ?? "#1d1c18",
+  );
 
   function cambiaColorAccion(
-    accion: "dibujo" | "forma" | "sello" | "cuadro",
+    accion: "dibujo" | "forma" | "sello" | "cuadro" | "texto" | "marca",
     color: string,
   ) {
-    guardaColor(accion, color);
+    // el texto admite «como esté» (cadena vacía), que no se recuerda: es un
+    // no-color, no una preferencia
+    if (color) guardaColor(accion, color);
     if (accion === "dibujo") setDrawColor(color);
     else if (accion === "forma") setShapeColor(color);
     else if (accion === "cuadro") setFreeTextColor(color);
+    else if (accion === "texto") setTextColor(color || null);
+    else if (accion === "marca") setFillColor(color);
     else setStampColor(color);
   }
 
@@ -85,6 +99,10 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
       freeTextColor,
       freeTextSize,
       freeTextBorder,
+      textColor,
+      textAlign,
+      fillMark,
+      fillColor,
       activeSig,
     }),
     [
@@ -103,6 +121,10 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
       freeTextColor,
       freeTextSize,
       freeTextBorder,
+      textColor,
+      textAlign,
+      fillMark,
+      fillColor,
       activeSig,
     ],
   );
@@ -128,6 +150,13 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
     setFreeTextSize,
     freeTextBorder,
     setFreeTextBorder,
+    textColor,
+    setTextColor,
+    textAlign,
+    setTextAlign,
+    fillMark,
+    setFillMark,
+    fillColor,
     cambiaColorAccion,
     tool,
   };

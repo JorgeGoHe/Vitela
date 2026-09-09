@@ -49,6 +49,80 @@ export function getTextBlocks(
   return invoke("get_text_blocks", { path, pageIndex });
 }
 
+/** Alineación del texto: se resuelve colocando el origen del objeto, no con
+ *  un operador del PDF. */
+export type Alineacion = "izq" | "centro" | "der";
+
+/** Texto nuevo en un punto de la página (contenido, no anotación). */
+export function addTextBlock(args: {
+  workPath: string;
+  pageIndex: number;
+  x: number;
+  y: number;
+  text: string;
+  fontSize: number;
+  font?: string | null;
+  color?: Rgba | null;
+  align?: Alineacion | null;
+}): Promise<void> {
+  return invoke("add_text_block", {
+    font: null,
+    color: null,
+    align: null,
+    ...args,
+  });
+}
+
+/** Reescribe un bloque del content stream. Sin `color` ni `align` se queda
+ *  con los que tuviera: editar no debe recolorear sin querer. */
+export function editTextBlock(args: {
+  workPath: string;
+  pageIndex: number;
+  objectIndex: number;
+  newText: string;
+  color?: Rgba | null;
+  align?: Alineacion | null;
+}): Promise<void> {
+  return invoke("edit_text_block", { color: null, align: null, ...args });
+}
+
+/** Mueve, redimensiona, gira y voltea un objeto de imagen. `rotate` va en
+ *  múltiplos de 90 y se suma a lo que ya tuviera. */
+export function transformImage(args: {
+  workPath: string;
+  pageIndex: number;
+  objectIndex: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  rotate?: number | null;
+  flipH?: boolean | null;
+  flipV?: boolean | null;
+}): Promise<void> {
+  return invoke("transform_image", {
+    rotate: null,
+    flipH: null,
+    flipV: null,
+    ...args,
+  });
+}
+
+/** Trae la imagen al frente o la manda al fondo del content stream. */
+export function reorderImage(
+  workPath: string,
+  pageIndex: number,
+  imageIndex: number,
+  alFrente: boolean,
+): Promise<void> {
+  return invoke("reorder_image", {
+    workPath,
+    pageIndex,
+    imageIndex,
+    alFrente,
+  });
+}
+
 /** Una sustitución: en qué bloque, qué sale y qué entra. */
 export type Reemplazo = {
   page_index: number;

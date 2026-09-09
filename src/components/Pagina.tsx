@@ -12,6 +12,7 @@ import {
   type Rect,
   type ShapeKind,
 } from "../tipos";
+import type { Alineacion } from "../api";
 import { pagePoint, rectAPagina, resizeRect } from "../hooks/pagina/geometria";
 import { useEnlaces } from "../hooks/pagina/useEnlaces";
 import { useFormularios } from "../hooks/pagina/useFormularios";
@@ -27,6 +28,10 @@ import CapaFormularios from "./pagina/CapaFormularios";
 import CapaImagenes from "./pagina/CapaImagenes";
 import CapaTexto from "./pagina/CapaTexto";
 import TarjetaSeleccion from "./pagina/TarjetaSeleccion";
+
+/** Las marcas de «rellenar y firmar»: con las que se rellena un formulario
+ *  que no es interactivo. «texto» no es una marca, lleva al cuadro de texto. */
+export type MarcaRellenar = "check" | "cross" | "dot" | "line";
 
 /** Estado global de herramienta que necesitan los handlers de la página. */
 export type ToolProps = {
@@ -49,6 +54,12 @@ export type ToolProps = {
   freeTextColor: string;
   freeTextSize: number;
   freeTextBorder: boolean;
+  /** Color del texto del documento; `null` = el que ya tenga. */
+  textColor: string | null;
+  textAlign: Alineacion | null;
+  /** Marca de «rellenar y firmar» armada, si la hay. */
+  fillMark: MarcaRellenar | null;
+  fillColor: string;
   activeSig: { png: string; ratio: number } | null;
 };
 
@@ -184,6 +195,7 @@ function Pagina({
     pageVersion,
     mode,
     size,
+    tool,
     onPageMutated,
     onError,
   });
@@ -373,6 +385,12 @@ function Pagina({
       return;
     }
     if (mode === "firmar") {
+      // con una marca armada, el clic la coloca (Acrobat: se ponen con un
+      // clic y se mueven después); si no, manda la firma manuscrita
+      if (tool.fillMark) {
+        anotaciones.colocaMarca(tool.fillMark, x, y);
+        return;
+      }
       if (!activeSig) return;
       areas.sigDragRef.current = { x, y };
       areas.setSigDraft(null);

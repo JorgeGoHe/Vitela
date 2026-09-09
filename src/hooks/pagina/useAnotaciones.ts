@@ -28,7 +28,7 @@ import {
   type Rect,
   type ResizeHandle,
 } from "../../tipos";
-import type { ToolProps } from "../../components/Pagina";
+import type { MarcaRellenar, ToolProps } from "../../components/Pagina";
 import type { SeleccionTexto } from "./useSeleccionTexto";
 import { pagePoint, puntoAPagina, puntoEnCapa, rectAPagina } from "./geometria";
 
@@ -269,6 +269,74 @@ export function useAnotaciones(ctx: {
       });
       setFreeTextDraft(null);
       onModeChange("select");
+      onAnnotated(index);
+    } catch (e) {
+      onError(e);
+    }
+  }
+
+  /** Marca de «rellenar y firmar»: ✓, ✗, ● o una línea, colocada con un
+   *  clic donde el usuario señala. Son las de siempre —Ink y formas—, así
+   *  que se mueven después con el mismo arrastre que un sello y ⌘Z las
+   *  quita. Es el flujo con el que se rellena un formulario escaneado. */
+  async function colocaMarca(kind: MarcaRellenar, x: number, y: number) {
+    if (!workPath) return;
+    const color = hexToRgba(tool.fillColor);
+    // tamaños fijos, los de Acrobat: se colocan y se ajustan arrastrando
+    const r = 7;
+    const punto = (px: number, py: number) => {
+      const p = puntoAPagina({ x: px, y: py }, size);
+      return [p.x, p.y] as [number, number];
+    };
+    try {
+      if (kind === "dot" || kind === "line") {
+        const p1 = puntoAPagina(
+          kind === "dot" ? { x: x - r, y: y - r } : { x: x - 30, y },
+          size,
+        );
+        const p2 = puntoAPagina(
+          kind === "dot" ? { x: x + r, y: y + r } : { x: x + 30, y },
+          size,
+        );
+        await addShape({
+          workPath,
+          pageIndex: index,
+          kind: kind === "dot" ? "ellipse" : "line",
+          x1: p1.x,
+          y1: p1.y,
+          x2: p2.x,
+          y2: p2.y,
+          stroke: color,
+          fill: kind === "dot" ? color : null,
+          strokeWidth: 2,
+          author: autorComentarios(),
+        });
+      } else {
+        // el aspa se traza de una sola pasada volviendo sobre su diagonal:
+        // dos trazos serían dos pasos de deshacer
+        const puntos =
+          kind === "check"
+            ? [
+                punto(x - r, y),
+                punto(x - r / 3, y + r),
+                punto(x + r, y - r),
+              ]
+            : [
+                punto(x - r, y - r),
+                punto(x + r, y + r),
+                punto(x, y),
+                punto(x + r, y - r),
+                punto(x - r, y + r),
+              ];
+        await invoke("add_stroke", {
+          workPath,
+          pageIndex: index,
+          points: puntos,
+          color,
+          width: 2,
+          author: autorComentarios(),
+        });
+      }
       onAnnotated(index);
     } catch (e) {
       onError(e);
@@ -523,6 +591,7 @@ export function useAnotaciones(ctx: {
     markupSelection,
     commitShape,
     placeStamp,
+    colocaMarca,
     submitNote,
     finishStroke,
     deleteAnnotation,

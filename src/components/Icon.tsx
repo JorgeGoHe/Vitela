@@ -10,6 +10,10 @@ const ICONS: Record<string, string[]> = {
   chevLeft: ["m15 18-6-6 6-6"],
   chevRight: ["m9 18 6-6-6-6"],
   minus: ["M5 12h14"],
+  check: ["m4 13 5 5L20 6"],
+  dot: ["M12 5a7 7 0 1 0 0 14 7 7 0 0 0 0-14Z"],
+  flipH: ["M12 3v18", "M8 7 3 12l5 5V7Z", "m16 7 5 5-5 5V7Z"],
+  flipV: ["M3 12h18", "M7 8l5-5 5 5H7Z", "m7 16 5 5 5-5H7Z"],
   plus: ["M12 5v14", "M5 12h14"],
   search: ["M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16Z", "m21 21-4.35-4.35"],
   select: ["m3 3 7.07 16.97 2.51-7.39 7.39-2.51L3 3Z"],
@@ -126,12 +130,23 @@ const ICONS: Record<string, string[]> = {
   ],
 };
 
-export default function Icon({ name, size = 16 }: { name: string; size?: number }) {
+/** `espejo` voltea el icono en horizontal: es lo que distingue «girar a la
+ *  izquierda» de «girar a la derecha» sin dibujar un segundo trazado. */
+export default function Icon({
+  name,
+  size = 16,
+  espejo = false,
+}: {
+  name: string;
+  size?: number;
+  espejo?: boolean;
+}) {
   return (
     <svg
       width={size}
       height={size}
       viewBox="0 0 24 24"
+      style={espejo ? { transform: "scaleX(-1)" } : undefined}
       fill="none"
       stroke="currentColor"
       strokeWidth={1.8}

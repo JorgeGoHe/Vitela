@@ -463,6 +463,13 @@ function App() {
   });
   const herramienta = useHerramienta(activeSig);
   const tool = herramienta.tool;
+  const setFillMark = herramienta.setFillMark;
+
+  // la marca de rellenar es del modo Firma: al salir se desarma sola, como
+  // el resto de borradores
+  useEffect(() => {
+    if (mode !== "firmar") setFillMark(null);
+  }, [mode, setFillMark]);
 
   /** Abre un PDF en la copia de trabajo; devuelve su `work_path` o null
    *  si no se ha podido abrir. */
@@ -3027,7 +3034,9 @@ function App() {
         />
       )}
 
-      {mode === "firmar" && !activeSig && !drawingSig && (
+      {/* con una marca armada el usuario está rellenando, no eligiendo firma:
+          la biblioteca taparía la página */}
+      {mode === "firmar" && !activeSig && !drawingSig && !herramienta.fillMark && (
         <PanelFirmas
           firmas={firmas}
           onPick={pickSignature}
@@ -3406,6 +3415,12 @@ function App() {
           Arrastra para marcar el área que quieres conservar · Esc cancela
         </div>
       )}
+      {mode === "firmar" && !activeSig && herramienta.fillMark && (
+        <div className="sign-hint">
+          Haz clic donde quieras la marca · se mueve y se borra después como
+          cualquier comentario · Esc sale
+        </div>
+      )}
       {mode === "firmar" && activeSig && (
         <div className="sign-hint">
           Haz clic donde quieras la firma (o arrastra para elegir el tamaño) ·
@@ -3440,9 +3455,16 @@ function App() {
         setFreeTextSize={herramienta.setFreeTextSize}
         freeTextBorder={herramienta.freeTextBorder}
         setFreeTextBorder={herramienta.setFreeTextBorder}
+        textColor={herramienta.textColor}
+        textAlign={herramienta.textAlign}
+        setTextAlign={herramienta.setTextAlign}
+        fillMark={herramienta.fillMark}
+        setFillMark={herramienta.setFillMark}
+        fillColor={herramienta.fillColor}
         cambiaColorAccion={herramienta.cambiaColorAccion}
         anadirTexto={() => setPedirTextoNuevo((n) => n + 1)}
         insertarImagen={() => setPedirImagen((n) => n + 1)}
+        escribirEncima={() => setMode("freetext")}
         marcasRedact={marcasRedact.length}
         aplicarRedaccion={pedirAplicarRedaccion}
         quitarMarcasRedact={quitarTodasLasMarcas}

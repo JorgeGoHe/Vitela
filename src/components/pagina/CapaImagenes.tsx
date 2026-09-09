@@ -25,6 +25,8 @@ export default function CapaImagenes({
     setImagePopover,
     imgPatch,
     replaceImagePick,
+    orientaImagen,
+    ordenaImagen,
     deleteImage,
     startImgAction,
   } = imagenes;
@@ -90,6 +92,58 @@ export default function CapaImagenes({
           }}
           onMouseDown={(e) => e.stopPropagation()}
         >
+          {/* girar, voltear y ordenar: lo que Acrobat pone en la barra de
+              propiedades de una imagen seleccionada, sin submenús */}
+          <div className="card-row">
+            <button
+              className="btn btn-icon"
+              title="Girar 90° a la izquierda"
+              aria-label="Girar 90° a la izquierda"
+              onClick={() => orientaImagen(imagePopover, { rotate: -90 })}
+            >
+              <Icon name="rotate" size={13} espejo />
+            </button>
+            <button
+              className="btn btn-icon"
+              title="Girar 90° a la derecha"
+              aria-label="Girar 90° a la derecha"
+              onClick={() => orientaImagen(imagePopover, { rotate: 90 })}
+            >
+              <Icon name="rotate" size={13} />
+            </button>
+            <button
+              className="btn btn-icon"
+              title="Voltear en horizontal"
+              aria-label="Voltear en horizontal"
+              onClick={() => orientaImagen(imagePopover, { flipH: true })}
+            >
+              <Icon name="flipH" size={13} />
+            </button>
+            <button
+              className="btn btn-icon"
+              title="Voltear en vertical"
+              aria-label="Voltear en vertical"
+              onClick={() => orientaImagen(imagePopover, { flipV: true })}
+            >
+              <Icon name="flipV" size={13} />
+            </button>
+            <button
+              className="btn btn-icon"
+              title="Traer al frente"
+              aria-label="Traer al frente"
+              onClick={() => ordenaImagen(imagePopover, true)}
+            >
+              <Icon name="up" size={13} />
+            </button>
+            <button
+              className="btn btn-icon"
+              title="Enviar al fondo"
+              aria-label="Enviar al fondo"
+              onClick={() => ordenaImagen(imagePopover, false)}
+            >
+              <Icon name="down" size={13} />
+            </button>
+          </div>
           <div className="card-actions">
             <button
               className="btn"

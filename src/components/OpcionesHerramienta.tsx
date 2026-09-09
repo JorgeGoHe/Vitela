@@ -5,10 +5,28 @@ import {
   type Mode,
   type ShapeKind,
 } from "../tipos";
+import type { Alineacion } from "../api";
+import type { MarcaRellenar } from "./Pagina";
 import { STAMP_PRESETS } from "../hooks/useHerramienta";
 import Icon from "./Icon";
 
 const SHAPE_COLORS = ANNOT_COLORS;
+
+/** Los tres botones de alineación, con la etiqueta que entiende el backend. */
+const ALINEACIONES: [Alineacion, string, string][] = [
+  ["izq", "Izq.", "Alinear a la izquierda"],
+  ["centro", "Centro", "Centrar"],
+  ["der", "Der.", "Alinear a la derecha"],
+];
+
+/** La fila de «rellenar y firmar»: se colocan con un clic y se mueven
+ *  después, como cualquier otra marca. */
+const MARCAS: [MarcaRellenar, string, string][] = [
+  ["check", "check", "Marca de verificación"],
+  ["cross", "close", "Aspa"],
+  ["dot", "dot", "Punto"],
+  ["line", "minus", "Línea"],
+];
 
 /** Fila contextual de opciones de la herramienta activa (trazo, formas y
  *  sello); no pinta nada en el resto de modos. */
@@ -37,9 +55,16 @@ export default function OpcionesHerramienta({
   setFreeTextSize,
   freeTextBorder,
   setFreeTextBorder,
+  textColor,
+  textAlign,
+  setTextAlign,
+  fillMark,
+  setFillMark,
+  fillColor,
   cambiaColorAccion,
   anadirTexto,
   insertarImagen,
+  escribirEncima,
   marcasRedact,
   aplicarRedaccion,
   quitarMarcasRedact,
@@ -69,14 +94,23 @@ export default function OpcionesHerramienta({
   setFreeTextSize: (s: number) => void;
   freeTextBorder: boolean;
   setFreeTextBorder: (b: boolean) => void;
+  /** Color del texto del documento; `null` = el que ya tenga. */
+  textColor: string | null;
+  textAlign: Alineacion | null;
+  setTextAlign: (a: Alineacion | null) => void;
+  fillMark: MarcaRellenar | null;
+  setFillMark: (m: MarcaRellenar | null) => void;
+  fillColor: string;
   cambiaColorAccion: (
-    accion: "dibujo" | "forma" | "sello" | "cuadro",
+    accion: "dibujo" | "forma" | "sello" | "cuadro" | "texto" | "marca",
     color: string,
   ) => void;
   /** Abre el borrador de texto nuevo en la página actual (modo Editar). */
   anadirTexto: () => void;
   /** Pide una imagen y la coloca en la página actual (modo Imagen). */
   insertarImagen: () => void;
+  /** Pasa al cuadro de texto: es el «Texto» de rellenar y firmar. */
+  escribirEncima: () => void;
   /** Zonas marcadas para censurar en todo el documento. */
   marcasRedact: number;
   aplicarRedaccion: () => void;
@@ -135,9 +169,91 @@ export default function OpcionesHerramienta({
             <Icon name="textedit" size={14} />
             Añadir texto
           </button>
+          {/* color y alineación, donde el usuario ya está mirando cuando los
+              necesita. «Como está» es el defecto: editar un párrafo no debe
+              recolorearlo sin querer */}
+          <div className="swatches" role="group" aria-label="Color del texto">
+            <button
+              className={`swatch swatch-auto${textColor === null ? " on" : ""}`}
+              title="El color que ya tenga"
+              aria-label="El color que ya tenga"
+              aria-pressed={textColor === null}
+              onClick={() => cambiaColorAccion("texto", "")}
+            >
+              A
+            </button>
+            {SHAPE_COLORS.map((c) => (
+              <button
+                key={c}
+                className={`swatch${textColor === c ? " on" : ""}`}
+                style={{ background: c }}
+                title={NOMBRE_COLOR[c] ?? c}
+                aria-label={NOMBRE_COLOR[c] ?? c}
+                aria-pressed={textColor === c}
+                onClick={() => cambiaColorAccion("texto", c)}
+              />
+            ))}
+          </div>
+          <div className="segmented">
+            {ALINEACIONES.map(([a, corta, etiqueta]) => (
+              <button
+                key={a}
+                className={`btn${textAlign === a ? " on" : ""}`}
+                title={etiqueta}
+                aria-label={etiqueta}
+                aria-pressed={textAlign === a}
+                onClick={() => setTextAlign(textAlign === a ? null : a)}
+              >
+                {corta}
+              </button>
+            ))}
+          </div>
           <span className="opt-hint">
             Clic en un texto del PDF para corregirlo · clic en una zona libre
             para escribir uno nuevo
+          </span>
+        </div>
+      )}
+      {mode === "firmar" && (
+        <div className="tool-options">
+          <span>Rellenar</span>
+          {MARCAS.map(([m, icono, etiqueta]) => (
+            <button
+              key={m}
+              className={`btn btn-icon${fillMark === m ? " on" : ""}`}
+              title={`${etiqueta} · clic en la página para colocarla`}
+              aria-label={etiqueta}
+              aria-pressed={fillMark === m}
+              onClick={() => setFillMark(fillMark === m ? null : m)}
+            >
+              <Icon name={icono} size={14} />
+            </button>
+          ))}
+          <button
+            className="btn"
+            title="Escribir encima del documento (cuadro de texto)"
+            onClick={escribirEncima}
+          >
+            <Icon name="textbox" size={14} />
+            Texto
+          </button>
+          <div className="swatches" role="group" aria-label="Color de la marca">
+            {SHAPE_COLORS.map((c) => (
+              <button
+                key={c}
+                className={`swatch${fillColor === c ? " on" : ""}`}
+                style={{ background: c }}
+                title={NOMBRE_COLOR[c] ?? c}
+                aria-label={NOMBRE_COLOR[c] ?? c}
+                aria-pressed={fillColor === c}
+                onClick={() => cambiaColorAccion("marca", c)}
+              />
+            ))}
+          </div>
+          <span className="opt-hint">
+            {fillMark
+              ? "Clic en la página para colocarla · se mueve después"
+              : "Marcas para rellenar un formulario que no es interactivo"}
           </span>
         </div>
       )}

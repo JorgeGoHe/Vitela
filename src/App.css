@@ -2041,6 +2041,17 @@ textarea {
   cursor: default;
 }
 
+/* «como esté»: el no-color del texto del documento, que es el defecto */
+.swatch-auto {
+  background: transparent;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .opt-hint {
   font-family: var(--font-mono);
   color: var(--fg-muted);

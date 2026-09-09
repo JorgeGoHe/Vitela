@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { invoke } from "../../ipc";
-import type { Mode, PageSize, TextBlock } from "../../tipos";
+import { addTextBlock, editTextBlock } from "../../api";
+import { hexToRgba, type Mode, type PageSize, type TextBlock } from "../../tipos";
+import type { ToolProps } from "../../components/Pagina";
 import { puntoAPagina, puntoAVista } from "./geometria";
 
 /**
@@ -15,6 +17,7 @@ export function useTexto(ctx: {
   pageVersion: number;
   mode: Mode;
   size: PageSize;
+  tool: ToolProps;
   onPageMutated: (page: number) => void;
   onError: (e: unknown) => void;
 }) {
@@ -26,9 +29,16 @@ export function useTexto(ctx: {
     pageVersion,
     mode,
     size,
+    tool,
     onPageMutated,
     onError,
   } = ctx;
+  // color y alineación de la fila contextual; `null` es «como esté», que es
+  // lo que hace falta para que editar un párrafo no lo recoloree sin querer
+  const formato = {
+    color: tool.textColor ? hexToRgba(tool.textColor) : null,
+    align: tool.textAlign,
+  };
   const [textBlocks, setTextBlocks] = useState<TextBlock[]>([]);
   const [blockDraft, setBlockDraft] = useState<{
     block: TextBlock;
@@ -84,7 +94,7 @@ export function useTexto(ctx: {
     }
     const p = puntoAPagina({ x: newTextDraft.x, y: newTextDraft.y }, size);
     try {
-      await invoke("add_text_block", {
+      await addTextBlock({
         workPath,
         pageIndex: index,
         x: p.x,
@@ -92,6 +102,7 @@ export function useTexto(ctx: {
         text: newTextDraft.text,
         fontSize: newTextDraft.size,
         font: newTextDraft.font === "auto" ? null : newTextDraft.font,
+        ...formato,
       });
       setNewTextDraft(null);
       onPageMutated(index);
@@ -103,11 +114,12 @@ export function useTexto(ctx: {
   async function submitBlockDraft() {
     if (!workPath || !blockDraft) return;
     try {
-      await invoke("edit_text_block", {
+      await editTextBlock({
         workPath,
         pageIndex: index,
         objectIndex: blockDraft.block.object_index,
         newText: blockDraft.text,
+        ...formato,
       });
       setBlockDraft(null);
       onPageMutated(index);

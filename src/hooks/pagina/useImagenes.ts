@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
 import { invoke } from "../../ipc";
 import { open } from "../../dialogos";
-import { getImageData } from "../../api";
+import { getImageData, reorderImage, transformImage } from "../../api";
 import type { ImageInfo, ImgAction, Mode, PageSize, Rect, ResizeHandle } from "../../tipos";
 import { puntoAPagina, puntoEnCapa, rectAPagina, rectAVista } from "./geometria";
 
@@ -228,6 +228,45 @@ export function useImagenes(ctx: {
     }
   }
 
+  /** Girar y voltear la imagen seleccionada, sobre la matriz del objeto.
+   *  Los bounds se mandan tal cual: lo que cambia es la orientación. */
+  async function orientaImagen(
+    im: ImageInfo,
+    cambio: { rotate?: number; flipH?: boolean; flipV?: boolean },
+  ) {
+    if (!workPath) return;
+    const pr = rectAPagina(im, size);
+    try {
+      await transformImage({
+        workPath,
+        pageIndex: index,
+        objectIndex: im.object_index,
+        x: pr.x,
+        y: pr.y,
+        w: pr.w,
+        h: pr.h,
+        ...cambio,
+      });
+      setImagePopover(null);
+      onPageMutated(index);
+    } catch (e) {
+      onError(e);
+    }
+  }
+
+  /** Traer al frente o enviar al fondo, que es lo que hace falta cuando una
+   *  imagen tapa a otra. */
+  async function ordenaImagen(im: ImageInfo, alFrente: boolean) {
+    if (!workPath) return;
+    try {
+      await reorderImage(workPath, index, im.object_index, alFrente);
+      setImagePopover(null);
+      onPageMutated(index);
+    } catch (e) {
+      onError(e);
+    }
+  }
+
   async function deleteImage(im: ImageInfo) {
     if (!workPath) return;
     try {
@@ -284,6 +323,8 @@ export function useImagenes(ctx: {
     commitImage,
     sampleAround,
     replaceImagePick,
+    orientaImagen,
+    ordenaImagen,
     deleteImage,
     startImgAction,
   };
