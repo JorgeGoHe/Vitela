@@ -136,6 +136,7 @@ import {
   type PageSize,
   type Preferencias,
   type Zoom,
+  ES_MAC,
 } from "./tipos";
 import Icon from "./components/Icon";
 import Busqueda from "./components/Busqueda";
@@ -248,6 +249,20 @@ function resumenFirmas(firmas: FirmaInfo[]): string {
 
 /** Punto de lectura al que vuelve ⌥←: página, scroll y zoom. */
 type Vista = { page: number; scrollTop: number; zoom: Zoom };
+
+/** Reenvía una pulsación ⌘/Ctrl+tecla a los listeners globales (entradas
+ *  del menú nativo cuyo atajo captura el sistema antes que el webview). */
+function reenviaTecla(key: string) {
+  window.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key,
+      metaKey: ES_MAC,
+      ctrlKey: !ES_MAC,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+}
 
 function App() {
   const [originalPath, setOriginalPath] = useState<string | null>(null);
@@ -2895,6 +2910,11 @@ function App() {
     "exportar-imagenes": () => setExportOpen(true),
     "exportar-texto": exportPlainText,
     "exportar-word": () => setWordAsk(true),
+    // Copiar y Seleccionar todo: el menú nativo se queda con ⌘C y ⌘A antes
+    // que el webview y la selección del visor no es del DOM, así que la
+    // entrada del menú reenvía la tecla a los listeners de siempre
+    copiar: () => reenviaTecla("c"),
+    "seleccionar-todo": () => reenviaTecla("a"),
     comprimir: () => setCompressOpen(true),
     /* Ayuda */
     atajos: () => setAtajosAbiertos(true),

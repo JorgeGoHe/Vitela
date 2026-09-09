@@ -92,23 +92,6 @@ fn e(
     })
 }
 
-/// Igual que [`e`], pero con la mitad de la UI todavía en otra rama (ver
-/// `Entrada::pendiente_ui`).
-fn e_sin_ui(
-    id: &'static str,
-    etiqueta: &'static str,
-    atajo: Option<&'static str>,
-    necesita_documento: bool,
-) -> Elemento {
-    match e(id, etiqueta, atajo, necesita_documento) {
-        Elemento::Accion(entrada) => Elemento::Accion(Entrada {
-            pendiente_ui: true,
-            ..entrada
-        }),
-        otro => otro,
-    }
-}
-
 fn sep() -> Elemento {
     Elemento::Separador
 }
@@ -152,8 +135,8 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 // la app empaquetada no copiaban nada. Ahora emiten
                 // `menu-accion` como el resto y la UI hace lo mismo que su
                 // atajo.
-                e_sin_ui("copiar", "Copiar", Some("CmdOrCtrl+C"), true),
-                e_sin_ui("seleccionar-todo", "Seleccionar todo", Some("CmdOrCtrl+A"), true),
+                e("copiar", "Copiar", Some("CmdOrCtrl+C"), true),
+                e("seleccionar-todo", "Seleccionar todo", Some("CmdOrCtrl+A"), true),
                 sep(),
                 e("buscar", "Buscar…", Some("CmdOrCtrl+F"), true),
                 e("buscar-siguiente", "Coincidencia siguiente", Some("CmdOrCtrl+G"), true),
@@ -217,7 +200,7 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 sep(),
                 e("exportar-imagenes", "Exportar como imágenes…", None, true),
                 e("exportar-texto", "Exportar texto…", None, true),
-                e_sin_ui("exportar-word", "Exportar a Word (.docx)…", None, true),
+                e("exportar-word", "Exportar a Word (.docx)…", None, true),
                 e("comprimir", "Reducir tamaño…", None, true),
             ],
         },
