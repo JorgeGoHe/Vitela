@@ -383,6 +383,28 @@ mod tests {
         cuenta(&work);
         crate::paginas2::add_blank_page(work.clone(), 1).unwrap();
         cuenta(&work);
+        // foto con ruido para que compress_pdf tenga algo que reducir de
+        // verdad (si no reduce devuelve Err y no deja paso)
+        let mut foto = image::RgbaImage::new(1600, 1200);
+        for (x, y, p) in foto.enumerate_pixels_mut() {
+            let h = x
+                .wrapping_mul(2654435761)
+                .wrapping_add(y.wrapping_mul(2246822519))
+                .rotate_left(13)
+                .wrapping_mul(2654435761);
+            *p = image::Rgba([h as u8, (h >> 8) as u8, (h >> 16) as u8, 255]);
+        }
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(foto)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .unwrap();
+        let b64 = {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(buf.into_inner())
+        };
+        crate::firmas_visuales::stamp_signature(work.clone(), 0, b64, 50.0, 300.0, 300.0, 225.0)
+            .unwrap();
+        cuenta(&work);
         seguridad::flatten_pdf(work.clone()).unwrap();
         cuenta(&work);
         crate::exportar::compress_pdf(work.clone(), 60, 72).unwrap();

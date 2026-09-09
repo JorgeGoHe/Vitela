@@ -1,7 +1,7 @@
 //! Salida: exportar páginas como imágenes, extraer el texto plano y
 //! comprimir el documento recomprimiendo sus imágenes.
 
-use crate::{on_pdfium_thread, pdfium, save_and_close, with_doc};
+use crate::{invalidate_doc_cache, on_pdfium_thread, pdfium, with_doc};
 use crate::historial::mutacion;
 use pdfium_render::prelude::*;
 use serde::Serialize;
@@ -82,8 +82,11 @@ pub struct CompressReport {
 
 /// Comprime el documento recomprimiendo sus imágenes a JPEG con la calidad
 /// dada y submuestreando las que superen `max_dpi` respecto a su tamaño en
-/// página. Se saltan las imágenes con transparencia (JPEG la perdería) y las
-/// rotadas (la reinserción solo maneja imágenes sin rotar).
+/// página. Se saltan las imágenes con transparencia (JPEG la perdería), las
+/// rotadas (la reinserción solo maneja imágenes sin rotar) y las que no
+/// ganarían nada (ni hay que bajarles la resolución ni el JPEG sale menor
+/// que su flujo original). Si aun así el resultado no es más pequeño,
+/// devuelve Err y deja el fichero intacto.
 #[tauri::command(async)]
 pub fn compress_pdf(work_path: String, quality: u8, max_dpi: u16) -> Result<CompressReport, String> {
     let quality = quality.clamp(30, 95);
@@ -130,13 +133,20 @@ pub fn compress_pdf(work_path: String, quality: u8, max_dpi: u16) -> Result<Comp
                     let Ok(raw) = img_obj.get_raw_image() else {
                         continue;
                     };
+                    // tamaño del flujo tal cual está guardado, sin aplicar
+                    // filtros: con qué hay que comparar el JPEG nuevo
+                    let original = img_obj
+                        .get_raw_image_data()
+                        .map(|d| d.len())
+                        .unwrap_or(0);
                     let rgba = raw.to_rgba8();
                     if rgba.pixels().any(|px| px[3] < 250) {
                         continue; // transparencia: JPEG la perdería
                     }
                     let dpi_efectivo = rgba.width() as f32 / (w_pts / 72.0);
                     let objetivo_px = (w_pts / 72.0 * max_dpi).round().max(16.0) as u32;
-                    let img = if dpi_efectivo > max_dpi && objetivo_px < rgba.width() {
+                    let submuestrear = dpi_efectivo > max_dpi && objetivo_px < rgba.width();
+                    let img = if submuestrear {
                         image::DynamicImage::ImageRgba8(rgba).resize(
                             objetivo_px,
                             u32::MAX,
@@ -158,6 +168,12 @@ pub fn compress_pdf(work_path: String, quality: u8, max_dpi: u16) -> Result<Comp
                         continue;
                     }
                     drop(enc);
+                    // solo merece la pena si hay que bajar la resolución o si
+                    // el JPEG ocupa menos que el flujo original (un PNG de
+                    // color plano, por ejemplo, ya está mejor comprimido)
+                    if !submuestrear && (original == 0 || jpeg.len() >= original) {
+                        continue;
+                    }
                     candidatas.push(Candidata {
                         index: i,
                         left: b.left().value,
@@ -192,10 +208,24 @@ pub fn compress_pdf(work_path: String, quality: u8, max_dpi: u16) -> Result<Comp
                 page.regenerate_content().map_err(|e| e.to_string())?;
             }
         }
-        save_and_close(doc, &work_path)?;
-        let despues = std::fs::metadata(&work_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        const SIN_REDUCIR: &str =
+            "No se ha podido reducir el tamaño: las imágenes ya están comprimidas";
+        if recomprimidas == 0 {
+            return Err(SIN_REDUCIR.into());
+        }
+        // guardar aparte y quedarse con el resultado solo si es más pequeño;
+        // si no, la copia de trabajo se queda como estaba (y la mutación
+        // fallida retira su instantánea)
+        let tmp = format!("{work_path}.comprimido.tmp");
+        doc.save_to_file(&tmp).map_err(|e| e.to_string())?;
+        drop(doc);
+        let despues = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
+        if despues == 0 || despues >= antes {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(SIN_REDUCIR.into());
+        }
+        invalidate_doc_cache();
+        std::fs::rename(&tmp, &work_path).map_err(|e| e.to_string())?;
         Ok(CompressReport {
             antes,
             despues,
@@ -243,6 +273,39 @@ mod tests {
         let contenido = std::fs::read_to_string(&txt).unwrap();
         assert!(contenido.contains("Uno") && contenido.contains("Dos"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn comprimir_no_agranda_un_png_plano() {
+        let dir = std::env::temp_dir();
+        let pdf = dir.join("exportar-compress-plano-test.pdf");
+        crea_pdf(&["Con dibujo plano"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+        // PNG 200x120 de color plano: Flate lo deja en unos cientos de bytes,
+        // el JPEG equivalente ocupa más; a 72 dpi tampoco hay que reducir
+        let mut img = image::RgbaImage::new(200, 120);
+        for (_, _, p) in img.enumerate_pixels_mut() {
+            *p = image::Rgba([30, 80, 200, 255]);
+        }
+        let mut buf = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .unwrap();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(buf.into_inner());
+        crate::firmas_visuales::stamp_signature(work.clone(), 0, b64, 50.0, 200.0, 200.0, 120.0)
+            .expect("insertar imagen");
+
+        let antes = std::fs::read(&pdf).expect("leer antes");
+        let e = match compress_pdf(work.clone(), 75, 150) {
+            Err(e) => e,
+            Ok(r) => panic!("no debería reducir: {} → {}", r.antes, r.despues),
+        };
+        assert!(
+            e.starts_with("No se ha podido reducir"),
+            "mensaje inesperado: {e}"
+        );
+        let despues = std::fs::read(&pdf).expect("leer después");
+        assert!(antes == despues, "el fichero cambió al no poder reducir");
     }
 
     #[test]
