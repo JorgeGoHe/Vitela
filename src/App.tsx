@@ -70,6 +70,14 @@ function App() {
   const [originalPath, setOriginalPath] = useState<string | null>(null);
   const [workPath, setWorkPath] = useState<string | null>(null);
   const [modified, setModified] = useState(false);
+  // el original iba cifrado: la copia de trabajo está en claro y al guardar
+  // hay que decidir si se vuelve a proteger (la contraseña solo vive en memoria)
+  const [hadPassword, setHadPassword] = useState(false);
+  const [docPassword, setDocPassword] = useState<string | null>(null);
+  const [saveAsk, setSaveAsk] = useState<{
+    dest: string;
+    resolve: (ok: boolean) => void;
+  } | null>(null);
   const [docVersion, setDocVersion] = useState(0);
   const [pageCount, setPageCount] = useState(0);
   const [pageSizes, setPageSizes] = useState<PageSize[]>([]);
@@ -171,13 +179,21 @@ function App() {
       busqueda.limpiar(true);
       setModified(false);
       const anterior = workPath;
-      const info = await invoke<{ page_count: number; work_path: string }>(
-        "open_pdf",
-        { path, password: password ?? null },
-      );
+      const info = await invoke<{
+        page_count: number;
+        work_path: string;
+        had_password: boolean;
+      }>("open_pdf", { path, password: password ?? null });
       // la copia de trabajo del documento anterior ya no sirve: borrarla
       if (anterior) invoke("close_document", { workPath: anterior }).catch(() => {});
       setPwdDraft(null);
+      setHadPassword(info.had_password);
+      setDocPassword(info.had_password ? (password ?? null) : null);
+      if (info.had_password) {
+        setNotice(
+          "Documento protegido: al guardar puedes mantener la contraseña o quitarla",
+        );
+      }
       setOriginalPath(path);
       setWorkPath(info.work_path);
       setPageCount(info.page_count);
@@ -208,6 +224,8 @@ function App() {
     setPageVersions([]);
     busqueda.limpiar(true);
     setModified(false);
+    setHadPassword(false);
+    setDocPassword(null);
     setMode("select");
     setPageIndex(0);
     setOutlineState([]);
@@ -808,31 +826,62 @@ function App() {
     }
   }
 
-  async function saveFile() {
-    if (!workPath || !originalPath) return;
+  /** Escribe la copia de trabajo en `dest`, cifrada con la contraseña
+   *  original si `mantener`. Devuelve si se llegó a guardar. */
+  async function escribirEn(dest: string, mantener: boolean): Promise<boolean> {
+    if (!workPath) return false;
     try {
-      await invoke("save_pdf", { workPath, destPath: originalPath });
+      if (mantener && docPassword !== null) {
+        await encryptPdf({
+          workPath,
+          destPath: dest,
+          userPassword: docPassword,
+          ownerPassword: null,
+        });
+      } else {
+        await invoke("save_pdf", { workPath, destPath: dest });
+        // a partir de aquí el fichero de `dest` va en claro
+        setHadPassword(false);
+        setDocPassword(null);
+      }
+      setOriginalPath(dest);
       setModified(false);
+      return true;
     } catch (e) {
       setError(String(e));
+      return false;
     }
   }
 
-  async function saveFileAs() {
-    if (!workPath) return;
+  /** Guarda en `dest`; si el original iba cifrado, pregunta antes si se
+   *  mantiene la contraseña. */
+  function guardarEn(dest: string): Promise<boolean> {
+    if (!hadPassword || docPassword === null) return escribirEn(dest, false);
+    return new Promise((resolve) => setSaveAsk({ dest, resolve }));
+  }
+
+  function resolverSaveAsk(mantener: boolean | null) {
+    if (!saveAsk) return;
+    const { dest, resolve } = saveAsk;
+    setSaveAsk(null);
+    if (mantener === null) resolve(false);
+    else escribirEn(dest, mantener).then(resolve);
+  }
+
+  async function saveFile(): Promise<boolean> {
+    if (!workPath || !originalPath) return false;
+    return guardarEn(originalPath);
+  }
+
+  async function saveFileAs(): Promise<boolean> {
+    if (!workPath) return false;
     const dest = await save({
       filters: [{ name: "PDF", extensions: ["pdf"] }],
       defaultPath: originalPath ?? "documento.pdf",
       title: "Guardar como",
     });
-    if (!dest) return;
-    try {
-      await invoke("save_pdf", { workPath, destPath: dest });
-      setOriginalPath(dest);
-      setModified(false);
-    } catch (e) {
-      setError(String(e));
-    }
+    if (!dest) return false;
+    return guardarEn(dest);
   }
 
   async function pickSignedDest(): Promise<string | null> {
@@ -1225,6 +1274,24 @@ function App() {
           textoConfirmar="Aplanar"
           onConfirm={applyFlatten}
           onClose={() => setFlattenAsk(false)}
+        />
+      )}
+      {saveAsk && (
+        <DialogoConfirmar
+          titulo="Guardar un documento protegido"
+          cuerpo={
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              Este documento se abrió con contraseña. Puedes guardarlo
+              manteniéndola o quitarla y dejarlo en claro.
+            </p>
+          }
+          textoConfirmar="Guardar sin contraseña"
+          secundario={{
+            texto: "Mantener contraseña",
+            onClick: () => resolverSaveAsk(true),
+          }}
+          onConfirm={() => resolverSaveAsk(false)}
+          onClose={() => resolverSaveAsk(null)}
         />
       )}
       {linkAsk && (

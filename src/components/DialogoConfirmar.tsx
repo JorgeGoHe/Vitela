@@ -1,12 +1,14 @@
 import type { ReactNode } from "react";
 
 /** Modal genérico de confirmación: título, cuerpo libre y botón de acción
- *  (rojo si la acción es destructiva). */
+ *  (rojo si la acción es destructiva). `secundario` añade una tercera
+ *  opción entre Cancelar y la acción principal. */
 export default function DialogoConfirmar({
   titulo,
   cuerpo,
   textoConfirmar,
   peligro = false,
+  secundario,
   onConfirm,
   onClose,
 }: {
@@ -14,6 +16,7 @@ export default function DialogoConfirmar({
   cuerpo: ReactNode;
   textoConfirmar: string;
   peligro?: boolean;
+  secundario?: { texto: string; onClick: () => void };
   onConfirm: () => void;
   onClose: () => void;
 }) {
@@ -32,6 +35,11 @@ export default function DialogoConfirmar({
           <button className="btn" onClick={onClose}>
             Cancelar
           </button>
+          {secundario && (
+            <button className="btn" onClick={secundario.onClick}>
+              {secundario.texto}
+            </button>
+          )}
           <button
             className={peligro ? "btn btn-danger" : "btn btn-primary"}
             onClick={onConfirm}
