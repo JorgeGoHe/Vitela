@@ -509,6 +509,41 @@ compila los instaladores a mano o al etiquetar `v*`.
   - `fixtures/firmado_ecdsa.pdf`: un PDF firmado con ECDSA P-256 de
     verdad, para probar la verificación de un documento que llega de fuera
     sin fabricar el CMS en el test.
+- **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
+  - Comandos del ciclo 5 (los envoltorios, en `src/api.ts`, con el mismo
+    nombre en camelCase):
+    - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la
+      UI** («Quitar todas las marcas»): era el comando escrito y sin usar que
+      cazó el test cruzado.
+    - `search_pdf(context)` **no tiene defecto en la UI**: `searchPdf` exige
+      el parámetro y `useBusqueda` lo pide solo con el cajón de resultados
+      desplegado. `SearchMatch` declara `block_index`, que es el que usa
+      `useReemplazo` para agrupar: la UI ya no recalcula el bloque con
+      `get_text_blocks` (dos criterios distintos para el mismo contrato).
+    - `export_docx(work_path, dest_path, page_indices?)` →
+      `DocxReport { parrafos, imagenes, perdido }`. La UI da **antes** de
+      pedir destino el aviso de que la maquetación no sale, con el patrón de
+      `DialogoCombinar`.
+    - `move_text_block` / `resize_text_block` (mover y estirar un bloque de
+      texto, con los ocho tiradores de siempre) y `crop_image` (recortar,
+      desde el popover de la imagen). `TextBlock` trae `color`, que es lo que
+      pinta el swatch «A» de la fila contextual; `add_text_block` y
+      `edit_text_block` aceptan `line_height` y `char_spacing`.
+    - `reply_annotation` (hilos `/IRT`), `set_annotation_state` (los cuatro
+      estados de revisión de Acrobat, con el nombre que se escribe en el PDF:
+      `Accepted`, `Rejected`, `Cancelled`, `Completed`) y
+      `export_comments(path, dest, "txt")`. `AnnotationInfo` gana
+      `in_reply_to` (para anidar) y `state`.
+    - `list_attachments` / `save_attachment` / `add_attachment` y
+      `list_layers` / `set_layer_visible`. **No hay borrar adjuntos**: no
+      está en el contrato y la UI no lo ofrece.
+    - `verify_signatures` devuelve `confianza` (`raiz_conocida`,
+      `autofirmado`, `desconocida`): una línea más en la tarjeta del panel,
+      que **no cambia el color de la banda** —la confianza es del
+      certificado, la validez es del documento—.
+    - `autosave_state` pide **tres** argumentos: sin `modified` todas las
+      llamadas se rechazaban con un 400 y la recuperación no tenía nada que
+      recuperar (AC-047). El fallo ya no se traga en silencio.
 - **Menú nativo** (`menu.rs`): Archivo, Editar, Ver, Documento, Ventana y
   Ayuda en la barra del sistema, espejo del menú «Acciones» de la app —
   con esto la búsqueda de menús de macOS encuentra por fin «Marca de
@@ -556,6 +591,7 @@ compila los instaladores a mano o al etiquetar `v*`.
     `propiedades`, `exportar-imagenes`, `exportar-texto`, `exportar-word`,
     `comprimir`.
   - Ayuda: `atajos` (⌘/) (y Acerca de, nativa).
+  - Ayuda: `atajos` (y Acerca de, nativa).
 - **Protección** (`seguridad.rs`): `encrypt_pdf` compone la máscara `/P`
   del spec a partir de `permisos { imprimir, copiar, editar }` (los tres a
   `true` por defecto): bit 3 imprimir —y con él el 12, alta calidad—, bit 5
@@ -576,7 +612,9 @@ compila los instaladores a mano o al etiquetar `v*`.
   La UI lo cuenta tal cual: el candado de la barra sale solo cuando el
   fichero en disco está cifrado de verdad (se abrió con contraseña, o ya se
   ha guardado con la protección puesta) y mientras tanto lleva la etiqueta
-  «se protegerá al guardar».
+  «se protegerá al guardar». La pregunta de «¿mantengo la contraseña?» se
+  hace **una vez por documento** y se recuerda: guardar es un gesto que se
+  repite, y una pregunta que sale en cada ⌘S se contesta sin leerla.
 - **Aplanar y casillas**: el marco de un widget lo pinta el entorno de
   formularios de PDFium desde `/MK` y `/BS` al vuelo, así que
   `FPDFPage_Flatten` no tiene nada que copiar y la casilla sin marcar
@@ -590,7 +628,12 @@ compila los instaladores a mano o al etiquetar `v*`.
   llama la UI tras abrir con éxito (un PDF protegido cuya contraseña se
   cancela no se ha abierto). La UI **revalida la lista cada vez que la
   enseña** (al desplegar el menú y al volver al estado vacío) y, si abrir
-  un reciente falla porque ya no está, lo quita con `remove_recent`. Una lista corrupta o un `DIR_DATOS` sin
+  un reciente falla porque ya no está, lo quita con `remove_recent`. En el
+  estado vacío cada fila trae además su ficha (`pdf_info`, que no abre el
+  documento ni pide contraseña): «12 páginas · 1,4 MB» y el candado si va
+  cifrado, para no descubrirlo al pinchar. «Abrir reciente…» del menú
+  nativo sin documento lleva el foco a esa lista, o dice que no hay
+  ninguna. Una lista corrupta o un `DIR_DATOS` sin
   fijar devuelven vacío, nunca un error.
 - **Eventos hacia la UI** (los dos con `listen`; en el navegador de QA no
   existen, los shims de `ipc.ts` los dejan en nada):
@@ -621,6 +664,14 @@ compila los instaladores a mano o al etiquetar `v*`.
     resuelve los cambios sin guardar y llama a `confirmar_cierre`, que
     destruye la ventana de verdad. **Si la UI no escucha este evento la
     app no se puede cerrar.**
+- **Errores de transporte** (`src/ipc.ts`): cuando la llamada **no llega**
+  al backend —el motor caído, el puente de QA parado, el IPC sin
+  responder—, la banda enseñaba «TypeError: Failed to fetch». `invoke`
+  distingue ahora «no ha llegado» de «el backend ha dicho que no»: nuestros
+  comandos rechazan con un `String` (el mensaje que ya escribe
+  `mensaje_llano` en Rust) y el transporte con un `Error`, que se traduce a
+  «No se ha podido hablar con el motor de PDF. Cierra y vuelve a abrir
+  Vitela; el documento sigue en la copia de trabajo».
 - **Errores para humanos**: `mensaje_llano` (lib.rs) traduce la jerga de
   las librerías (el `Display` de `PdfiumError` es el `Debug` de Rust; los
   de E/S acaban en `(os error 2)`) a una frase con la causa y la salida,
@@ -652,9 +703,13 @@ compila los instaladores a mano o al etiquetar `v*`.
   `RangoPaginas`, `Dialogo*`; `useReemplazo` lleva «Reemplazar» y
   «Reemplazar todo», y se crea en `App` **después** de `afterMutation`,
   que es un `useCallback` y no se iza). El
-  sidebar tiene cuatro pestañas —Páginas, Marcadores, Comentarios y, solo
-  en documentos firmados, Firmas— y por eso mide 200 px y las deja
-  envolver a dos líneas. `PanelFirmas` (sin «Doc») es otra cosa: la
+  sidebar tiene tres pestañas fijas —Páginas, Marcadores y Comentarios— y
+  tres que solo salen cuando el documento tiene qué enseñar: Firmas,
+  Adjuntos (`list_attachments`) y Capas (`list_layers`). Por eso mide
+  200 px y las deja envolver a dos líneas: seis fijas no cabrían. **Apagar
+  una capa cambia el fichero** (PDFium respeta el `/OFF` del documento al
+  renderizar y pdfium-render 0.8 no expone el contexto OCG), así que deja
+  su paso de deshacer y el panel lo dice en una línea bajo la lista. `PanelFirmas` (sin «Doc») es otra cosa: la
   biblioteca de firmas manuscritas del modo Firma.
   **Todo modal usa `useModal`** (Esc cierra —también con el foco fuera del
   diálogo, gracias a un listener en fase de captura—, Enter confirma, foco
@@ -667,7 +722,10 @@ compila los instaladores a mano o al etiquetar `v*`.
   hook en `src/hooks/pagina/` (`useSeleccionTexto`, `useEnlaces`,
   `useTexto`, `useFormularios`, `useImagenes`, `useAnotaciones`,
   `useAreas`, más `geometria.ts` puro) y su capa en
-  `src/components/pagina/`. Los hooks se llaman `use…` (lo exige
+  `src/components/pagina/`. Las tarjetas flotantes se colocan con
+  `cardTop` (`geometria.ts`), que las **vuelca hacia arriba cuando debajo
+  no caben**: en la última línea de la página había que hacer scroll para
+  llegar al botón de guardar. Los hooks se llaman `use…` (lo exige
   rules-of-hooks) aunque el resto del identificador vaya en español.
 - **Dos sistemas de coordenadas** (`hooks/pagina/geometria.ts`): el
   **espacio de la vista** —el del render, el ratón y todos los overlays— y
@@ -696,7 +754,14 @@ compila los instaladores a mano o al etiquetar `v*`.
   scroll se quedaba donde estaba y nadie recalculaba el contador.
 - **Imprimir**: el diálogo propio rasteriza el rango pedido y monta las
   páginas en `.print-pages`, que va **fuera de `.app`** con
-  `createPortal(…, document.body)`. El `@media print` esconde `.app`
+  `createPortal(…, document.body)`. El `@media print` lleva
+  `@page { size: auto; margin: 0 }` y `.print-pages img { max-height:
+  100vh; object-fit: contain }`: sin eso, una A4 a ancho completo no cabía
+  en el área imprimible, se empujaba a la hoja siguiente y salía **un folio
+  en blanco por página** (AC-048). El diálogo cuenta cuántas hojas van a
+  salir y dice dentro —sin cerrarse— cuándo el rango o el filtro de
+  pares/impares no dejan ninguna (`paginasImprimibles`, en `tipos.ts`,
+  compartida con `App`). El `@media print` esconde `.app`
   entera, y un ancestro en `display:none` saca todo su subárbol de la caja
   de renderizado: dentro, la hoja salía en blanco. Esc cancela la
   preparación (`printCancelRef`) y los blob URLs se liberan en la limpieza
@@ -721,8 +786,9 @@ compila los instaladores a mano o al etiquetar `v*`.
   render: overlays, exportación y fichero se quedan como están.
 - **Historial de vistas** (⌥← / ⌥→): dos pilas en `App` con
   `{ page, scrollTop, zoom }`. `saltarA(page)` es el `gotoPage` de los
-  saltos largos —enlaces, marcadores, comentarios del panel, firmas y
-  coincidencias de búsqueda— y apila de dónde se viene; los dos botones
+  saltos largos —enlaces, marcadores, comentarios del panel, firmas,
+  coincidencias de búsqueda, **el clic en una miniatura y «Ir a la
+  página»**— y apila de dónde se viene; los dos botones
   solo salen en la píldora cuando hay algo que recorrer. **El punto de
   partida se lee FUERA del updater de `setState`**: React los ejecuta al
   procesar la cola, ya después del `scrollIntoView` síncrono de `gotoPage`,
@@ -753,7 +819,7 @@ compila los instaladores a mano o al etiquetar `v*`.
   que coincidan con `estructura()` en los dos sentidos. **Un id nuevo se
   añade en `estructura()` y en `accionesMenu`, o el test lo canta.**
   «Ayuda ▸ Atajos de teclado» abre `DialogoAtajos`, la única pantalla donde
-  están escritos los veinticinco atajos.
+  están escritos todos los atajos, ella incluida (⌘/ y F1).
 - **Preferencias y memoria de la UI** en `localStorage` (`src/tipos.ts`):
   colores por acción, opciones de búsqueda (`Aa` y `|ab|`), «Resaltar
   campos» de los formularios (encendido por defecto), la presentación de
@@ -786,8 +852,16 @@ compila los instaladores a mano o al etiquetar `v*`.
   coincidencia con su frase de contexto, y debajo «Reemplazar con…» con sus
   dos botones. ↑/↓ recorren la lista sin salir del campo y los saltos pasan
   por `saltarA`, así que ⌥← sigue funcionando. Reemplazar es una sola
-  mutación y el aviso dice cuántos bloques han cambiado y cuántos se han
-  saltado por la fuente: nunca canta un éxito redondo.
+  mutación y **los recuentos van en coincidencias, no en bloques** (que es
+  vocabulario del motor y un número que el usuario no puede reconocer):
+  «12 coincidencias reemplazadas · 3 en un texto que no se puede
+  reescribir». Lo que no se va a poder hacer se dice **antes**, bajo el
+  campo, con las coincidencias ya situadas por su `block_index`. La pasada
+  de `context` solo se pide con el cajón abierto; si se abre sobre una
+  búsqueda hecha sin él, se repite una vez en silencio. Y **tras cualquier
+  mutación la búsqueda se rehace en vez de tirarse** (`trasMutacion`): un
+  ⌘Z detrás de reemplazar dejaba la lista vacía con el término escrito.
+  ⌘G sin coincidencias repite la última búsqueda, como Acrobat.
 - **Marca de agua y encabezados**: los dos diálogos comparten el bloque
   `RangoPaginas` («todas» / «1-3, 8», con `indicesDeRango` en `tipos.ts`) y
   enseñan **vista previa en vivo** sobre la miniatura que el panel lateral
@@ -802,16 +876,35 @@ compila los instaladores a mano o al etiquetar `v*`.
   (`estadoDeFirma` → `nivel`: `ok`, `mal`, `duda`): «no se ha podido
   comprobar» es neutro, con el gris lápiz, y nunca rojo — una firma ECDSA o
   con SHA-512 salía acusando de manipulación un documento intacto. La banda
-  toma el peor estado de todas y nombra a quien firmó esa.
+  toma el peor estado de todas y nombra a quien firmó esa (bajando **solo
+  la primera letra** de la frase: `toLowerCase()` entero se llevaba por
+  delante la mayúscula de «Vitela»). **Una firma válida con una revisión
+  detrás es `duda`, no `mal`**: rojo solo cuando el digest no cuadra —una
+  actualización incremental es lo normal en un PDF firmado que sigue vivo,
+  y en Acrobat tampoco es roja—. La tarjeta del panel añade quién responde
+  por el certificado (`confianza`) y no llama «caducado» a uno cuyo periodo
+  de validez empezaba después de la firma.
+- **Comentarios con hilo y estado** (`PanelComentarios`): las respuestas
+  (`in_reply_to`) se pintan indentadas bajo su comentario y comparten con
+  él el mismo `roving tabindex`, así que ↑/↓, Enter y Supr valen para las
+  dos. El estado de revisión es un desplegable **en el propio comentario**
+  —no un panel de propiedades aparte— y se guarda como lo guarda Acrobat.
+  Hay un tercer filtro por estado junto a los de tipo y autor, y Esc los
+  quita los tres. «Exportar comentarios…» (`export_comments`) está en el
+  bloque Salida, con «Word (.docx)…».
 - **Recuperación tras un cierre inesperado**: la UI apunta la sesión
   (`autosaveState`) diez segundos después del último cambio y la borra al
   guardar y al cerrar. Al arrancar, `recoverSession` y, si hay algo, una
-  banda de una línea con «Recuperar» y «Descartar». Recuperar abre la copia
+  banda de una línea con «Recuperar» y «No guardar». Recuperar abre la copia
   de trabajo pero **conserva el fichero original** (`openPath(path, pwd,
-  original)`), para que ⌘S no escriba en el temporal.
+  original)`), para que ⌘S no escriba en el temporal. «No guardar» se llama
+  igual que en el diálogo de cierre y **confirma**: es el único borrado
+  irreversible de trabajo del usuario que hay en la app. El apunte manda
+  `modified`, sin el cual no se apuntaba nada (AC-047).
 - **Fila contextual** (`OpcionesHerramienta`): además de trazo, formas,
   sello y cuadro, el modo Editar lleva color («A» = el que ya tenga, que es
-  el defecto) y alineación, y el modo Firma la fila de marcas de rellenar
+  el defecto, y que se pinta del color real del bloque señalado —`TextBlock`
+  trae `color`—), alineación, interlineado y espaciado entre caracteres, y el modo Firma la fila de marcas de rellenar
   (✓, ✗, ●, línea y «Texto», que lleva al cuadro de texto). La fila va fija
   bajo la barra y **baja lo que ocupen las bandas** (`--bandas` en el
   `.app`): antes se pintaba encima de la de firmas.
@@ -826,6 +919,9 @@ compila los instaladores a mano o al etiquetar `v*`.
   ⌘L pantalla completa (Esc sale) · ⇧⌘L modo nocturno del documento ·
   ⌥← y ⌥→ historial de vistas · ⌘/ atajos de teclado ·
   ⇧⌘N ir a la página · ←/→ página anterior y siguiente · Esc quita las
+  ⌥← y ⌥→ historial de vistas ·
+  ⇧⌘N ir a la página · ⌘/ y F1 abren los atajos (la pantalla se lista a sí
+  misma) · ←/→ página anterior y siguiente · Esc quita las
   coincidencias de búsqueda y, si no hay, sale de la herramienta · Supr
   borra la anotación seleccionada · ⌘A todo el texto de la página (dentro
   del panel de páginas, seleccionarlas todas) · ⌘C copiar la selección.
@@ -891,8 +987,13 @@ compila los instaladores a mano o al etiquetar `v*`.
    pierde los no-ASCII) → Helvetica. "Arial" se mapea a Helvetica (la
    builtin de PDFium se identifica como «Arial» o, desde chromium/8000,
    «Chrom Sans OTF»; `normaliza_familia` devuelve siempre las estándar).
+   Un bloque se **coloca y se estira** con los mismos ocho tiradores que
+   los sellos y las imágenes (`move_text_block`, `resize_text_block`;
+   estirar escala el cuerpo de la fuente, no deforma los glifos), y la fila
+   contextual lleva interlineado y espaciado (`TL` y `Tc`).
    Imágenes: insertar, mover,
-   redimensionar, reemplazar y borrar objetos de imagen
+   redimensionar, girar, voltear, ordenar, recortar (`crop_image`, desde el
+   popover), reemplazar y borrar objetos de imagen
 7. ✅ Firma digital: campo de firma (visible con `rect`, con su `/AP`:
    firma manuscrita, «Firmado por …», fecha y motivo) + ByteRange +
    PKCS#7 detached, y verificación al abrir (`verify_signatures`, con
