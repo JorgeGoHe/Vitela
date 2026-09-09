@@ -189,12 +189,58 @@ fn ancho_estimado(text: &str, size: f32) -> f32 {
     text.chars().count() as f32 * size * 0.6
 }
 
-/// Marca de agua de texto en todas las páginas (diagonal ascendente u
-/// horizontal). `position` es una celda de un grid 3×3 ("nw".."se", `None` =
-/// centro). Va como contenido de página; para poder quitarla después el alpha
-/// se limita a 240 (así `remove_marginal_text` la reconoce por translucidez
-/// aunque no esté rotada).
+/// Opacidad por defecto de la marca de agua: la de Acrobat.
+const OPACIDAD_MARCA: f32 = 0.3;
+
+/// Las páginas sobre las que trabaja un marginal: las que se pidan o, sin
+/// lista, todas. Los índices fuera del documento se ignoran (la UI puede
+/// mandar un rango escrito a mano).
+fn paginas_pedidas(total: u16, pedidas: &Option<Vec<u16>>) -> Vec<u16> {
+    match pedidas {
+        Some(v) => {
+            let mut v: Vec<u16> = v.iter().copied().filter(|i| *i < total).collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        }
+        None => (0..total).collect(),
+    }
+}
+
+/// Dónde cae el centro del marginal dentro de la página, según la celda del
+/// grid 3×3 ("nw".."se", vacío = centro) y las semiextensiones del objeto ya
+/// girado, para que no se salga por ningún lado.
+fn centro_en_celda(pos: &str, page_w: f32, page_h: f32, hw: f32, hh: f32) -> (f32, f32) {
+    let (mx, my) = (page_w * 0.08, page_h * 0.08);
+    let tx = if pos.contains('w') {
+        (mx + hw).min(page_w / 2.0)
+    } else if pos.contains('e') {
+        (page_w - mx - hw).max(page_w / 2.0)
+    } else {
+        page_w / 2.0
+    };
+    let ty = if pos.contains('n') {
+        (page_h - my - hh).max(page_h / 2.0)
+    } else if pos.contains('s') {
+        (my + hh).min(page_h / 2.0)
+    } else {
+        page_h / 2.0
+    };
+    (tx, ty)
+}
+
+/// Marca de agua de texto **o de imagen**, en todas las páginas o solo en
+/// las que se pidan. `position` es una celda de un grid 3×3 ("nw".."se",
+/// `None` = centro), `rotation` los grados antihorarios (sin ella, 45° si
+/// `diagonal`, 0 si no) y `opacity` la transparencia (0,3 por defecto, la de
+/// Acrobat).
+///
+/// Va como contenido de página; para poder quitarla después el alpha del
+/// texto se limita a 240 (así `remove_marginal_text` la reconoce por
+/// translucidez aunque no esté rotada). La imagen se incrusta con su alfa ya
+/// multiplicado por la opacidad, que es lo que deja el `/SMask` puesto.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 pub fn add_watermark(
     work_path: String,
     text: String,
@@ -202,67 +248,112 @@ pub fn add_watermark(
     color: [u8; 4],
     diagonal: bool,
     position: Option<String>,
+    page_indices: Option<Vec<u16>>,
+    image_png: Option<String>,
+    opacity: Option<f32>,
+    rotation: Option<f32>,
 ) -> Result<(), String> {
     let text = text.trim().to_string();
-    if text.is_empty() {
+    let imagen = match image_png {
+        Some(b64) => {
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64.split(',').next_back().unwrap_or_default())
+                .map_err(|_| "La imagen de la marca de agua no se ha podido leer")?;
+            Some(
+                image::load_from_memory(&bytes)
+                    .map_err(|e| format!("La imagen de la marca de agua no vale: {e}"))?,
+            )
+        }
+        None => None,
+    };
+    if text.is_empty() && imagen.is_none() {
         return Err("La marca de agua está vacía".into());
     }
     let pos = position.unwrap_or_else(|| "c".into());
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
+    let opacidad = opacity.unwrap_or(OPACIDAD_MARCA).clamp(0.05, 1.0);
+    let giro = rotation.unwrap_or(if diagonal { 45.0 } else { 0.0 });
+    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
         let font = doc.fonts_mut().helvetica_bold();
         let size = font_size.clamp(12.0, 200.0);
-        let c = PdfColor::new(color[0], color[1], color[2], color[3].min(240));
-        for i in 0..doc.pages().len() {
+        let alpha = ((color[3] as f32) * opacidad).round().clamp(1.0, 240.0) as u8;
+        let c = PdfColor::new(color[0], color[1], color[2], alpha);
+        // la imagen lleva la opacidad en su propio alfa: así PDFium le
+        // escribe el /SMask y se ve translúcida en cualquier visor
+        let imagen = imagen.as_ref().map(|img| {
+            let mut rgba = img.to_rgba8();
+            for p in rgba.pixels_mut() {
+                p.0[3] = (p.0[3] as f32 * opacidad).round() as u8;
+            }
+            image::DynamicImage::ImageRgba8(rgba)
+        });
+        let (cos, sin) = {
+            let r = giro.to_radians();
+            (r.cos(), r.sin())
+        };
+        for i in paginas_pedidas(doc.pages().len(), &page_indices) {
             let mut page = doc.pages().get(i).map_err(|e| e.to_string())?;
             let page_w = page.width().value;
             let page_h = page.height().value;
-            let mut obj = PdfPageTextObject::new(&doc, &text, font, PdfPoints::new(size))
-                .map_err(|e| e.to_string())?;
-            obj.set_fill_color(c).map_err(|e| e.to_string())?;
-            let w = ancho_estimado(&text, size);
-            // centro del texto antes de transformar (baseline en el origen)
-            let (cx, cy) = (w / 2.0, size * 0.35);
-            let (cx2, cy2) = if diagonal {
-                obj.rotate_counter_clockwise_degrees(45.0)
+            // ancho y alto del objeto sin girar, y su centro
+            let (w, h, cx, cy) = match &imagen {
+                Some(img) => {
+                    let (iw, ih) = (img.width() as f32, img.height() as f32);
+                    let escala = ((page_w * 0.5) / iw).min((page_h * 0.5) / ih);
+                    let (w, h) = (iw * escala, ih * escala);
+                    (w, h, w / 2.0, h / 2.0)
+                }
+                None => {
+                    let w = ancho_estimado(&text, size);
+                    // el texto tiene la línea base en el origen
+                    (w, size, w / 2.0, size * 0.35)
+                }
+            };
+            // el centro, después del giro alrededor del origen
+            let (cx2, cy2) = (cx * cos - cy * sin, cx * sin + cy * cos);
+            let (hw, hh) = (
+                (w * cos.abs() + h * sin.abs()) / 2.0,
+                (w * sin.abs() + h * cos.abs()) / 2.0,
+            );
+            let (tx, ty) = centro_en_celda(&pos, page_w, page_h, hw, hh);
+            match &imagen {
+                Some(img) => {
+                    let mut obj = PdfPageImageObject::new_with_size(
+                        &doc,
+                        img,
+                        PdfPoints::new(w),
+                        PdfPoints::new(h),
+                    )
                     .map_err(|e| e.to_string())?;
-                let r = std::f32::consts::FRAC_1_SQRT_2;
-                (cx * r - cy * r, cx * r + cy * r)
-            } else {
-                (cx, cy)
-            };
-            // semiextensiones de la caja (rotada o no) para que las celdas
-            // laterales no saquen el texto de la página
-            let (hw, hh) = if diagonal {
-                let r = std::f32::consts::FRAC_1_SQRT_2;
-                let d = (w / 2.0 + size * 0.5) * r;
-                (d, d)
-            } else {
-                (w / 2.0, size * 0.5)
-            };
-            let (mx, my) = (page_w * 0.08, page_h * 0.08);
-            let tx = if pos.contains('w') {
-                (mx + hw).min(page_w / 2.0)
-            } else if pos.contains('e') {
-                (page_w - mx - hw).max(page_w / 2.0)
-            } else {
-                page_w / 2.0
-            };
-            let ty = if pos.contains('n') {
-                (page_h - my - hh).max(page_h / 2.0)
-            } else if pos.contains('s') {
-                (my + hh).min(page_h / 2.0)
-            } else {
-                page_h / 2.0
-            };
-            obj.translate(PdfPoints::new(tx - cx2), PdfPoints::new(ty - cy2))
-                .map_err(|e| e.to_string())?;
-            page.objects_mut()
-                .add_text_object(obj)
-                .map_err(|e| e.to_string())?;
+                    if giro != 0.0 {
+                        obj.rotate_counter_clockwise_degrees(giro)
+                            .map_err(|e| e.to_string())?;
+                    }
+                    obj.translate(PdfPoints::new(tx - cx2), PdfPoints::new(ty - cy2))
+                        .map_err(|e| e.to_string())?;
+                    page.objects_mut()
+                        .add_image_object(obj)
+                        .map_err(|e| e.to_string())?;
+                }
+                None => {
+                    let mut obj = PdfPageTextObject::new(&doc, &text, font, PdfPoints::new(size))
+                        .map_err(|e| e.to_string())?;
+                    obj.set_fill_color(c).map_err(|e| e.to_string())?;
+                    if giro != 0.0 {
+                        obj.rotate_counter_clockwise_degrees(giro)
+                            .map_err(|e| e.to_string())?;
+                    }
+                    obj.translate(PdfPoints::new(tx - cx2), PdfPoints::new(ty - cy2))
+                        .map_err(|e| e.to_string())?;
+                    page.objects_mut()
+                        .add_text_object(obj)
+                        .map_err(|e| e.to_string())?;
+                }
+            }
             page.regenerate_content().map_err(|e| e.to_string())?;
         }
         save_and_close(doc, &work_path)?;
@@ -284,6 +375,7 @@ pub fn add_header_footer(
     footer_center: Option<String>,
     footer_right: Option<String>,
     font_size: f32,
+    page_indices: Option<Vec<u16>>,
 ) -> Result<(), String> {
     let zonas = [
         &header_left,
@@ -299,7 +391,7 @@ pub fn add_header_footer(
     }) {
         return Err("No hay ningún texto que añadir".into());
     }
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
+    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -309,7 +401,9 @@ pub fn add_header_footer(
         let total = doc.pages().len();
         let fecha = chrono::Local::now().format("%d/%m/%Y").to_string();
         const MARGEN_X: f32 = 36.0;
-        for i in 0..total {
+        // el número de página y el total siguen siendo los del documento,
+        // aunque solo se escriban unas cuantas
+        for i in paginas_pedidas(total, &page_indices) {
             let mut page = doc.pages().get(i).map_err(|e| e.to_string())?;
             let page_w = page.width().value;
             let page_h = page.height().value;
@@ -440,8 +534,19 @@ mod tests {
         let pdf = std::env::temp_dir().join("paginas2-quitar-test.pdf");
         crea_pdf(&["Contenido uno", "Contenido dos"], &pdf);
         let work = pdf.to_string_lossy().to_string();
-        add_watermark(work.clone(), "BORRADOR".into(), 60.0, [200, 30, 30, 90], true, None)
-            .expect("marca");
+        add_watermark(
+            work.clone(),
+            "BORRADOR".into(),
+            60.0,
+            [200, 30, 30, 90],
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("marca");
         add_header_footer(
             work.clone(),
             None,
@@ -451,6 +556,7 @@ mod tests {
             Some("{n} / {total}".into()),
             None,
             10.0,
+            None,
         )
         .expect("pie");
         // dry run cuenta sin tocar
@@ -488,6 +594,10 @@ mod tests {
             [200, 30, 30, 255],
             false,
             Some("se".into()),
+            None,
+            None,
+            None,
+            None,
         )
         .expect("marca");
         add_header_footer(
@@ -499,6 +609,7 @@ mod tests {
             Some("{n}".into()),
             None,
             10.0,
+            None,
         )
         .expect("pie");
         assert!(textos(&work)[0].contains("CONFIDENCIAL"));
@@ -549,6 +660,10 @@ mod tests {
             [200, 30, 30, 90],
             true,
             None,
+            None,
+            None,
+            None,
+            None,
         )
         .expect("marca de agua");
         add_header_footer(
@@ -560,6 +675,7 @@ mod tests {
             Some("{n} / {total}".into()),
             None,
             10.0,
+            None,
         )
         .expect("pie");
         let t = textos(&work);
@@ -727,6 +843,128 @@ mod tests {
         for p in [&pdf, &a, &b] {
             std::fs::remove_file(p).ok();
         }
+    }
+
+    /// Poner una marca de agua o un pie solo en unas páginas es lo primero
+    /// que pide cualquiera («en todas menos la portada»), y hasta ahora era
+    /// todo o nada. Y sigue siendo un solo paso de deshacer.
+    #[test]
+    fn la_marca_de_agua_y_el_pie_solo_en_las_paginas_que_se_piden() {
+        let pdf = std::env::temp_dir().join("paginas2-marca-rango-test.pdf");
+        crea_pdf(&["Uno", "Dos", "Tres", "Cuatro"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+        let pasos = |w: &str| {
+            crate::historial::history_state(w.to_string())
+                .expect("historial")
+                .undo
+        };
+        let antes = pasos(&work);
+        add_watermark(
+            work.clone(),
+            "BORRADOR".into(),
+            60.0,
+            [200, 30, 30, 255],
+            true,
+            None,
+            Some(vec![0, 2]),
+            None,
+            None,
+            None,
+        )
+        .expect("marca en dos páginas");
+        assert_eq!(pasos(&work), antes + 1, "el lote entero es UN paso");
+        let t = textos(&work);
+        assert!(t[0].contains("BORRADOR"), "{:?}", t[0]);
+        assert!(!t[1].contains("BORRADOR"), "la 2 tenía que quedar limpia");
+        assert!(t[2].contains("BORRADOR"), "{:?}", t[2]);
+        assert!(!t[3].contains("BORRADOR"), "la 4 tenía que quedar limpia");
+
+        // el pie solo en la última, y el número sigue siendo el del
+        // documento (4 de 4), no el del rango
+        add_header_footer(
+            work.clone(),
+            None,
+            None,
+            None,
+            None,
+            Some("{n} / {total}".into()),
+            None,
+            10.0,
+            Some(vec![3]),
+        )
+        .expect("pie");
+        let t = textos(&work);
+        assert!(t[3].contains("4 / 4"), "{:?}", t[3]);
+        assert!(!t[0].contains("1 / 4"), "la portada no lleva pie");
+        std::fs::remove_file(&pdf).ok();
+    }
+
+    /// Marca de agua con imagen (el logo de la empresa), que es la otra
+    /// mitad del diálogo de Acrobat: se ve, es translúcida (su alfa lleva
+    /// la opacidad, así que PDFium le escribe el /SMask) y solo cae donde
+    /// se ha pedido.
+    #[test]
+    fn la_marca_de_agua_puede_ser_una_imagen_translucida() {
+        let pdf = std::env::temp_dir().join("paginas2-marca-imagen-test.pdf");
+        crea_pdf(&["Uno", "Dos"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+        // un cuadrado azul opaco como «logo»
+        let img = image::RgbaImage::from_pixel(120, 120, image::Rgba([20, 40, 200, 255]));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .expect("png");
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(buf.into_inner());
+
+        let tinta_antes = tinta_en_el_centro(&work, 0);
+        add_watermark(
+            work.clone(),
+            String::new(),
+            0.0,
+            [0, 0, 0, 255],
+            false,
+            None,
+            Some(vec![0]),
+            Some(b64),
+            Some(0.3),
+            Some(45.0),
+        )
+        .expect("marca de imagen");
+        assert!(
+            tinta_en_el_centro(&work, 0) > tinta_antes,
+            "la marca de imagen no ha pintado nada"
+        );
+        assert_eq!(
+            tinta_en_el_centro(&work, 1),
+            0,
+            "la página 2 no llevaba marca"
+        );
+        // el objeto nuevo es una imagen con alfa: /SMask escrito
+        let bytes = std::fs::read(&pdf).expect("leer");
+        assert!(
+            bytes.windows(6).any(|w| w == b"/SMask"),
+            "la imagen translúcida tiene que llevar su /SMask"
+        );
+        std::fs::remove_file(&pdf).ok();
+    }
+
+    /// Píxeles con tinta en el centro de la página (una banda ancha), para
+    /// juzgar si algo se ha pintado ahí.
+    fn tinta_en_el_centro(work: &str, pagina: u16) -> u32 {
+        let png = crate::render_page_png(work.to_string(), pagina, 400, true).expect("render");
+        let img = image::load_from_memory(&png).expect("PNG").to_rgba8();
+        let (w, h) = (img.width(), img.height());
+        let mut n = 0;
+        for y in h / 3..h * 2 / 3 {
+            for x in w / 3..w * 2 / 3 {
+                let p = img.get_pixel(x, y).0;
+                if p[0] < 245 || p[1] < 245 || p[2] < 245 {
+                    n += 1;
+                }
+            }
+        }
+        n
     }
 
 }
