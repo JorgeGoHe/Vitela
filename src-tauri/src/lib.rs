@@ -857,15 +857,24 @@ fn ruta_de_url(url: &tauri::Url) -> Option<String> {
     }
 }
 
-/// Pide a la UI que abra `path`. Si la ventana todavía no ha cargado, se
-/// guarda y se manda en cuanto la página esté lista: los eventos de Tauri
-/// no se encolan, y el `listen` de la UI tarda un instante en registrarse.
-#[cfg(target_os = "macos")]
 /// La UI ya ha registrado su `listen` y los eventos le llegan. Lo pone
 /// `ui_lista`, no `on_page_load`: la página cargada no significa que el JS
 /// esté escuchando, y los eventos de Tauri no se encolan.
+///
+/// Va SIN `cfg`, como `ABRIR_PENDIENTE` y el comando `ui_lista`: el
+/// arranque con un PDF en `argv` es de las tres plataformas. Solo
+/// `RunEvent::Opened` —y con él `pide_abrir` y `ruta_de_url`— es de macOS.
 static UI_LISTA: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Pide a la UI que abra `path`. Si todavía no está escuchando, se guarda
+/// y lo recoge `ui_lista`: los eventos de Tauri no se encolan, y el
+/// `listen` de la UI tarda un instante en registrarse.
+///
+/// Es el único camino, en las tres plataformas: el PDF de `argv` (arranque
+/// en frío en Windows y Linux) y el de `RunEvent::Opened` (macOS, también
+/// con la app ya abierta) pasan los dos por aquí. Sin `cfg`: cuanto menos
+/// código dependa de la plataforma, menos se rompe la compilación de las
+/// otras dos, que aquí solo se ven en CI.
 fn pide_abrir(app: &tauri::AppHandle, path: String) {
     use tauri::Emitter;
     if !UI_LISTA.load(std::sync::atomic::Ordering::SeqCst) {
@@ -951,7 +960,7 @@ pub fn run() {
             });
             // PDF pasado como argumento (doble clic en Windows y Linux)
             if let Some(path) = pdf_de_argv(std::env::args_os()) {
-                *ABRIR_PENDIENTE.lock().unwrap_or_else(|e| e.into_inner()) = Some(path);
+                pide_abrir(app.handle(), path);
             }
             Ok(())
         })
@@ -1060,11 +1069,9 @@ pub fn run() {
             tauri::RunEvent::Exit => borra_copias_abiertas(),
             // ⌘Q en macOS no siempre pasa por la ventana: si el intento de
             // salida llega antes, se frena igual y se pregunta
-            tauri::RunEvent::ExitRequested { api, .. } => {
-                if frenar_cierre() {
-                    api.prevent_exit();
-                    pregunta_por_el_cierre(_app);
-                }
+            tauri::RunEvent::ExitRequested { api, .. } if frenar_cierre() => {
+                api.prevent_exit();
+                pregunta_por_el_cierre(_app);
             }
             // macOS: doble clic en el Finder o `open -a Vitela x.pdf`,
             // tanto con la app cerrada como ya abierta
