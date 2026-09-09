@@ -81,6 +81,32 @@ pub(crate) fn geo_pagina(doc: &LoDoc, page_id: ObjectId) -> Result<crate::Geo, S
     Ok(crate::Geo::nueva(&mb, 0))
 }
 
+/// Como [`geo_pagina`] pero con el `/Rotate` de la página puesto: es el
+/// espacio de la página VISTA, el que devuelven los comandos que leen
+/// anotaciones.
+pub(crate) fn geo_vista(doc: &LoDoc, page_id: ObjectId) -> Result<crate::Geo, String> {
+    let mb = media_box(doc, page_id)?;
+    Ok(crate::Geo::nueva(&mb, rotacion(doc, page_id)))
+}
+
+/// `/Rotate` de la página, heredado del árbol de páginas si hace falta.
+fn rotacion(doc: &LoDoc, page_id: ObjectId) -> u16 {
+    let mut actual = page_id;
+    for _ in 0..32 {
+        let Ok(dict) = doc.get_object(actual).and_then(|o| o.as_dict()) else {
+            return 0;
+        };
+        if let Ok(r) = dict.get(b"Rotate").and_then(|o| o.as_i64()) {
+            return r.rem_euclid(360) as u16;
+        }
+        match dict.get(b"Parent").and_then(|o| o.as_reference()) {
+            Ok(p) => actual = p,
+            Err(_) => return 0,
+        }
+    }
+    0
+}
+
 /// Rect de UI (origen arriba-izquierda) a array Rect PDF de la página dada.
 fn rect_pdf(rect: &Rect, geo: &crate::Geo) -> Object {
     let r = geo.ui_rect_a_pdf(rect);

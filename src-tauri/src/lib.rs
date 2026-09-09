@@ -659,6 +659,7 @@ mod recientes;
 #[cfg(debug_assertions)]
 pub mod puente_dev;
 mod seguridad;
+mod seguridad2;
 mod texto;
 
 /// Firma digitalmente la copia de trabajo y escribe el PDF firmado en
@@ -1031,6 +1032,11 @@ pub fn run() {
             seguridad::remove_encryption,
             seguridad::flatten_pdf,
             seguridad::redact_area,
+            seguridad2::mark_redaction,
+            seguridad2::list_redactions,
+            seguridad2::unmark_redaction,
+            seguridad2::apply_redactions,
+            seguridad2::sanitize_pdf,
             exportar::export_pages_png,
             exportar::export_text,
             exportar::compress_pdf,

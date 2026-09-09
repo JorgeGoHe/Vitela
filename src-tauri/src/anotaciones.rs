@@ -946,6 +946,55 @@ pub fn remove_annotation(work_path: String, page_index: u16, annot_index: u16) -
     }))
 }
 
+/// Quita una anotación del `/Annots` de su página con lopdf (para los
+/// comandos que ya están dentro de una `cirugia` y no pueden abrir PDFium a
+/// mitad). El objeto se queda huérfano: lopdf lo descarta al guardar.
+pub(crate) fn quita_annot(
+    doc: &mut lopdf::Document,
+    page_index: u16,
+    annot_index: usize,
+) -> Result<(), String> {
+    use lopdf::Object;
+    let page_id = *doc
+        .get_pages()
+        .get(&(page_index as u32 + 1))
+        .ok_or("Página fuera de rango")?;
+    let por_referencia = {
+        let page = doc
+            .get_object(page_id)
+            .and_then(|o| o.as_dict())
+            .map_err(|e| e.to_string())?;
+        match page.get(b"Annots") {
+            Ok(Object::Reference(rid)) => Some(*rid),
+            _ => None,
+        }
+    };
+    let quita = |arr: &mut Vec<Object>| -> Result<(), String> {
+        if annot_index >= arr.len() {
+            return Err("Esa anotación ya no está".into());
+        }
+        arr.remove(annot_index);
+        Ok(())
+    };
+    match por_referencia {
+        Some(rid) => quita(
+            doc.get_object_mut(rid)
+                .and_then(|o| o.as_array_mut())
+                .map_err(|e| e.to_string())?,
+        ),
+        None => {
+            let page = doc
+                .get_object_mut(page_id)
+                .and_then(|o| o.as_dict_mut())
+                .map_err(|e| e.to_string())?;
+            match page.get_mut(b"Annots") {
+                Ok(Object::Array(arr)) => quita(arr),
+                _ => Err("La página no tiene anotaciones".into()),
+            }
+        }
+    }
+}
+
 /// Reescribe el `/AP` de un cuadro de texto con lo que diga ahora su
 /// `/Contents`, su `/DA` y su `/BS`. Sin esto, corregir el texto cambiaría
 /// el dato y no lo que se ve. Para el resto de tipos no hay nada que hacer:

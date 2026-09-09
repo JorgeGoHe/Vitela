@@ -151,7 +151,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
     }
     use crate::{
         anotaciones, anotaciones2, busqueda, documento, exportar, firma, firmas_visuales, formularios, historial,
-        imagenes, paginas, paginas2, seguridad, texto,
+        imagenes, paginas, paginas2, seguridad, seguridad2, texto,
     };
     match cmd {
         "open_pdf" => cmd!(crate::open_pdf, { path: String, password: Option<String> }),
@@ -220,6 +220,11 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "remove_encryption" => cmd!(seguridad::remove_encryption, { work_path: String }),
         "flatten_pdf" => cmd!(seguridad::flatten_pdf, { work_path: String }),
         "redact_area" => cmd!(seguridad::redact_area, { work_path: String, page_index: u16, rect: crate::Rect, dry_run: bool }),
+        "mark_redaction" => cmd!(seguridad2::mark_redaction, { work_path: String, page_index: u16, rect: crate::Rect }),
+        "list_redactions" => cmd!(seguridad2::list_redactions, { work_path: String }),
+        "unmark_redaction" => cmd!(seguridad2::unmark_redaction, { work_path: String, page_index: u16, mark_index: u16 }),
+        "apply_redactions" => cmd!(seguridad2::apply_redactions, { work_path: String, dry_run: bool }),
+        "sanitize_pdf" => cmd!(seguridad2::sanitize_pdf, { work_path: String, dry_run: bool }),
         "export_pages_png" => cmd!(exportar::export_pages_png, { path: String, dest_dir: String, dpi: u16, format: String }),
         "export_text" => cmd!(exportar::export_text, { path: String, dest_path: String }),
         "compress_pdf" => cmd!(exportar::compress_pdf, { work_path: String, quality: u8, max_dpi: u16 }),
