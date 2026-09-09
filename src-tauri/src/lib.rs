@@ -185,10 +185,20 @@ fn borra_copias_abiertas() {
 /// instantáneas (`vitela-historial/`) huérfanas de cierres bruscos. Solo las
 /// de hace más de 24 h, para no pisar a otra instancia de la app viva.
 fn barre_huerfanos(dir: &std::path::Path, edad_minima: std::time::Duration) -> usize {
+    // la copia que hay apuntada para recuperar NO es huérfana: es
+    // justamente el trabajo que se salvó de un cierre bruto
+    let apuntada = recuperacion::copia_apuntada().unwrap_or_default();
+    let nombre_apuntado = std::path::Path::new(&apuntada)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let salvada = move |n: &str| !nombre_apuntado.is_empty() && n.starts_with(&nombre_apuntado);
     let mut borrados = barre_ficheros(dir, edad_minima, |n| {
-        n.starts_with("vitela-") && (n.ends_with(".pdf") || n.ends_with(".pdf.tmp"))
+        n.starts_with("vitela-") && (n.ends_with(".pdf") || n.ends_with(".pdf.tmp")) && !salvada(n)
     });
-    borrados += barre_ficheros(&dir.join("vitela-historial"), edad_minima, |n| n.contains(".snap"));
+    borrados += barre_ficheros(&dir.join("vitela-historial"), edad_minima, |n| {
+        n.contains(".snap") && !salvada(n)
+    });
     borrados
 }
 
@@ -686,6 +696,7 @@ mod imagenes;
 mod paginas;
 mod paginas2;
 mod recientes;
+mod recuperacion;
 #[cfg(debug_assertions)]
 pub mod puente_dev;
 mod seguridad;
@@ -1100,6 +1111,9 @@ pub fn run() {
             historial::redo,
             historial::history_state,
             historial::squash_history,
+            recuperacion::autosave_state,
+            recuperacion::clear_session,
+            recuperacion::recover_session,
             recientes::list_recent,
             recientes::touch_recent,
             recientes::remove_recent,
@@ -1373,6 +1387,46 @@ pub(crate) mod tests {
         // recién creado: con 24 h de margen no se toca
         assert_eq!(barre_huerfanos(&dir, std::time::Duration::from_secs(24 * 3600)), 0);
         assert!(dir.join("vitela-c-3.pdf").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// El barrido de huérfanos no puede llevarse la copia que hay apuntada
+    /// para recuperar: es justo el trabajo que se salvó del cierre bruto.
+    #[test]
+    fn el_barrido_respeta_la_copia_que_hay_que_recuperar() {
+        let datos = std::env::temp_dir().join("vitela-test-datos-recuperacion");
+        std::fs::create_dir_all(&datos).unwrap();
+        let _ = firmas_visuales::DIR_DATOS.set(datos);
+        // otro test puede haber fijado ya el directorio: se usa el que valga
+        let datos = firmas_visuales::DIR_DATOS.get().unwrap().clone();
+        std::fs::create_dir_all(&datos).unwrap();
+
+        let dir = std::env::temp_dir().join("editor_pdf_test_barrido_sesion");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("vitela-historial")).unwrap();
+        let salvada = dir.join("vitela-salvada-1.pdf");
+        std::fs::write(&salvada, b"x").unwrap();
+        std::fs::write(dir.join("vitela-huerfana-2.pdf"), b"x").unwrap();
+        std::fs::write(
+            dir.join("vitela-historial").join("vitela-salvada-1.pdf.snap1"),
+            b"x",
+        )
+        .unwrap();
+        let sesion = datos.join("sesion.json");
+        recuperacion::apunta_en(&sesion, &salvada.to_string_lossy(), "/tmp/factura.pdf", true)
+            .expect("apuntar");
+
+        assert_eq!(
+            barre_huerfanos(&dir, std::time::Duration::ZERO),
+            1,
+            "solo se va la huérfana de verdad"
+        );
+        assert!(salvada.exists(), "la copia apuntada tiene que sobrevivir");
+        assert!(
+            dir.join("vitela-historial").join("vitela-salvada-1.pdf.snap1").exists(),
+            "y sus instantáneas con ella"
+        );
+        let _ = std::fs::remove_file(&sesion);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
