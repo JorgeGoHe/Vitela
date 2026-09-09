@@ -77,7 +77,11 @@ compila los instaladores a mano o al etiquetar `v*`.
   devuelven `{ undo, redo, page_count }`; `squash_history(n)` funde pasos
   (encabezado + pie). La UI (`hooks/useHistorial.ts`) refresca todo con
   `afterMutation(page_count)` tras restaurar.
-- Comandos: `open_pdf`, `render_page(path, page_index, width)` → PNG base64,
+- Comandos: `open_pdf`, `render_page(path, page_index, width, with_annotations?)`
+  → PNG (`with_annotations` por defecto `true`; con `false` salen el
+  documento y los campos de formulario rellenados pero no los
+  comentarios, que es «Solo el documento» del diálogo de impresión de
+  Acrobat),
   `get_page_text(path, page_index)` → caracteres con cajas de glifos (puntos
   PDF, origen arriba-izquierda), `search_pdf(path, query)` → coincidencias con
   rectángulos por página, `delete_page`, `rotate_page` (90° CW acumulativo),
@@ -96,8 +100,9 @@ compila los instaladores a mano o al etiquetar `v*`.
   `get_images` / `add_image` (tamaño natural a 72 dpi, limitado a la página) /
   `transform_image` (mover/redimensionar por ratio de bounds) /
   `replace_image` (borra + recrea en los mismos bounds) / `delete_image`,
-  `sign_pdf(work, dest, cert_pem, key_pem, reason)` (módulo `firma`, no usa
-  PDFium; test con fixtures en `src-tauri/fixtures/`).
+  `sign_pdf(work, dest, cert_pem, key_pem, reason, rect?, page_index?,
+  signer_name?, signature_png?)` y `sign_pdf_p12` (módulo `firma`, no usa
+  PDFium; test con fixtures en `src-tauri/fixtures/`), `verify_signatures`.
 - **Coordenadas y páginas rotadas** (`Geo`, en `lib.rs`): hay dos espacios y
   cada comando usa uno, a propósito.
   - **Espacio de la página vista**: el del render, con el `/Rotate` ya
@@ -115,7 +120,15 @@ compila los instaladores a mano o al etiquetar `v*`.
     `create_form_field`, `redact_area`, `crop_page`, `add_image`,
     `transform_image`, `add_text_block`, `stamp_signature`.
   - **Leen en el espacio propio de la página** (la UI convierte al leer):
-    `get_page_text`, `get_text_blocks`, `get_images`, `search_pdf`.
+    `get_page_text`, `get_text_blocks`, `get_images`, `search_pdf`. Los
+    cuatro voltean la `y` con `Geo::de_pagina(&page).propia()`, nunca con
+    `page.height()`: su respuesta no depende del `/Rotate` (AC-014,
+    AC-034).
+  - **Los objetos nuevos se giran al revés que la página**: `add_text_block`
+    y `add_image` colocan el ancla con la altura propia y giran el objeto
+    `−/Rotate` (`Geo::ejes()` da hacia dónde va «a la derecha» y «hacia
+    abajo» de la vista, en coordenadas del papel) para que el texto y las
+    imágenes se lean derechos, igual que `add_stamp` (AC-035).
   - `get_page_sizes` devuelve `width`/`height` **ya rotados** (el tamaño tal
     como se ve) más `rotation` en grados horarios (0/90/180/270).
   - Ojo con `page.height()` de pdfium-render: devuelve la altura **ya
@@ -145,6 +158,16 @@ compila los instaladores a mano o al etiquetar `v*`.
   no es un comentario**: `get_annotations` se lo salta (por `kind`) y
   `remove_annotation` lo borra junto a su nota para no dejarlo huérfano en
   `/Annots`.
+- `transform_annotation` mueve y redimensiona cuatro tipos, por tres
+  caminos: **Stamp** e **Ink** transforman los objetos que llevan dentro;
+  **FreeText** se mueve y se redimensiona y su `/AP` se vuelve a dibujar
+  (se dibuja en local, `/BBox 0 0 w h`); **Text** solo se mueve, porque el
+  icono del post-it tiene tamaño fijo también en Acrobat y del rect nuevo
+  solo se toma la esquina.
+- **WinAnsi** (`anotaciones2::winansi`): el tramo 0x80–0x9F NO es latin-1;
+  ahí es donde WinAnsiEncoding guarda la raya «—», el guion «–», los
+  puntos suspensivos «…», las comillas tipográficas y el «€». Lo usan el
+  `/AP` de los cuadros de texto y el de la firma visible.
 - **Autor y fecha**: los seis comandos que crean anotaciones
   (`add_highlight`, `add_stroke`, `add_note`, `add_markup`, `add_shape`,
   `add_stamp`) aceptan `author: Option<String>`; sin él se usa el usuario
@@ -247,6 +270,84 @@ compila los instaladores a mano o al etiquetar `v*`.
     no solo en el puente: `search_pdf(match_case, whole_word)`,
     `extract_pages(delete_after)`, `encrypt_pdf(dest_path, permisos)`. Un
     `invoke` que no mande el campo tiene que funcionar.
+- Comandos del ciclo 3:
+  - `verify_signatures(path)` → un `FirmaInfo` por cada campo `/Sig`
+    (`firma.rs`): comprueba que el `/ByteRange` cubre el fichero entero
+    salvo el hueco de su `/Contents` (`covers_whole_file`), que el SHA-256
+    de esos rangos es el `messageDigest` firmado del PKCS#7 y que la firma
+    RSA de los atributos firmados la hizo la clave del certificado
+    embebido (las dos cosas juntas son `digest_ok`), y saca del
+    certificado `cert_subject`, `cert_issuer`, `not_before`, `not_after`,
+    `expired` y `self_signed`, más `page_index` y `rect` del widget (en el
+    espacio de la página vista). **No hay cadena de confianza**: no se
+    consulta el llavero del sistema, así que la UI no puede decir
+    «válida», solo «firmado por X, el documento no ha cambiado desde la
+    firma» y, si no hay raíz, «certificado no verificado».
+  - `sign_pdf` / `sign_pdf_p12` con `rect`, `page_index`, `signer_name` y
+    `signature_png` (base64): con `rect` el widget deja de ser `[0 0 0 0]`
+    y lleva su `/AP` —un Form XObject con el PNG de la firma manuscrita
+    (incrustado con su alfa en `/SMask`) y debajo «Firmado por …» y la
+    fecha en Helvetica— más `/DA` y `/F 132`. Sin `rect`, invisible, como
+    antes. El diccionario de firma gana `/Name`.
+  - **Redacción en dos fases** (`seguridad2.rs`): `mark_redaction(work,
+    page_index, rect)` → índice de la marca en `/Annots`,
+    `list_redactions(work)` → `{ page_index, annot_index, rect }` (rect en
+    el espacio de la página vista), `unmark_redaction(work, page_index,
+    mark_index)` y `apply_redactions(work, dry_run)` → `{ zonas, textos,
+    imagenes }`. Las marcas son anotaciones `/Square` con `/C [1 0 0]`,
+    `/IC [0 0 0]`, su `/AP` de borde rojo y la clave propia
+    `/Vitela /Redact`: sobreviven a guardar, se ven en cualquier visor
+    como lo que son (una propuesta, no una censura) y la UI las mueve y
+    las borra con `transform_annotation` y `remove_annotation`, como
+    cualquier comentario. Aplicar es UNA mutación para todo el lote.
+  - `sanitize_pdf(work, dry_run)` → `{ metadatos, scripts, adjuntos,
+    capas, formularios }` (`seguridad2.rs`): quita `/Info` y el XMP, los
+    `/JavaScript` del `/Names`, `/OpenAction` y `/AA`, los
+    `/EmbeddedFiles` y las anotaciones `/FileAttachment`, `/OCProperties`
+    y el `/AcroForm`, y **poda los objetos** (`prune_objects`): quitar la
+    referencia dejaría el script y el adjunto dentro del fichero, sin
+    nadie que apuntara a ellos. Limitación conocida: lo que va dentro de
+    un content stream marcado con BDC de una capa apagada no se toca.
+  - `replace_pages(work, page_indices, other_path, other_indices?)`,
+    `split_pdf(work, dest_dir, modo, cada?)` (modo `"cada"` o
+    `"marcadores"`, ficheros `parte-N.pdf`; escribe fuera, así que no muta
+    ni deja paso de deshacer) y `merge_many(work, others, at?)`
+    (`paginas2.rs`), cada uno en una sola mutación.
+  - `extract_each_page(work, page_indices, dest_dir, delete_after?)`
+    (`paginas.rs`): «un fichero por página» (`pagina-N.pdf`) entero en una
+    operación — escribe todos los ficheros primero y borra dentro de la
+    misma mutación, así que un fallo a mitad no deja el trabajo hecho a
+    medias ni dos pasos de deshacer.
+  - `set_menu_state(has_document)` (`menu.rs`, ver «Menú nativo»).
+- **Menú nativo** (`menu.rs`): Archivo, Editar, Ver, Documento, Ventana y
+  Ayuda en la barra del sistema, espejo del menú «Acciones» de la app —
+  con esto la búsqueda de menús de macOS encuentra por fin «Marca de
+  agua». **No ejecuta nada**: cada entrada emite el evento `menu-accion`
+  con `{ id }` y la UI lo enruta a la misma función que su botón, para que
+  no haya dos caminos que puedan separarse. La estructura es un dato
+  (`menu::estructura()`), con un test que comprueba que no hay ids
+  repetidos ni entradas sin etiqueta. `set_menu_state(has_document)`
+  vuelve a montar el menú para atenuar lo que no aplica (en Acrobat se
+  atenúa, no desaparece). **Ojo**: las entradas llevan su acelerador, así
+  que en macOS el sistema se queda con ⌘S, ⌘Z, ⌘P… antes que el webview;
+  si la UI no escucha `menu-accion`, esos atajos dejan de funcionar. Los
+  ids, que son el contrato con la UI:
+  - Archivo: `abrir`, `abrir-reciente`, `guardar`, `guardar-como`,
+    `cerrar-documento`, `anadir-pdf`, `insertar-pdf`, `combinar-ficheros`,
+    `reemplazar-paginas`, `extraer-paginas`, `dividir-documento`,
+    `imprimir`.
+  - Editar: `deshacer`, `rehacer`, `copiar`, `seleccionar-todo`, `buscar`,
+    `buscar-siguiente`, `buscar-anterior`, `preferencias`.
+  - Ver: `zoom-mas`, `zoom-menos`, `zoom-pagina`, `zoom-100`,
+    `zoom-ancho`, `pagina-una`, `pagina-continua`, `pagina-dos`,
+    `pagina-dos-continua`, `girar-vista-derecha`, `girar-vista-izquierda`,
+    `panel-lateral`, `pantalla-completa`, `modo-nocturno`.
+  - Documento: `organizar-paginas`, `recortar-pagina`, `marca-de-agua`,
+    `encabezado-pie`, `quitar-marca-de-agua`, `quitar-encabezados`,
+    `anadir-campo`, `anadir-enlace`, `firmar`, `proteger`,
+    `quitar-proteccion`, `aplanar`, `redactar`, `sanitizar`,
+    `propiedades`, `exportar-imagenes`, `exportar-texto`, `comprimir`.
+  - Ayuda: `atajos`.
 - **Protección** (`seguridad.rs`): `encrypt_pdf` compone la máscara `/P`
   del spec a partir de `permisos { imprimir, copiar, editar }` (los tres a
   `true` por defecto): bit 3 imprimir —y con él el 12, alta calidad—, bit 5
@@ -259,7 +360,11 @@ compila los instaladores a mano o al etiquetar `v*`.
   pantalla dejaría de funcionar. La anotación vive en un mapa por
   `work_path` (`proteccion_de` / `olvida_proteccion`, que llama
   `borra_copia` al cerrar) y por eso **no entra en el historial**: ⌘Z no la
-  quita, la quita `remove_encryption`.
+  quita, la quita `remove_encryption` (que sí pasa por `mutacion`, así que
+  deja su paso). **Un PDF firmado no se cifra**: cifrar reescribe el
+  documento y movería el `/ByteRange`, así que `encrypt_pdf` (con
+  `dest_path` y sin él) y `save_pdf` con protección anotada se niegan con
+  `firma::AVISO_FIRMADO` en vez de romper la firma.
 - **Aplanar y casillas**: el marco de un widget lo pinta el entorno de
   formularios de PDFium desde `/MK` y `/BS` al vuelo, así que
   `FPDFPage_Flatten` no tiene nada que copiar y la casilla sin marcar
@@ -320,9 +425,9 @@ compila los instaladores a mano o al etiquetar `v*`.
   cachés, copia de trabajo, `open_pdf`, render, firma, `run()`); el resto
   por dominio: `busqueda.rs`, `paginas.rs`/`paginas2.rs`,
   `anotaciones.rs`/`anotaciones2.rs`, `formularios.rs`/`formularios2.rs`,
-  `texto.rs`, `imagenes.rs`, `documento.rs`, `seguridad.rs`, `exportar.rs`,
-  `firma.rs`, `firmas_visuales.rs`, `historial.rs`, `recientes.rs`,
-  `puente_dev.rs`.
+  `texto.rs`, `imagenes.rs`, `documento.rs`, `seguridad.rs`/`seguridad2.rs`,
+  `exportar.rs`, `firma.rs`, `firmas_visuales.rs`, `historial.rs`,
+  `recientes.rs`, `menu.rs`, `puente_dev.rs`.
   `generate_handler!` y `despachar` referencian los comandos por ruta de
   módulo (con re-exports no funciona el macro).
 - **Estructura de la UI**: `App.tsx` conserva el ciclo de apertura, la
@@ -408,6 +513,17 @@ compila los instaladores a mano o al etiquetar `v*`.
   está acotado a esos esquemas. `tauri.conf.json` lleva una CSP real
   (`csp` y `devCsp`, esta última con Vite, HMR y el puente de QA): no hay
   recursos remotos (fuentes locales en `src/assets/fonts/`).
+- **Compilar para las otras plataformas**: en macOS no se ve si Windows o
+  Linux compilan, y un `#[cfg(target_os = "macos")]` de más ya dejó el
+  instalador de Windows sin salir (AC-032). El código dependiente de
+  plataforma se reduce al mínimo: en `lib.rs` solo `RunEvent::Opened` y
+  `ruta_de_url` (la URL `file://` que manda macOS); `pide_abrir`,
+  `UI_LISTA`, `ABRIR_PENDIENTE` y `ui_lista` son de las tres. Para
+  comprobarlo sin una máquina Windows: cambiar `target_os = "macos"` por
+  `"windows"` en `lib.rs` y `menu.rs` y correr
+  `cargo clippy --all-targets -- -D warnings`; eso es exactamente el
+  código que ven Windows y Linux (incluidos los avisos de código muerto,
+  que con `-D warnings` son errores en CI).
 - PDFium se carga en runtime: primero desde los resources del bundle
   (producción; `bundle.resources` en `tauri.conf.json` + `RESOURCE_LIB_DIR`
   fijado en el setup), después desde `./lib/` relativo al cwd (que en
@@ -438,7 +554,9 @@ compila los instaladores a mano o al etiquetar `v*`.
    «Chrom Sans OTF»; `normaliza_familia` devuelve siempre las estándar).
    Imágenes: insertar, mover,
    redimensionar, reemplazar y borrar objetos de imagen
-7. ✅ Firma digital: campo de firma + ByteRange + PKCS#7 detached
+7. ✅ Firma digital: campo de firma (visible con `rect`, con su `/AP`) +
+   ByteRange + PKCS#7 detached, y verificación al abrir
+   (`verify_signatures`, sin cadena de confianza del sistema)
    (RSA/SHA-256; certificado en PEM o contenedor .p12/.pfx con contraseña —
    `p12-keystore`; PDFium no firma — cirugía con lopdf y criptografía con
    RustCrypto)
