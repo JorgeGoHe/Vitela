@@ -718,10 +718,12 @@ mod tests {
 
         // el resaltado va PRIMERO: a partir de aquí el ordinal de la marca
         // entre las marcas (0) y su índice en /Annots (1) no coinciden
-        crate::anotaciones::add_highlight(
+        crate::anotaciones2::add_markup(
             work.clone(),
             0,
             vec![Rect { x: 40.0, y: 300.0, w: 120.0, h: 14.0 }],
+            "highlight".into(),
+            None,
             None,
         )
         .expect("resaltar");

@@ -6,76 +6,6 @@ use pdfium_render::prelude::*;
 use serde::Serialize;
 
 
-
-/// Crea una anotación de resaltado amarillo sobre los rects dados
-/// (coords de UI en puntos PDF).
-#[tauri::command(async)]
-pub fn add_highlight(
-    work_path: String,
-    page_index: u16,
-    rects: Vec<Rect>,
-    author: Option<String>,
-) -> Result<(), String> {
-    if rects.is_empty() {
-        return Err("No hay nada que resaltar".into());
-    }
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        // los comandos que escriben trabajan en el espacio propio de la
-        // página (sin rotar); la UI convierte antes de mandar
-        let geo = Geo::de_pagina(&page).propia();
-        let mut annot = page
-            .annotations_mut()
-            .create_highlight_annotation()
-            .map_err(|e| e.to_string())?;
-        // flag Print: sin él, aplanar (FLAT_PRINT) descarta la anotación
-        annot.set_is_printed(true).map_err(|e| e.to_string())?;
-        annot
-            .set_stroke_color(PdfColor::new(255, 220, 0, 140))
-            .map_err(|e| e.to_string())?;
-        let left = rects.iter().map(|r| r.x).fold(f32::MAX, f32::min);
-        let top = rects.iter().map(|r| r.y).fold(f32::MAX, f32::min);
-        let right = rects.iter().map(|r| r.x + r.w).fold(f32::MIN, f32::max);
-        let bottom = rects.iter().map(|r| r.y + r.h).fold(f32::MIN, f32::max);
-        let envelope = Rect {
-            x: left,
-            y: top,
-            w: right - left,
-            h: bottom - top,
-        };
-        annot
-            .set_bounds(geo.ui_rect_a_pdf(&envelope))
-            .map_err(|e| e.to_string())?;
-        for r in &rects {
-            let pr = geo.ui_rect_a_pdf(r);
-            // Orden del spec (UL, UR, LL, LR): otros visores generan la
-            // apariencia a partir de los quads y el orden importa.
-            let quad = PdfQuadPoints::new(
-                pr.left(),
-                pr.top(),
-                pr.right(),
-                pr.top(),
-                pr.left(),
-                pr.bottom(),
-                pr.right(),
-                pr.bottom(),
-            );
-            annot
-                .attachment_points_mut()
-                .create_attachment_point_at_end(quad)
-                .map_err(|e| e.to_string())?;
-        }
-        drop(page);
-        save_and_close(doc, &work_path)?;
-        // segundo pase: PDFium no escribe ni la apariencia ni /T y /M
-        remata_annot(&work_path, page_index, Some(EstiloMarca::Resaltado), author)
-    }))
-}
-
 /// Añade un trazo a mano alzada como anotación Ink con su apariencia
 /// (un path dentro de la anotación), de modo que se puede borrar
 /// individualmente. Los puntos vienen en coords de UI (puntos PDF,
@@ -1272,7 +1202,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("editor_pdf_test_resaltado_rects.pdf");
         crea_pdf(&["Hola"], &tmp);
         let work = tmp.to_string_lossy().into_owned();
-        add_highlight(
+        crate::anotaciones2::add_markup(
             work.clone(),
             0,
             vec![
@@ -1289,6 +1219,8 @@ mod tests {
                     h: 14.0,
                 },
             ],
+            "highlight".into(),
+            None,
             None,
         )
         .expect("resaltar");
@@ -1311,7 +1243,7 @@ mod tests {
         let work = tmp.to_string_lossy().into_owned();
 
         // resaltado + nota
-        add_highlight(
+        crate::anotaciones2::add_markup(
             work.clone(),
             0,
             vec![Rect {
@@ -1320,6 +1252,8 @@ mod tests {
                 w: 100.0,
                 h: 14.0,
             }],
+            "highlight".into(),
+            None,
             None,
         )
         .expect("resaltar");
@@ -1385,10 +1319,12 @@ mod tests_apariencia {
         let tmp = std::env::temp_dir().join("render-sin-anotaciones-test.pdf");
         crea_pdf(&["Hola"], &tmp);
         let work = tmp.to_string_lossy().into_owned();
-        add_highlight(
+        crate::anotaciones2::add_markup(
             work.clone(),
             0,
             vec![crate::Rect { x: 40.0, y: 300.0, w: 200.0, h: 30.0 }],
+            "highlight".into(),
+            None,
             None,
         )
         .expect("resaltar");
@@ -1508,7 +1444,7 @@ mod tests_apariencia {
         crea_pdf(&["Hola"], &tmp);
         let work = tmp.to_string_lossy().into_owned();
         // zona en blanco de la página, lejos del texto
-        add_highlight(work.clone(), 0, vec![caja(300.0)], None).expect("resaltar");
+        crate::anotaciones2::add_markup(work.clone(), 0, vec![caja(300.0)], "highlight".into(), None, None).expect("resaltar");
 
         let png = render_page_png(work.clone(), 0, 300, true).expect("render");
         let [r, g, b, _] = pixel(&png, 300, 300.0, 310.0);
@@ -1546,7 +1482,7 @@ mod tests_apariencia {
         );
 
         // con autor explícito, en todos los creadores de anotaciones
-        add_highlight(work.clone(), 0, vec![caja(300.0)], Some("Jorge".into())).expect("resaltar");
+        crate::anotaciones2::add_markup(work.clone(), 0, vec![caja(300.0)], "highlight".into(), None, Some("Jorge".into())).expect("resaltar");
         add_stroke(
             work.clone(),
             0,
@@ -1607,7 +1543,7 @@ mod tests_apariencia {
         let tmp = std::env::temp_dir().join("editor_pdf_test_ap_aplanado.pdf");
         crea_pdf(&["Hola"], &tmp);
         let work = tmp.to_string_lossy().into_owned();
-        add_highlight(work.clone(), 0, vec![caja(300.0)], None).expect("resaltar");
+        crate::anotaciones2::add_markup(work.clone(), 0, vec![caja(300.0)], "highlight".into(), None, None).expect("resaltar");
         crate::seguridad::flatten_pdf(work.clone()).expect("aplanar");
 
         let png = render_page_png(work.clone(), 0, 300, true).expect("render");
@@ -1803,7 +1739,7 @@ mod tests_apariencia {
         let tmp = std::env::temp_dir().join("editor_pdf_test_recolorear.pdf");
         crea_pdf(&["Hola"], &tmp);
         let work = tmp.to_string_lossy().into_owned();
-        add_highlight(work.clone(), 0, vec![caja(300.0)], None).expect("resaltar");
+        crate::anotaciones2::add_markup(work.clone(), 0, vec![caja(300.0)], "highlight".into(), None, None).expect("resaltar");
 
         set_annotation_color(work.clone(), 0, 0, [90, 200, 250, 255]).expect("recolorear");
 

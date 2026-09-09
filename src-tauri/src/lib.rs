@@ -1039,7 +1039,6 @@ pub fn run() {
             paginas::delete_pages,
             paginas::rotate_pages,
             save_pdf,
-            anotaciones::add_highlight,
             anotaciones::add_stroke,
             anotaciones::add_note,
             anotaciones::get_annotations,

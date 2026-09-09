@@ -13,7 +13,8 @@ fn color_de(c: [u8; 4]) -> PdfColor {
 }
 
 /// Marca de texto sobre los rects dados (coords de UI): resaltado, subrayado
-/// o tachado. Igual que `add_highlight` pero con subtipo y color a elegir.
+/// o tachado: el subtipo y el color se eligen (es el único camino; el
+/// `add_highlight` del ciclo 1 lo sustituyó y se retiró en el 5).
 #[tauri::command(async)]
 pub fn add_markup(
     work_path: String,
@@ -994,7 +995,7 @@ mod tests {
             // marca de texto: el /AP se pinta sobre los quads
             let (rx, ry) = vista_a_pagina(&work, 60.0, 500.0);
             let (rx2, ry2) = vista_a_pagina(&work, 180.0, 516.0);
-            crate::anotaciones::add_highlight(
+            add_markup(
                 work.clone(),
                 0,
                 vec![Rect {
@@ -1003,6 +1004,8 @@ mod tests {
                     w: (rx2 - rx).abs(),
                     h: (ry2 - ry).abs(),
                 }],
+                "highlight".into(),
+                None,
                 None,
             )
             .expect("resaltar");
