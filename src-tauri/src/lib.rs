@@ -77,7 +77,9 @@ pub(crate) fn pdfium() -> Result<&'static Pdfium, String> {
             Some(b) => b,
             None => Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./lib/"))
                 .or_else(|_| Pdfium::bind_to_system_library())
-                .map_err(|e| format!("No se ha podido cargar libpdfium: {e}"))?,
+                .map_err(|e| {
+                    mensaje_llano(format!("No se ha podido cargar libpdfium: {e}"))
+                })?,
         };
         let leaked: &'static Pdfium = Box::leak(Box::new(Pdfium::new(bindings)));
         *slot = Some(leaked);
@@ -359,6 +361,9 @@ fn causa_llana(s: &str) -> Option<&'static str> {
     if tiene("os error") || tiene("IoError") {
         return Some("el sistema no ha dejado terminar la operación; inténtalo de nuevo");
     }
+    if tiene("image not found") || tiene("cannot open shared object") || tiene("dlopen") {
+        return Some("falta el motor PDF (libpdfium); reinstala la aplicación");
+    }
     if tiene("PdfiumLibraryInternalError") || tiene("PdfiumError") {
         return Some("el PDF no ha admitido este cambio; guárdalo, ciérralo y vuelve a abrirlo");
     }
@@ -367,10 +372,16 @@ fn causa_llana(s: &str) -> Option<&'static str> {
 
 /// Traduce el error de PDFium al abrir (su `Display` es el `Debug` de Rust,
 /// que no le sirve de nada al usuario).
-fn mensaje_apertura(e: &PdfiumError) -> String {
+fn mensaje_apertura(e: &PdfiumError, path: &str) -> String {
+    let nombre = std::path::Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string());
     match e {
+        // con el nombre: al abrir un reciente que ya no está, «No se
+        // encuentra el fichero» a secas no dice cuál ni qué hacer
         PdfiumError::IoError(io) if io.kind() == std::io::ErrorKind::NotFound => {
-            "No se encuentra el fichero".into()
+            format!("No se encuentra «{nombre}»: puede que se haya movido, cambiado de nombre o borrado")
         }
         PdfiumError::IoError(io) => format!("No se ha podido leer el fichero: {io}"),
         PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::FormatError) => {
@@ -397,7 +408,7 @@ fn open_pdf(path: String, password: Option<String>) -> Result<DocumentInfo, Stri
             Err(PdfiumError::PdfiumLibraryInternalError(
                 PdfiumInternalError::PasswordError,
             )) => return Err("PASSWORD_REQUIRED".into()),
-            Err(e) => return Err(mensaje_apertura(&e)),
+            Err(e) => return Err(mensaje_apertura(&e, &path)),
         };
         let page_count = doc.pages().len();
         let had_password = password.is_some();
@@ -1088,6 +1099,15 @@ pub(crate) mod tests {
                 paginas2::remove_marginal_text(d.clone(), "header".into(), true).unwrap_err(),
             ),
             (
+                "no poder tomar la instantánea de deshacer",
+                historial::mutacion("/nope/ni/existe.pdf".to_string(), |_| Ok(())).unwrap_err(),
+            ),
+            (
+                "listar las firmas de una carpeta que no está",
+                firmas_visuales::listar_firmas_en(std::path::Path::new("/nope/firmas"))
+                    .unwrap_err(),
+            ),
+            (
                 "firmar con un certificado que no está",
                 sign_pdf(b.clone(), "/tmp/f.pdf".into(), "/tmp/nope.pem".into(), "/tmp/nope.pem".into(), None)
                     .unwrap_err(),
@@ -1245,7 +1265,10 @@ pub(crate) mod tests {
     #[test]
     fn errores_de_apertura_en_castellano() {
         let e = open_pdf("/no/existe/de-verdad.pdf".into(), None).unwrap_err();
-        assert_eq!(e, "No se encuentra el fichero");
+        assert_eq!(
+            e,
+            "No se encuentra «de-verdad.pdf»: puede que se haya movido, cambiado de nombre o borrado"
+        );
         let txt = std::env::temp_dir().join("vitela-no-soy-un-pdf.txt");
         std::fs::write(&txt, b"esto no es un PDF").expect("escribir txt");
         let e = open_pdf(txt.to_string_lossy().to_string(), None).unwrap_err();

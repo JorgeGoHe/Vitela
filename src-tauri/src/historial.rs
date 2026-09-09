@@ -82,16 +82,23 @@ fn empuja(work_path: &str) -> Result<(), String> {
     let work_path = work_path.to_string();
     on_pdfium_thread(move || {
         invalidate_doc_cache();
-        let tam = std::fs::metadata(&work_path).map_err(|e| e.to_string())?.len();
+        let tam = std::fs::metadata(&work_path)
+            .map_err(crate::mensaje_llano)?
+            .len();
         if tam > MAX_BYTES {
             return Ok(());
         }
-        std::fs::create_dir_all(directorio()).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(directorio()).map_err(|e| {
+            crate::mensaje_llano(format!(
+                "No se ha podido preparar la carpeta de deshacer: {e}"
+            ))
+        })?;
         con(&work_path, |h| {
             let snap = ruta_instantanea(&work_path, h.seq);
             h.seq += 1;
-            std::fs::copy(&work_path, &snap)
-                .map_err(|e| format!("No se ha podido guardar el paso de deshacer: {e}"))?;
+            std::fs::copy(&work_path, &snap).map_err(|e| {
+                crate::mensaje_llano(format!("No se ha podido guardar el paso de deshacer: {e}"))
+            })?;
             for viejo in h.rehacer.drain(..) {
                 let _ = std::fs::remove_file(viejo);
             }

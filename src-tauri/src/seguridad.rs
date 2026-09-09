@@ -960,7 +960,7 @@ pub fn redact_area(
         Ok(RedactReport { textos, imagenes })
     });
     if dry_run {
-        cuerpo(work_path)
+        cuerpo(work_path).map_err(crate::mensaje_llano)
     } else {
         mutacion(work_path, cuerpo)
     }

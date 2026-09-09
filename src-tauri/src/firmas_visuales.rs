@@ -10,7 +10,7 @@ use base64::Engine;
 use pdfium_render::prelude::*;
 use serde::Serialize;
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct FirmaGuardada {
     pub id: String,
     pub name: String,
@@ -131,7 +131,9 @@ pub(crate) fn guardar_firma_en(
 /// Lista las firmas de `dir`, más reciente primero.
 pub(crate) fn listar_firmas_en(dir: &std::path::Path) -> Result<Vec<FirmaGuardada>, String> {
     let mut out = Vec::new();
-    let entries = std::fs::read_dir(dir).map_err(|e| e.to_string())?;
+    let entries = std::fs::read_dir(dir).map_err(|e| {
+        crate::mensaje_llano(format!("No se ha podido leer la biblioteca de firmas: {e}"))
+    })?;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("png") {

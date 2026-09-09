@@ -51,9 +51,12 @@ pub(crate) fn lee(fichero: &std::path::Path) -> Vec<Entrada> {
 }
 
 fn escribe(fichero: &std::path::Path, lista: &[Entrada]) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(lista).map_err(|e| e.to_string())?;
-    std::fs::write(fichero, json)
-        .map_err(|e| format!("No se ha podido guardar la lista de recientes: {e}"))
+    let json = serde_json::to_string_pretty(lista).map_err(|e| {
+        crate::mensaje_llano(format!("No se ha podido guardar la lista de recientes: {e}"))
+    })?;
+    std::fs::write(fichero, json).map_err(|e| {
+        crate::mensaje_llano(format!("No se ha podido guardar la lista de recientes: {e}"))
+    })
 }
 
 /// Sube `path` al principio de la lista (o lo mete si no estaba) y recorta

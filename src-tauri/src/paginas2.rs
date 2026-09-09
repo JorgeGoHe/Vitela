@@ -650,7 +650,7 @@ pub fn remove_marginal_text(
         Ok(MarginalReport { textos: total })
     });
     if dry_run {
-        cuerpo(work_path)
+        cuerpo(work_path).map_err(crate::mensaje_llano)
     } else {
         mutacion(work_path, cuerpo)
     }
