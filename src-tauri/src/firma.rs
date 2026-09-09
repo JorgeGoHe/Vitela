@@ -120,6 +120,14 @@ pub fn esta_firmado(path: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Frase para el usuario cuando ya hay una firma y volver a firmar se la
+/// llevaría por delante. Vitela reescribe el fichero entero al firmar (no
+/// hace actualización incremental), así que la firma anterior dejaría de
+/// cuadrar con el documento: mejor decirlo que romperla en silencio.
+pub const AVISO_YA_FIRMADO: &str =
+    "El documento ya lleva una firma y volver a firmarlo invalidaría la anterior. \
+     Guarda una copia sin firmar y firma esa.";
+
 /// Frase para el usuario cuando una operación destruiría la firma. Ni
 /// «ByteRange» ni «PKCS#7»: qué pasa y qué hacer.
 pub const AVISO_FIRMADO: &str =
@@ -282,6 +290,11 @@ pub fn sign(
     reason: Option<String>,
     apariencia: &Apariencia,
 ) -> Result<(), String> {
+    // firmar reescribe el fichero entero: una firma anterior quedaría
+    // apuntando a desplazamientos que ya no existen
+    if esta_firmado(src_path) {
+        return Err(AVISO_YA_FIRMADO.to_string());
+    }
     let mut doc = LoDoc::load(src_path).map_err(|e| format!("No se ha podido leer el PDF: {e}"))?;
     let pagina = apariencia.page_index.unwrap_or(0) as u32 + 1;
     let page_id = *doc
@@ -1429,6 +1442,31 @@ mod tests {
         }
     }
     impl rsa::rand_core::CryptoRng for Entropia {}
+
+    /// Vitela reescribe el fichero al firmar, así que firmar encima de una
+    /// firma la destruiría. Acrobat encadena firmas con actualización
+    /// incremental; mientras eso no exista, lo honesto es negarse y decir
+    /// qué hacer, no dejar el documento con una firma rota.
+    #[test]
+    fn firmar_un_documento_ya_firmado_avisa_en_vez_de_romper_la_firma() {
+        let (dest, _) = pdf_firmado("firma-doble");
+        let otra = dest.with_extension("otra.pdf");
+        let err = sign(
+            &dest.to_string_lossy(),
+            &otra.to_string_lossy(),
+            &credenciales(),
+            None,
+            &Apariencia::default(),
+        )
+        .unwrap_err();
+        assert!(err.contains("ya lleva una firma"), "aviso poco claro: {err}");
+        assert!(err.contains("copia sin firmar"), "falta el qué hacer: {err}");
+        assert!(!otra.exists(), "no se escribe nada si no se va a firmar");
+        // y la firma que había sigue valiendo
+        let f = &verify_signatures(dest.to_string_lossy().into_owned()).expect("verificar")[0];
+        assert_eq!(f.estado, ESTADO_OK);
+        std::fs::remove_file(&dest).ok();
+    }
 
     /// El contenido del `/AP /N` del widget de firma de la página `pagina`.
     fn ap_de_la_firma(path: &str) -> String {
