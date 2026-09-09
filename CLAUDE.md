@@ -45,6 +45,11 @@ compila los instaladores a mano o al etiquetar `v*`.
 
 - La UI nunca toca el PDF: todo pasa por comandos Tauri (`invoke`) definidos en
   `src-tauri/src/lib.rs`.
+- **Guardar**: `save_pdf` copia la copia de trabajo al destino dejando
+  `/Creator (Vitela)` en su `/Info`. Un PDF **firmado** (lleva `/ByteRange`)
+  se copia byte a byte, sin pasar por lopdf: reescribirlo movería el
+  `/ByteRange` e invalidaría la firma. Si hay protección puesta (ver
+  «Protección»), en vez de copiar cifra al destino.
 - **Copia de trabajo**: `open_pdf(path)` copia el documento a temp y devuelve
   `{ page_count, work_path, had_password }`. Todos los demás comandos operan
   sobre `work_path`; el original solo se toca con `save_pdf(work_path,
@@ -89,6 +94,34 @@ compila los instaladores a mano o al etiquetar `v*`.
   `replace_image` (borra + recrea en los mismos bounds) / `delete_image`,
   `sign_pdf(work, dest, cert_pem, key_pem, reason)` (módulo `firma`, no usa
   PDFium; test con fixtures en `src-tauri/fixtures/`).
+- **Coordenadas y páginas rotadas** (`Geo`, en `lib.rs`): hay dos espacios y
+  cada comando usa uno, a propósito.
+  - **Espacio de la página vista**: el del render, con el `/Rotate` ya
+    aplicado, origen arriba a la izquierda. Es donde la UI dibuja.
+  - **Espacio propio de la página**: el de la caja de la página sin rotar,
+    también con origen arriba a la izquierda para la UI. Es donde viven de
+    verdad los `/Rect` de las anotaciones y las cajas de los objetos.
+  - **Leen en el espacio de la página vista** (la UI los pinta tal cual):
+    `get_annotations`, `get_document_annotations`, `get_links`,
+    `get_form_fields`.
+  - **Escriben en el espacio propio de la página** (la UI convierte con la
+    `rotation` de `get_page_sizes` antes de mandar): `add_highlight`,
+    `add_markup`, `add_stroke`, `add_note`, `add_shape`, `add_stamp`,
+    `add_free_text`, `transform_annotation`, `create_link`,
+    `create_form_field`, `redact_area`, `crop_page`, `add_image`,
+    `transform_image`, `add_text_block`, `stamp_signature`.
+  - **Leen en el espacio propio de la página** (la UI convierte al leer):
+    `get_page_text`, `get_text_blocks`, `get_images`, `search_pdf`.
+  - `get_page_sizes` devuelve `width`/`height` **ya rotados** (el tamaño tal
+    como se ve) más `rotation` en grados horarios (0/90/180/270).
+  - Ojo con `page.height()` de pdfium-render: devuelve la altura **ya
+    rotada** mientras que `annotation.bounds()` sigue sin rotar. Usarla para
+    voltear la `y` desplazaba las anotaciones 246 pt en una A4 girada
+    (AC-014). `Geo::de_pagina` da el espacio de la vista y `.propia()` el de
+    la página; nunca volver a mezclar.
+  - Excepción visible: `add_stamp` cruza su caja y gira su texto al revés
+    que la página para que se lea derecho en pantalla, como Acrobat. El
+    punto de anclaje sigue siendo el que manda la UI, en el espacio propio.
 - Anotaciones: PDFium **no escribe** el `/AP` de las marcas de texto. Lo
   genera en memoria al cargar el documento (por eso se veían en
   `render_page`), pero al guardar no queda nada: fuera de Vitela el
@@ -103,13 +136,25 @@ compila los instaladores a mano o al etiquetar `v*`.
   datos de `get_annotations`. Añadir objetos DENTRO de la anotación
   (`FPDFAnnot_AppendObject`) sigue siendo la vía de los trazos y las
   formas: en pdfium-render 0.8 solo Ink y Stamp exponen `objects_mut`.
+  Las notas llevan `/Name /Comment` y una ventana `/Popup` con `/Open
+  false`, que es el post-it que enseñan Acrobat y Vista Previa. **El popup
+  no es un comentario**: `get_annotations` se lo salta (por `kind`) y
+  `remove_annotation` lo borra junto a su nota para no dejarlo huérfano en
+  `/Annots`.
 - **Autor y fecha**: los seis comandos que crean anotaciones
   (`add_highlight`, `add_stroke`, `add_note`, `add_markup`, `add_shape`,
   `add_stamp`) aceptan `author: Option<String>`; sin él se usa el usuario
   del sistema (`USER`/`USERNAME`/`LOGNAME`). El remate lo hace
   `anotaciones::remata_annot`, el mismo pase de lopdf de la apariencia:
-  escribe `/T` y `/M` (`D:YYYYMMDDHHmmSS`). `get_annotations` los
-  devuelve como `author` y `modified` (ISO 8601, o vacíos).
+  escribe `/T` y `/M` (`D:YYYYMMDDHHmmSS` **más el desfase horario**:
+  `+HH'mm'` o `Z`; sin él, dos comentarios de husos distintos se ordenan mal
+  en cualquier revisor). `get_annotations` los devuelve como `author` y
+  `modified` (ISO 8601 con su zona, o vacíos). Al crear se escribe también
+  `/CreationDate` con esa misma hora: PDFium pone una suya en UTC y en el
+  mismo objeto quedaban dos horas distintas. `remata_annot_en` hace lo
+  mismo sobre una anotación concreta y conserva el `/T` que hubiera: es lo
+  que usa `transform_annotation` para refrescar `/M` al mover un
+  comentario (PDFium escribe una fecha suya, en UTC, que se reescribe).
   **El color de las anotaciones se lee
   siempre con lopdf (`anotaciones::datos_annots`, documento cacheado en el
   hilo), nunca con `stroke_color()` de pdfium-render 0.8**: cuando la anotación tiene
@@ -142,7 +187,7 @@ compila los instaladores a mano o al etiquetar `v*`.
   `add_header_footer` (paginas2.rs); `get/set_outline`, `get/set_metadata`,
   `get_links` (documento.rs); `encrypt_pdf` (AES-256 R6 propio con
   RustCrypto — lopdf 0.34 no escribe cifrado), `flatten_pdf`, `redact_area`
-  (seguridad.rs); `export_pages_png`, `export_text`, `compress_pdf`
+  (seguridad.rs; ver «Protección» abajo); `export_pages_png`, `export_text`, `compress_pdf`
   (exportar.rs); `stamp_signature` + biblioteca de firmas
   (firmas_visuales.rs; `DIR_DATOS` OnceLock en vez de AppHandle);
   `get_image_data` (imagenes.rs); `create_form_field` y `create_link`
@@ -153,6 +198,63 @@ compila los instaladores a mano o al etiquetar `v*`.
   `history_state`, `squash_history` (ver arriba); `list_recent` /
   `touch_recent` / `remove_recent` (recientes.rs) y `confirmar_cierre`
   (lib.rs, ver abajo).
+- Comandos del ciclo 2:
+  - `set_annotation_contents(work_path, page_index, annot_index, contents,
+    author?)` y `set_annotation_color(work_path, page_index, annot_index,
+    color)` (anotaciones.rs): corregir y recolorear un comentario ya creado,
+    al instante y sin «Aceptar», como las propiedades de Acrobat. El color
+    va en `/C` (y `/CA` si no es opaco) y además recolorea lo que la
+    anotación lleve dibujado dentro (Ink y Stamp); las marcas de texto
+    regeneran su `/AP` y los cuadros de texto su `/DA` y su `/AP`.
+  - `get_document_annotations(path)` → `AnnotationInfo` + `page_index` (JSON
+    plano) de **todo** el documento en una pasada, para el panel de
+    comentarios: pedirlas página a página serían N viajes por el canal del
+    hilo de PDFium.
+  - `add_free_text(work_path, page_index, rect, text, font_size, color,
+    border, author?)` (anotaciones2.rs): el «Cuadro de texto» de Acrobat,
+    comentario `FreeText` encima del documento (no toca el content stream,
+    a diferencia de `add_text_block`). Se construye entero con lopdf, con
+    `/AP` propio en Helvetica WinAnsi; corregir su texto o su color rehace
+    esa apariencia (`regenera_freetext`), que si no cambiaría el dato y no
+    lo que se ve.
+  - `delete_pages(work_path, page_indices)` → nuevo total y
+    `rotate_pages(work_path, page_indices, quarter_turns)` con signo (±1,
+    ±2, ±3) (paginas.rs): el lote entero en una sola mutación, un solo ⌘Z.
+    Borrar va de mayor a menor y se niega a dejar el documento sin páginas.
+    `extract_pages` acepta `deleteAfter` para llevarse las páginas del
+    original dentro de la misma operación.
+  - `set_form_choice(work_path, page_index, field_index, value)`
+    (formularios.rs): elige una opción de un desplegable o una lista.
+    `field_index` es el `annot_index` de `get_form_fields`, que ahora
+    devuelve también `options` y trata `ComboBox` y `ListBox`. Va con lopdf
+    (`/V`, `/I` en las listas, `NeedAppearances`) porque pdfium-render 0.8
+    lee las opciones pero no deja escribir el valor.
+  - `remove_encryption(work_path)` y `encrypt_pdf` con `dest_path`
+    opcional y `permisos` (seguridad.rs, ver «Protección»).
+  - Los flags opcionales se declaran `Option<T>` en la firma del comando y
+    no solo en el puente: `search_pdf(match_case, whole_word)`,
+    `extract_pages(delete_after)`, `encrypt_pdf(dest_path, permisos)`. Un
+    `invoke` que no mande el campo tiene que funcionar.
+- **Protección** (`seguridad.rs`): `encrypt_pdf` compone la máscara `/P`
+  del spec a partir de `permisos { imprimir, copiar, editar }` (los tres a
+  `true` por defecto): bit 3 imprimir —y con él el 12, alta calidad—, bit 5
+  copiar, bits 4, 6, 9 y 11 editar/comentar/rellenar/montar; el bit 10
+  (accesibilidad) se queda siempre puesto, como en Acrobat. Con `dest_path`
+  escribe una copia protegida; **sin él la protección se anota para el
+  documento abierto y la aplica `save_pdf`**. No se cifra la copia de
+  trabajo en el sitio a propósito: quedaría ilegible para el resto de
+  comandos (PDFium pediría la contraseña en cada render) y el documento en
+  pantalla dejaría de funcionar. La anotación vive en un mapa por
+  `work_path` (`proteccion_de` / `olvida_proteccion`, que llama
+  `borra_copia` al cerrar) y por eso **no entra en el historial**: ⌘Z no la
+  quita, la quita `remove_encryption`.
+- **Aplanar y casillas**: el marco de un widget lo pinta el entorno de
+  formularios de PDFium desde `/MK` y `/BS` al vuelo, así que
+  `FPDFPage_Flatten` no tiene nada que copiar y la casilla sin marcar
+  desaparecía al aplanar. El marco va dentro de la apariencia:
+  `create_form_field` lo dibuja en sus dos estados y `prepara_para_aplanar`
+  genera el `/AP /N` de los widgets `Btn` que no lo lleven (los PDFs de
+  fuera) desde `/MK` (`/BG`, `/BC`) y `/BS` (`/W`).
 - **Recientes** (`recientes.rs`): lista de ocho en
   `DIR_DATOS/recientes.json`. Solo se guardan ruta y fecha; `name`, `dir`
   y `exists` se recalculan al listar. `open_pdf` NO toca la lista: la
@@ -163,11 +265,20 @@ compila los instaladores a mano o al etiquetar `v*`.
   existen, los shims de `ipc.ts` los dejan en nada):
   - `abrir-fichero` con `{ path }` — doble clic en el Finder/Explorador o
     PDF en la línea de órdenes. `bundle.fileAssociations` declara la
-    extensión; en Windows y Linux llega por `std::env::args()`, en macOS
-    por `RunEvent::Opened` (también con la app ya abierta). Los eventos de
-    Tauri no se encolan y el `listen` de la UI se registra por IPC, así
-    que en arranque frío el PDF se guarda y se manda tras `on_page_load`.
-    Sin test automático: se prueba con `open -a Vitela fichero.pdf`.
+    extensión; en Windows y Linux llega por `std::env::args_os()` (con
+    `args()` un nombre que no sea UTF-8 hace cascar la app al arrancar), en
+    macOS por `RunEvent::Opened` (también con la app ya abierta). **Los
+    eventos de Tauri no se encolan** y el `listen` de la UI se registra por
+    IPC, así que en arranque en frío el PDF se guarda en `ABRIR_PENDIENTE`
+    y se lo lleva la UI con el comando `ui_lista()`, que llama al montarse
+    y que devuelve `Option<String>` con el fichero que esperaba. Ese
+    comando es también el que enciende la bandera «la UI ya escucha»: a
+    partir de ahí los ficheros van por el evento. Ojo con
+    `webview_windows().is_empty()` como guardia de arranque en frío: la
+    ventana se crea en `.build()`, antes de `RunEvent::Opened`, así que
+    nunca es cierta. Sin test automático de extremo a extremo: se prueba
+    con `open -a Vitela fichero.pdf`, con la app cerrada y con ella
+    abierta.
   - `cerrar-solicitado` con `{}` — ⌘W, el botón rojo o ⌘Q. El primer
     intento se frena (`prevent_close` en la ventana y `prevent_exit` en la
     salida, porque en macOS ⌘Q no siempre pasa por la ventana); la UI
@@ -180,7 +291,12 @@ compila los instaladores a mano o al etiquetar `v*`.
   conservando el contexto en español que ya escribimos nosotros. Vive en
   los embudos por los que pasa todo comando —`mutacion`, `with_doc`,
   `with_lopdf`, `cirugia_en_hilo`— más los pocos que no pasan por
-  ninguno; no hace falta llamarla en cada `map_err`.
+  ninguno; no hace falta llamarla en cada `map_err`. **Las rutas de ensayo
+  previo (`dry_run`) y las copias de solo lectura no pasan por `mutacion`**:
+  ahí sí hay que llamarla a mano (`get_image_data`, y `redact_area` y
+  `remove_marginal_text` con `dry_run`), y son justo las que el usuario ve
+  antes de decidir. El test `los_errores_que_ve_el_usuario_no_llevan_jerga`
+  las cubre.
 - **Módulos del core**: `lib.rs` solo tiene la infraestructura (hilo,
   cachés, copia de trabajo, `open_pdf`, render, firma, `run()`); el resto
   por dominio: `busqueda.rs`, `paginas.rs`/`paginas2.rs`,
