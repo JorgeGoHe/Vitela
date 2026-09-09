@@ -433,6 +433,7 @@ mod historial;
 mod imagenes;
 mod paginas;
 mod paginas2;
+mod recientes;
 #[cfg(debug_assertions)]
 pub mod puente_dev;
 mod seguridad;
@@ -618,6 +619,9 @@ pub fn run() {
             historial::redo,
             historial::history_state,
             historial::squash_history,
+            recientes::list_recent,
+            recientes::touch_recent,
+            recientes::remove_recent,
             close_document
         ])
         .build(tauri::generate_context!())

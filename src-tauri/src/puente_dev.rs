@@ -240,6 +240,10 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "redo" => cmd!(historial::redo, { work_path: String }),
         "history_state" => cmd!(historial::history_state, { work_path: String }),
         "squash_history" => cmd!(historial::squash_history, { work_path: String, steps: u16 }),
+        "list_recent" => crate::recientes::list_recent()
+            .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
+        "touch_recent" => cmd!(crate::recientes::touch_recent, { path: String }),
+        "remove_recent" => cmd!(crate::recientes::remove_recent, { path: String }),
         otro => Err(format!("Comando desconocido en el puente: {otro}")),
     }
 }
