@@ -43,6 +43,8 @@ import {
   autosaveState,
   borraSesion,
   listRecent,
+  pdfInfo,
+  type PdfInfo,
   listRedactions,
   applyRedactions,
   mergeMany,
@@ -229,7 +231,11 @@ function resumenFirmas(firmas: FirmaInfo[]): string {
   const dudosa = firmas.find((f) => estadoDeFirma(f).nivel !== "ok");
   if (dudosa) {
     const suyo = dudosa.name || dudosa.cert_subject || "";
-    return `${suyo ? `Firmado por ${suyo} · ` : ""}${estadoDeFirma(dudosa).texto.toLowerCase()}`;
+    const texto = estadoDeFirma(dudosa).texto;
+    // solo baja la PRIMERA letra: `toLowerCase()` sobre la frase entera se
+    // llevaba por delante la mayúscula de «Vitela»
+    const seguido = texto.charAt(0).toLowerCase() + texto.slice(1);
+    return `${suyo ? `Firmado por ${suyo} · ${seguido}` : texto}`;
   }
   const quien = firmas[0].name || firmas[0].cert_subject || "";
   const cuando = firmas[0].signed_at ? ` el ${fechaLarga(firmas[0].signed_at)}` : "";
@@ -437,6 +443,11 @@ function App() {
     onClick: () => void;
   } | null>(null);
   const [recientes, setRecientes] = useState<Reciente[]>([]);
+  // ficha de cada reciente (páginas, tamaño y si va cifrado), pedida sin
+  // abrir el documento: es lo que deja poner el candado antes de pinchar
+  const [fichasRecientes, setFichasRecientes] = useState<
+    Record<string, PdfInfo | null>
+  >({});
   // ficheros soltados de golpe: abrir el primero o unirlos
   const [dropAsk, setDropAsk] = useState<string[] | null>(null);
   const [arrastrando, setArrastrando] = useState(false);
@@ -618,6 +629,27 @@ function App() {
   useEffect(() => {
     if (!workPath) refrescarRecientes();
   }, [workPath, refrescarRecientes]);
+
+  // La ficha de cada reciente que sigue en su sitio: `pdf_info` no abre el
+  // documento ni pide la contraseña, así que se puede preguntar por los
+  // ocho. Sin esto, un PDF protegido no se distinguía hasta pincharlo y
+  // encontrarse el diálogo de contraseña.
+  useEffect(() => {
+    let cancelado = false;
+    for (const r of recientes) {
+      if (!r.exists || fichasRecientes[r.path] !== undefined) continue;
+      pdfInfo(r.path)
+        .then((i) => {
+          if (!cancelado) setFichasRecientes((m) => ({ ...m, [r.path]: i }));
+        })
+        .catch(() => {
+          if (!cancelado) setFichasRecientes((m) => ({ ...m, [r.path]: null }));
+        });
+    }
+    return () => {
+      cancelado = true;
+    };
+  }, [recientes, fichasRecientes]);
 
   /** Al arrancar: si quedó una sesión sin guardar, se ofrece recuperarla.
    *  La copia de trabajo ya estaba en temp; lo que faltaba era el apunte. */
@@ -1652,11 +1684,12 @@ function App() {
   }
 
   /** Salta a la página escrita en la píldora; fuera de rango, gotoPage la
-   *  recorta en silencio. */
+   *  recorta en silencio. Es un salto largo, así que pasa por `saltarA` y
+   *  ⌥← devuelve a donde se estaba leyendo. */
   function irAPaginaEscrita() {
     const n = Number.parseInt(pageDraft ?? "", 10);
     setPageDraft(null);
-    if (!Number.isNaN(n)) gotoPage(n - 1);
+    if (!Number.isNaN(n)) saltarA(Math.min(Math.max(n - 1, 0), pageCount - 1));
   }
 
   /** El punto de lectura de ahora mismo. */
@@ -1794,6 +1827,7 @@ function App() {
     onError: (e) => setError(String(e)),
   });
   const limpiarBusqueda = busqueda.limpiar;
+  const busquedaTrasMutacion = busqueda.trasMutacion;
   hayCoincidenciasRef.current = busqueda.matches.length > 0;
 
   // Seguimiento del scroll: la página cuyo centro queda más cerca del centro
@@ -1920,13 +1954,15 @@ function App() {
     setPageCount(newCount);
     setModified(true);
     setError(null);
-    limpiarBusqueda();
+    // las cajas de las coincidencias ya no valen, pero la lista sí interesa:
+    // se rehace la búsqueda en vez de tirarla (Acrobat mantiene el panel)
+    busquedaTrasMutacion();
     setPageIndex((p) => Math.max(0, Math.min(nextPage ?? p, newCount - 1)));
     // el docVersion nuevo deja inservible todo el caché: liberar los blobs
     evictAll();
     setDocVersion((v) => v + 1);
     refrescarHistorial();
-  }, [refrescarHistorial, evictAll, limpiarBusqueda]);
+  }, [refrescarHistorial, evictAll, busquedaTrasMutacion]);
 
   const reemplazo = useReemplazo({
     workPath,
@@ -3831,7 +3867,9 @@ function App() {
                 girarLote={girarPaginas}
                 eliminarLote={borrarPaginas}
                 extraerLote={() => setExtraerOpen(true)}
-                gotoPage={gotoPage}
+                // el clic en una miniatura es un salto largo como cualquier
+                // otro: Acrobat lo apila en «Vista anterior» y aquí también
+                gotoPage={saltarA}
                 movePage={movePage}
                 rotatePage={rotatePage}
                 duplicatePageAt={duplicatePageAt}
@@ -3867,19 +3905,38 @@ function App() {
                 {recientes.length > 0 && (
                   <div className="recientes">
                     <span className="card-label">Recientes</span>
-                    {recientes.map((r) => (
+                    {recientes.map((r) => {
+                      const ficha = fichasRecientes[r.path];
+                      return (
                       <div
                         key={r.path}
                         className={`reciente${r.exists ? "" : " no-esta"}`}
                       >
                         <button
                           className="reciente-abrir"
-                          title={r.exists ? r.path : `Ya no está en ${r.path}`}
+                          title={
+                            !r.exists
+                              ? `Ya no está en ${r.path}`
+                              : ficha?.encrypted
+                                ? `${r.path} · protegido: pedirá la contraseña`
+                                : r.path
+                          }
                           disabled={!r.exists}
                           onClick={() => abrirReciente(r.path)}
                         >
-                          <span className="reciente-nombre">{r.name}</span>
+                          <span className="reciente-nombre">
+                            {ficha?.encrypted && (
+                              <Icon name="lock" size={11} />
+                            )}
+                            {r.name}
+                          </span>
                           <span className="reciente-dir">{r.dir}</span>
+                          {ficha && (
+                            <span className="reciente-ficha dato">
+                              {plural(ficha.page_count, "página", "páginas")} ·{" "}
+                              {tamanoFichero(ficha.bytes)}
+                            </span>
+                          )}
                         </button>
                         {!r.exists && (
                           <button
@@ -3890,7 +3947,8 @@ function App() {
                           </button>
                         )}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

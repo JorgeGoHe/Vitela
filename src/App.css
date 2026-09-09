@@ -862,9 +862,23 @@ textarea {
 .reciente-nombre {
   font-size: 12px;
   max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* el candado del reciente protegido: se ve antes de pinchar, no después */
+.reciente-nombre > svg {
+  flex-shrink: 0;
+  color: var(--fg-muted);
+}
+
+.reciente-ficha {
+  font-size: 11px;
+  color: var(--fg-muted);
 }
 
 .reciente-dir {

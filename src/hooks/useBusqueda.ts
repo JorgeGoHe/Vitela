@@ -99,6 +99,19 @@ export function useBusqueda(opts: {
     if (opts.contexto && searched && !conContexto) repetir.current();
   }, [opts.contexto, searched, conContexto]);
 
+  // Tras mutar el documento las cajas de las coincidencias ya no valen. Se
+  // rehace la búsqueda en vez de tirar la lista: reemplazar (o un ⌘Z detrás)
+  // dejaba al usuario sin resultados y con el término aún escrito, teniendo
+  // que volver a pulsar Enter. Acrobat mantiene el panel.
+  const trasMutacionRef = useRef(() => {});
+  useEffect(() => {
+    trasMutacionRef.current = () => {
+      if (searched && query.trim()) void ejecuta(opciones, true);
+      else limpiar();
+    };
+  });
+  const trasMutacion = useCallback(() => trasMutacionRef.current(), []);
+
   /** Cambia una opción y, si ya había resultados, repite la búsqueda. */
   function cambiaOpcion(clave: keyof OpcionesBusqueda) {
     const next = { ...opciones, [clave]: !opciones[clave] };
@@ -156,6 +169,7 @@ export function useBusqueda(opts: {
     cambiaOpcion,
     gotoMatch,
     repetirUltima,
+    trasMutacion,
     irAMatch,
     matchesByPage,
     limpiar,
