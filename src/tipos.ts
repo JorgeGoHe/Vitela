@@ -539,7 +539,14 @@ export const FIRMA_VACIA: FirmaDraft = {
  *  Tres niveles, como Acrobat: bien, mal y **«no se ha podido comprobar»**.
  *  El tercero es el que faltaba: una firma ECDSA o con SHA-512 salía en rojo
  *  acusando de manipulación un documento intacto. Acrobat nunca dice «no
- *  válida» cuando lo que pasa es que no sabe. */
+ *  válida» cuando lo que pasa es que no sabe.
+ *
+ *  **Rojo solo cuando el contenido firmado no cuadra.** Una revisión añadida
+ *  detrás de la firma —rellenar un campo, una segunda firma, el DSS de una
+ *  firma con LTV— es lo normal en un PDF firmado que sigue vivo, y en
+ *  Acrobat tampoco es rojo: la firma sigue siendo válida y lo que hay es
+ *  contenido que no avala. Por eso ese caso es `duda`, y va después de
+ *  comprobar el digest: si además el digest falla, manda el rojo. */
 export function estadoDeFirma(f: {
   estado?: EstadoFirma;
   covers_whole_file: boolean;
@@ -552,16 +559,16 @@ export function estadoDeFirma(f: {
         "No se ha podido comprobar la firma: usa un tipo de firma que Vitela todavía no sabe leer",
     };
   }
-  if (!f.covers_whole_file) {
-    return {
-      nivel: "mal",
-      texto: "Se ha añadido contenido después de firmarse",
-    };
-  }
   if (f.estado === "modificado" || !f.digest_ok) {
     return {
       nivel: "mal",
       texto: "El documento ha cambiado después de firmarse",
+    };
+  }
+  if (!f.covers_whole_file) {
+    return {
+      nivel: "duda",
+      texto: "La firma es válida, pero hay cambios posteriores que no avala",
     };
   }
   return { nivel: "ok", texto: "El documento no ha cambiado desde la firma" };

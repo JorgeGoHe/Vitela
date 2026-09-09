@@ -2,6 +2,18 @@ import type { FirmaInfo } from "../api";
 import { estadoDeFirma, fechaLarga } from "../tipos";
 import Icon from "./Icon";
 
+/** El certificado no está caducado sino al revés: su periodo de validez
+ *  empezaba después de la fecha de la firma. El backend lo marca igual
+ *  (`expired`), y decir «caducado» de un certificado que aún no había
+ *  entrado en vigor sería contar lo contrario de lo que pasa. */
+function aunNoValido(f: FirmaInfo): boolean {
+  if (!f.not_before) return false;
+  const desde = new Date(f.not_before).getTime();
+  const firmado = new Date(f.signed_at || Date.now()).getTime();
+  if (Number.isNaN(desde) || Number.isNaN(firmado)) return false;
+  return desde > firmado;
+}
+
 /**
  * Pestaña «Firmas» del sidebar: una tarjeta por firma con quién firmó,
  * quién emitió su certificado, cuándo, por qué y qué se ha comprobado.
@@ -74,7 +86,9 @@ export default function PanelFirmasDoc({
             )}
             <span className="firma-linea">
               {f.expired
-                ? "El certificado está caducado"
+                ? aunNoValido(f)
+                  ? "El certificado todavía no era válido cuando se firmó"
+                  : "El certificado está caducado"
                 : f.not_after
                   ? `Certificado válido hasta ${fechaLarga(f.not_after)}`
                   : "Sin fecha de caducidad"}
