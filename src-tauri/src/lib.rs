@@ -1104,6 +1104,7 @@ pub fn run() {
             seguridad2::sanitize_pdf,
             exportar::export_pages_png,
             exportar::export_text,
+            exportar::export_docx,
             exportar::compress_pdf,
             formularios2::create_form_field,
             formularios2::create_link,

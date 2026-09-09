@@ -233,6 +233,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "sanitize_pdf" => cmd!(seguridad2::sanitize_pdf, { work_path: String, dry_run: bool }),
         "export_pages_png" => cmd!(exportar::export_pages_png, { path: String, dest_dir: String, dpi: u16, format: String }),
         "export_text" => cmd!(exportar::export_text, { path: String, dest_path: String }),
+        "export_docx" => cmd!(exportar::export_docx, { work_path: String, dest_path: String, page_indices: Option<Vec<u16>> }),
         "compress_pdf" => cmd!(exportar::compress_pdf, { work_path: String, quality: u8, max_dpi: u16 }),
         "create_form_field" => cmd!(crate::formularios2::create_form_field, { work_path: String, page_index: u16, kind: String, rect: crate::Rect, name: String }),
         "delete_form_field" => cmd!(crate::formularios2::delete_form_field, { work_path: String, name: String }),

@@ -54,6 +54,7 @@ cbc = { version = "0.1", features = ["alloc"] }
 getrandom = "0.2"
 # puente HTTP de QA (el código solo se compila en debug)
 tiny_http = "0.12"
+docx-rs = "0.4.22"
 
 # cadena de confianza de las firmas (ciclo 5): las raíces las pone el
 # sistema, no Vitela. En macOS las evalúa el propio llavero; en Windows y
@@ -66,3 +67,7 @@ core-foundation = "0.10"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 rustls-native-certs = "0.8"
+
+[dev-dependencies]
+# solo para abrir el .docx en el test de export_docx y leer su XML
+zip = { version = "8", default-features = false, features = ["deflate"] }

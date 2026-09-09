@@ -5,7 +5,7 @@ use crate::historial::mutacion;
 use pdfium_render::prelude::*;
 use serde::Serialize;
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct TextBlock {
     pub object_index: u32,
     pub text: String,
@@ -14,7 +14,18 @@ pub struct TextBlock {
     pub w: f32,
     pub h: f32,
     pub font_size: f32,
+    /// Familia **normalizada** (Helvetica, Times, Courier…): las fuentes
+    /// internas de PDFium cambian de nombre entre builds. El estilo va
+    /// aparte, en `negrita` y `cursiva`, porque `normaliza_familia` se lo
+    /// llevaba por delante («Arial-Bold» salía «Helvetica») y al exportar a
+    /// Word el párrafo perdía el énfasis.
     pub font_family: String,
+    pub negrita: bool,
+    pub cursiva: bool,
+    /// Color del relleno del texto, RGBA. Sin él la UI no puede pintar del
+    /// color real el botón «A» («el color que ya tenga») ni conservarlo al
+    /// corregir un párrafo de varias líneas.
+    pub color: [u8; 4],
 }
 
 /// Directorios de fuentes TTF del sistema, por plataforma.
@@ -106,13 +117,16 @@ pub(crate) fn fuente_por_nombre(doc: &mut PdfDocument<'static>, nombre: &str) ->
 pub(crate) fn normaliza_familia(familia: &str) -> String {
     let f = familia.trim();
     let n = f.to_lowercase();
-    if n.contains("chrom sans") || n.starts_with("arial") || n == "helvetica" {
+    // por subcadena, no por prefijo exacto: el nombre real de un PDF de
+    // fuera viene con el estilo pegado («TimesNewRomanPS-BoldItalicMT»),
+    // y ese estilo lo lee `estilo_del_nombre`, no esta función
+    if n.contains("chrom sans") || n.contains("arial") || n.contains("helvetica") {
         return "Helvetica".into();
     }
-    if n.contains("chrom serif") || n == "times" || n.starts_with("times new") {
+    if n.contains("chrom serif") || n.contains("times") {
         return "Times".into();
     }
-    if n.contains("chrom mono") || n.starts_with("courier") {
+    if n.contains("chrom mono") || n.contains("courier") {
         return "Courier".into();
     }
     f.to_string()
@@ -165,47 +179,86 @@ fn ancho_del_objeto(obj: &PdfPageTextObject, texto: &str, size: f32) -> f32 {
 /// en coords de UI.
 #[tauri::command(async)]
 pub fn get_text_blocks(path: String, page_index: u16) -> Result<Vec<TextBlock>, String> {
-    on_pdfium_thread(move || {
-        with_doc(&path, |doc| {
-            let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-            // espacio propio de la página: las cajas de los objetos no
-            // llevan la rotación, y `page.height()` sí (ver `Geo`)
-            let geo = crate::Geo::de_pagina(&page).propia();
-            let objects = page.objects();
-            let mut out = Vec::new();
-            for i in 0..objects.len() {
-                let Ok(obj) = objects.get(i) else { continue };
-                let Some(t) = obj.as_text_object() else {
-                    continue;
-                };
-                let text = t.text();
-                if text.trim().is_empty() {
-                    continue;
-                }
-                let Ok(b) = obj.bounds() else { continue };
-                // `bounds()` de un objeto de página son quadpoints; los
-                // giros del PDF son múltiplos de 90°, así que su caja
-                // envolvente es el rect
-                let caja = geo.pdf_rect_a_ui(&PdfRect::new(
-                    b.bottom(),
-                    b.left(),
-                    b.top(),
-                    b.right(),
-                ));
-                out.push(TextBlock {
-                    object_index: i as u32,
-                    text,
-                    x: caja.x,
-                    y: caja.y,
-                    w: caja.w,
-                    h: caja.h,
-                    font_size: t.unscaled_font_size().value,
-                    font_family: normaliza_familia(&t.font().family()),
-                });
-            }
-            Ok(out)
-        })
-    })
+    on_pdfium_thread(move || with_doc(&path, |doc| Ok(bloques_de(doc, page_index))))
+}
+
+/// El cuerpo de [`get_text_blocks`], sobre un documento ya abierto: lo usa
+/// también la exportación a Word, que trabaja sobre una copia propia de
+/// solo lectura. Una página que no existe no es un error: no tiene bloques.
+pub(crate) fn bloques_de(doc: &PdfDocument<'static>, page_index: u16) -> Vec<TextBlock> {
+    let Ok(page) = doc.pages().get(page_index) else {
+        return Vec::new();
+    };
+    // espacio propio de la página: las cajas de los objetos no
+    // llevan la rotación, y `page.height()` sí (ver `Geo`)
+    let geo = crate::Geo::de_pagina(&page).propia();
+    let objects = page.objects();
+    let mut out = Vec::new();
+    for i in 0..objects.len() {
+        let Ok(obj) = objects.get(i) else { continue };
+        let Some(t) = obj.as_text_object() else {
+            continue;
+        };
+        let text = t.text();
+        if text.trim().is_empty() {
+            continue;
+        }
+        let Ok(b) = obj.bounds() else { continue };
+        // `bounds()` de un objeto de página son quadpoints; los
+        // giros del PDF son múltiplos de 90°, así que su caja
+        // envolvente es el rect
+        let caja = geo.pdf_rect_a_ui(&PdfRect::new(b.bottom(), b.left(), b.top(), b.right()));
+        let fuente = t.font();
+        let cruda = fuente.family();
+        let c = obj.fill_color().unwrap_or(PdfColor::new(0, 0, 0, 255));
+        let estilo = estilo_de(&fuente, &cruda);
+        out.push(TextBlock {
+            object_index: i as u32,
+            text,
+            x: caja.x,
+            y: caja.y,
+            w: caja.w,
+            h: caja.h,
+            font_size: t.unscaled_font_size().value,
+            font_family: normaliza_familia(&cruda),
+            negrita: estilo.0,
+            cursiva: estilo.1,
+            color: [c.red(), c.green(), c.blue(), c.alpha()],
+        });
+    }
+    out
+}
+
+/// El estilo que declara el **nombre** de la fuente: «Arial-BoldMT»,
+/// «Helvetica-Oblique», «TimesNewRomanPS-BoldItalicMT». Devuelve
+/// `(negrita, cursiva)`.
+///
+/// El nombre manda porque **el peso que devuelve PDFium no es de fiar**: lo
+/// avisa su propia documentación y se comprueba a ojo con las fuentes
+/// internas de este build (chromium/8009), donde `times_bold()` sale como
+/// «Times New Roman» con peso 0 y sin la bandera de negrita del descriptor.
+/// En un PDF de fuera, que lleva la fuente embebida con su nombre real, el
+/// nombre acierta.
+pub(crate) fn estilo_del_nombre(nombre: &str) -> (bool, bool) {
+    let n = nombre.to_lowercase();
+    let negrita = n.contains("bold") || n.contains("negrita") || n.contains("black")
+        || n.contains("heavy") || n.contains("semibold");
+    let cursiva = n.contains("italic") || n.contains("oblique") || n.contains("cursiva");
+    (negrita, cursiva)
+}
+
+/// El estilo de una fuente concreta: el nombre y, si calla, lo que digan el
+/// peso y la bandera del descriptor.
+fn estilo_de(fuente: &PdfFont, nombre: &str) -> (bool, bool) {
+    let (negrita, cursiva) = estilo_del_nombre(nombre);
+    let pesada = matches!(
+        fuente.weight(),
+        Ok(PdfFontWeight::Weight600
+            | PdfFontWeight::Weight700Bold
+            | PdfFontWeight::Weight800
+            | PdfFontWeight::Weight900)
+    ) || matches!(fuente.weight(), Ok(PdfFontWeight::Custom(p)) if p >= 600);
+    (negrita || pesada, cursiva || fuente.is_italic())
 }
 
 /// Edición real de texto: reescribe el objeto de texto del content stream.
@@ -525,6 +578,26 @@ mod tests {
     use crate::tests::{crea_pdf, textos_de};
     #[allow(unused_imports)]
     use crate::{get_page_sizes, open_pdf, render_page_b64, render_page_png};
+
+    /// **G2.** La familia va normalizada y el estilo aparte: hasta el ciclo
+    /// 5 `normaliza_familia` convertía «Arial-BoldMT» en «Helvetica» y el
+    /// párrafo perdía la negrita al exportar a Word. El nombre es la fuente
+    /// de verdad porque el peso que devuelve PDFium no lo es (con las
+    /// fuentes internas de chromium/8009, `times_bold()` sale como «Times
+    /// New Roman» con peso 0).
+    #[test]
+    fn el_nombre_de_la_fuente_dice_el_estilo_y_la_familia_no_se_lo_come() {
+        assert_eq!(estilo_del_nombre("Arial-BoldMT"), (true, false));
+        assert_eq!(estilo_del_nombre("Helvetica-Oblique"), (false, true));
+        assert_eq!(
+            estilo_del_nombre("TimesNewRomanPS-BoldItalicMT"),
+            (true, true)
+        );
+        assert_eq!(estilo_del_nombre("Georgia"), (false, false));
+        // y la familia sigue normalizándose, que es lo que la UI enseña
+        assert_eq!(normaliza_familia("Arial-BoldMT"), "Helvetica");
+        assert_eq!(normaliza_familia("TimesNewRomanPS-BoldItalicMT"), "Times");
+    }
 
     #[test]
     fn normaliza_nombres_de_fuentes_internas() {

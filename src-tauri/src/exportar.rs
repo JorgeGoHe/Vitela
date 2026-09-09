@@ -251,6 +251,97 @@ mod tests {
     use crate::tests::crea_pdf;
     use base64::Engine;
 
+    /// Un fichero del `.docx` (que es un zip), como texto.
+    fn dentro_del_docx(docx: &std::path::Path, fichero: &str) -> String {
+        let f = std::fs::File::open(docx).expect("abrir el .docx");
+        let mut zip = zip::ZipArchive::new(f).expect("el .docx tiene que ser un zip válido");
+        let mut entrada = zip
+            .by_name(fichero)
+            .unwrap_or_else(|_| panic!("el .docx no lleva {fichero}"));
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut entrada, &mut s).expect("leer");
+        s
+    }
+
+    /// **G2.** Exportar a Word: los párrafos en orden de lectura, con su
+    /// fuente, su tamaño y su color, las imágenes incrustadas y un salto de
+    /// página entre páginas. Y el informe honesto de lo que se queda
+    /// fuera: un PDF no guarda columnas ni tablas, y no se inventan.
+    #[test]
+    fn exportar_a_word_lleva_texto_en_orden_color_fuente_e_imagenes() {
+        let dir = std::env::temp_dir();
+        let pdf = dir.join("exportar-docx-test.pdf");
+        let png = dir.join("exportar-docx-test.png");
+        let docx = dir.join("exportar-docx-test.docx");
+        crea_pdf(&["Primera pagina", "Segunda pagina"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        image::RgbaImage::from_pixel(60, 30, image::Rgba([20, 120, 220, 255]))
+            .save(&png)
+            .expect("crear png");
+
+        // un titular rojo en Times arriba del todo y una imagen debajo
+        crate::texto::add_text_block(
+            work.clone(),
+            0,
+            50.0,
+            60.0,
+            "Titular en rojo".into(),
+            20.0,
+            Some("Times-Bold".into()),
+            Some([220, 20, 20, 255]),
+            None,
+        )
+        .expect("titular");
+        crate::imagenes::add_image(work.clone(), 0, png.to_string_lossy().into_owned(), 60.0, 300.0)
+            .expect("imagen");
+
+        let informe = export_docx(work.clone(), docx.to_string_lossy().into_owned(), None)
+            .expect("exportar a docx");
+        assert_eq!(informe.parrafos, 3, "dos textos de la página 1 y uno de la 2");
+        assert_eq!(informe.imagenes, 1);
+        assert!(
+            informe.perdido.iter().any(|p| p.contains("columnas")),
+            "el informe tiene que decir que la maquetación no sale: {:?}",
+            informe.perdido
+        );
+
+        let xml = dentro_del_docx(&docx, "word/document.xml");
+        let pos = |aguja: &str| xml.find(aguja).unwrap_or_else(|| panic!("falta {aguja} en el XML"));
+        // orden de lectura: el titular (y=60) antes que el texto de la
+        // página (y≈100) y que la segunda página
+        assert!(
+            pos("Titular en rojo") < pos("Primera pagina"),
+            "el titular va más arriba en la página, así que va antes"
+        );
+        assert!(pos("Primera pagina") < pos("Segunda pagina"));
+        // fuente, tamaño, color y estilo del titular
+        assert!(xml.contains("w:ascii=\"Times\""), "la familia del titular");
+        assert!(xml.contains("w:val=\"40\""), "20 pt son 40 medios puntos");
+        assert!(xml.contains("DC1414"), "el color rojo del titular");
+        // el salto de página entre las dos páginas
+        assert!(xml.contains("w:type=\"page\""), "falta el salto de página");
+        // la imagen, con su relación
+        assert!(xml.contains("<w:drawing>"), "falta la imagen");
+        let rels = dentro_del_docx(&docx, "word/_rels/document.xml.rels");
+        assert!(
+            rels.contains("/image") && rels.contains(".png"),
+            "la imagen tiene que estar relacionada: {rels}"
+        );
+
+        // un rango de páginas exporta solo eso
+        let informe = export_docx(work.clone(), docx.to_string_lossy().into_owned(), Some(vec![1]))
+            .expect("exportar la segunda");
+        assert_eq!(informe.parrafos, 1);
+        assert_eq!(informe.imagenes, 0);
+        let xml = dentro_del_docx(&docx, "word/document.xml");
+        assert!(!xml.contains("Primera pagina"), "solo la página pedida");
+        assert!(!xml.contains("w:type=\"page\""), "una sola página, sin salto");
+
+        for f in [&pdf, &png, &docx] {
+            std::fs::remove_file(f).ok();
+        }
+    }
+
     /// «Reducir tamaño» sobre un documento sin ninguna imagen decía que «las
     /// imágenes ya están comprimidas». No hay imágenes: el motivo es otro.
     #[test]
@@ -377,4 +468,206 @@ mod tests {
         assert_eq!(imgs.len(), 1);
         assert!((imgs[0].w - 300.0).abs() < 2.0);
     }
+}
+
+/// Lo que ha salido en el `.docx` y lo que se ha quedado por el camino.
+/// La UI avisa **antes** de pedir destino; esto es para decir después qué
+/// ha pasado de verdad con este documento concreto.
+#[derive(Serialize, Debug, Default)]
+pub struct DocxReport {
+    /// Párrafos escritos (un bloque de texto del PDF, un párrafo).
+    pub parrafos: u32,
+    /// Imágenes incrustadas.
+    pub imagenes: u32,
+    /// Lo que el `.docx` NO lleva, en llano y sin excusas, para que la UI
+    /// lo cuente sin adornarlo.
+    pub perdido: Vec<String>,
+}
+
+/// Exporta a Word (`.docx`) lo que Vitela sabe leer del PDF: un párrafo por
+/// bloque de texto, ordenados de arriba abajo y de izquierda a derecha, con
+/// su familia, tamaño, negrita, cursiva y color; las imágenes en su sitio
+/// aproximado; y un salto de página por página.
+///
+/// **Es una aproximación, y a propósito.** Un PDF no guarda párrafos,
+/// columnas ni tablas: guarda trozos de texto colocados en un papel.
+/// Reconstruir la maquetación es adivinar, y adivinar mal en un contrato es
+/// peor que entregar texto corrido. Así que **no se intenta detectar tablas
+/// ni columnas**: el resultado es el texto en orden de lectura, que es lo
+/// que sirve para reescribir un documento sencillo en Word.
+///
+/// Escribe fuera de la copia de trabajo, así que no muta el documento ni
+/// deja paso de deshacer.
+#[tauri::command(async)]
+pub fn export_docx(
+    work_path: String,
+    dest_path: String,
+    page_indices: Option<Vec<u16>>,
+) -> Result<DocxReport, String> {
+    use docx_rs::{BreakType, Docx, Paragraph, Pic, Run, RunFonts};
+    on_pdfium_thread(move || {
+        // documento propio de solo lectura: `get_processed_image`
+        // transforma el objeto de imagen y sobre el documento cacheado
+        // falsearía los bounds del render (lo mismo que `get_image_data`)
+        let doc = pdfium()?
+            .load_pdf_from_file(&work_path, None)
+            .map_err(crate::mensaje_llano)?;
+        let total = doc.pages().len();
+        let paginas: Vec<u16> = match page_indices {
+            Some(v) => v.into_iter().filter(|i| *i < total).collect(),
+            None => (0..total).collect(),
+        };
+        if paginas.is_empty() {
+            return Err("No hay ninguna página que exportar".into());
+        }
+
+        let mut docx = Docx::new();
+        let mut informe = DocxReport::default();
+        let (mut ilegibles, mut vectores, mut comentarios, mut campos) = (0u32, false, false, false);
+
+        for (orden, &pi) in paginas.iter().enumerate() {
+            let Ok(page) = doc.pages().get(pi) else { continue };
+            let geo = crate::Geo::de_pagina(&page).propia();
+            // texto e imágenes en una sola lista, ordenada como se lee
+            let mut trozos: Vec<(i32, i32, Trozo)> = Vec::new();
+            for b in crate::texto::bloques_de(&doc, pi) {
+                trozos.push((b.y.round() as i32, b.x.round() as i32, Trozo::Texto(b)));
+            }
+            let objetos = page.objects();
+            for i in 0..objetos.len() {
+                let Ok(obj) = objetos.get(i) else { continue };
+                if obj.as_path_object().is_some() {
+                    vectores = true;
+                    continue;
+                }
+                let Some(img) = obj.as_image_object() else { continue };
+                let Ok(b) = obj.bounds() else { continue };
+                let caja = geo.pdf_rect_a_ui(&PdfRect::new(b.bottom(), b.left(), b.top(), b.right()));
+                match png_de_imagen(img, &doc) {
+                    Some((png, ancho_px, alto_px)) => trozos.push((
+                        caja.y.round() as i32,
+                        caja.x.round() as i32,
+                        Trozo::Imagen {
+                            png,
+                            ancho_px,
+                            alto_px,
+                            ancho_pt: caja.w,
+                            alto_pt: caja.h,
+                        },
+                    )),
+                    None => ilegibles += 1,
+                }
+            }
+            trozos.sort_by_key(|(y, x, _)| (*y, *x));
+
+            for (_, _, trozo) in trozos {
+                match trozo {
+                    Trozo::Texto(b) => {
+                        // Word mide en medios puntos
+                        let mut run = Run::new()
+                            .add_text(b.text.clone())
+                            .size(((b.font_size.round().max(1.0)) as usize) * 2)
+                            .fonts(RunFonts::new().ascii(b.font_family.clone()))
+                            .color(format!(
+                                "{:02X}{:02X}{:02X}",
+                                b.color[0], b.color[1], b.color[2]
+                            ));
+                        if b.negrita {
+                            run = run.bold();
+                        }
+                        if b.cursiva {
+                            run = run.italic();
+                        }
+                        docx = docx.add_paragraph(Paragraph::new().add_run(run));
+                        informe.parrafos += 1;
+                    }
+                    Trozo::Imagen {
+                        png,
+                        ancho_px,
+                        alto_px,
+                        ancho_pt,
+                        alto_pt,
+                    } => {
+                        // EMU: 914400 por pulgada, 12700 por punto PDF
+                        let pic = Pic::new_with_dimensions(png, ancho_px, alto_px)
+                            .size((ancho_pt * 12700.0) as u32, (alto_pt * 12700.0) as u32);
+                        docx = docx
+                            .add_paragraph(Paragraph::new().add_run(Run::new().add_image(pic)));
+                        informe.imagenes += 1;
+                    }
+                }
+            }
+
+            for a in page.annotations().iter() {
+                match a.annotation_type() {
+                    PdfPageAnnotationType::Widget => campos = true,
+                    PdfPageAnnotationType::Popup => {}
+                    _ => comentarios = true,
+                }
+            }
+
+            if orden + 1 < paginas.len() {
+                docx = docx.add_paragraph(
+                    Paragraph::new().add_run(Run::new().add_break(BreakType::Page)),
+                );
+            }
+        }
+
+        informe.perdido.push(
+            "La maquetación: las columnas y las tablas salen como texto corrido".into(),
+        );
+        if vectores {
+            informe
+                .perdido
+                .push("Los dibujos vectoriales (líneas, recuadros y fondos)".into());
+        }
+        if comentarios {
+            informe.perdido.push("Los comentarios y las anotaciones".into());
+        }
+        if campos {
+            informe
+                .perdido
+                .push("Los campos de formulario (sale el documento, no el formulario)".into());
+        }
+        if ilegibles > 0 {
+            informe.perdido.push(if ilegibles == 1 {
+                "Una imagen que no se ha podido leer".to_string()
+            } else {
+                format!("{ilegibles} imágenes que no se han podido leer")
+            });
+        }
+
+        let fichero = std::fs::File::create(&dest_path)
+            .map_err(|e| crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}")))?;
+        docx.build()
+            .pack(fichero)
+            .map_err(|e| crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}")))?;
+        Ok(informe)
+    })
+}
+
+/// Un trozo de página que va al `.docx`, con su sitio para ordenarlo.
+enum Trozo {
+    Texto(crate::texto::TextBlock),
+    Imagen {
+        png: Vec<u8>,
+        ancho_px: u32,
+        alto_px: u32,
+        ancho_pt: f32,
+        alto_pt: f32,
+    },
+}
+
+/// El bitmap de un objeto de imagen, en PNG y con su tamaño en píxeles.
+/// `None` si PDFium no sabe descomprimirlo (JBIG2, JPX raros): esa imagen
+/// se cuenta como perdida en vez de tirar la exportación entera.
+fn png_de_imagen(
+    img: &PdfPageImageObject,
+    doc: &PdfDocument<'static>,
+) -> Option<(Vec<u8>, u32, u32)> {
+    let bitmap = img.get_processed_image(doc).ok()?;
+    let (ancho, alto) = (bitmap.width(), bitmap.height());
+    let mut buf = Cursor::new(Vec::new());
+    bitmap.write_to(&mut buf, image::ImageFormat::Png).ok()?;
+    Some((buf.into_inner(), ancho, alto))
 }
