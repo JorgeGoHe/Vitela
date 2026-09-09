@@ -10,6 +10,9 @@ import type { Anotaciones } from "../../hooks/pagina/useAnotaciones";
 import Icon from "../Icon";
 import type { ToolProps } from "../Pagina";
 
+/** Marcas de texto: las que se pueden seleccionar con un clic. */
+const MARCAS = ["Highlight", "Underline", "Strikeout", "StrikeOut"];
+
 export function MarcasAnotaciones({
   mode,
   anotaciones,
@@ -19,7 +22,7 @@ export function MarcasAnotaciones({
   anotaciones: Anotaciones;
   scale: number;
 }) {
-  const { annots, annotDraft, startAnnotAction } = anotaciones;
+  const { annots, annotDraft, startAnnotAction, setNotePopover } = anotaciones;
   return (
     <>
       {annots
@@ -69,6 +72,34 @@ export function MarcasAnotaciones({
             />
           )),
         )}
+      {/* los overlays de arriba son decorativos (pointer-events: none): la
+          zona clicable de cada marca va aquí, como en Acrobat, donde un
+          clic la selecciona y Supr la borra */}
+      {mode === "select" &&
+        annots
+          .filter((a) => MARCAS.includes(a.kind))
+          .flatMap((a) =>
+            (a.rects.length > 0
+              ? a.rects
+              : [{ x: a.x, y: a.y, w: a.w, h: a.h }]
+            ).map((r, j) => (
+              <div
+                key={`hm${a.index}-${j}`}
+                className="annot-hit-markup"
+                title={`${KIND_LABELS[a.kind] ?? a.kind} · clic para opciones`}
+                style={{
+                  left: r.x * scale,
+                  top: r.y * scale,
+                  width: r.w * scale,
+                  height: r.h * scale,
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setNotePopover((p) => (p?.index === a.index ? null : a));
+                }}
+              />
+            )),
+          )}
       {mode === "select" &&
         annots
           .filter((a) => a.kind === "Ink" || a.kind === "Stamp")

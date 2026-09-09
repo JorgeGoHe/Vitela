@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react";
 import { invoke } from "../../ipc";
 import { addMarkup, addShape, addStamp, transformAnnotation } from "../../api";
 import {
@@ -246,20 +252,39 @@ export function useAnotaciones(ctx: {
     }
   }
 
-  async function deleteAnnotation(annot: AnnotationInfo) {
-    if (!workPath) return;
-    try {
-      await invoke("remove_annotation", {
-        workPath,
-        pageIndex: index,
-        annotIndex: annot.index,
-      });
-      setNotePopover(null);
-      onAnnotated(index);
-    } catch (e) {
-      onError(e);
+  const deleteAnnotation = useCallback(
+    async (annot: AnnotationInfo) => {
+      if (!workPath) return;
+      try {
+        await invoke("remove_annotation", {
+          workPath,
+          pageIndex: index,
+          annotIndex: annot.index,
+        });
+        setNotePopover(null);
+        onAnnotated(index);
+      } catch (e) {
+        onError(e);
+      }
+    },
+    [workPath, index, onAnnotated, onError],
+  );
+
+  // Supr o Retroceso borran el comentario seleccionado, como en Acrobat
+  useEffect(() => {
+    const elegida = notePopover;
+    if (!elegida) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (document.querySelector(".modal-backdrop")) return;
+      e.preventDefault();
+      if (elegida) deleteAnnotation(elegida);
     }
-  }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [notePopover, deleteAnnotation]);
 
   /** Clic simple en modo selección: abre el popover de la anotación pulsada. */
   function onClickLayer(e: MouseEvent<HTMLDivElement>) {

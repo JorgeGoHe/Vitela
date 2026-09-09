@@ -1405,6 +1405,19 @@ textarea {
 }
 
 /* zona clicable de una anotación (sello/dibujo) en modo seleccionar */
+/* zona clicable de una marca de texto (el overlay de color no recibe
+   clics): seleccionarla abre su tarjeta y Supr la borra */
+.annot-hit-markup {
+  position: absolute;
+  pointer-events: auto;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.annot-hit-markup:hover {
+  outline: 1px solid var(--accent);
+}
+
 .annot-hit {
   position: absolute;
   cursor: move;

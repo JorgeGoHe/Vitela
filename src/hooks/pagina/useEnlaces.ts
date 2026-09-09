@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "../../ipc";
 import { createLink, getLinks, type LinkInfo } from "../../api";
 import type { Mode, Rect } from "../../tipos";
@@ -126,20 +126,39 @@ export function useEnlaces(ctx: {
     }
   }
 
-  async function deleteLink(l: LinkInfo) {
-    if (!workPath) return;
-    try {
-      await invoke("remove_annotation", {
-        workPath,
-        pageIndex: index,
-        annotIndex: l.annot_index,
-      });
-      setLinkPopover(null);
-      onAnnotated(index);
-    } catch (e) {
-      onError(e);
+  const deleteLink = useCallback(
+    async (l: LinkInfo) => {
+      if (!workPath) return;
+      try {
+        await invoke("remove_annotation", {
+          workPath,
+          pageIndex: index,
+          annotIndex: l.annot_index,
+        });
+        setLinkPopover(null);
+        onAnnotated(index);
+      } catch (e) {
+        onError(e);
+      }
+    },
+    [workPath, index, onAnnotated, onError],
+  );
+
+  // Supr o Retroceso borran el enlace seleccionado
+  useEffect(() => {
+    const elegido = linkPopover;
+    if (!elegido) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (document.querySelector(".modal-backdrop")) return;
+      e.preventDefault();
+      if (elegido) deleteLink(elegido);
     }
-  }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [linkPopover, deleteLink]);
 
   return {
     links,
