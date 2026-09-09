@@ -569,7 +569,339 @@ mod tests {
         assert!(t[1].contains("2 / 2"));
         assert!(t[0].contains("Informe"));
     }
+
+    fn pasos(work: &str) -> u16 {
+        crate::historial::history_state(work.to_string()).expect("historial").undo
+    }
+
+    /// «Reemplazar páginas» de Acrobat: se eligen las del destino y las del
+    /// origen y el resto se conserva. Un solo ⌘Z lo devuelve.
+    #[test]
+    fn reemplazar_paginas_conserva_el_resto() {
+        let pdf = std::env::temp_dir().join("paginas2-reemplazar-test.pdf");
+        let otro = std::env::temp_dir().join("paginas2-reemplazar-otro.pdf");
+        crea_pdf(&["Uno", "Dos", "Tres", "Cuatro", "Cinco", "Seis"], &pdf);
+        crea_pdf(&["Alfa", "Beta"], &otro);
+        let work = pdf.to_string_lossy().into_owned();
+        let antes = pasos(&work);
+
+        let total = replace_pages(work.clone(), vec![1, 2], otro.to_string_lossy().into_owned(), None)
+            .expect("reemplazar");
+
+        assert_eq!(total, 6, "dos por dos: el total no cambia");
+        let t = textos(&work);
+        assert!(t[0].contains("Uno"), "página 1: {:?}", t[0]);
+        assert!(t[1].contains("Alfa"), "página 2: {:?}", t[1]);
+        assert!(t[2].contains("Beta"), "página 3: {:?}", t[2]);
+        assert!(t[3].contains("Cuatro"), "página 4: {:?}", t[3]);
+        assert!(t[5].contains("Seis"), "página 6: {:?}", t[5]);
+        assert_eq!(pasos(&work), antes + 1, "reemplazar es UN paso");
+        crate::historial::undo(work.clone()).expect("deshacer");
+        let t = textos(&work);
+        assert!(t[1].contains("Dos") && t[2].contains("Tres"), "⌘Z lo devuelve");
+
+        // y se puede elegir qué páginas del origen entran
+        replace_pages(
+            work.clone(),
+            vec![0],
+            otro.to_string_lossy().into_owned(),
+            Some(vec![1]),
+        )
+        .expect("reemplazar con selección del origen");
+        let t = textos(&work);
+        assert_eq!(t.len(), 6);
+        assert!(t[0].contains("Beta"), "solo la segunda del origen: {:?}", t[0]);
+
+        std::fs::remove_file(&pdf).ok();
+        std::fs::remove_file(&otro).ok();
+    }
+
+    /// «Dividir»: cada N páginas y por marcadores de primer nivel, con
+    /// carpeta de salida y sin tocar el documento abierto.
+    #[test]
+    fn dividir_cada_n_paginas_y_por_marcadores() {
+        let pdf = std::env::temp_dir().join("paginas2-dividir-test.pdf");
+        crea_pdf(&["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        let dir = std::env::temp_dir().join("vitela-dividir-test");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).expect("carpeta");
+        let antes = pasos(&work);
+
+        let partes = split_pdf(
+            work.clone(),
+            dir.to_string_lossy().into_owned(),
+            "cada".into(),
+            Some(3),
+        )
+        .expect("dividir cada 3");
+        assert_eq!(partes.len(), 4, "10 páginas de 3 en 3 son 3+3+3+1");
+        let cuentas: Vec<usize> = partes.iter().map(|p| textos(p).len()).collect();
+        assert_eq!(cuentas, vec![3, 3, 3, 1]);
+        assert_eq!(pasos(&work), antes, "dividir escribe fuera: no muta nada");
+        assert_eq!(textos(&work).len(), 10, "el documento se queda entero");
+
+        // por marcadores de primer nivel
+        crate::documento::set_outline(
+            work.clone(),
+            vec![
+                crate::documento::OutlineNode {
+                    title: "Capítulo 1".into(),
+                    page_index: Some(0),
+                    children: vec![],
+                },
+                crate::documento::OutlineNode {
+                    title: "Capítulo 2".into(),
+                    page_index: Some(4),
+                    children: vec![],
+                },
+            ],
+        )
+        .expect("marcadores");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).expect("carpeta");
+        let partes = split_pdf(
+            work.clone(),
+            dir.to_string_lossy().into_owned(),
+            "marcadores".into(),
+            None,
+        )
+        .expect("dividir por marcadores");
+        let cuentas: Vec<usize> = partes.iter().map(|p| textos(p).len()).collect();
+        assert_eq!(cuentas, vec![4, 6], "el corte cae en el marcador");
+
+        // un modo que no existe se dice, no se adivina
+        assert!(split_pdf(
+            work.clone(),
+            dir.to_string_lossy().into_owned(),
+            "loquesea".into(),
+            None
+        )
+        .is_err());
+
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_file(&pdf).ok();
+    }
+
+    /// «Combinar ficheros»: varios PDF en el orden de la lista y un solo
+    /// paso de deshacer.
+    #[test]
+    fn combinar_varios_ficheros_es_un_solo_paso() {
+        let pdf = std::env::temp_dir().join("paginas2-combinar-test.pdf");
+        let a = std::env::temp_dir().join("paginas2-combinar-a.pdf");
+        let b = std::env::temp_dir().join("paginas2-combinar-b.pdf");
+        crea_pdf(&["Base"], &pdf);
+        crea_pdf(&["A1", "A2"], &a);
+        crea_pdf(&["B1"], &b);
+        let work = pdf.to_string_lossy().into_owned();
+        let antes = pasos(&work);
+
+        let total = merge_many(
+            work.clone(),
+            vec![a.to_string_lossy().into_owned(), b.to_string_lossy().into_owned()],
+            None,
+        )
+        .expect("combinar");
+        assert_eq!(total, 4);
+        let t = textos(&work);
+        assert!(t[0].contains("Base"));
+        assert!(t[1].contains("A1") && t[2].contains("A2"), "orden de la lista");
+        assert!(t[3].contains("B1"));
+        assert_eq!(pasos(&work), antes + 1, "combinar es UN paso");
+        crate::historial::undo(work.clone()).expect("deshacer");
+        assert_eq!(textos(&work).len(), 1, "⌘Z devuelve el documento");
+
+        // y se puede insertar en un punto concreto, conservando el orden
+        merge_many(
+            work.clone(),
+            vec![a.to_string_lossy().into_owned(), b.to_string_lossy().into_owned()],
+            Some(0),
+        )
+        .expect("combinar al principio");
+        let t = textos(&work);
+        assert!(
+            t[0].contains("A1") && t[1].contains("A2") && t[2].contains("B1") && t[3].contains("Base"),
+            "el orden de la lista se conserva al insertar: {t:?}"
+        );
+
+        for p in [&pdf, &a, &b] {
+            std::fs::remove_file(p).ok();
+        }
+    }
+
 }
+
+/// Reemplaza las páginas de `page_indices` por las de otro documento,
+/// conservando el resto: es «Reemplazar páginas» de Acrobat. Sin
+/// `other_indices` entran todas las del origen.
+///
+/// Se hace en una sola mutación: se insertan las nuevas donde empezaban las
+/// viejas y después se borran las viejas, de mayor a menor.
+#[tauri::command(async)]
+pub fn replace_pages(
+    work_path: String,
+    page_indices: Vec<u16>,
+    other_path: String,
+    other_indices: Option<Vec<u16>>,
+) -> Result<u16, String> {
+    if page_indices.is_empty() {
+        return Err("No hay páginas que reemplazar".into());
+    }
+    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let mut doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(crate::mensaje_llano)?;
+        let other = pdfium
+            .load_pdf_from_file(&other_path, None)
+            .map_err(crate::mensaje_llano)?;
+        let total = doc.pages().len();
+        let mut viejas: Vec<u16> = page_indices.clone();
+        viejas.sort_unstable();
+        viejas.dedup();
+        if let Some(fuera) = viejas.iter().find(|i| **i >= total) {
+            return Err(format!("La página {} ya no está en el documento", fuera + 1));
+        }
+        let rango = match &other_indices {
+            Some(indices) if !indices.is_empty() => {
+                if let Some(fuera) = indices.iter().find(|i| **i >= other.pages().len()) {
+                    return Err(format!("El otro documento no tiene la página {}", fuera + 1));
+                }
+                indices
+                    .iter()
+                    .map(|i| (i + 1).to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            }
+            _ => format!("1-{}", other.pages().len()),
+        };
+        let destino = viejas[0];
+        doc.pages_mut()
+            .copy_pages_from_document(&other, &rango, destino)
+            .map_err(crate::mensaje_llano)?;
+        drop(other);
+        // las viejas se han desplazado tantas posiciones como páginas nuevas
+        let metidas = doc.pages().len() - total;
+        for i in viejas.iter().rev() {
+            doc.pages()
+                .get(i + metidas)
+                .map_err(crate::mensaje_llano)?
+                .delete()
+                .map_err(crate::mensaje_llano)?;
+        }
+        let nuevo = doc.pages().len();
+        if nuevo == 0 {
+            return Err("Un documento no puede quedarse sin páginas".into());
+        }
+        save_and_close(doc, &work_path)?;
+        Ok(nuevo)
+    }))
+}
+
+/// Divide el documento en varios ficheros dentro de `dest_dir` y devuelve
+/// las rutas escritas. Dos modos, los de Acrobat que se pueden cumplir con
+/// lo que ya sabe el core: `"cada"` (cada N páginas) y `"marcadores"` (un
+/// fichero por marcador de primer nivel).
+///
+/// No muta el documento abierto: escribe fuera, así que no deja paso de
+/// deshacer y, si un fichero falla, el original no se ha tocado.
+#[tauri::command(async)]
+pub fn split_pdf(
+    work_path: String,
+    dest_dir: String,
+    modo: String,
+    cada: Option<u16>,
+) -> Result<Vec<String>, String> {
+    on_pdfium_thread(move || {
+        let total = crate::with_doc(&work_path, |doc| Ok(doc.pages().len()))?;
+        if total == 0 {
+            return Err("El documento no tiene páginas".into());
+        }
+        let cortes: Vec<u16> = match modo.as_str() {
+            "cada" => {
+                let n = cada.unwrap_or(1).max(1);
+                (0..total).step_by(n as usize).collect()
+            }
+            "marcadores" => {
+                let raices = crate::documento::get_outline(work_path.clone())?;
+                let mut inicios: Vec<u16> = raices.iter().filter_map(|n| n.page_index).collect();
+                inicios.sort_unstable();
+                inicios.dedup();
+                if inicios.is_empty() {
+                    return Err(
+                        "El documento no tiene marcadores de primer nivel por los que dividir"
+                            .into(),
+                    );
+                }
+                // lo que va antes del primer marcador es el primer trozo
+                if inicios[0] != 0 {
+                    inicios.insert(0, 0);
+                }
+                inicios
+            }
+            _ => return Err("Modo de división desconocido".into()),
+        };
+        let mut escritos: Vec<String> = Vec::new();
+        for (n, inicio) in cortes.iter().enumerate() {
+            let fin = cortes.get(n + 1).copied().unwrap_or(total);
+            if fin <= *inicio {
+                continue;
+            }
+            let destino =
+                std::path::Path::new(&dest_dir).join(format!("parte-{}.pdf", escritos.len() + 1));
+            let rango = format!("{}-{}", inicio + 1, fin);
+            crate::with_doc(&work_path, |doc| {
+                let mut nuevo = pdfium()?.create_new_pdf().map_err(crate::mensaje_llano)?;
+                nuevo
+                    .pages_mut()
+                    .copy_pages_from_document(doc, &rango, 0)
+                    .map_err(crate::mensaje_llano)?;
+                nuevo.save_to_file(&destino).map_err(|e| {
+                    crate::mensaje_llano(format!(
+                        "No se ha podido escribir {}: {e}",
+                        destino.display()
+                    ))
+                })
+            })?;
+            escritos.push(destino.to_string_lossy().into_owned());
+        }
+        Ok(escritos)
+    })
+}
+
+/// Une varios PDF al documento abierto, en el orden de la lista y a partir
+/// de `at` (al final si no llega). Es «Combinar ficheros» de Acrobat: todo
+/// el lote en UNA mutación, así que un solo ⌘Z lo deshace.
+#[tauri::command(async)]
+pub fn merge_many(work_path: String, others: Vec<String>, at: Option<u16>) -> Result<u16, String> {
+    if others.is_empty() {
+        return Err("No hay ningún fichero que unir".into());
+    }
+    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let mut doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(crate::mensaje_llano)?;
+        let mut destino = at.unwrap_or(u16::MAX).min(doc.pages().len());
+        for otro in &others {
+            let other = pdfium
+                .load_pdf_from_file(otro, None)
+                .map_err(|e| crate::mensaje_llano(format!("No se ha podido abrir {otro}: {e}")))?;
+            let paginas = other.pages().len();
+            let rango = format!("1-{paginas}");
+            doc.pages_mut()
+                .copy_pages_from_document(&other, &rango, destino)
+                .map_err(crate::mensaje_llano)?;
+            drop(other);
+            // el siguiente va detrás, para conservar el orden de la lista
+            destino += paginas;
+        }
+        let nuevo = doc.pages().len();
+        save_and_close(doc, &work_path)?;
+        Ok(nuevo)
+    }))
+}
+
 
 #[derive(serde::Serialize, Debug)]
 pub struct MarginalReport {
