@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useModal } from "../hooks/useModal";
-import { parseRango, type OpcionesImprimir } from "../tipos";
+import { paginasImprimibles, parseRango, type OpcionesImprimir } from "../tipos";
 
 /**
  * Diálogo de impresión propio, el que Acrobat abre antes del diálogo del
@@ -25,8 +25,13 @@ export default function DialogoImprimir({
   // detrás del velo del modal, que es donde nadie la lee
   const rangoVacio =
     o.ambito === "rango" && parseRango(o.rango, pageCount).length === 0;
+  // y lo mismo con el filtro de pares/impares: si no deja ninguna página se
+  // dice aquí, con las opciones delante y sin cerrar nada
+  const sinPaginas =
+    !rangoVacio &&
+    paginasImprimibles(o, pageCount, paginaActual).length === 0;
   const confirmar = () => {
-    if (!rangoVacio) onConfirm(o);
+    if (!rangoVacio && !sinPaginas) onConfirm(o);
   };
   const { ref, onKeyDown } = useModal({ onClose, onConfirm: confirmar });
   const cambia = (parte: Partial<OpcionesImprimir>) =>
@@ -102,6 +107,13 @@ export default function DialogoImprimir({
           <option value="pares">Solo las pares</option>
           <option value="impares">Solo las impares</option>
         </select>
+        {sinPaginas && (
+          <p className="modal-error" role="alert">
+            Ninguna de las páginas elegidas es{" "}
+            {o.subconjunto === "pares" ? "par" : "impar"}: cambia el filtro o
+            las páginas.
+          </p>
+        )}
 
         <span className="card-label">Tamaño</span>
         <select
@@ -154,7 +166,7 @@ export default function DialogoImprimir({
           </button>
           <button
             className="btn btn-primary"
-            disabled={rangoVacio}
+            disabled={rangoVacio || sinPaginas}
             onClick={confirmar}
           >
             Imprimir

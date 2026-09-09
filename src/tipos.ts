@@ -303,6 +303,27 @@ export type OpcionesImprimir = {
   conMarcas: boolean;
 };
 
+/** Las páginas que salen de las opciones del diálogo, ya filtradas por
+ *  pares/impares. Vive aquí y no en `App` porque el diálogo la necesita
+ *  para decir «con esto no queda ninguna» **antes** de aceptar: el error de
+ *  después llegaba con el diálogo ya cerrado y las opciones perdidas. */
+export function paginasImprimibles(
+  o: OpcionesImprimir,
+  pageCount: number,
+  paginaActual: number,
+): number[] {
+  const base =
+    o.ambito === "todas"
+      ? Array.from({ length: pageCount }, (_, i) => i)
+      : o.ambito === "actual"
+        ? [paginaActual]
+        : parseRango(o.rango, pageCount);
+  if (o.subconjunto === "todas") return base;
+  // «pares» e «impares» van por el número que ve el usuario, no por índice
+  const quiereImpar = o.subconjunto === "impares";
+  return base.filter((i) => (i + 1) % 2 === (quiereImpar ? 1 : 0));
+}
+
 export const IMPRIMIR_POR_DEFECTO: OpcionesImprimir = {
   ambito: "todas",
   rango: "",

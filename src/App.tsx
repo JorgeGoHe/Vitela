@@ -112,6 +112,7 @@ import {
   MOD,
   guardaZoom,
   parseRango,
+  paginasImprimibles,
   plural,
   tamanoFichero,
   type FiltroComentarios,
@@ -158,14 +159,6 @@ const BASE_WIDTH = 900;
 function recortaZoom(z: number): number {
   return Math.min(4, Math.max(0.5, Math.round(z * 100) / 100));
 }
-/**
- * Reenvía a la app una pulsación que el menú nativo se ha quedado. En macOS
- * una entrada con acelerador consume la tecla antes de que llegue al
- * webview, así que ⌘C y ⌘A dejarían de funcionar en la app empaquetada: el
- * evento sintético los devuelve al mismo camino de siempre (la selección de
- * la página que se está leyendo, o el panel de páginas si tiene el foco), en
- * vez de abrir un segundo camino que pueda separarse del primero.
- */
 /** Los cuatro modos de presentación en el segmentado de la píldora. */
 const MODOS_PILDORA: [ModoPagina, string, string][] = [
   ["una", "pageOne", "Una sola página"],
@@ -247,6 +240,9 @@ function App() {
   // hay que decidir si se vuelve a proteger (la contraseña solo vive en memoria)
   const [hadPassword, setHadPassword] = useState(false);
   const [docPassword, setDocPassword] = useState<string | null>(null);
+  // lo que se contestó la primera vez en este documento: el segundo ⌘S no
+  // vuelve a preguntar lo mismo (`null` = todavía no se ha preguntado)
+  const [mantenerClave, setMantenerClave] = useState<boolean | null>(null);
   const [saveAsk, setSaveAsk] = useState<{
     dest: string;
     resolve: (ok: boolean) => void;
@@ -431,6 +427,7 @@ function App() {
   // sesión que quedó a medias en un cierre inesperado: una banda de una línea,
   // no un modal, que es como Vitela cuenta todo lo demás
   const [sesionRota, setSesionRota] = useState<Sesion | null>(null);
+  const [descartarAsk, setDescartarAsk] = useState<Sesion | null>(null);
   // «Ayuda ▸ Atajos de teclado»: el único sitio donde están todos escritos
   const [atajosAbiertos, setAtajosAbiertos] = useState(false);
   const {
@@ -493,6 +490,7 @@ function App() {
       setProtPendiente(false);
       setHadPassword(info.had_password);
       setDocPassword(info.had_password ? (password ?? null) : null);
+      setMantenerClave(null);
       if (info.had_password) {
         setNotice(
           "Documento protegido: al guardar puedes mantener la contraseña o quitarla",
@@ -580,9 +578,15 @@ function App() {
   );
 
   const refrescarRecientes = useCallback(() => {
-    listRecent()
-      .then(setRecientes)
-      .catch(() => setRecientes([]));
+    return listRecent()
+      .then((l) => {
+        setRecientes(l);
+        return l;
+      })
+      .catch(() => {
+        setRecientes([]);
+        return [] as Reciente[];
+      });
   }, []);
 
   // al montar y cada vez que se vuelve al estado vacío: la lista se
@@ -621,7 +625,10 @@ function App() {
     });
   }
 
-  /** Descartar: se borra la copia y el apunte, y se dice. */
+  /** No guardar: se borra la copia y el apunte, y se dice. Es el único
+   *  borrado irreversible de trabajo del usuario que hay en la app, así que
+   *  pregunta antes, como el diálogo de cierre —y se llama igual que allí,
+   *  que es lo que hace que se reconozca. */
   function descartarSesion(s: Sesion) {
     setSesionRota(null);
     invoke("close_document", { workPath: s.work_path }).catch(() => {});
@@ -653,10 +660,26 @@ function App() {
   /** «Archivo ▸ Abrir reciente…» del menú nativo: la lista vive en el menú
    *  «Acciones» cuando hay documento y en el estado vacío cuando no, así que
    *  en vez de un tercer sitio se enseña el que toque. En los dos casos se
-   *  revalida antes: lo que se pinta tiene que ser lo que hay en el disco. */
+   *  revalida antes: lo que se pinta tiene que ser lo que hay en el disco.
+   *  Sin documento la entrada no producía nada visible: ahora lleva el foco
+   *  a la lista que ya está en pantalla, o dice que no hay ninguna. */
   function abrirRecientes() {
-    refrescarRecientes();
-    if (pageCount > 0) setMenuOpen(true);
+    refrescarRecientes().then((lista) => {
+      if (pageCount > 0) {
+        setMenuOpen(true);
+        return;
+      }
+      if (lista.length === 0) {
+        setNotice("No hay documentos recientes");
+        return;
+      }
+      // el estado vacío ya los enseña: basta con llevar allí el foco
+      requestAnimationFrame(() => {
+        (
+          document.querySelector(".recientes .reciente-abrir") as HTMLElement
+        )?.focus();
+      });
+    });
   }
 
   function quitarReciente(path: string) {
@@ -810,6 +833,7 @@ function App() {
     setModified(false);
     setHadPassword(false);
     setDocPassword(null);
+    setMantenerClave(null);
     setProtegido(false);
     setProtPendiente(false);
     setMode("select");
@@ -1281,7 +1305,19 @@ function App() {
         setViewRotation((r) => (r + sentido + 360) % 360);
       } else if (mod && (e.key === "g" || e.key === "G") && pageCount > 0) {
         e.preventDefault();
-        busqueda.gotoMatch(e.shiftKey ? -1 : 1);
+        // sin coincidencias en pantalla, ⌘G repite la última búsqueda, como
+        // Acrobat; y si nunca se ha buscado, lleva el foco al campo
+        if (busqueda.matches.length > 0) busqueda.gotoMatch(e.shiftKey ? -1 : 1);
+        else if (!busqueda.repetirUltima())
+          (document.querySelector(".search input") as HTMLInputElement)?.focus();
+      } else if (mod && e.key === "/") {
+        // ⌘/ y F1, las dos teclas con las que se pide ayuda: hasta ahora la
+        // pantalla que enseña los atajos era la única sin ninguno
+        e.preventDefault();
+        setAtajosAbiertos(true);
+      } else if (!mod && e.key === "F1") {
+        e.preventDefault();
+        setAtajosAbiertos(true);
       } else if (mod && !enCampo && (e.key === "z" || e.key === "Z") && pageCount > 0) {
         // sin historial el atajo no hace nada, como en Acrobat: llamar al
         // backend solo dejaba un error rojo de «Nada que deshacer»
@@ -2026,18 +2062,10 @@ function App() {
     setPrintOpen(true);
   }
 
-  /** Páginas que pide el diálogo, ya filtradas por pares/impares. */
+  /** Páginas que pide el diálogo, ya filtradas por pares/impares. La cuenta
+   *  la hace `tipos.ts`, que es donde la comparte con el diálogo. */
   function paginasAImprimir(o: OpcionesImprimir): number[] {
-    const base =
-      o.ambito === "todas"
-        ? Array.from({ length: pageCount }, (_, i) => i)
-        : o.ambito === "actual"
-          ? [pageIndex]
-          : parseRango(o.rango, pageCount);
-    if (o.subconjunto === "todas") return base;
-    // «pares» e «impares» van por el número que ve el usuario, no por índice
-    const quiereImpar = o.subconjunto === "impares";
-    return base.filter((i) => (i + 1) % 2 === (quiereImpar ? 1 : 0));
+    return paginasImprimibles(o, pageCount, pageIndex);
   }
 
   /** Rasteriza solo el rango pedido y abre el diálogo del sistema. El bucle
@@ -2045,14 +2073,10 @@ function App() {
    *  liberan los blobs y no se abre nada. */
   async function prepararImpresion(o: OpcionesImprimir) {
     if (!workPath) return;
-    // el rango vacío lo ataja el propio diálogo, junto al campo; aquí solo
-    // puede quedar un subconjunto (pares/impares) que no case con el rango
+    // el diálogo no deja aceptar sin páginas —ni por el rango ni por el
+    // filtro de pares/impares—, así que aquí solo queda la red de seguridad
     const idx = paginasAImprimir(o);
-    if (idx.length === 0) {
-      setPrintOpen(false);
-      setNotice("Ninguna página del rango es de las que has pedido imprimir");
-      return;
-    }
+    if (idx.length === 0) return;
     setPrintOpts(o);
     setPrintOpen(false);
     const señal = { cancelado: false };
@@ -2422,10 +2446,14 @@ function App() {
     }
   }
 
-  /** Guarda en `dest`; si el original iba cifrado, pregunta antes si se
-   *  mantiene la contraseña. */
+  /** Guarda en `dest`; si el original iba cifrado, pregunta la primera vez
+   *  si se mantiene la contraseña y **recuerda la respuesta para ese
+   *  documento**: guardar es un gesto que se repite, y repetir la misma
+   *  pregunta en cada ⌘S convierte el aviso en un trámite que se contesta
+   *  sin leer. Se vuelve a preguntar al abrir otro documento. */
   function guardarEn(dest: string): Promise<boolean> {
     if (!hadPassword || docPassword === null) return escribirEn(dest, false);
+    if (mantenerClave !== null) return escribirEn(dest, mantenerClave);
     return new Promise((resolve) => setSaveAsk({ dest, resolve }));
   }
 
@@ -2434,7 +2462,10 @@ function App() {
     const { dest, resolve } = saveAsk;
     setSaveAsk(null);
     if (mantener === null) resolve(false);
-    else escribirEn(dest, mantener).then(resolve);
+    else {
+      setMantenerClave(mantener);
+      escribirEn(dest, mantener).then(resolve);
+    }
   }
 
   async function saveFile(): Promise<boolean> {
@@ -2986,8 +3017,8 @@ function App() {
           >
             Recuperar
           </button>
-          <button className="btn" onClick={() => descartarSesion(sesionRota)}>
-            Descartar
+          <button className="btn" onClick={() => setDescartarAsk(sesionRota)}>
+            No guardar
           </button>
         </div>
       )}
@@ -3133,6 +3164,26 @@ function App() {
           peligro
           onConfirm={applyRemoveMarginal}
           onClose={() => setMarginalAsk(null)}
+        />
+      )}
+      {descartarAsk && (
+        <DialogoConfirmar
+          titulo="No guardar los cambios"
+          cuerpo={
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              Se borrará la copia con los cambios sin guardar de{" "}
+              {descartarAsk.original_path ?? "un documento sin fichero"}. Es lo
+              único que queda de ese trabajo y no se podrá recuperar.
+            </p>
+          }
+          textoConfirmar="No guardar"
+          peligro
+          onConfirm={() => {
+            const s = descartarAsk;
+            setDescartarAsk(null);
+            descartarSesion(s);
+          }}
+          onClose={() => setDescartarAsk(null)}
         />
       )}
       {redactAsk && (

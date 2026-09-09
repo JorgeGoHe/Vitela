@@ -77,6 +77,12 @@ const GRUPOS: { titulo: string; atajos: Atajo[] }[] = [
       [atajo("Tab", "shift"), "Volver al campo anterior"],
     ],
   },
+  {
+    titulo: "Ayuda",
+    // esta pantalla también se lista a sí misma: era la única que enseñaba
+    // los atajos de todos menos el suyo
+    atajos: [[`${atajo("/")} · ${atajo("F1", "")}`, "Atajos de teclado"]],
+  },
 ];
 
 /**

@@ -35,6 +35,9 @@ export function useBusqueda(opts: {
   // si la última búsqueda se pidió con contexto: sin él las coincidencias
   // no traen ni la frase de alrededor ni el bloque, y el cajón las necesita
   const [conContexto, setConContexto] = useState(false);
+  // el último término que se llegó a buscar; sobrevive a `limpiar` porque es
+  // lo que repite ⌘G cuando ya no hay coincidencias en pantalla
+  const [ultimoTermino, setUltimoTermino] = useState("");
 
   /** Descarta los resultados; con `conQuery` vacía también el campo. */
   const limpiar = useCallback((conQuery = false) => {
@@ -48,24 +51,29 @@ export function useBusqueda(opts: {
   /** El cuerpo de la búsqueda. Con `mantener` no se salta a la primera
    *  coincidencia ni se reinicia el recorrido: es la repetición silenciosa
    *  que hace falta al desplegar el cajón, no una búsqueda nueva. */
-  async function ejecuta(o: OpcionesBusqueda, mantener: boolean) {
+  async function ejecuta(
+    o: OpcionesBusqueda,
+    mantener: boolean,
+    termino = query,
+  ) {
     const { workPath, contexto, gotoPage, onError } = opts;
     if (!workPath) return;
-    if (!query.trim()) {
+    if (!termino.trim()) {
       limpiar();
       return;
     }
     try {
       const res = await searchPdf(
         workPath,
-        query,
+        termino,
         o.matchCase,
         o.wholeWord,
         contexto,
       );
       setMatches(res);
       setSearched(true);
-      setLastQuery(query);
+      setLastQuery(termino);
+      setUltimoTermino(termino);
       setConContexto(contexto);
       if (!mantener) {
         setMatchIdx(0);
@@ -107,6 +115,16 @@ export function useBusqueda(opts: {
     opts.gotoPage(matches[i].page_index);
   }
 
+  /** ⌘G sin coincidencias en pantalla: Acrobat repite la última búsqueda en
+   *  vez de quedarse mudo. Devuelve si ha habido algo que repetir. */
+  function repetirUltima(): boolean {
+    const termino = query.trim() || ultimoTermino;
+    if (!termino) return false;
+    if (query !== termino) setQuery(termino);
+    void ejecuta(opciones, false, termino);
+    return true;
+  }
+
   function gotoMatch(delta: number) {
     if (matches.length === 0) return;
     const next = (matchIdx + delta + matches.length) % matches.length;
@@ -137,6 +155,7 @@ export function useBusqueda(opts: {
     opciones,
     cambiaOpcion,
     gotoMatch,
+    repetirUltima,
     irAMatch,
     matchesByPage,
     limpiar,
