@@ -1,5 +1,6 @@
 /** Borradores rectangulares: recorte, redacción y fantasma de la firma. */
-import { plural, type Mode } from "../../tipos";
+import type { Mode, Rect } from "../../tipos";
+import Icon from "../Icon";
 import { clampCardLeft } from "../../hooks/pagina/geometria";
 import type { Areas } from "../../hooks/pagina/useAreas";
 
@@ -10,6 +11,9 @@ type Props = {
   displayWidth: number;
   activeSig: { png: string; ratio: number } | null;
   onModeChange: (m: Mode) => void;
+  /** Zonas marcadas para censurar en esta página. */
+  marcas: { markIndex: number; rect: Rect }[];
+  onQuitarMarca: (markIndex: number) => void;
 };
 
 export default function CapaAreas({
@@ -19,19 +23,11 @@ export default function CapaAreas({
   displayWidth,
   activeSig,
   onModeChange,
+  marcas,
+  onQuitarMarca,
 }: Props) {
-  const {
-    cropDraft,
-    setCropDraft,
-    redactDraft,
-    setRedactDraft,
-    redactReport,
-    setRedactReport,
-    sigDraft,
-    certDraft,
-    applyCrop,
-    applyRedact,
-  } = areas;
+  const { cropDraft, setCropDraft, redactDraft, sigDraft, certDraft, applyCrop } =
+    areas;
   return (
     <>
       {mode === "crop" && cropDraft && (
@@ -77,50 +73,53 @@ export default function CapaAreas({
         </>
       )}
       {mode === "redact" && redactDraft && (
-        <>
+        <div
+          className="redact-rect"
+          style={{
+            left: redactDraft.x * scale,
+            top: redactDraft.y * scale,
+            width: redactDraft.w * scale,
+            height: redactDraft.h * scale,
+          }}
+        />
+      )}
+      {mode === "redact" &&
+        marcas.map((m) => (
           <div
-            className="redact-rect"
+            key={m.markIndex}
+            className="redact-marca"
+            tabIndex={0}
+            role="button"
+            aria-label={`Zona marcada para censurar; Supr la quita`}
+            title="Zona marcada. Se censura al aplicar; Supr la quita"
             style={{
-              left: redactDraft.x * scale,
-              top: redactDraft.y * scale,
-              width: redactDraft.w * scale,
-              height: redactDraft.h * scale,
-            }}
-          />
-          <div
-            className="card crop-actions"
-            style={{
-              left: clampCardLeft(redactDraft.x * scale, displayWidth, 320),
-              top: (redactDraft.y + redactDraft.h) * scale + 8,
+              left: m.rect.x * scale,
+              top: m.rect.y * scale,
+              width: m.rect.w * scale,
+              height: m.rect.h * scale,
             }}
             onMouseDown={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Delete" || e.key === "Backspace") {
+                e.preventDefault();
+                e.stopPropagation();
+                onQuitarMarca(m.markIndex);
+              }
+            }}
           >
-            <p>
-              {redactReport
-                ? `Se eliminarán ${plural(redactReport.textos, "bloque de texto", "bloques de texto")} y ${plural(redactReport.imagenes, "imagen", "imágenes")}.`
-                : "Calculando…"}
-            </p>
-            <div className="card-actions">
-              <button
-                className="btn btn-danger"
-                disabled={!redactReport}
-                onClick={applyRedact}
-              >
-                Redactar
-              </button>
-              <button
-                className="btn"
-                onClick={() => {
-                  setRedactDraft(null);
-                  setRedactReport(null);
-                }}
-              >
-                Cancelar
-              </button>
-            </div>
+            <button
+              className="redact-quitar"
+              title="Quitar esta marca"
+              aria-label="Quitar esta marca"
+              onClick={(e) => {
+                e.stopPropagation();
+                onQuitarMarca(m.markIndex);
+              }}
+            >
+              <Icon name="close" size={11} />
+            </button>
           </div>
-        </>
-      )}
+        ))}
       {mode === "firma-cert" && certDraft && (
         <div
           className="crop-rect"

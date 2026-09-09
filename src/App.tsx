@@ -35,6 +35,10 @@ import {
   extractPages,
   getDocumentAnnotations,
   listRecent,
+  listRedactions,
+  applyRedactions,
+  sanitizePdf,
+  unmarkRedaction,
   rotatePages,
   removeRecent,
   renderPageSrc,
@@ -46,6 +50,9 @@ import {
   type AnotacionDoc,
   type FirmaInfo,
   type HeaderFooter,
+  type Redaccion,
+  type RedactReport,
+  type SanitizeReport,
   type Reciente,
 } from "./api";
 import {
@@ -126,6 +133,22 @@ function recortaZoom(z: number): number {
 /** Separación vertical entre páginas y padding superior del visor (px). */
 const PAGE_GAP = 24;
 const VIEWER_PAD_TOP = 28;
+
+/** «Se quitarán: autor y título, 2 adjuntos y 1 script», con lo que hay. */
+function resumenSaneado(r: SanitizeReport): string {
+  const partes: string[] = [];
+  if (r.metadatos > 0) partes.push("el autor, el título y demás datos del documento");
+  if (r.scripts > 0) partes.push(plural(r.scripts, "script", "scripts"));
+  if (r.adjuntos > 0) partes.push(plural(r.adjuntos, "adjunto", "adjuntos"));
+  if (r.capas > 0) partes.push(plural(r.capas, "capa oculta", "capas ocultas"));
+  if (r.formularios > 0) {
+    partes.push(plural(r.formularios, "campo de formulario", "campos de formulario"));
+  }
+  if (partes.length === 0) return "Este documento no lleva información oculta que quitar.";
+  const ultima = partes.pop()!;
+  const lista = partes.length > 0 ? `${partes.join(", ")} y ${ultima}` : ultima;
+  return `Se quitarán ${lista}. No se puede deshacer guardando, pero ${MOD}Z lo devuelve mientras el documento siga abierto.`;
+}
 
 /** La banda de firmas, en una línea y sin jerga. */
 function resumenFirmas(firmas: FirmaInfo[]): string {
@@ -290,6 +313,10 @@ function App() {
   const [protPendiente, setProtPendiente] = useState(false);
   const [quitarProtAsk, setQuitarProtAsk] = useState(false);
   const [flattenAsk, setFlattenAsk] = useState(false);
+  // zonas marcadas para censurar: propuestas revisables, no censuras
+  const [marcasRedact, setMarcasRedact] = useState<Redaccion[]>([]);
+  const [redactAsk, setRedactAsk] = useState<RedactReport | null>(null);
+  const [sanitizeAsk, setSanitizeAsk] = useState<SanitizeReport | null>(null);
   // enlace externo pendiente de confirmar (los URI del PDF no son de fiar)
   const [linkAsk, setLinkAsk] = useState<string | null>(null);
   // páginas rasterizadas listas para el diálogo del sistema; `anchoIn` solo
@@ -719,6 +746,116 @@ function App() {
       cancelled = true;
     };
   }, [workPath, docVersion]);
+
+  // Zonas marcadas para censurar: viven en el PDF como anotaciones, así que
+  // sobreviven a guardar y hay que releerlas con cada cambio del documento
+  const refrescarMarcas = useCallback(() => {
+    if (!workPath) {
+      setMarcasRedact([]);
+      return;
+    }
+    listRedactions(workPath)
+      .then(setMarcasRedact)
+      .catch(() => setMarcasRedact([]));
+  }, [workPath]);
+
+  useEffect(() => {
+    refrescarMarcas();
+  }, [refrescarMarcas, docVersion]);
+
+  /** El índice que entiende `unmark_redaction` es la posición de la marca
+   *  DENTRO de su página; `list_redactions` las devuelve en ese orden. */
+  const marcasIndexadas = useMemo(() => {
+    const cuenta = new Map<number, number>();
+    return marcasRedact.map((m) => {
+      const n = cuenta.get(m.page_index) ?? 0;
+      cuenta.set(m.page_index, n + 1);
+      return { ...m, markIndex: n };
+    });
+  }, [marcasRedact]);
+
+  /** Quita una marca (no toca el contenido: solo la propuesta). */
+  async function quitarMarca(page: number, markIndex: number) {
+    if (!workPath) return;
+    try {
+      await unmarkRedaction(workPath, page, markIndex);
+      refrescarMarcas();
+      afterPageMutation(page);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  /** Quita todas las marcas de golpe, en un solo paso de deshacer. */
+  async function quitarTodasLasMarcas() {
+    if (!workPath || marcasIndexadas.length === 0) return;
+    // de mayor a menor: quitar una corre los índices de las siguientes
+    const orden = [...marcasIndexadas].sort(
+      (a, b) => b.page_index - a.page_index || b.markIndex - a.markIndex,
+    );
+    try {
+      let hechas = 0;
+      for (const m of orden) {
+        await unmarkRedaction(workPath, m.page_index, m.markIndex);
+        hechas++;
+      }
+      if (hechas > 1) await historial.agrupar(hechas);
+      refrescarMarcas();
+      afterMutation(pageCount);
+      setNotice(
+        `${plural(hechas, "marca quitada", "marcas quitadas")} · ${MOD}Z para deshacer`,
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  /** Ensayo previo y confirmación destructiva antes de censurar de verdad. */
+  async function pedirAplicarRedaccion() {
+    if (!workPath || marcasRedact.length === 0) return;
+    try {
+      setRedactAsk(await applyRedactions(workPath, true));
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function aplicarRedaccion() {
+    if (!workPath) return;
+    try {
+      const r = await applyRedactions(workPath, false);
+      setRedactAsk(null);
+      setMode("select");
+      refrescarMarcas();
+      afterMutation(pageCount);
+      setNotice(
+        `Censurado: ${plural(r.textos, "bloque de texto", "bloques de texto")} y ${plural(r.imagenes, "imagen", "imágenes")} eliminados`,
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function pedirSanear() {
+    if (!workPath) return;
+    try {
+      setSanitizeAsk(await sanitizePdf(workPath, true));
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function aplicarSanear() {
+    if (!workPath) return;
+    try {
+      await sanitizePdf(workPath, false);
+      setSanitizeAsk(null);
+      afterMutation(pageCount);
+      setNotice(`Información oculta eliminada · ${MOD}Z para deshacer`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   // Marcadores del documento (pestaña del sidebar)
   useEffect(() => {
@@ -2297,6 +2434,7 @@ function App() {
                 puedeQuitarProteccion={protegido || protPendiente}
                 quitarProteccion={() => setQuitarProtAsk(true)}
                 abrirAplanar={() => setFlattenAsk(true)}
+                sanear={pedirSanear}
                 redactar={() => {
                   selectMode("select");
                   setMode("redact");
@@ -2481,6 +2619,40 @@ function App() {
           onClose={() => setMarginalAsk(null)}
         />
       )}
+      {redactAsk && (
+        <DialogoConfirmar
+          titulo="Aplicar la redacción"
+          cuerpo={
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              En {plural(marcasRedact.length, "zona marcada", "zonas marcadas")}{" "}
+              se eliminarán{" "}
+              {plural(redactAsk.textos, "bloque de texto", "bloques de texto")} y{" "}
+              {plural(redactAsk.imagenes, "imagen", "imágenes")}, y quedará una
+              caja negra encima. El contenido se elimina y no se podrá
+              recuperar guardando; {MOD}Z lo devuelve mientras el documento
+              siga abierto.
+            </p>
+          }
+          textoConfirmar="Aplicar la redacción"
+          peligro
+          onConfirm={aplicarRedaccion}
+          onClose={() => setRedactAsk(null)}
+        />
+      )}
+      {sanitizeAsk && (
+        <DialogoConfirmar
+          titulo="Quitar la información oculta"
+          cuerpo={
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              {resumenSaneado(sanitizeAsk)}
+            </p>
+          }
+          textoConfirmar="Quitar"
+          peligro
+          onConfirm={aplicarSanear}
+          onClose={() => setSanitizeAsk(null)}
+        />
+      )}
       {flattenAsk && (
         <DialogoConfirmar
           titulo="Fijar las anotaciones en la página"
@@ -2608,8 +2780,8 @@ function App() {
       )}
       {mode === "redact" && (
         <div className="sign-hint">
-          Arrastra sobre el área a censurar: el contenido se ELIMINA de verdad
-          · Esc cancela
+          Arrastra sobre las zonas a censurar: quedan marcadas en rojo y no se
+          borra nada hasta que pulses «Aplicar redacción» · Esc sale
         </div>
       )}
       {mode === "form-new" && (
@@ -2717,6 +2889,9 @@ function App() {
         cambiaColorAccion={herramienta.cambiaColorAccion}
         anadirTexto={() => setPedirTextoNuevo((n) => n + 1)}
         insertarImagen={() => setPedirImagen((n) => n + 1)}
+        marcasRedact={marcasRedact.length}
+        aplicarRedaccion={pedirAplicarRedaccion}
+        quitarMarcasRedact={quitarTodasLasMarcas}
       />
 
       <div className="body">
@@ -2901,6 +3076,11 @@ function App() {
                   onLinkUri={onLinkUri}
                   onSigStamped={onSigStamped}
                   onFirmaRect={recibeFirmaRect}
+                  marcas={marcasIndexadas
+                    .filter((m) => m.page_index === i)
+                    .map((m) => ({ markIndex: m.markIndex, rect: m.rect }))}
+                  quitarMarca={quitarMarca}
+                  onMarcasCambian={refrescarMarcas}
                   pedirTextoNuevo={pedirTextoNuevo}
                   pedirImagen={pedirImagen}
                 />

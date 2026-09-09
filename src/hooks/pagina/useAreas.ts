@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { cropPage, redactArea, stampSignature, type RedactReport } from "../../api";
+import { cropPage, markRedaction, stampSignature } from "../../api";
 import type { Mode, PageSize, Rect } from "../../tipos";
 import { rectAPagina } from "./geometria";
 
@@ -20,6 +20,8 @@ export function useAreas(ctx: {
   onError: (e: unknown) => void;
   onModeChange: (m: Mode) => void;
   onSigStamped: () => void;
+  /** La lista de marcas del documento ha cambiado: que App la relea. */
+  onMarcasCambian: () => void;
 }) {
   const {
     workPath,
@@ -33,13 +35,13 @@ export function useAreas(ctx: {
     onError,
     onModeChange,
     onSigStamped,
+    onMarcasCambian,
   } = ctx;
   const [cropDraft, setCropDraft] = useState<Rect | null>(null);
   const cropStartRef = useRef<{ x: number; y: number } | null>(null);
   const [redactDraft, setRedactDraft] = useState<Rect | null>(null);
   const redactStartRef = useRef<{ x: number; y: number } | null>(null);
   const redactLiveRef = useRef<Rect | null>(null);
-  const [redactReport, setRedactReport] = useState<RedactReport | null>(null);
   // recuadro de la firma con certificado: el rectángulo se dibuja aquí y lo
   // resuelve App, que es quien tiene el diálogo y el destino
   const [certDraft, setCertDraft] = useState<Rect | null>(null);
@@ -57,7 +59,6 @@ export function useAreas(ctx: {
     setCropDraft(null);
     cropStartRef.current = null;
     setRedactDraft(null);
-    setRedactReport(null);
     redactStartRef.current = null;
     redactLiveRef.current = null;
     setCertDraft(null);
@@ -77,24 +78,14 @@ export function useAreas(ctx: {
     }
   }
 
-  async function previewRedact(r: Rect) {
+  /** Marcar NO borra: deja una zona roja revisable, como en Acrobat. Lo
+   *  destructivo es «Aplicar redacción», y va aparte. */
+  async function marcarRedaccion(r: Rect) {
     if (!workPath) return;
     try {
-      setRedactReport(
-        await redactArea(workPath, index, rectAPagina(r, size), true),
-      );
-    } catch (e) {
-      onError(e);
-    }
-  }
-
-  async function applyRedact() {
-    if (!workPath || !redactDraft) return;
-    try {
-      await redactArea(workPath, index, rectAPagina(redactDraft, size), false);
+      await markRedaction(workPath, index, rectAPagina(r, size));
       setRedactDraft(null);
-      setRedactReport(null);
-      onModeChange("select");
+      onMarcasCambian();
       onPageMutated(index);
     } catch (e) {
       onError(e);
@@ -136,15 +127,12 @@ export function useAreas(ctx: {
     setRedactDraft,
     redactStartRef,
     redactLiveRef,
-    redactReport,
-    setRedactReport,
     sigDraft,
     setSigDraft,
     sigLiveRef,
     sigDragRef,
     applyCrop,
-    previewRedact,
-    applyRedact,
+    marcarRedaccion,
     stampActiveSignature,
   };
 }

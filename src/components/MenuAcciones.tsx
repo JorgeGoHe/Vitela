@@ -56,6 +56,7 @@ export default function MenuAcciones({
   puedeQuitarProteccion,
   quitarProteccion,
   abrirAplanar,
+  sanear,
   redactar,
   nuevoCampo,
   nuevoEnlace,
@@ -88,6 +89,8 @@ export default function MenuAcciones({
   puedeQuitarProteccion: boolean;
   quitarProteccion: () => void;
   abrirAplanar: () => void;
+  /** «Quitar información oculta…»: ensayo previo y después confirmar. */
+  sanear: () => void;
   redactar: () => void;
   nuevoCampo: () => void;
   nuevoEnlace: () => void;
@@ -277,6 +280,11 @@ export default function MenuAcciones({
               icon="redact"
               texto="Redactar (censurar)…"
               onSelect={ejecutar(redactar)}
+            />
+            <Entrada
+              icon="shrink"
+              texto="Quitar información oculta…"
+              onSelect={ejecutar(sanear)}
             />
             <div className="menu-titulo">Insertar</div>
             <Entrada

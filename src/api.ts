@@ -417,6 +417,62 @@ export function flattenPdf(workPath: string): Promise<void> {
 
 export type RedactReport = { textos: number; imagenes: number };
 
+/* ---- redacción en dos fases ---- */
+
+/** Una zona marcada para censurar. Es una propuesta, no una censura: vive
+ *  en el PDF como anotación y se puede revisar, quitar y guardar. */
+export type Redaccion = {
+  page_index: number;
+  rect: { x: number; y: number; w: number; h: number };
+};
+
+/** Marca una zona; devuelve el índice de la marca en su página. */
+export function markRedaction(
+  workPath: string,
+  pageIndex: number,
+  rect: { x: number; y: number; w: number; h: number },
+): Promise<number> {
+  return invoke("mark_redaction", { workPath, pageIndex, rect });
+}
+
+export function listRedactions(workPath: string): Promise<Redaccion[]> {
+  return invoke("list_redactions", { workPath });
+}
+
+export function unmarkRedaction(
+  workPath: string,
+  pageIndex: number,
+  markIndex: number,
+): Promise<void> {
+  return invoke("unmark_redaction", { workPath, pageIndex, markIndex });
+}
+
+/** Aplica todas las marcas en una sola mutación; con `dryRun` solo cuenta
+ *  lo que se iría. */
+export function applyRedactions(
+  workPath: string,
+  dryRun: boolean,
+): Promise<RedactReport> {
+  return invoke("apply_redactions", { workPath, dryRun });
+}
+
+/** Lo que el documento lleva escondido y se puede quitar. */
+export type SanitizeReport = {
+  metadatos: number;
+  scripts: number;
+  adjuntos: number;
+  capas: number;
+  formularios: number;
+};
+
+/** Quita la información oculta; con `dryRun` solo cuenta por categorías. */
+export function sanitizePdf(
+  workPath: string,
+  dryRun: boolean,
+): Promise<SanitizeReport> {
+  return invoke("sanitize_pdf", { workPath, dryRun });
+}
+
 /** Redacción real de un área; con dryRun solo cuenta qué caería. */
 export function redactArea(
   workPath: string,

@@ -95,6 +95,12 @@ type Props = {
   /** Recuadro dibujado para la firma con certificado, ya en el espacio
    *  propio de la página: lo resuelve App, que abre el diálogo. */
   onFirmaRect: (page: number, rect: Rect) => void;
+  /** Zonas marcadas para censurar que caen en esta página. */
+  marcas: { markIndex: number; rect: Rect }[];
+  /** Quita una marca de esta página (la lista la lleva App). */
+  quitarMarca: (page: number, markIndex: number) => void;
+  /** La lista de marcas ha cambiado: que App la relea. */
+  onMarcasCambian: () => void;
   /** Suben cuando la fila contextual pide «Añadir texto» o «Insertar
    *  imagen…»: la página actual abre el borrador sin obligar a descubrir el
    *  clic en zona libre. */
@@ -135,6 +141,9 @@ function Pagina({
   onLinkUri,
   onSigStamped,
   onFirmaRect,
+  marcas,
+  quitarMarca,
+  onMarcasCambian,
   pedirTextoNuevo,
   pedirImagen,
 }: Props) {
@@ -253,6 +262,7 @@ function Pagina({
     onError,
     onModeChange,
     onSigStamped,
+    onMarcasCambian,
   });
 
   // «Añadir texto» e «Insertar imagen…» de la fila contextual: los abre la
@@ -385,7 +395,6 @@ function Pagina({
     if (mode === "redact") {
       areas.redactStartRef.current = { x, y };
       areas.setRedactDraft(null);
-      areas.setRedactReport(null);
       return;
     }
     if (mode === "firma-cert") {
@@ -638,10 +647,10 @@ function Pagina({
       areas.redactStartRef.current = null;
       const d = areas.redactLiveRef.current;
       areas.redactLiveRef.current = null;
-      if (d && d.w > 6 && d.h > 6) {
-        areas.setRedactDraft(d);
-        areas.previewRedact(d);
-      }
+      // soltar deja una MARCA revisable, no una censura: lo destructivo es
+      // «Aplicar redacción», que va aparte y con su informe previo
+      if (d && d.w > 6 && d.h > 6) areas.marcarRedaccion(d);
+      else areas.setRedactDraft(null);
       return;
     }
     if (mode === "firma-cert") {
@@ -792,6 +801,8 @@ function Pagina({
             displayWidth={displayWidth}
             activeSig={activeSig}
             onModeChange={onModeChange}
+            marcas={marcas}
+            onQuitarMarca={(markIndex) => quitarMarca(index, markIndex)}
           />
           {matches?.map((g) =>
             g.rects.map((r, j) => (

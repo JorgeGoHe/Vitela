@@ -1,4 +1,10 @@
-import { ANNOT_COLORS, NOMBRE_COLOR, type Mode, type ShapeKind } from "../tipos";
+import {
+  ANNOT_COLORS,
+  NOMBRE_COLOR,
+  plural,
+  type Mode,
+  type ShapeKind,
+} from "../tipos";
 import { STAMP_PRESETS } from "../hooks/useHerramienta";
 import Icon from "./Icon";
 
@@ -34,6 +40,9 @@ export default function OpcionesHerramienta({
   cambiaColorAccion,
   anadirTexto,
   insertarImagen,
+  marcasRedact,
+  aplicarRedaccion,
+  quitarMarcasRedact,
 }: {
   mode: Mode;
   drawColor: string;
@@ -68,6 +77,10 @@ export default function OpcionesHerramienta({
   anadirTexto: () => void;
   /** Pide una imagen y la coloca en la página actual (modo Imagen). */
   insertarImagen: () => void;
+  /** Zonas marcadas para censurar en todo el documento. */
+  marcasRedact: number;
+  aplicarRedaccion: () => void;
+  quitarMarcasRedact: () => void;
 }) {
   return (
     <>
@@ -84,6 +97,34 @@ export default function OpcionesHerramienta({
           </label>
           <span className="opt-hint">
             Clic en un campo para rellenarlo · Tab salta al siguiente
+          </span>
+        </div>
+      )}
+      {mode === "redact" && (
+        <div className="tool-options">
+          <span>Redactar</span>
+          <button
+            className="btn btn-danger"
+            disabled={marcasRedact === 0}
+            title={
+              marcasRedact === 0
+                ? "Marca antes las zonas que quieras censurar"
+                : "Elimina el contenido de las zonas marcadas"
+            }
+            onClick={aplicarRedaccion}
+          >
+            <Icon name="redact" size={14} />
+            Aplicar redacción ({plural(marcasRedact, "zona", "zonas")})
+          </button>
+          <button
+            className="btn"
+            disabled={marcasRedact === 0}
+            onClick={quitarMarcasRedact}
+          >
+            Quitar todas las marcas
+          </button>
+          <span className="opt-hint">
+            Marcar no borra: se revisa y se aplica al final
           </span>
         </div>
       )}

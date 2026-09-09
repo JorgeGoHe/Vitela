@@ -1011,6 +1011,40 @@ textarea {
   cursor: crosshair;
 }
 
+/* zona ya marcada: una propuesta revisable, con su aspa para quitarla */
+.redact-marca {
+  position: absolute;
+  border: 2px solid var(--danger);
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  cursor: pointer;
+}
+
+.redact-marca:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.redact-quitar {
+  position: absolute;
+  top: -9px;
+  right: -9px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card-bg);
+  color: var(--danger);
+  cursor: pointer;
+  padding: 0;
+}
+
+.redact-quitar:hover {
+  background: var(--btn-hover);
+}
+
 .redact-rect {
   position: absolute;
   background: rgba(0, 0, 0, 0.85);
