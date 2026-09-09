@@ -8,11 +8,14 @@ const ENFOCABLES =
  * Comportamiento común de todos los modales (U-3 y la regla «todo diálogo:
  * Esc cierra, Enter confirma, foco inicial y Cancelar»):
  *
- * - Escape cierra (y no deja que el atajo llegue al documento de debajo).
+ * - Escape cierra SIEMPRE: si el foco está dentro lo recoge el `onKeyDown`
+ *   del `.modal`, y si se ha ido fuera (un clic en el fondo, por ejemplo) lo
+ *   recoge un listener en fase de captura, que además impide que el atajo
+ *   llegue al documento de debajo.
  * - Enter ejecuta la acción principal, salvo dentro de un `textarea` (salto
  *   de línea) o sobre un botón (lo activa el navegador).
- * - Foco inicial en el primer campo; si el diálogo solo tiene botones, en la
- *   acción principal, que es la que confirma con Enter.
+ * - Foco inicial en el primer campo; si el diálogo solo tiene botones (los de
+ *   confirmación), en la acción principal, que es la que confirma con Enter.
  * - Trampa de foco: el tabulador no sale del diálogo mientras está abierto.
  *
  * Se aplica poniendo `ref` y `onKeyDown` en el `.modal`.
@@ -45,6 +48,22 @@ export function useModal(opts: {
     const principal = el.querySelector<HTMLElement>(".btn-primary, .btn-danger");
     (campo ?? principal ?? lista[0] ?? el).focus();
   }, [enfocables]);
+
+  // Red de seguridad para Escape: si el foco se ha salido del diálogo (clic
+  // en el fondo, foco perdido tras un re-render) el `onKeyDown` de abajo no
+  // llega a verlo. En captura, para cerrarlo antes de que los atajos
+  // globales de la app vean la tecla.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      const el = ref.current;
+      if (el && el.contains(document.activeElement)) return;
+      e.stopPropagation();
+      onClose();
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
