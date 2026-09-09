@@ -257,6 +257,29 @@ export function copyToClipboard(text: string) {
   });
 }
 
+/* ---- impresión ---- */
+
+/** Qué se imprime y cómo. Los valores por defecto son los de Acrobat:
+ *  todas las páginas, ajustadas al papel y con las marcas. */
+export type OpcionesImprimir = {
+  ambito: "todas" | "actual" | "rango";
+  rango: string;
+  subconjunto: "todas" | "pares" | "impares";
+  escala: "ajustar" | "real" | "personalizada";
+  porcentaje: number;
+  /** «Documento y marcas»: con los comentarios y los campos rellenados. */
+  conMarcas: boolean;
+};
+
+export const IMPRIMIR_POR_DEFECTO: OpcionesImprimir = {
+  ambito: "todas",
+  rango: "",
+  subconjunto: "todas",
+  escala: "ajustar",
+  porcentaje: 100,
+  conMarcas: true,
+};
+
 /* ---- ajuste de línea del cuadro de texto (FreeText) ---- */
 
 /** Interlineado del `/AP` del cuadro de texto. */

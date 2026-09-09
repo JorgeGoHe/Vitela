@@ -62,6 +62,8 @@ import {
   ATAJO_MARCADORES,
   ATAJO_PANEL,
   cargaPreferencias,
+  IMPRIMIR_POR_DEFECTO,
+  type OpcionesImprimir,
   cargaResaltarCampos,
   formateaRango,
   hexToRgba,
@@ -96,6 +98,7 @@ import DialogoConfirmar from "./components/DialogoConfirmar";
 import DialogoExportar from "./components/DialogoExportar";
 import DialogoComprimir from "./components/DialogoComprimir";
 import DialogoPreferencias from "./components/DialogoPreferencias";
+import DialogoImprimir from "./components/DialogoImprimir";
 import "./App.css";
 
 const BASE_WIDTH = 900;
@@ -239,7 +242,17 @@ function App() {
   const [flattenAsk, setFlattenAsk] = useState(false);
   // enlace externo pendiente de confirmar (los URI del PDF no son de fiar)
   const [linkAsk, setLinkAsk] = useState<string | null>(null);
-  const [printPages, setPrintPages] = useState<string[] | null>(null);
+  // páginas rasterizadas listas para el diálogo del sistema; `anchoIn` solo
+  // lo llevan las escalas que no son «ajustar al papel»
+  const [printPages, setPrintPages] = useState<
+    { src: string; anchoIn?: number }[] | null
+  >(null);
+  const [printOpen, setPrintOpen] = useState(false);
+  const [printOpts, setPrintOpts] = useState<OpcionesImprimir>(
+    IMPRIMIR_POR_DEFECTO,
+  );
+  // el bucle de rasterizado mira esta bandera entre página y página
+  const printCancelRef = useRef<{ cancelado: boolean } | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportFmt, setExportFmt] = useState<"png" | "jpeg">("png");
   const [exportDpi, setExportDpi] = useState(150);
@@ -250,6 +263,13 @@ function App() {
   // los avisos de progreso («Comprimiendo…») no se van solos: mientras dura
   // el trabajo son el único indicio de que la app no está colgada
   const [noticePersistente, setNoticePersistente] = useState(false);
+  // contador honesto del progreso («12 / 200»), en Fragment Mono
+  const [noticeDato, setNoticeDato] = useState<string | null>(null);
+  // salida del trabajo largo: la banda lleva su propio Cancelar
+  const [noticeAccion, setNoticeAccion] = useState<{
+    texto: string;
+    onClick: () => void;
+  } | null>(null);
   const [recientes, setRecientes] = useState<Reciente[]>([]);
   // ficheros soltados de golpe: abrir el primero o unirlos
   const [dropAsk, setDropAsk] = useState<string[] | null>(null);
@@ -346,11 +366,22 @@ function App() {
   }
 
   /** Muestra un aviso en la banda superior. Con `persistente` se queda hasta
-   *  que otro aviso lo sustituye (progreso); si no, se va solo a los 6 s. */
+   *  que otro aviso lo sustituye (progreso); si no, se va solo a los 6 s.
+   *  `dato` es el contador («12 / 200»), que se pinta en Fragment Mono, y
+   *  `accion` el botón de la propia banda (Cancelar). */
   const setNotice = useCallback(
-    (texto: string | null, opts?: { persistente?: boolean }) => {
+    (
+      texto: string | null,
+      opts?: {
+        persistente?: boolean;
+        dato?: string;
+        accion?: { texto: string; onClick: () => void };
+      },
+    ) => {
       setNoticeTexto(texto);
       setNoticePersistente(!!opts?.persistente);
+      setNoticeDato(opts?.dato ?? null);
+      setNoticeAccion(opts?.accion ?? null);
       // si algo ha salido bien, la banda roja de antes ya no cuenta: se
       // quedaba en pantalla a través de operaciones correctas
       if (texto) setError(null);
@@ -1367,20 +1398,98 @@ function App() {
     }
   }
 
-  async function printDocument() {
+  /** ⌘P: el diálogo propio, antes que el del sistema (como Acrobat). */
+  function printDocument() {
     if (!workPath) return;
+    setPrintOpen(true);
+  }
+
+  /** Páginas que pide el diálogo, ya filtradas por pares/impares. */
+  function paginasAImprimir(o: OpcionesImprimir): number[] {
+    const base =
+      o.ambito === "todas"
+        ? Array.from({ length: pageCount }, (_, i) => i)
+        : o.ambito === "actual"
+          ? [pageIndex]
+          : parseRango(o.rango, pageCount);
+    if (o.subconjunto === "todas") return base;
+    // «pares» e «impares» van por el número que ve el usuario, no por índice
+    const quiereImpar = o.subconjunto === "impares";
+    return base.filter((i) => (i + 1) % 2 === (quiereImpar ? 1 : 0));
+  }
+
+  /** Rasteriza solo el rango pedido y abre el diálogo del sistema. El bucle
+   *  se puede cancelar desde la propia banda de progreso; al cancelar se
+   *  liberan los blobs y no se abre nada. */
+  async function prepararImpresion(o: OpcionesImprimir) {
+    if (!workPath) return;
+    const idx = paginasAImprimir(o);
+    if (idx.length === 0) {
+      setError(
+        `Escribe qué páginas quieres imprimir, por ejemplo «1-3, 8» (el documento tiene ${pageCount})`,
+      );
+      return;
+    }
+    setPrintOpts(o);
+    setPrintOpen(false);
+    const señal = { cancelado: false };
+    printCancelRef.current = señal;
+    const cancelar = {
+      texto: "Cancelar",
+      onClick: () => {
+        señal.cancelado = true;
+      },
+    };
+    // pocas páginas se pueden permitir 300 dpi; un documento entero a 300
+    // tarda de más y no se nota en papel
+    const dpi = idx.length <= 8 ? 300 : 200;
+    const listas: { src: string; anchoIn?: number }[] = [];
+    const soltar = () => {
+      for (const p of listas) URL.revokeObjectURL(p.src);
+    };
     try {
-      setNotice("Preparando la impresión…", { persistente: true });
-      const pages: string[] = [];
-      for (let i = 0; i < pageCount; i++) {
-        const width = Math.round(((pageSizes[i]?.width ?? 595) * 200) / 72);
-        pages.push(await renderPageSrc(workPath, i, width));
+      setNotice("Preparando la impresión…", {
+        persistente: true,
+        dato: `0 / ${idx.length}`,
+        accion: cancelar,
+      });
+      for (let n = 0; n < idx.length; n++) {
+        if (señal.cancelado) break;
+        const i = idx[n];
+        const anchoPt = pageSizes[i]?.width ?? 595;
+        const src = await renderPageSrc(
+          workPath,
+          i,
+          Math.round((anchoPt * dpi) / 72),
+          { withAnnotations: o.conMarcas },
+        );
+        listas.push({
+          src,
+          anchoIn:
+            o.escala === "ajustar"
+              ? undefined
+              : (anchoPt / 72) *
+                (o.escala === "real" ? 1 : o.porcentaje / 100),
+        });
+        setNotice("Preparando la impresión…", {
+          persistente: true,
+          dato: `${n + 1} / ${idx.length}`,
+          accion: cancelar,
+        });
+      }
+      if (señal.cancelado) {
+        soltar();
+        setNotice("Impresión cancelada");
+        return;
       }
       setNotice(null);
-      setPrintPages(pages);
+      setPrintPages(listas);
     } catch (e) {
+      soltar();
       setNotice(null);
       setError(String(e));
+    } finally {
+      printCancelRef.current = null;
     }
   }
 
@@ -1408,7 +1517,7 @@ function App() {
         setError(String(e));
       }
       // liberar los blob URLs de las páginas ya impresas
-      for (const src of printPages) URL.revokeObjectURL(src);
+      for (const p of printPages) URL.revokeObjectURL(p.src);
       setPrintPages(null);
     }, 200);
     return () => clearTimeout(t);
@@ -2008,6 +2117,12 @@ function App() {
       {notice && (
         <div className={`banner-notice${noticeSaliendo ? " saliendo" : ""}`}>
           <p title={notice}>{notice}</p>
+          {noticeDato && <span className="dato notice-dato">{noticeDato}</span>}
+          {noticeAccion && (
+            <button className="btn" onClick={noticeAccion.onClick}>
+              {noticeAccion.texto}
+            </button>
+          )}
           <button className="btn btn-icon" aria-label="Cerrar el aviso" onClick={() => setNotice(null)}>
             <Icon name="close" size={13} />
           </button>
@@ -2295,10 +2410,24 @@ function App() {
           onClose={() => setCompressOpen(false)}
         />
       )}
+      {printOpen && (
+        <DialogoImprimir
+          inicial={printOpts}
+          pageCount={pageCount}
+          paginaActual={pageIndex}
+          onConfirm={prepararImpresion}
+          onClose={() => setPrintOpen(false)}
+        />
+      )}
       {printPages && (
         <div className="print-pages">
-          {printPages.map((src, i) => (
-            <img key={i} src={src} alt={`Página ${i + 1}`} />
+          {printPages.map((p, i) => (
+            <img
+              key={i}
+              src={p.src}
+              alt={`Página ${i + 1}`}
+              style={p.anchoIn ? { width: `${p.anchoIn}in` } : undefined}
+            />
           ))}
         </div>
       )}

@@ -1046,6 +1046,13 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+}
+
+/* el contador del progreso: dato de imprenta, no interfaz (DESIGN.md) */
+.notice-dato {
+  color: var(--fg-muted);
+  white-space: nowrap;
 }
 
 .print-pages {

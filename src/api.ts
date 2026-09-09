@@ -125,13 +125,15 @@ export async function renderPageSrc(
   path: string,
   pageIndex: number,
   width: number,
-  opts?: { background?: boolean },
+  opts?: { background?: boolean; withAnnotations?: boolean },
 ): Promise<string> {
-  const r = await invoke<unknown>(
-    "render_page",
-    { path, pageIndex, width },
-    opts,
-  );
+  const args: Record<string, unknown> = { path, pageIndex, width };
+  // sin la opción, el render de siempre (con anotaciones); con `false`,
+  // el documento limpio, que es lo que pide «Solo el documento» al imprimir
+  if (opts?.withAnnotations !== undefined) {
+    args.withAnnotations = opts.withAnnotations;
+  }
+  const r = await invoke<unknown>("render_page", args, opts);
   if (typeof r === "string") return `data:image/png;base64,${r}`;
   return URL.createObjectURL(
     new Blob([r as ArrayBuffer], { type: "image/png" }),
