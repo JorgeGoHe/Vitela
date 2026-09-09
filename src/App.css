@@ -400,6 +400,38 @@ textarea {
   gap: 14px;
 }
 
+/* la lista de miniaturas conserva la separación que tenía en el sidebar */
+.paginas-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* barra de la selección múltiple: recuento y acciones en lote */
+.sel-bar {
+  position: sticky;
+  top: 34px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+}
+
+.sel-bar-acciones {
+  display: flex;
+  gap: 2px;
+}
+
+/* el mismo icono de rotar, mirado al espejo: girar a la izquierda */
+.espejo svg {
+  transform: scaleX(-1);
+}
+
 .thumb {
   position: relative;
   cursor: pointer;
@@ -413,6 +445,37 @@ textarea {
 
 .thumb.active {
   outline-color: var(--accent);
+}
+
+.thumb.marcada {
+  outline-color: var(--accent);
+  box-shadow:
+    var(--shadow-card),
+    0 0 0 4px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.thumb:focus-visible {
+  outline-color: var(--accent);
+}
+
+/* línea de inserción del arrastre: dónde caería la página que se lleva */
+.thumb.drop-antes::before,
+.thumb.drop-despues::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+}
+
+.thumb.drop-antes::before {
+  top: -8px;
+}
+
+.thumb.drop-despues::after {
+  bottom: -8px;
 }
 
 .thumb img {
@@ -660,6 +723,14 @@ textarea {
 .page-wrap {
   position: relative;
   flex-shrink: 0;
+}
+
+/* la hoja de verdad: es la que gira con la vista (⇧⌘+ / ⇧⌘−) */
+.page-rot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform-origin: center;
   box-shadow: var(--shadow-page);
   background: white;
   border-radius: 2px;

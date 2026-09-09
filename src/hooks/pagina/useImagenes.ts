@@ -3,7 +3,7 @@ import { invoke } from "../../ipc";
 import { open } from "../../dialogos";
 import { getImageData } from "../../api";
 import type { ImageInfo, ImgAction, Mode, PageSize, Rect, ResizeHandle } from "../../tipos";
-import { puntoAPagina, rectAPagina, rectAVista } from "./geometria";
+import { puntoAPagina, puntoEnCapa, rectAPagina, rectAVista } from "./geometria";
 
 /**
  * Imágenes de la página (modo imagen): insertar, mover/redimensionar por
@@ -19,6 +19,7 @@ export function useImagenes(ctx: {
   mode: Mode;
   scale: number;
   size: PageSize;
+  viewRotation: number;
   wrapRef: RefObject<HTMLDivElement | null>;
   onPageMutated: (page: number) => void;
   onError: (e: unknown) => void;
@@ -32,6 +33,7 @@ export function useImagenes(ctx: {
     mode,
     scale,
     size,
+    viewRotation,
     wrapRef,
     onPageMutated,
     onError,
@@ -249,14 +251,12 @@ export function useImagenes(ctx: {
   ) {
     e.stopPropagation();
     if (e.button !== 0) return;
-    const rect = (
-      e.currentTarget.closest(".textlayer") as HTMLElement
-    ).getBoundingClientRect();
+    const p = puntoEnCapa(e, scale, viewRotation);
     imgActionRef.current = {
       kind,
       handle,
-      startX: (e.clientX - rect.left) / scale,
-      startY: (e.clientY - rect.top) / scale,
+      startX: p.x,
+      startY: p.y,
       orig: im,
       moved: false,
     };

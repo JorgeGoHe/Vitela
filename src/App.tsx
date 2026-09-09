@@ -29,8 +29,11 @@ import {
   addWatermark,
   duplicatePage,
   insertPdfAt,
+  deletePages,
+  extractPages,
   getDocumentAnnotations,
   listRecent,
+  rotatePages,
   removeRecent,
   renderPageSrc,
   touchRecent,
@@ -54,8 +57,10 @@ import {
 import {
   ATAJO_PANEL,
   cargaPreferencias,
+  formateaRango,
   hexToRgba,
   MOD,
+  parseRango,
   type FiltroComentarios,
   type Mode,
   type PageSize,
@@ -73,6 +78,7 @@ import DialogoMarcaAgua from "./components/DialogoMarcaAgua";
 import DialogoEncabezado from "./components/DialogoEncabezado";
 import PanelMarcadores from "./components/PanelMarcadores";
 import PanelComentarios from "./components/PanelComentarios";
+import DialogoExtraer from "./components/DialogoExtraer";
 import DialogoPropiedades from "./components/DialogoPropiedades";
 import DialogoContrasena from "./components/DialogoContrasena";
 import DialogoProteger from "./components/DialogoProteger";
@@ -180,6 +186,12 @@ function App() {
   const [comentarios, setComentarios] = useState<AnotacionDoc[]>([]);
   const [filtroComentarios, setFiltroComentarios] =
     useState<FiltroComentarios>("todos");
+  // páginas marcadas en el panel para actuar en lote
+  const [paginasSel, setPaginasSel] = useState<Set<number>>(new Set());
+  const [extraerOpen, setExtraerOpen] = useState(false);
+  // giro SOLO de la vista (⇧⌘+ / ⇧⌘−): no toca el fichero y se pierde al
+  // cerrar, como en Acrobat
+  const [viewRotation, setViewRotation] = useState(0);
   // comentario elegido en el panel: la página lo abre en su popover
   const [annotSel, setAnnotSel] = useState<{
     page: number;
@@ -269,6 +281,8 @@ function App() {
           "Documento protegido: al guardar puedes mantener la contraseña o quitarla",
         );
       }
+      setPaginasSel(new Set());
+      setViewRotation(0);
       setOriginalPath(path);
       setWorkPath(info.work_path);
       setPageCount(info.page_count);
@@ -461,6 +475,8 @@ function App() {
     setOutlineState([]);
     setComentarios([]);
     setAnnotSel(null);
+    setPaginasSel(new Set());
+    setViewRotation(0);
     evictAll();
     setDocVersion((v) => v + 1);
     invoke("close_document", { workPath: anterior }).catch((e) => setError(String(e)));
@@ -709,6 +725,16 @@ function App() {
       } else if (mod && !e.shiftKey && e.key === "-" && pageCount > 0) {
         e.preventDefault();
         setZoom(recortaZoom(Math.round((zoomNum - 0.25) * 4) / 4));
+      } else if (
+        mod &&
+        e.shiftKey &&
+        (e.key === "+" || e.key === "*" || e.key === "-" || e.key === "_") &&
+        pageCount > 0
+      ) {
+        // girar SOLO la vista: el fichero no cambia y el título no gana el «•»
+        e.preventDefault();
+        const sentido = e.key === "-" || e.key === "_" ? -90 : 90;
+        setViewRotation((r) => (r + sentido + 360) % 360);
       } else if (mod && (e.key === "g" || e.key === "G") && pageCount > 0) {
         e.preventDefault();
         busqueda.gotoMatch(e.shiftKey ? -1 : 1);
@@ -735,23 +761,32 @@ function App() {
   // Ancho de página en pantalla: fijo por zoom numérico, o el ancho útil
   // del visor en modo "ajuste". El ancho de render (px físicos) es también
   // la clave del caché: unifica ambos modos.
+  const vistaGirada = viewRotation === 90 || viewRotation === 270;
   const PADDING_VIEWER = 48;
   const VIEWER_PAD_BOTTOM = 72;
   const fitWidth = viewerW ? Math.max(320, viewerW - PADDING_VIEWER) : BASE_WIDTH;
   const fitHeight = viewerH
     ? Math.max(200, viewerH - VIEWER_PAD_TOP - VIEWER_PAD_BOTTOM)
     : BASE_WIDTH;
-  // «ajustar a página»: el ancho que deja entrar la hoja entera a lo alto.
-  // Se usa la proporción más alta del documento para que el ancho no cambie
-  // al desplazarse entre páginas de tamaños distintos.
+  // «ajustar»: el ancho de hoja que hace que la página ocupe justo el ancho
+  // (o el alto) útil. Se usa la proporción más alta del documento para que el
+  // ancho no cambie al desplazarse entre páginas de tamaños distintos, y se
+  // cuenta el giro de la vista, que intercambia alto y ancho en pantalla.
   const ratioMax = pageSizes.reduce((m, s) => Math.max(m, s.height / s.width), 0);
-  const pageFitWidth =
-    ratioMax > 0 ? Math.max(160, Math.min(fitWidth, fitHeight / ratioMax)) : fitWidth;
+  const anchoAjuste =
+    vistaGirada && ratioMax > 0 ? fitWidth / ratioMax : fitWidth;
+  const anchoPagina =
+    ratioMax > 0
+      ? Math.max(
+          160,
+          Math.min(anchoAjuste, vistaGirada ? fitHeight : fitHeight / ratioMax),
+        )
+      : anchoAjuste;
   const displayWidth =
     zoom === "ajuste"
-      ? fitWidth
+      ? anchoAjuste
       : zoom === "pagina"
-        ? pageFitWidth
+        ? anchoPagina
         : BASE_WIDTH * zoom;
   const ocupado = useSyncExternalStore(subscribeBusy, busyCount) > 0;
 
@@ -803,9 +838,12 @@ function App() {
     else pageElsRef.current.delete(page);
   }, []);
 
-  /** Alturas en pantalla de cada página con el ancho dado. */
+  /** Alturas en pantalla de cada página con el ancho de hoja dado. Con la
+   *  vista girada un cuarto, alto y ancho se intercambian. */
   function alturasPagina(width: number): number[] {
-    return pageSizes.map((s) => (width * s.height) / s.width);
+    return pageSizes.map((s) =>
+      vistaGirada ? width : (width * s.height) / s.width,
+    );
   }
 
   /** Lleva el visor al principio de una página (miniaturas, marcadores,
@@ -949,6 +987,36 @@ function App() {
         pageIndex: i,
       });
       afterMutation(count);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  /** Gira las páginas marcadas (o la actual) en una sola mutación. */
+  async function girarPaginas(cuartos: number) {
+    if (!workPath) return;
+    const idx = paginasSel.size > 0 ? [...paginasSel] : [pageIndex];
+    try {
+      await rotatePages(workPath, idx, cuartos);
+      afterMutation(pageCount);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  /** Borra las páginas marcadas de una vez: un solo paso de deshacer. */
+  async function borrarPaginas() {
+    if (!workPath || paginasSel.size === 0) return;
+    const idx = [...paginasSel];
+    if (idx.length >= pageCount) return;
+    try {
+      const count = await deletePages(workPath, idx);
+      setPaginasSel(new Set());
+      afterMutation(count);
+      // sin confirmación: ⌘Z las devuelve, pero el aviso lo dice
+      setNotice(
+        `${idx.length} ${idx.length === 1 ? "página eliminada" : "páginas eliminadas"} · ${MOD}Z para deshacer`,
+      );
     } catch (e) {
       setError(String(e));
     }
@@ -1236,20 +1304,65 @@ function App() {
     }
   }
 
-  async function extractCurrentPage() {
+  async function aplicarExtraer(opts: {
+    rango: string;
+    borrar: boolean;
+    porPagina: boolean;
+  }) {
     if (!workPath) return;
-    const dest = await save({
-      filters: [{ name: "PDF", extensions: ["pdf"] }],
-      defaultPath: `pagina-${pageIndex + 1}.pdf`,
-      title: "Extraer página a un PDF nuevo",
-    });
-    if (!dest) return;
+    const idx = parseRango(opts.rango, pageCount);
+    if (idx.length === 0) {
+      setError(
+        `Escribe qué páginas quieres extraer, por ejemplo «1-3, 8» (el documento tiene ${pageCount})`,
+      );
+      return;
+    }
+    setExtraerOpen(false);
     try {
-      await invoke("extract_pages", {
-        workPath,
-        pageIndices: [pageIndex],
-        destPath: dest,
+      if (opts.porPagina) {
+        const dir = await open({
+          directory: true,
+          multiple: false,
+          title: "Carpeta para los PDF extraídos",
+        });
+        if (typeof dir !== "string") return;
+        const sep = dir.includes("\\") ? "\\" : "/";
+        for (const i of idx) {
+          await extractPages({
+            workPath,
+            pageIndices: [i],
+            destPath: `${dir}${sep}pagina-${i + 1}.pdf`,
+            deleteAfter: false,
+          });
+        }
+        if (opts.borrar) {
+          const count = await deletePages(workPath, idx);
+          setPaginasSel(new Set());
+          afterMutation(count);
+        }
+        setNotice(`${idx.length} PDF escritos en ${dir}`);
+        return;
+      }
+      const dest = await save({
+        filters: [{ name: "PDF", extensions: ["pdf"] }],
+        defaultPath: (originalPath ?? "documento.pdf").replace(
+          /\.pdf$/i,
+          "-extraido.pdf",
+        ),
+        title: "Extraer páginas a un PDF nuevo",
       });
+      if (!dest) return;
+      await extractPages({
+        workPath,
+        pageIndices: idx,
+        destPath: dest,
+        deleteAfter: opts.borrar,
+      });
+      if (opts.borrar) {
+        setPaginasSel(new Set());
+        afterMutation(pageCount - idx.length);
+      }
+      setNotice(`${idx.length} página(s) extraídas a ${dest}`);
     } catch (e) {
       setError(String(e));
     }
@@ -1579,7 +1692,7 @@ function App() {
                 saveFileAs={saveFileAs}
                 closeDocument={closeDocument}
                 addPdf={addPdf}
-                extractCurrentPage={extractCurrentPage}
+                abrirExtraer={() => setExtraerOpen(true)}
                 insertPdfHere={insertPdfHere}
                 recortarPagina={() => {
                   selectMode("select");
@@ -1864,6 +1977,18 @@ function App() {
           Arrastra sobre la zona que será clicable · Esc cancela
         </div>
       )}
+      {extraerOpen && (
+        <DialogoExtraer
+          inicial={
+            paginasSel.size > 0
+              ? formateaRango([...paginasSel])
+              : String(pageIndex + 1)
+          }
+          pageCount={pageCount}
+          onConfirm={aplicarExtraer}
+          onClose={() => setExtraerOpen(false)}
+        />
+      )}
       {exportOpen && (
         <DialogoExportar
           fmt={exportFmt}
@@ -1976,6 +2101,11 @@ function App() {
                 thumbs={thumbs}
                 pageIndex={pageIndex}
                 pageCount={pageCount}
+                seleccion={paginasSel}
+                setSeleccion={setPaginasSel}
+                girarLote={girarPaginas}
+                eliminarLote={borrarPaginas}
+                extraerLote={() => setExtraerOpen(true)}
                 gotoPage={gotoPage}
                 movePage={movePage}
                 rotatePage={rotatePage}
@@ -2043,6 +2173,7 @@ function App() {
                   size={size}
                   pageCount={pageCount}
                   displayWidth={displayWidth}
+                  viewRotation={viewRotation}
                   devicePixelRatio={window.devicePixelRatio}
                   docVersion={docVersion}
                   annotVersion={annotVersion}

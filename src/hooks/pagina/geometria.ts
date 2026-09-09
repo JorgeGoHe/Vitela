@@ -110,13 +110,54 @@ export function resizeRect(
   return { x: left, y: top, w, h };
 }
 
+/** Punto del ratón dentro de una capa, deshaciendo el giro de la vista
+ *  (⇧⌘+/⇧⌘−), que es solo una rotación CSS de la hoja: el rect que devuelve
+ *  el navegador para un elemento girado es su caja envolvente. */
+function puntoEnRect(
+  rect: DOMRect,
+  clientX: number,
+  clientY: number,
+  scale: number,
+  viewRotation: number,
+): { x: number; y: number } {
+  const p = { x: (clientX - rect.left) / scale, y: (clientY - rect.top) / scale };
+  if (!viewRotation) return p;
+  return puntoAPagina(p, {
+    width: rect.width / scale,
+    height: rect.height / scale,
+    rotation: viewRotation,
+  });
+}
+
 /** Punto del ratón en coordenadas de página (puntos PDF). */
-export function pagePoint(e: MouseEvent<HTMLDivElement>, scale: number) {
-  const rect = e.currentTarget.getBoundingClientRect();
-  return {
-    x: (e.clientX - rect.left) / scale,
-    y: (e.clientY - rect.top) / scale,
-  };
+export function pagePoint(
+  e: MouseEvent<HTMLDivElement>,
+  scale: number,
+  viewRotation = 0,
+) {
+  return puntoEnRect(
+    e.currentTarget.getBoundingClientRect(),
+    e.clientX,
+    e.clientY,
+    scale,
+    viewRotation,
+  );
+}
+
+/** Igual, pero desde un overlay: la referencia es la capa de texto. */
+export function puntoEnCapa(
+  e: MouseEvent<HTMLElement>,
+  scale: number,
+  viewRotation = 0,
+) {
+  const capa = e.currentTarget.closest(".textlayer") as HTMLElement;
+  return puntoEnRect(
+    capa.getBoundingClientRect(),
+    e.clientX,
+    e.clientY,
+    scale,
+    viewRotation,
+  );
 }
 
 /** Evita que una tarjeta flotante se salga del borde de la página. */

@@ -156,6 +156,39 @@ export const KIND_ICONS: Record<string, string> = {
 /** «todos» o el plural de un tipo (`KIND_PLURALS`). */
 export type FiltroComentarios = string;
 
+/** Lee la sintaxis de rango de Acrobat («1-3, 8») y devuelve los índices
+ *  desde 0, ordenados y sin repetidos. Lo que se sale del documento se
+ *  descarta en silencio. */
+export function parseRango(texto: string, pageCount: number): number[] {
+  const fuera = new Set<number>();
+  for (const trozo of texto.split(",")) {
+    const t = trozo.trim();
+    if (!t) continue;
+    const m = /^(\d+)\s*(?:-\s*(\d+))?$/.exec(t);
+    if (!m) continue;
+    const a = Number(m[1]);
+    const b = m[2] ? Number(m[2]) : a;
+    for (let n = Math.min(a, b); n <= Math.max(a, b); n++) {
+      if (n >= 1 && n <= pageCount) fuera.add(n - 1);
+    }
+  }
+  return [...fuera].sort((x, y) => x - y);
+}
+
+/** El camino de vuelta: «1-3, 8» a partir de unos índices desde 0. */
+export function formateaRango(indices: number[]): string {
+  const orden = [...indices].sort((a, b) => a - b);
+  const trozos: string[] = [];
+  let i = 0;
+  while (i < orden.length) {
+    let j = i;
+    while (j + 1 < orden.length && orden[j + 1] === orden[j] + 1) j++;
+    trozos.push(i === j ? `${orden[i] + 1}` : `${orden[i] + 1}-${orden[j] + 1}`);
+    i = j + 1;
+  }
+  return trozos.join(", ");
+}
+
 export function hexToRgba(hex: string, alpha = 255): Rgba {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255, alpha];

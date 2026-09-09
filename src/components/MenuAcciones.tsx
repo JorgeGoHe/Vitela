@@ -43,7 +43,7 @@ export default function MenuAcciones({
   saveFileAs,
   closeDocument,
   addPdf,
-  extractCurrentPage,
+  abrirExtraer,
   insertPdfHere,
   recortarPagina,
   abrirMarcaAgua,
@@ -72,7 +72,7 @@ export default function MenuAcciones({
   /** Cierra el menú por su cuenta. */
   closeDocument: () => void;
   addPdf: () => void;
-  extractCurrentPage: () => void;
+  abrirExtraer: () => void;
   insertPdfHere: () => void;
   recortarPagina: () => void;
   abrirMarcaAgua: () => void;
@@ -194,8 +194,8 @@ export default function MenuAcciones({
             <Entrada icon="merge" texto="Añadir PDF…" onSelect={ejecutar(addPdf)} />
             <Entrada
               icon="extract"
-              texto="Extraer página…"
-              onSelect={ejecutar(extractCurrentPage)}
+              texto="Extraer páginas…"
+              onSelect={ejecutar(abrirExtraer)}
             />
             <Entrada
               icon="merge"

@@ -140,6 +140,36 @@ export function getDocumentAnnotations(path: string): Promise<AnotacionDoc[]> {
   return invoke("get_document_annotations", { path });
 }
 
+/** Borra varias páginas en una sola mutación (un solo paso de deshacer);
+ *  devuelve el total que queda. */
+export function deletePages(
+  workPath: string,
+  pageIndices: number[],
+): Promise<number> {
+  return invoke("delete_pages", { workPath, pageIndices });
+}
+
+/** Gira varias páginas en una sola mutación; `quarterTurns` va con signo
+ *  (±1, ±2, ±3) para admitir el giro antihorario. */
+export function rotatePages(
+  workPath: string,
+  pageIndices: number[],
+  quarterTurns: number,
+): Promise<void> {
+  return invoke("rotate_pages", { workPath, pageIndices, quarterTurns });
+}
+
+/** Escribe las páginas dadas en un PDF nuevo; con `deleteAfter` las quita
+ *  además del documento de trabajo, dentro de la misma mutación. */
+export function extractPages(args: {
+  workPath: string;
+  pageIndices: number[];
+  destPath: string;
+  deleteAfter: boolean;
+}): Promise<void> {
+  return invoke("extract_pages", { ...args });
+}
+
 /** Cuadro de texto de Acrobat: una anotación FreeText que escribe ENCIMA
  *  del documento, sin tocar el contenido de la página. */
 export function addFreeText(args: {

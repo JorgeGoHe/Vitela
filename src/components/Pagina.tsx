@@ -61,6 +61,8 @@ type Props = {
   size: PageSize;
   pageCount: number;
   displayWidth: number;
+  /** Giro solo de la vista (⇧⌘+/⇧⌘−): rotación CSS, el fichero no cambia. */
+  viewRotation: number;
   devicePixelRatio: number;
   docVersion: number;
   annotVersion: number;
@@ -94,6 +96,7 @@ function Pagina({
   size,
   pageCount,
   displayWidth,
+  viewRotation,
   devicePixelRatio,
   docVersion,
   annotVersion,
@@ -181,6 +184,7 @@ function Pagina({
     mode,
     scale,
     size,
+    viewRotation,
     wrapRef,
     onPageMutated,
     onError,
@@ -208,6 +212,7 @@ function Pagina({
     mode,
     scale,
     size,
+    viewRotation,
     tool,
     selOwner,
     seleccionExterna,
@@ -285,7 +290,7 @@ function Pagina({
 
   function onMouseDown(e: React.MouseEvent<HTMLDivElement>) {
     if (e.button !== 0) return;
-    const { x, y } = pagePoint(e, scale);
+    const { x, y } = pagePoint(e, scale, viewRotation);
     if (mode === "draw") {
       anotaciones.strokeLiveRef.current = [[x, y]];
       anotaciones.setStrokePts([[x, y]]);
@@ -371,7 +376,7 @@ function Pagina({
     if (!(e.buttons & 1)) return;
     if (mode === "select" && anotaciones.annotActionRef.current) {
       const a = anotaciones.annotActionRef.current;
-      const { x, y } = pagePoint(e, scale);
+      const { x, y } = pagePoint(e, scale, viewRotation);
       const dx = x - a.startX;
       const dy = y - a.startY;
       if (Math.abs(dx) + Math.abs(dy) > 1) a.moved = true;
@@ -387,7 +392,7 @@ function Pagina({
     }
     if (mode === "image" && imagenes.imgActionRef.current) {
       const a = imagenes.imgActionRef.current;
-      const { x, y } = pagePoint(e, scale);
+      const { x, y } = pagePoint(e, scale, viewRotation);
       const dx = x - a.startX;
       const dy = y - a.startY;
       if (Math.abs(dx) + Math.abs(dy) > 1) a.moved = true;
@@ -401,7 +406,7 @@ function Pagina({
     }
     if (mode === "draw") {
       if (anotaciones.strokeLiveRef.current.length === 0) return;
-      const { x, y } = pagePoint(e, scale);
+      const { x, y } = pagePoint(e, scale, viewRotation);
       anotaciones.strokeLiveRef.current = [...anotaciones.strokeLiveRef.current, [x, y]];
       anotaciones.setStrokePts(anotaciones.strokeLiveRef.current);
       return;
@@ -409,7 +414,7 @@ function Pagina({
     if (mode === "firmar") {
       const start = areas.sigDragRef.current;
       if (!activeSig || !start) return;
-      const { x, y } = pagePoint(e, scale);
+      const { x, y } = pagePoint(e, scale, viewRotation);
       const w = Math.abs(x - start.x);
       if (w < 4) return;
       const h = w * activeSig.ratio;
@@ -426,7 +431,7 @@ function Pagina({
     if (mode === "shape") {
       const start = anotaciones.shapeStartRef.current;
       if (!start) return;
-      const { x, y } = pagePoint(e, scale);
+      const { x, y } = pagePoint(e, scale, viewRotation);
       const d = { x1: start.x, y1: start.y, x2: x, y2: y };
       anotaciones.shapeLiveRef.current = d;
       anotaciones.setShapeDraft(d);
@@ -435,7 +440,7 @@ function Pagina({
     if (mode === "crop") {
       const start = areas.cropStartRef.current;
       if (!start) return;
-      const { x, y } = pagePoint(e, scale);
+      const { x, y } = pagePoint(e, scale, viewRotation);
       areas.setCropDraft({
         x: Math.min(x, start.x),
         y: Math.min(y, start.y),
@@ -447,7 +452,7 @@ function Pagina({
     if (mode === "redact") {
       const start = areas.redactStartRef.current;
       if (!start) return;
-      const { x, y } = pagePoint(e, scale);
+      const { x, y } = pagePoint(e, scale, viewRotation);
       const d = {
         x: Math.min(x, start.x),
         y: Math.min(y, start.y),
@@ -461,7 +466,7 @@ function Pagina({
     if (mode === "freetext") {
       const start = anotaciones.freeTextStartRef.current;
       if (!start) return;
-      const { x, y } = pagePoint(e, scale);
+      const { x, y } = pagePoint(e, scale, viewRotation);
       const d = {
         x: Math.min(x, start.x),
         y: Math.min(y, start.y),
@@ -476,7 +481,7 @@ function Pagina({
     if (mode === "form-new" || mode === "link-new") {
       const start = (mode === "form-new" ? formularios.formStartRef : enlaces.linkStartRef).current;
       if (!start) return;
-      const { x, y } = pagePoint(e, scale);
+      const { x, y } = pagePoint(e, scale, viewRotation);
       const d = {
         x: Math.min(x, start.x),
         y: Math.min(y, start.y),
@@ -500,7 +505,7 @@ function Pagina({
       Math.abs(e.clientY - down.y) < 4
     )
       return;
-    const { x, y } = pagePoint(e, scale);
+    const { x, y } = pagePoint(e, scale, viewRotation);
     const idx = charIndexAt(seleccion.pageText, x, y);
     if (idx === null) return;
     const a = seleccion.anchorRef.current;
@@ -615,13 +620,28 @@ function Pagina({
     if (mode === "draw" && anotaciones.strokeLiveRef.current.length > 0) anotaciones.finishStroke();
   }
 
+  // La hoja se gira con un transform; la caja exterior intercambia alto y
+  // ancho para que el scroll continuo siga colocando bien las páginas.
+  const altoHoja = (displayWidth * size.height) / size.width;
+  const cuarto = viewRotation === 90 || viewRotation === 270;
   return (
     <div
       ref={wrapRef}
       className="page-wrap"
-      style={{ width: displayWidth }}
+      style={{
+        width: cuarto ? altoHoja : displayWidth,
+        height: cuarto ? displayWidth : altoHoja,
+      }}
       data-page={index}
     >
+      <div
+        className="page-rot"
+        style={{
+          width: displayWidth,
+          height: altoHoja,
+          transform: `translate(-50%, -50%) rotate(${viewRotation}deg)`,
+        }}
+      >
       <span className="esquina a" />
       <span className="esquina b" />
       <span className="esquina c" />
@@ -733,6 +753,7 @@ function Pagina({
           )}
         </div>
       )}
+      </div>
     </div>
   );
 }

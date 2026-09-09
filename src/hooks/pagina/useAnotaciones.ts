@@ -28,7 +28,7 @@ import {
 } from "../../tipos";
 import type { ToolProps } from "../../components/Pagina";
 import type { SeleccionTexto } from "./useSeleccionTexto";
-import { pagePoint, puntoAPagina, rectAPagina } from "./geometria";
+import { pagePoint, puntoAPagina, puntoEnCapa, rectAPagina } from "./geometria";
 
 /**
  * Anotaciones de la página: la lista (iconos de nota, overlays de marcas,
@@ -45,6 +45,8 @@ export function useAnotaciones(ctx: {
   mode: Mode;
   scale: number;
   size: PageSize;
+  /** Giro solo de la vista (⇧⌘+/⇧⌘−): no toca el fichero. */
+  viewRotation: number;
   tool: ToolProps;
   selOwner: number | null;
   /** Índice de la anotación que el panel de comentarios quiere seleccionar
@@ -66,6 +68,7 @@ export function useAnotaciones(ctx: {
     mode,
     scale,
     size,
+    viewRotation,
     tool,
     selOwner,
     seleccionExterna,
@@ -425,7 +428,7 @@ export function useAnotaciones(ctx: {
   /** Clic simple en modo selección: abre el popover de la anotación pulsada. */
   function onClickLayer(e: MouseEvent<HTMLDivElement>) {
     if (mode !== "select" || seleccion.selection) return;
-    const { x, y } = pagePoint(e, scale);
+    const { x, y } = pagePoint(e, scale, viewRotation);
     // Ink y Stamp tienen su propio overlay arrastrable con su mousedown
     const CLICKABLE = ["Highlight", "Underline", "Strikeout", "StrikeOut"];
     const hit = annots.find((a) => {
@@ -447,14 +450,12 @@ export function useAnotaciones(ctx: {
   ) {
     e.stopPropagation();
     if (e.button !== 0) return;
-    const rect = (
-      e.currentTarget.closest(".textlayer") as HTMLElement
-    ).getBoundingClientRect();
+    const p = puntoEnCapa(e, scale, viewRotation);
     annotActionRef.current = {
       kind,
       handle,
-      startX: (e.clientX - rect.left) / scale,
-      startY: (e.clientY - rect.top) / scale,
+      startX: p.x,
+      startY: p.y,
       orig: a,
       moved: false,
     };
