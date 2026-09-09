@@ -55,3 +55,14 @@ getrandom = "0.2"
 # puente HTTP de QA (el código solo se compila en debug)
 tiny_http = "0.12"
 
+# cadena de confianza de las firmas (ciclo 5): las raíces las pone el
+# sistema, no Vitela. En macOS las evalúa el propio llavero; en Windows y
+# Linux se leen del almacén nativo y la cadena se comprueba con el mismo
+# código que ya verifica las firmas (RustCrypto), sin traerse ring ni un
+# ensamblador nuevo al build de Windows.
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+core-foundation = "0.10"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+rustls-native-certs = "0.8"

@@ -686,6 +686,7 @@ mod anotaciones2;
 mod busqueda;
 mod documento;
 mod exportar;
+mod confianza;
 mod firma;
 mod firmas_visuales;
 mod formularios;

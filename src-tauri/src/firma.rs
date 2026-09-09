@@ -524,6 +524,13 @@ pub struct FirmaInfo {
     pub not_yet_valid: bool,
     /// Autofirmado: nadie más responde por ese certificado.
     pub self_signed: bool,
+    /// **Quién responde por el certificado**, que es una pregunta distinta
+    /// de si el documento ha cambiado: `"raiz_conocida"` (encadena con una
+    /// raíz del almacén del sistema), `"autofirmado"` o `"desconocida"`.
+    /// Ver `confianza.rs`: **no se comprueba la revocación**, así que la
+    /// etiqueta honesta es «emitido por una autoridad reconocida», nunca
+    /// «válida».
+    pub confianza: String,
     pub page_index: Option<u16>,
     /// Rectángulo del widget en el espacio de la página VISTA, como el
     /// resto de comandos que leen anotaciones. `None` si la firma es
@@ -703,6 +710,7 @@ fn lee_firma(
         expired: false,
         not_yet_valid: false,
         self_signed: false,
+        confianza: crate::confianza::DESCONOCIDA.to_string(),
         page_index,
         rect,
         // mientras no se compruebe nada, lo honesto es «no se sabe»
@@ -739,6 +747,7 @@ fn lee_firma(
         info.expired = cms.expired;
         info.not_yet_valid = cms.not_yet_valid;
         info.self_signed = cms.self_signed;
+        info.confianza = cms.confianza;
         info.algoritmo = cms.algoritmo;
         // el hash del /ByteRange se calcula con el algoritmo que declara la
         // firma, no siempre SHA-256: con SHA-384 o SHA-512 el documento
@@ -765,7 +774,7 @@ fn lee_firma(
 
 /// Los tres hashes de la familia SHA-2 que se usan en las firmas de PDF.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Hash {
+pub(crate) enum Hash {
     Sha256,
     Sha384,
     Sha512,
@@ -838,6 +847,8 @@ struct DatosCms {
     expired: bool,
     not_yet_valid: bool,
     self_signed: bool,
+    /// Ver `confianza.rs`.
+    confianza: String,
 }
 
 /// ¿El certificado está fuera de su periodo de validez, y por qué lado?
@@ -884,7 +895,8 @@ fn lee_cms(der_con_relleno: &[u8]) -> Option<DatosCms> {
     let digest = md_der.get(2..)?.to_vec();
     let hash = Hash::de_oid(signer.digest_alg.oid);
 
-    let (cert, era_el_del_firmante) = certificado_del_firmante(&sd, &signer.sid)?;
+    let bolso = certificados_del_bolso(&sd);
+    let (cert, era_el_del_firmante) = certificado_del_firmante(&bolso, &signer.sid)?;
     let spki = cert.tbs_certificate.subject_public_key_info.to_der().ok()?;
     let datos = attrs.to_der().ok()?;
     let (firma_ok, algoritmo) = if era_el_del_firmante {
@@ -907,6 +919,10 @@ fn lee_cms(der_con_relleno: &[u8]) -> Option<DatosCms> {
     let iso = |t: &x509_cert::time::Time| {
         chrono::DateTime::<chrono::Utc>::from(t.to_system_time()).to_rfc3339()
     };
+    // la confianza se evalúa en el momento de la firma: un certificado
+    // caducado hoy era bueno cuando se firmó, y eso es lo que mira Acrobat
+    let momento = hora_de_la_firma(attrs).unwrap_or_else(std::time::SystemTime::now);
+    let confianza = crate::confianza::confianza_del_firmante(&cert, &bolso, momento);
     let (fuera, todavia_no) = fuera_de_vigor(
         cert.tbs_certificate.validity.not_before.to_system_time(),
         cert.tbs_certificate.validity.not_after.to_system_time(),
@@ -924,6 +940,7 @@ fn lee_cms(der_con_relleno: &[u8]) -> Option<DatosCms> {
         not_after: iso(&cert.tbs_certificate.validity.not_after),
         expired: fuera,
         not_yet_valid: todavia_no,
+        confianza,
     })
 }
 
@@ -932,21 +949,9 @@ fn lee_cms(der_con_relleno: &[u8]) -> Option<DatosCms> {
 /// el primero del bolso solo para poder enseñar algo, con `false` en el
 /// segundo miembro: con ese no se verifica nada.
 fn certificado_del_firmante(
-    sd: &cms::signed_data::SignedData,
+    certificados: &[x509_cert::Certificate],
     sid: &SignerIdentifier,
 ) -> Option<(x509_cert::Certificate, bool)> {
-    let certificados: Vec<x509_cert::Certificate> = sd
-        .certificates
-        .as_ref()
-        .map(|c| {
-            c.0.iter()
-                .filter_map(|c| match c {
-                    CertificateChoices::Certificate(cert) => Some(cert.clone()),
-                    _ => None,
-                })
-                .collect()
-        })
-        .unwrap_or_default();
     let suyo = certificados.iter().find(|cert| match sid {
         SignerIdentifier::IssuerAndSerialNumber(ias) => {
             cert.tbs_certificate.issuer == ias.issuer
@@ -960,6 +965,37 @@ fn certificado_del_firmante(
         Some(cert) => Some((cert.clone(), true)),
         None => certificados.first().map(|c| (c.clone(), false)),
     }
+}
+
+/// Todos los certificados que viajan en la firma: el del firmante y, en
+/// una firma cualificada, la cadena hasta la raíz. La cadena es justo lo
+/// que necesita `confianza.rs` para llegar al almacén del sistema.
+fn certificados_del_bolso(sd: &cms::signed_data::SignedData) -> Vec<x509_cert::Certificate> {
+    sd.certificates
+        .as_ref()
+        .map(|c| {
+            c.0.iter()
+                .filter_map(|c| match c {
+                    CertificateChoices::Certificate(cert) => Some(cert.clone()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// La hora que declara el atributo firmado `signingTime`, si lo lleva.
+fn hora_de_la_firma(
+    attrs: &cms::signed_data::SignedAttributes,
+) -> Option<std::time::SystemTime> {
+    use der::{Decode, Encode};
+    let attr = attrs
+        .iter()
+        .find(|a| a.oid == const_oid::db::rfc5911::ID_SIGNING_TIME)?;
+    let der = attr.values.iter().next()?.to_der().ok()?;
+    x509_cert::time::Time::from_der(&der)
+        .ok()
+        .map(|t| t.to_system_time())
 }
 
 /// El `SubjectKeyIdentifier` (extensión 2.5.29.14) del certificado.
@@ -981,7 +1017,7 @@ fn identificador_de_clave(cert: &x509_cert::Certificate) -> Option<Vec<u8>> {
 /// certificado. Devuelve `None` cuando el algoritmo no está soportado —que
 /// no es lo mismo que una firma que no cuadra— y la etiqueta que la UI
 /// enseña en la tarjeta.
-fn comprueba_firma(
+pub(crate) fn comprueba_firma(
     alg: const_oid::ObjectIdentifier,
     spki: &[u8],
     datos: &[u8],
@@ -1172,6 +1208,60 @@ mod tests {
         assert_eq!(fuera_de_vigor(ahora - 2 * dia, ahora - dia, ahora), (true, false));
         // todavía no: empieza mañana
         assert_eq!(fuera_de_vigor(ahora + dia, ahora + 2 * dia, ahora), (true, true));
+    }
+
+    /// **G1.** La confianza es una pregunta distinta de la validez: el
+    /// documento puede estar intacto y la firma cuadrar, y aun así no
+    /// haber nadie que responda por el certificado. Vitela firma con uno
+    /// autofirmado, y eso es lo que tiene que decir la tarjeta.
+    #[test]
+    fn la_firma_de_vitela_es_valida_y_su_certificado_no_lo_respalda_nadie() {
+        let (dest, _) = pdf_firmado("firma-confianza");
+        let f = &verify_signatures(dest.to_string_lossy().into_owned()).expect("verificar")[0];
+        assert_eq!(f.estado, ESTADO_OK, "algoritmo: {}", f.algoritmo);
+        assert!(f.self_signed);
+        assert_eq!(
+            f.confianza,
+            crate::confianza::AUTOFIRMADO,
+            "nadie más responde por el certificado de prueba"
+        );
+        std::fs::remove_file(&dest).ok();
+    }
+
+    /// **G1.** Una cadena de dos —el firmante y su AC en el bolso de la
+    /// firma— cuya raíz no está en el almacén del sistema: no es
+    /// autofirmada, pero tampoco se sabe quién la emitió. Es el caso de un
+    /// PDF que llega de fuera firmado por una AC que la máquina no conoce,
+    /// y la respuesta honesta es «no se ha podido comprobar», no «no
+    /// válida».
+    #[test]
+    fn una_cadena_cuya_raiz_no_conoce_el_sistema_sale_desconocida() {
+        use rsa::pkcs8::DecodePrivateKey;
+        let (dest, bytes) = pdf_firmado("firma-confianza-cadena");
+        let ca = x509_cert::Certificate::from_pem(include_str!("../fixtures/test_ca_cert.pem"))
+            .expect("AC de prueba");
+        let hija = x509_cert::Certificate::from_pem(include_str!("../fixtures/test_hija_cert.pem"))
+            .expect("certificado hijo");
+        let clave = rsa::RsaPrivateKey::from_pkcs8_pem(include_str!("../fixtures/test_hija_key.pem"))
+            .expect("clave del hijo");
+        let cms = cms_a_mano(
+            &digest_del_byterange(&bytes, Hash::Sha256),
+            const_oid::db::rfc5912::ID_SHA_256,
+            const_oid::db::rfc5912::SHA_256_WITH_RSA_ENCRYPTION,
+            vec![ca, hija.clone()],
+            &hija,
+            |datos| {
+                use rsa::signature::{SignatureEncoding, Signer};
+                let sk = rsa::pkcs1v15::SigningKey::<Sha256>::new(clave.clone());
+                sk.sign(datos).to_vec()
+            },
+        );
+        std::fs::write(&dest, recose(&bytes, &cms)).expect("recoser");
+        let f = &verify_signatures(dest.to_string_lossy().into_owned()).expect("verificar")[0];
+        assert_eq!(f.estado, ESTADO_OK, "la firma cuadra: {}", f.algoritmo);
+        assert!(!f.self_signed, "la emitió su AC, no ella misma");
+        assert_eq!(f.confianza, crate::confianza::DESCONOCIDA);
+        std::fs::remove_file(&dest).ok();
     }
 
     /// El certificado de la firma ECDSA de prueba (P-256), y su clave.
