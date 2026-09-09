@@ -158,26 +158,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "render_page" => cmd!(crate::render_page_b64, { path: String, page_index: u16, width: i32 }),
         "get_page_text" => cmd!(busqueda::get_page_text, { path: String, page_index: u16 }),
         "get_page_sizes" => cmd!(crate::get_page_sizes, { path: String }),
-        // los dos booleanos son opcionales en el puente: por defecto, false
-        "search_pdf" => {
-            #[derive(serde::Deserialize)]
-            #[serde(rename_all = "camelCase")]
-            struct Args {
-                path: String,
-                query: String,
-                match_case: Option<bool>,
-                whole_word: Option<bool>,
-            }
-            let a: Args = serde_json::from_value(body)
-                .map_err(|e| format!("argumentos inválidos para search_pdf: {e}"))?;
-            busqueda::search_pdf(
-                a.path,
-                a.query,
-                a.match_case.unwrap_or(false),
-                a.whole_word.unwrap_or(false),
-            )
-            .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string()))
-        }
+        "search_pdf" => cmd!(busqueda::search_pdf, { path: String, query: String, match_case: Option<bool>, whole_word: Option<bool> }),
         "delete_page" => cmd!(paginas::delete_page, { work_path: String, page_index: u16 }),
         "rotate_page" => cmd!(paginas::rotate_page, { work_path: String, page_index: u16 }),
         "move_page" => cmd!(paginas::move_page, { work_path: String, from_index: u16, to_index: u16 }),

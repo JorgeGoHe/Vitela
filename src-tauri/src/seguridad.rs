@@ -592,7 +592,7 @@ pub fn flatten_pdf(work_path: String) -> Result<(), String> {
     }))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct RedactReport {
     pub textos: u32,
     pub imagenes: u32,
@@ -614,8 +614,8 @@ pub fn redact_area(
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            .map_err(crate::mensaje_llano)?;
+        let mut page = doc.pages().get(page_index).map_err(crate::mensaje_llano)?;
         let page_h = page.height().value;
         // rect en coords PDF
         let rx0 = rect.x;
@@ -659,7 +659,7 @@ pub fn redact_area(
             let removed = page
                 .objects_mut()
                 .remove_object_at_index(i)
-                .map_err(|e| e.to_string())?;
+                .map_err(crate::mensaje_llano)?;
             // regla del proyecto: su Drop llama a FPDFPageObj_Destroy y
             // PDFium casca — fuga puntual asumida
             std::mem::forget(removed);
@@ -676,11 +676,11 @@ pub fn redact_area(
             None,
             Some(PdfColor::new(0, 0, 0, 255)),
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(crate::mensaje_llano)?;
         page.objects_mut()
             .add_path_object(negro)
-            .map_err(|e| e.to_string())?;
-        page.regenerate_content().map_err(|e| e.to_string())?;
+            .map_err(crate::mensaje_llano)?;
+        page.regenerate_content().map_err(crate::mensaje_llano)?;
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(RedactReport { textos, imagenes })

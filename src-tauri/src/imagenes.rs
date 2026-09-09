@@ -28,11 +28,11 @@ pub fn get_image_data(path: String, page_index: u16, object_index: u32) -> Resul
         let obj = page
             .objects()
             .get(object_index as usize)
-            .map_err(|e| e.to_string())?;
+            .map_err(crate::mensaje_llano)?;
         let img_obj = obj.as_image_object().ok_or("No es una imagen")?;
         let img = img_obj
             .get_processed_image(&doc)
-            .map_err(|e| e.to_string())?;
+            .map_err(crate::mensaje_llano)?;
         let mut buf = std::io::Cursor::new(Vec::new());
         img.write_to(&mut buf, image::ImageFormat::Png)
             .map_err(|e| format!("No se ha podido codificar la imagen: {e}"))?;

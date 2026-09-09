@@ -137,14 +137,17 @@ pub fn normaliza_colapsando(
 ///
 /// `match_case` y `whole_word` son las dos casillas de Acrobat, apagadas
 /// por defecto: sin ellas la búsqueda no distingue mayúsculas y acepta
-/// coincidencias dentro de una palabra.
+/// coincidencias dentro de una palabra. Se pueden omitir (`null`), que es
+/// lo mismo que apagadas.
 #[tauri::command(async)]
 pub fn search_pdf(
     path: String,
     query: String,
-    match_case: bool,
-    whole_word: bool,
+    match_case: Option<bool>,
+    whole_word: Option<bool>,
 ) -> Result<Vec<SearchMatch>, String> {
+    let match_case = match_case.unwrap_or(false);
+    let whole_word = whole_word.unwrap_or(false);
     let needle: Vec<char> = normaliza_colapsando(query.trim().chars(), match_case)
         .into_iter()
         .map(|(c, _)| c)
@@ -226,7 +229,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("editor_pdf_test_busqueda.pdf");
         crea_pdf(&["Hola Mundo"], &tmp);
         let matches =
-            search_pdf(tmp.to_string_lossy().into_owned(), "mundo".into(), false, false).expect("buscar");
+            search_pdf(tmp.to_string_lossy().into_owned(), "mundo".into(), None, None).expect("buscar");
         std::fs::remove_file(&tmp).ok();
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].page_index, 0);
@@ -240,15 +243,15 @@ mod tests {
         let path = tmp.to_string_lossy().into_owned();
 
         // no solapadas: una por "banana", no dos dentro de la misma palabra
-        let m = search_pdf(path.clone(), "ana".into(), false, false).expect("buscar ana");
+        let m = search_pdf(path.clone(), "ana".into(), None, None).expect("buscar ana");
         assert_eq!(m.len(), 2, "'ana' en 'banana banana'");
 
         // sin distinguir mayúsculas
-        let m = search_pdf(path.clone(), "hola".into(), false, false).expect("buscar hola");
+        let m = search_pdf(path.clone(), "hola".into(), None, None).expect("buscar hola");
         assert_eq!(m.len(), 4, "'hola' aparece 4 veces");
 
         // rachas de espacios en el documento cuentan como un espacio
-        let m = search_pdf(path.clone(), "hola mundo".into(), false, false).expect("buscar frase");
+        let m = search_pdf(path.clone(), "hola mundo".into(), None, None).expect("buscar frase");
         assert_eq!(m.len(), 1, "'Hola  Mundo' con doble espacio");
 
         std::fs::remove_file(&tmp).ok();
@@ -260,13 +263,20 @@ mod tests {
         crea_pdf(&["Casa casaca CASA — año año, añoso"], &tmp);
         let path = tmp.to_string_lossy().into_owned();
         let cuenta = |q: &str, mc: bool, ww: bool| {
-            search_pdf(path.clone(), q.into(), mc, ww)
+            search_pdf(path.clone(), q.into(), Some(mc), Some(ww))
                 .expect("buscar")
                 .len()
         };
 
-        // por defecto (las dos apagadas, como Acrobat)
+        // por defecto (las dos apagadas, como Acrobat) y omitiéndolas
         assert_eq!(cuenta("casa", false, false), 3, "Casa, casaca, CASA");
+        assert_eq!(
+            search_pdf(path.clone(), "casa".into(), None, None)
+                .expect("buscar sin flags")
+                .len(),
+            3,
+            "omitir las casillas es lo mismo que dejarlas apagadas"
+        );
         // solo mayúsculas: descarta Casa y CASA, deja el trozo de «casaca»
         assert_eq!(cuenta("casa", true, false), 1);
         assert_eq!(cuenta("Casa", true, false), 1);

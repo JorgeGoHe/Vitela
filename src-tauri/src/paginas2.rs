@@ -571,7 +571,7 @@ mod tests {
     }
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Debug)]
 pub struct MarginalReport {
     pub textos: u32,
 }
@@ -590,10 +590,10 @@ pub fn remove_marginal_text(
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
+            .map_err(crate::mensaje_llano)?;
         let mut total = 0u32;
         for p in 0..doc.pages().len() {
-            let mut page = doc.pages().get(p).map_err(|e| e.to_string())?;
+            let mut page = doc.pages().get(p).map_err(crate::mensaje_llano)?;
             let page_h = page.height().value;
             let mut caen: Vec<usize> = Vec::new();
             {
@@ -633,12 +633,12 @@ pub fn remove_marginal_text(
                     let removed = page
                         .objects_mut()
                         .remove_object_at_index(i)
-                        .map_err(|e| e.to_string())?;
+                        .map_err(crate::mensaje_llano)?;
                     // regla del proyecto: su Drop llama a FPDFPageObj_Destroy
                     // y PDFium casca — fuga puntual asumida
                     std::mem::forget(removed);
                 }
-                page.regenerate_content().map_err(|e| e.to_string())?;
+                page.regenerate_content().map_err(crate::mensaje_llano)?;
             }
         }
         if dry_run {

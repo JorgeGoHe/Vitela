@@ -328,6 +328,9 @@ fn contexto_de(s: &str) -> Option<&str> {
 /// si el mensaje no contiene jerga y se puede dejar como está.
 fn causa_llana(s: &str) -> Option<&'static str> {
     let tiene = |aguja: &str| s.contains(aguja);
+    if tiene("ObjectIndexOutOfBounds") || tiene("ObjectIndexOutOfRange") {
+        return Some("ese elemento ya no está en la página; vuelve a abrir el documento");
+    }
     if tiene("PageIndexOutOfBounds") || tiene("PageIndexOutOfRange") {
         return Some("esa página ya no está en el documento; ciérralo y vuelve a abrirlo");
     }
@@ -923,6 +926,27 @@ pub(crate) mod tests {
                 "exportar texto a una carpeta que no existe",
                 exportar::export_text(b.clone(), "/nope/x.txt".into()).unwrap_err(),
             ),
+            // las rutas de ensayo previo (dry_run) y la copia de solo
+            // lectura no pasan por `mutacion`, así que necesitan traducir
+            // ellas mismas: son justo las que el usuario ve antes de decidir
+            (
+                "pedir una imagen que no está en la página",
+                imagenes::get_image_data(b.clone(), 0, 99).unwrap_err(),
+            ),
+            (
+                "ensayar la redacción sobre un fichero dañado",
+                seguridad::redact_area(
+                    d.clone(),
+                    0,
+                    Rect { x: 0.0, y: 0.0, w: 10.0, h: 10.0 },
+                    true,
+                )
+                .unwrap_err(),
+            ),
+            (
+                "ensayar el borrado de encabezados sobre un fichero dañado",
+                paginas2::remove_marginal_text(d.clone(), "header".into(), true).unwrap_err(),
+            ),
             (
                 "firmar con un certificado que no está",
                 sign_pdf(b.clone(), "/tmp/f.pdf".into(), "/tmp/nope.pem".into(), "/tmp/nope.pem".into(), None)
@@ -934,6 +958,8 @@ pub(crate) mod tests {
             "PdfiumLibraryInternalError",
             "PdfiumError",
             "PageIndexOutOfBounds",
+            "OutOfBounds",
+            "OutOfRange",
             "IoError",
             "os error",
             "No such file",
