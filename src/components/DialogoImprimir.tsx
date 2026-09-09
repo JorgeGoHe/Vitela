@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { useModal } from "../hooks/useModal";
-import { paginasImprimibles, parseRango, type OpcionesImprimir } from "../tipos";
+import {
+  paginasImprimibles,
+  parseRango,
+  plural,
+  type OpcionesImprimir,
+} from "../tipos";
 
 /**
  * Diálogo de impresión propio, el que Acrobat abre antes del diálogo del
@@ -27,9 +32,8 @@ export default function DialogoImprimir({
     o.ambito === "rango" && parseRango(o.rango, pageCount).length === 0;
   // y lo mismo con el filtro de pares/impares: si no deja ninguna página se
   // dice aquí, con las opciones delante y sin cerrar nada
-  const sinPaginas =
-    !rangoVacio &&
-    paginasImprimibles(o, pageCount, paginaActual).length === 0;
+  const hojas = paginasImprimibles(o, pageCount, paginaActual).length;
+  const sinPaginas = !rangoVacio && hojas === 0;
   const confirmar = () => {
     if (!rangoVacio && !sinPaginas) onConfirm(o);
   };
@@ -107,6 +111,13 @@ export default function DialogoImprimir({
           <option value="pares">Solo las pares</option>
           <option value="impares">Solo las impares</option>
         </select>
+        {/* cuántas hojas van a salir, antes de pulsar: es el dato que hace
+            falta para decidir el rango, y sale una hoja por página */}
+        {!rangoVacio && !sinPaginas && (
+          <span className="dato">
+            {plural(hojas, "hoja", "hojas")} de {pageCount}
+          </span>
+        )}
         {sinPaginas && (
           <p className="modal-error" role="alert">
             Ninguna de las páginas elegidas es{" "}

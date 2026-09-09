@@ -156,6 +156,24 @@ export function onPantallaCompleta(cb: (valor: boolean) => void): () => void {
   };
 }
 
+/** Lo que se dice cuando la llamada ni siquiera llega al backend: el motor
+ *  se ha caído, el puente de QA no está o el IPC no responde. El usuario
+ *  acaba de perder una operación; el peor sitio posible para enseñarle el
+ *  nombre de una excepción de JavaScript. */
+const SIN_MOTOR =
+  "No se ha podido hablar con el motor de PDF. Cierra y vuelve a abrir Vitela; el documento sigue en la copia de trabajo.";
+
+/** Distingue «la llamada no ha llegado» de «el backend ha dicho que no».
+ *  Nuestros comandos rechazan con un `String` (el mensaje en llano que ya
+ *  escribe `mensaje_llano` en Rust); lo que llega como `Error` —`TypeError:
+ *  Failed to fetch`, «Load failed», un IPC caído— es transporte. */
+function esFalloDeTransporte(e: unknown): boolean {
+  if (e instanceof Error) return true;
+  return /failed to fetch|load failed|networkerror|connection refused/i.test(
+    String(e),
+  );
+}
+
 export async function invoke<T>(
   cmd: string,
   args?: Record<string, unknown>,
@@ -176,6 +194,9 @@ export async function invoke<T>(
       throw data.error ?? `Error ${res.status} en ${cmd}`;
     }
     return data as T;
+  } catch (e) {
+    if (esFalloDeTransporte(e)) throw SIN_MOTOR;
+    throw e;
   } finally {
     if (cuenta) cambia(-1);
   }

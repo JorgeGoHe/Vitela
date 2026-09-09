@@ -1061,12 +1061,15 @@ export type Sesion = {
 };
 
 /** Apunta la sesión viva. La UI lo llama con un respiro de 10 s tras cada
- *  cambio: es un apunte, no un guardado, y no debe ir en cada tecla. */
+ *  cambio: es un apunte, no un guardado, y no debe ir en cada tecla.
+ *  `modified` no es opcional en el backend: sin él la llamada entera se
+ *  rechazaba y no se apuntaba nunca nada. */
 export function autosaveState(
   workPath: string,
   originalPath: string | null,
+  modified: boolean,
 ): Promise<void> {
-  return invoke("autosave_state", { workPath, originalPath });
+  return invoke("autosave_state", { workPath, originalPath, modified });
 }
 
 /** Borra el apunte: se cierra limpiamente, o el usuario descarta. */

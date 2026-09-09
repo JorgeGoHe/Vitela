@@ -1876,7 +1876,12 @@ function App() {
   useEffect(() => {
     if (!workPath || !modified) return;
     const t = setTimeout(() => {
-      autosaveState(workPath, originalPath).catch(() => {});
+      // el fallo no se le cuenta al usuario (es un apunte silencioso), pero
+      // tampoco se traga en silencio: un contrato roto aquí dejaba la
+      // recuperación sin nada que recuperar y nadie se enteraba
+      autosaveState(workPath, originalPath, modified).catch((e) =>
+        console.warn("no se ha podido apuntar la sesión:", e),
+      );
     }, 10000);
     return () => clearTimeout(t);
   }, [workPath, originalPath, modified, docVersion, annotVersion]);

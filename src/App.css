@@ -1322,17 +1322,35 @@ textarea {
 }
 
 @media print {
+  /* el papel lo pone el sistema y los márgenes los trae ya el render: sin
+     esta regla una A4 a ancho completo no cabía en el área imprimible, se
+     empujaba a la hoja siguiente y salía un folio en blanco por página */
+  @page {
+    size: auto;
+    margin: 0;
+  }
+
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+  }
+
   .app {
     display: none !important;
   }
 
   .print-pages {
     display: block;
+    margin: 0;
   }
 
   .print-pages img {
     display: block;
     width: 100%;
+    /* la hoja manda: la página se ajusta a ella sin deformarse ni partirse */
+    max-height: 100vh;
+    object-fit: contain;
     page-break-after: always;
   }
 
