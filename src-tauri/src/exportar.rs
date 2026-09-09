@@ -290,7 +290,7 @@ mod tests {
             Some("Times-Bold".into()),
             Some([220, 20, 20, 255]),
             None,
-        )
+            None)
         .expect("titular");
         crate::imagenes::add_image(work.clone(), 0, png.to_string_lossy().into_owned(), 60.0, 300.0)
             .expect("imagen");

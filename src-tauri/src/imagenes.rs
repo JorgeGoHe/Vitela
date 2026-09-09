@@ -379,6 +379,102 @@ pub fn replace_image(
     }))
 }
 
+/// Recorta una imagen: se queda con el trozo que marca `rect` —en el
+/// espacio propio de la página, como el resto de comandos que escriben— y
+/// la deja ocupando exactamente ese rectángulo, que es lo que hace la
+/// herramienta de recorte de Acrobat.
+///
+/// Recorta el **bitmap**, no la caja: PDFium no tiene «recortar», así que
+/// se saca la imagen procesada, se corta con el crate `image` y se vuelve a
+/// crear el objeto en su sitio (el camino de `replace_image`). Lo que se
+/// quita fuera del recorte **desaparece del fichero**, así que no queda
+/// escondido detrás como pasaría con un `/BBox`.
+#[tauri::command(async)]
+pub fn crop_image(
+    work_path: String,
+    page_index: u16,
+    object_index: u32,
+    rect: crate::Rect,
+) -> Result<(), String> {
+    if rect.w < 4.0 || rect.h < 4.0 {
+        return Err("El área de recorte es demasiado pequeña".into());
+    }
+    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(crate::mensaje_llano)?;
+        let mut page = doc.pages().get(page_index).map_err(crate::mensaje_llano)?;
+        let destino = crate::Geo::de_pagina(&page).propia().ui_rect_a_pdf(&rect);
+        // el trozo que se queda, y el rectángulo del papel que va a ocupar
+        let (recortada, corte_x, corte_y, corte_w, corte_h) = {
+            let obj = page
+                .objects()
+                .get(object_index as usize)
+                .map_err(crate::mensaje_llano)?;
+            let img = obj.as_image_object().ok_or("No es una imagen")?;
+            let b = obj.bounds().map_err(|e| e.to_string())?;
+            let (izq, abajo) = (b.left().value, b.bottom().value);
+            let (ancho, alto) = (b.right().value - izq, b.top().value - abajo);
+            if ancho <= 0.0 || alto <= 0.0 {
+                return Err("Esa imagen no tiene tamaño".into());
+            }
+            // la parte del rect que cae dentro de la imagen
+            let x0 = destino.left().value.max(izq);
+            let x1 = destino.right().value.min(izq + ancho);
+            let y0 = destino.bottom().value.max(abajo);
+            let y1 = destino.top().value.min(abajo + alto);
+            if x1 - x0 < 1.0 || y1 - y0 < 1.0 {
+                return Err("El área de recorte se sale de la imagen".into());
+            }
+            let bitmap = img
+                .get_processed_image(&doc)
+                .map_err(crate::mensaje_llano)?;
+            let (pw, ph) = (bitmap.width(), bitmap.height());
+            // del papel a los píxeles del bitmap: la `y` del papel sube y la
+            // de la imagen baja, así que el borde de arriba del recorte es
+            // la fila de más arriba
+            let a_px = |v: f32, largo: f32, total: u32| -> u32 {
+                ((v / largo) * total as f32).round().clamp(0.0, total as f32) as u32
+            };
+            let px = a_px(x0 - izq, ancho, pw);
+            let py = a_px(abajo + alto - y1, alto, ph);
+            let ancho_px = a_px(x1 - x0, ancho, pw).clamp(1, pw - px);
+            let alto_px = a_px(y1 - y0, alto, ph).clamp(1, ph - py);
+            let recortada =
+                image::imageops::crop_imm(&bitmap, px, py, ancho_px, alto_px).to_image();
+            (
+                image::DynamicImage::ImageRgba8(recortada),
+                x0,
+                y0,
+                x1 - x0,
+                y1 - y0,
+            )
+        };
+        let removed = page
+            .objects_mut()
+            .remove_object_at_index(object_index as usize)
+            .map_err(|e| e.to_string())?;
+        // ver nota en delete_text_block: soltar el objeto extraído casca
+        std::mem::forget(removed);
+        let mut obj = PdfPageImageObject::new_with_size(
+            &doc,
+            &recortada,
+            PdfPoints::new(corte_w),
+            PdfPoints::new(corte_h),
+        )
+        .map_err(crate::mensaje_llano)?;
+        obj.translate(PdfPoints::new(corte_x), PdfPoints::new(corte_y))
+            .map_err(|e| e.to_string())?;
+        page.objects_mut()
+            .add_image_object(obj)
+            .map_err(|e| e.to_string())?;
+        page.regenerate_content().map_err(|e| e.to_string())?;
+        drop(page);
+        save_and_close(doc, &work_path)
+    }))
+}
+
 /// Elimina una imagen de la página.
 #[tauri::command(async)]
 pub fn delete_image(work_path: String, page_index: u16, object_index: u32) -> Result<(), String> {
@@ -448,6 +544,69 @@ mod tests {
 
     #[allow(unused_imports)]
     use crate::{render_page_b64, tests::textos_de};
+
+    /// **G3.** Recortar una imagen: se queda el trozo que se marca, en el
+    /// sitio que se marca, y lo de fuera **desaparece del fichero** (no se
+    /// esconde detrás). Se comprueba con los bounds y con los píxeles del
+    /// bitmap que queda.
+    #[test]
+    fn recortar_una_imagen_se_queda_con_el_trozo_marcado() {
+        let dir = std::env::temp_dir();
+        let tmp = dir.join("imagenes-recortar-test.pdf");
+        let png = dir.join("imagenes-recortar-test.png");
+        crea_pdf(&["Con imagen"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+
+        // mitad izquierda roja, mitad derecha azul: así se sabe qué trozo
+        // ha quedado sin mirar coordenadas
+        let mut img = image::RgbaImage::from_pixel(80, 40, image::Rgba([200, 30, 30, 255]));
+        for x in 40..80 {
+            for y in 0..40 {
+                img.put_pixel(x, y, image::Rgba([30, 30, 200, 255]));
+            }
+        }
+        img.save(&png).expect("crear png");
+        add_image(work.clone(), 0, png.to_string_lossy().into_owned(), 100.0, 200.0)
+            .expect("insertar");
+        let antes = &get_images(work.clone(), 0).expect("imágenes")[0];
+        assert!((antes.w - 80.0).abs() < 1.0 && (antes.h - 40.0).abs() < 1.0);
+
+        // recortar la mitad derecha (la azul)
+        let corte = crate::Rect { x: antes.x + 40.0, y: antes.y, w: 40.0, h: 40.0 };
+        let indice = antes.object_index;
+        crop_image(work.clone(), 0, indice, corte.clone()).expect("recortar");
+
+        let despues = &get_images(work.clone(), 0).expect("imágenes")[0];
+        assert!(
+            (despues.w - 40.0).abs() < 1.5 && (despues.h - 40.0).abs() < 1.5,
+            "la imagen recortada mide {:.1}x{:.1}",
+            despues.w,
+            despues.h
+        );
+        assert!(
+            (despues.x - corte.x).abs() < 1.5 && (despues.y - corte.y).abs() < 1.5,
+            "y se queda donde se marcó el recorte"
+        );
+
+        // lo que queda es el trozo azul: el rojo ya no está en el fichero
+        let b64 = get_image_data(work.clone(), 0, despues.object_index).expect("bytes");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .expect("base64");
+        let recortada = image::load_from_memory(&bytes).expect("png").to_rgba8();
+        let centro = recortada.get_pixel(recortada.width() / 2, recortada.height() / 2).0;
+        assert!(
+            centro[2] > 150 && centro[0] < 100,
+            "el trozo que queda tenía que ser el azul: {centro:?}"
+        );
+
+        // un recorte fuera de la imagen se dice, no se hace a medias
+        let fuera = crate::Rect { x: 0.0, y: 0.0, w: 20.0, h: 20.0 };
+        assert!(crop_image(work.clone(), 0, despues.object_index, fuera).is_err());
+
+        std::fs::remove_file(&tmp).ok();
+        std::fs::remove_file(&png).ok();
+    }
 
     #[test]
     fn imagenes() {
