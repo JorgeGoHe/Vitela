@@ -2591,7 +2591,6 @@ function App() {
       if (historial.puedeRehacer) historial.rehacer();
     },
     copiar: () => reenviaTecla("c"),
-    "seleccionar-todo": () => reenviaTecla("a"),
     buscar: () =>
       (document.querySelector(".search input") as HTMLInputElement)?.focus(),
     "buscar-siguiente": () => busqueda.gotoMatch(1),
