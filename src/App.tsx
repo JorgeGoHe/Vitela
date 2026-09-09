@@ -341,14 +341,30 @@ function App() {
       .catch(() => setRecientes([]));
   }, []);
 
+  // al montar y cada vez que se vuelve al estado vacío: la lista se
+  // revalida (un reciente puede haber desaparecido del disco entretanto)
   useEffect(() => {
-    refrescarRecientes();
-  }, [refrescarRecientes]);
+    if (!workPath) refrescarRecientes();
+  }, [workPath, refrescarRecientes]);
 
   /** Abre un fichero comprobando antes los cambios sin guardar. */
   function abrirComprobando(path: string) {
     conCambiosGuardados(() => {
       openPath(path);
+    });
+  }
+
+  /** Abre un reciente. Si ya no está donde decía, se quita de la lista en
+   *  vez de dejar la entrada rota invitando a volver a pulsarla. */
+  function abrirReciente(path: string) {
+    conCambiosGuardados(async () => {
+      if (await openPath(path)) return;
+      const lista = await listRecent().catch(() => [] as Reciente[]);
+      const entrada = lista.find((r) => r.path === path);
+      if (!entrada || entrada.exists) return;
+      await removeRecent(path).catch(() => {});
+      refrescarRecientes();
+      setError(`Ya no está en ${path}; lo he quitado de recientes`);
     });
   }
 
@@ -1797,9 +1813,14 @@ function App() {
               </button>
               <MenuAcciones
                 recientes={recientes}
-                abrirReciente={abrirComprobando}
+                abrirReciente={abrirReciente}
                 abierto={menuOpen}
-                onToggle={() => setMenuOpen((o) => !o)}
+                onToggle={() => {
+                  // al desplegarlo se relee la lista: lo que pinta el menú
+                  // tiene que ser lo que hay ahora en el disco
+                  if (!menuOpen) refrescarRecientes();
+                  setMenuOpen((o) => !o);
+                }}
                 onCerrar={() => setMenuOpen(false)}
                 saveFileAs={saveFileAs}
                 closeDocument={closeDocument}
@@ -2287,7 +2308,7 @@ function App() {
                           className="reciente-abrir"
                           title={r.exists ? r.path : `Ya no está en ${r.path}`}
                           disabled={!r.exists}
-                          onClick={() => abrirComprobando(r.path)}
+                          onClick={() => abrirReciente(r.path)}
                         >
                           <span className="reciente-nombre">{r.name}</span>
                           <span className="reciente-dir">{r.dir}</span>
