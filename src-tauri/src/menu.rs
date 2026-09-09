@@ -197,7 +197,9 @@ pub(crate) fn estructura() -> Vec<Grupo> {
         Grupo {
             titulo: "Ayuda",
             entradas: vec![
-                e("atajos", "Atajos de teclado", None, false),
+                // ⌘/ es la tecla de la ayuda de teclado en Acrobat y en
+                // media docena de apps más; va en el menú para que se vea
+                e("atajos", "Atajos de teclado", Some("CmdOrCtrl+/"), false),
                 sep(),
                 Elemento::Nativa(Nativa::AcercaDe),
             ],
@@ -392,6 +394,25 @@ mod tests {
         }
         assert!(vistos.len() > 30, "el menú nativo se ha quedado corto");
         assert_eq!(vistos, ids(), "ids() y estructura() no dicen lo mismo");
+    }
+
+    /// Dos entradas con el mismo atajo son una que no funciona: el sistema
+    /// se queda con la primera y la segunda deja de responder sin decir
+    /// nada. Con 25 atajos ya no se lleva de memoria.
+    #[test]
+    fn ningun_atajo_esta_dos_veces() {
+        let mut vistos: Vec<(&str, &str)> = Vec::new();
+        for entrada in entradas() {
+            let Some(atajo) = entrada.atajo else { continue };
+            if let Some((otro, _)) = vistos.iter().find(|(_, a)| *a == atajo) {
+                panic!("{atajo} está en {otro} y en {}", entrada.id);
+            }
+            vistos.push((entrada.id, atajo));
+        }
+        assert!(
+            vistos.iter().any(|(id, a)| *id == "atajos" && *a == "CmdOrCtrl+/"),
+            "la pantalla que enseña los atajos tiene que tener el suyo"
+        );
     }
 
     /// Sin documento abierto, lo que necesita uno se atenúa; lo que no,
