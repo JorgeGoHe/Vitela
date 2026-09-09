@@ -528,11 +528,34 @@ function App() {
     conCambiosGuardados(async () => {
       const selected = await open({
         filters: [{ name: "PDF", extensions: ["pdf"] }],
-        multiple: false,
+        multiple: true,
       });
-      if (typeof selected !== "string") return;
-      await openPath(selected);
+      if (typeof selected === "string") {
+        await openPath(selected);
+        return;
+      }
+      // varios a la vez: el mismo trato que soltarlos sobre la ventana
+      if (!Array.isArray(selected) || selected.length === 0) return;
+      if (selected.length === 1) {
+        await openPath(selected[0]);
+        return;
+      }
+      setDropAsk(selected);
     });
+  }
+
+  /** Abre el primero de varios y deja el resto a mano en recientes, en vez
+   *  de descartarlos en silencio. */
+  async function abrirPrimeroYRecordar(pdfs: string[]) {
+    setDropAsk(null);
+    // primero los demás: así el que se abre queda arriba de la lista
+    for (const otro of pdfs.slice(1)) {
+      await touchRecent(otro).catch(() => {});
+    }
+    abrirComprobando(pdfs[0]);
+    setNotice(
+      `${pdfs.length - 1} PDF más en Recientes, dentro de «Acciones»`,
+    );
   }
 
   // Tamaños de página del documento: el esqueleto del scroll continuo
@@ -2068,22 +2091,18 @@ function App() {
       )}
       {dropAsk && (
         <DialogoConfirmar
-          titulo={`Has soltado ${dropAsk.length} PDF`}
+          titulo={`Has elegido ${dropAsk.length} PDF`}
           cuerpo={
             <p className="modal-file" style={{ whiteSpace: "normal" }}>
               Puedes abrir solo el primero ({dropAsk[0].split(/[\\/]/).pop()})
-              o unirlos todos en un documento nuevo, en el orden en que los
-              has soltado.
+              —los demás quedan en Recientes— o unirlos todos en un documento
+              nuevo, en el orden en que los has elegido.
             </p>
           }
           textoConfirmar="Unirlos en uno"
           secundario={{
             texto: "Abrir el primero",
-            onClick: () => {
-              const primero = dropAsk[0];
-              setDropAsk(null);
-              abrirComprobando(primero);
-            },
+            onClick: () => abrirPrimeroYRecordar(dropAsk),
           }}
           onConfirm={() => abrirYUnir(dropAsk)}
           onClose={() => setDropAsk(null)}

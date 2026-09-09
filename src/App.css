@@ -983,7 +983,7 @@ textarea {
    con tooltip) y como red de seguridad la barra puede partirse en dos filas.
    El corte va a 1280 porque con etiquetas la barra necesita ~1250px y la
    ventana por defecto mide 1100: a 1280 px justos las etiquetas se ven. */
-@media (max-width: 1279px) {
+@media (max-width: 1279.98px) {
   .toolbar .btn-etiqueta {
     display: none;
   }
