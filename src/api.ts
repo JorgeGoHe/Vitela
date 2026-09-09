@@ -1,4 +1,5 @@
 import { invoke } from "./ipc";
+import type { SearchMatch } from "./tipos";
 
 /** Firma manuscrita guardada en la biblioteca del usuario. */
 export type FirmaGuardada = {
@@ -24,6 +25,17 @@ export function importSignatureFile(imagePath: string): Promise<FirmaGuardada> {
 
 export function deleteStoredSignature(id: string): Promise<void> {
   return invoke("delete_stored_signature", { id });
+}
+
+/** Busca en todo el documento. `matchCase` y `wholeWord` son las dos
+ *  opciones de la búsqueda de Acrobat; por defecto van apagadas. */
+export function searchPdf(
+  path: string,
+  query: string,
+  matchCase: boolean,
+  wholeWord: boolean,
+): Promise<SearchMatch[]> {
+  return invoke("search_pdf", { path, query, matchCase, wholeWord });
 }
 
 export type Rgba = [number, number, number, number];

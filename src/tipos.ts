@@ -164,6 +164,25 @@ export function copyToClipboard(text: string) {
   });
 }
 
+/* ---- opciones de búsqueda (persistidas en localStorage) ---- */
+
+const CLAVE_BUSQUEDA = "editorPdf.opcionesBusqueda";
+
+export type OpcionesBusqueda = { matchCase: boolean; wholeWord: boolean };
+
+export function cargaOpcionesBusqueda(): OpcionesBusqueda {
+  try {
+    const g = JSON.parse(localStorage.getItem(CLAVE_BUSQUEDA) ?? "{}");
+    return { matchCase: !!g.matchCase, wholeWord: !!g.wholeWord };
+  } catch {
+    return { matchCase: false, wholeWord: false };
+  }
+}
+
+export function guardaOpcionesBusqueda(o: OpcionesBusqueda) {
+  localStorage.setItem(CLAVE_BUSQUEDA, JSON.stringify(o));
+}
+
 /* ---- memoria de color por acción (persistida en localStorage) ---- */
 
 const CLAVE_COLORES = "editorPdf.coloresAccion";

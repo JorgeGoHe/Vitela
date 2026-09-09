@@ -279,6 +279,19 @@ textarea {
   padding: 4px;
 }
 
+/* conmutadores «Aa» y «|ab|» dentro del campo de búsqueda */
+.search-opt {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 3px 4px;
+  color: var(--fg-muted);
+}
+
+.search .btn.on {
+  background: var(--btn-active);
+  color: var(--accent);
+}
+
 .match-count {
   font-family: var(--font-mono);
   color: var(--fg-muted);

@@ -1,4 +1,4 @@
-import { MOD } from "../tipos";
+import { MOD, type OpcionesBusqueda } from "../tipos";
 import Icon from "./Icon";
 
 /** Campo de búsqueda de la barra superior con el contador y las flechas
@@ -11,6 +11,8 @@ export default function Busqueda({
   matchIdx,
   searched,
   runSearch,
+  opciones,
+  cambiaOpcion,
   gotoMatch,
 }: {
   query: string;
@@ -21,6 +23,9 @@ export default function Busqueda({
   matchIdx: number;
   searched: boolean;
   runSearch: () => void;
+  /** Coincidir mayúsculas y palabra completa (recordadas entre sesiones). */
+  opciones: OpcionesBusqueda;
+  cambiaOpcion: (clave: keyof OpcionesBusqueda) => void;
   gotoMatch: (delta: number) => void;
 }) {
   return (
@@ -42,6 +47,24 @@ export default function Busqueda({
           }
         }}
       />
+      <button
+        className={`btn btn-icon search-opt${opciones.matchCase ? " on" : ""}`}
+        title="Coincidir mayúsculas y minúsculas"
+        aria-label="Coincidir mayúsculas y minúsculas"
+        aria-pressed={opciones.matchCase}
+        onClick={() => cambiaOpcion("matchCase")}
+      >
+        Aa
+      </button>
+      <button
+        className={`btn btn-icon search-opt${opciones.wholeWord ? " on" : ""}`}
+        title="Solo palabras completas"
+        aria-label="Solo palabras completas"
+        aria-pressed={opciones.wholeWord}
+        onClick={() => cambiaOpcion("wholeWord")}
+      >
+        |ab|
+      </button>
       {searched && (
         <>
           <span className="match-count">

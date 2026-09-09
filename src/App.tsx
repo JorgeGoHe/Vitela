@@ -1196,6 +1196,8 @@ function App() {
                 matchIdx={busqueda.matchIdx}
                 searched={busqueda.searched}
                 runSearch={busqueda.runSearch}
+                opciones={busqueda.opciones}
+                cambiaOpcion={busqueda.cambiaOpcion}
                 gotoMatch={busqueda.gotoMatch}
               />
               <button

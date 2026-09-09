@@ -1,6 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
-import { invoke } from "../ipc";
-import type { SearchMatch } from "../tipos";
+import { searchPdf } from "../api";
+import {
+  cargaOpcionesBusqueda,
+  guardaOpcionesBusqueda,
+  type OpcionesBusqueda,
+  type SearchMatch,
+} from "../tipos";
 import type { PageMatch } from "../components/Pagina";
 
 /**
@@ -18,6 +23,10 @@ export function useBusqueda(opts: {
   const [matches, setMatches] = useState<SearchMatch[]>([]);
   const [matchIdx, setMatchIdx] = useState(0);
   const [searched, setSearched] = useState(false);
+  // «Aa» y «|ab|»: apagadas por defecto, como en Acrobat, y recordadas
+  const [opciones, setOpciones] = useState<OpcionesBusqueda>(
+    cargaOpcionesBusqueda,
+  );
 
   /** Descarta los resultados; con `conQuery` vacía también el campo. */
   const limpiar = useCallback((conQuery = false) => {
@@ -27,18 +36,16 @@ export function useBusqueda(opts: {
     if (conQuery) setQuery("");
   }, []);
 
-  async function runSearch() {
+  async function runSearch(con?: OpcionesBusqueda) {
     const { workPath, gotoPage, onError } = opts;
+    const o = con ?? opciones;
     if (!workPath) return;
     if (!query.trim()) {
       limpiar();
       return;
     }
     try {
-      const res = await invoke<SearchMatch[]>("search_pdf", {
-        path: workPath,
-        query,
-      });
+      const res = await searchPdf(workPath, query, o.matchCase, o.wholeWord);
       setMatches(res);
       setMatchIdx(0);
       setSearched(true);
@@ -47,6 +54,14 @@ export function useBusqueda(opts: {
     } catch (e) {
       onError(e);
     }
+  }
+
+  /** Cambia una opción y, si ya había resultados, repite la búsqueda. */
+  function cambiaOpcion(clave: keyof OpcionesBusqueda) {
+    const next = { ...opciones, [clave]: !opciones[clave] };
+    setOpciones(next);
+    guardaOpcionesBusqueda(next);
+    if (searched) runSearch(next);
   }
 
   function gotoMatch(delta: number) {
@@ -76,6 +91,8 @@ export function useBusqueda(opts: {
     matchIdx,
     searched,
     runSearch,
+    opciones,
+    cambiaOpcion,
     gotoMatch,
     matchesByPage,
     limpiar,
