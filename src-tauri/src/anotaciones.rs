@@ -457,19 +457,35 @@ pub(crate) fn autor_o_sistema(author: Option<String>) -> String {
         .unwrap_or_else(|| "Usuario".into())
 }
 
-/// Fecha actual en el formato de fecha del PDF: `D:YYYYMMDDHHmmSS`.
+/// Fecha actual en el formato de fecha del PDF, con el desfase horario:
+/// `D:YYYYMMDDHHmmSS+HH'mm'` (o `…Z` en UTC). Sin la zona, un comentario
+/// hecho en Madrid y otro en México se ordenan mal en cualquier revisor.
 pub(crate) fn fecha_pdf_ahora() -> String {
-    chrono::Local::now().format("D:%Y%m%d%H%M%S").to_string()
+    let ahora = chrono::Local::now();
+    format!(
+        "{}{}",
+        ahora.format("D:%Y%m%d%H%M%S"),
+        desfase_pdf(ahora.offset().local_minus_utc())
+    )
 }
 
-/// `D:YYYYMMDDHHmmSS…` → ISO 8601 (`YYYY-MM-DDTHH:MM:SS`). Lo que no
-/// encaje se devuelve vacío: la UI solo tiene que saber pintarlo o no.
+/// Desfase horario en el formato del spec PDF: `Z`, `+HH'mm'` o `-HH'mm'`.
+fn desfase_pdf(segundos: i32) -> String {
+    if segundos == 0 {
+        return "Z".into();
+    }
+    let signo = if segundos < 0 { '-' } else { '+' };
+    let minutos = segundos.abs() / 60;
+    format!("{signo}{:02}'{:02}'", minutos / 60, minutos % 60)
+}
+
+/// `D:YYYYMMDDHHmmSS+HH'mm'` → ISO 8601 (`YYYY-MM-DDTHH:MM:SS+HH:MM`). Lo
+/// que no encaje se devuelve vacío: la UI solo tiene que saber pintarlo o
+/// no. La zona se conserva: sin ella dos comentarios de husos distintos se
+/// ordenan mal.
 pub(crate) fn fecha_pdf_a_iso(fecha: &str) -> String {
-    let d: Vec<char> = fecha
-        .trim_start_matches("D:")
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
+    let resto = fecha.trim_start_matches("D:");
+    let d: Vec<char> = resto.chars().take_while(|c| c.is_ascii_digit()).collect();
     if d.len() < 8 {
         return String::new();
     }
@@ -477,8 +493,27 @@ pub(crate) fn fecha_pdf_a_iso(fecha: &str) -> String {
     let mut iso = format!("{}-{}-{}", &t[0..4], &t[4..6], &t[6..8]);
     if d.len() >= 14 {
         iso.push_str(&format!("T{}:{}:{}", &t[8..10], &t[10..12], &t[12..14]));
+        iso.push_str(&zona_a_iso(&resto[d.len()..]));
     }
     iso
+}
+
+/// `+HH'mm'` → `+HH:MM`, `Z`/`Z00'00'` → `Z`. Sin zona reconocible, nada.
+fn zona_a_iso(zona: &str) -> String {
+    if zona.starts_with('Z') {
+        return "Z".into();
+    }
+    let b = zona.as_bytes();
+    if b.len() >= 6 && matches!(b[0], b'+' | b'-') && zona[1..3].chars().all(|c| c.is_ascii_digit())
+    {
+        let minutos = if zona[4..6].chars().all(|c| c.is_ascii_digit()) {
+            &zona[4..6]
+        } else {
+            "00"
+        };
+        return format!("{}{}:{}", zona.chars().next().unwrap(), &zona[1..3], minutos);
+    }
+    String::new()
 }
 
 /// Segundo pase con lopdf sobre la anotación recién creada por PDFium (la
@@ -493,10 +528,28 @@ pub(crate) fn remata_annot(
     estilo: Option<EstiloMarca>,
     author: Option<String>,
 ) -> Result<(), String> {
+    remata_annot_en(work_path, page_index, None, estilo, author)
+}
+
+/// Como [`remata_annot`] pero sobre una anotación concreta (`None` = la
+/// última, la que acaba de crear PDFium). El `/T` solo se escribe si llega
+/// un autor o si la anotación aún no lo tenía: refrescar la fecha al mover
+/// un comentario no puede cambiarle el autor.
+pub(crate) fn remata_annot_en(
+    work_path: &str,
+    page_index: u16,
+    annot_index: Option<usize>,
+    estilo: Option<EstiloMarca>,
+    author: Option<String>,
+) -> Result<(), String> {
+    let explicito = author.is_some();
     let autor = autor_o_sistema(author);
     let fecha = fecha_pdf_ahora();
     cirugia_en_hilo(work_path, move |doc| {
-        let i = ultima_annot(doc, page_index)?;
+        let i = match annot_index {
+            Some(i) => i,
+            None => ultima_annot(doc, page_index)?,
+        };
         if let Some(estilo) = estilo {
             escribe_apariencia_marca(doc, page_index, i, estilo)?;
         }
@@ -505,7 +558,9 @@ pub(crate) fn remata_annot(
             .get_object_mut(id)
             .and_then(|o| o.as_dict_mut())
             .map_err(|e| e.to_string())?;
-        annot.set("T", crate::documento::cadena_pdf(&autor));
+        if explicito || !annot.has(b"T") {
+            annot.set("T", crate::documento::cadena_pdf(&autor));
+        }
         annot.set("M", lopdf::Object::string_literal(fecha));
         Ok(())
     })
@@ -927,6 +982,35 @@ mod tests_apariencia {
         obj.as_stream().map(|s| !s.content.is_empty()).unwrap_or(false)
     }
 
+    /// `/M` de la anotación `i` tal como está en el fichero, sin traducir.
+    fn fecha_guardada(work: &str, i: usize) -> String {
+        let annot = annot_guardada(work, i);
+        match annot.get(b"M") {
+            Ok(lopdf::Object::String(bytes, _)) => bytes.iter().map(|b| *b as char).collect(),
+            otro => panic!("la anotación no lleva /M: {otro:?}"),
+        }
+    }
+
+    /// La fecha va en el formato del spec PDF y con el desfase horario:
+    /// `D:YYYYMMDDHHmmSS` + `Z` o `+HH'mm'`. La que escribe PDFium por su
+    /// cuenta al guardar (`…Z00'00'`, siempre UTC) no cumple.
+    fn fecha_pdf_completa(m: &str) -> bool {
+        let Some(resto) = m.strip_prefix("D:") else {
+            return false;
+        };
+        if resto.len() < 14 || !resto[..14].chars().all(|c| c.is_ascii_digit()) {
+            return false;
+        }
+        let zona = &resto[14..];
+        zona == "Z"
+            || (zona.len() == 7
+                && matches!(zona.as_bytes()[0], b'+' | b'-')
+                && zona.as_bytes()[3] == b'\''
+                && zona.as_bytes()[6] == b'\''
+                && zona[1..3].chars().all(|c| c.is_ascii_digit())
+                && zona[4..6].chars().all(|c| c.is_ascii_digit()))
+    }
+
     fn caja(y: f32) -> Rect {
         Rect { x: 200.0, y, w: 200.0, h: 20.0 }
     }
@@ -1103,6 +1187,94 @@ mod tests_apariencia {
             "el tachado no debe rellenar el quad: rgb({r},{g},{b})"
         );
         assert!(tiene_ap_con_stream(&work, 0), "el tachado debe llevar /AP");
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// La zona horaria llega a la UI: `modified` es ISO 8601 completo.
+    #[test]
+    fn la_fecha_iso_conserva_la_zona() {
+        assert_eq!(
+            fecha_pdf_a_iso("D:20260909143012+02'00'"),
+            "2026-09-09T14:30:12+02:00"
+        );
+        assert_eq!(
+            fecha_pdf_a_iso("D:20260909143012-05'30'"),
+            "2026-09-09T14:30:12-05:30"
+        );
+        // la que escribe PDFium por su cuenta al guardar
+        assert_eq!(
+            fecha_pdf_a_iso("D:20260909143012Z00'00'"),
+            "2026-09-09T14:30:12Z"
+        );
+        // sin zona (documentos de antes) se queda sin ella, no inventa
+        assert_eq!(fecha_pdf_a_iso("D:20260909143012"), "2026-09-09T14:30:12");
+        assert_eq!(fecha_pdf_a_iso("basura"), "");
+    }
+
+    /// `/M` con desfase horario: sin él, un comentario hecho en Madrid y
+    /// otro en México se ordenan mal en cualquier revisor (el formato de
+    /// fecha del spec PDF lleva la zona).
+    #[test]
+    fn la_fecha_lleva_la_zona_horaria() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_zona_horaria.pdf");
+        crea_pdf(&["Hola"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        add_note(work.clone(), 0, 200.0, 100.0, "Una nota".into(), None).expect("nota");
+
+        let m = fecha_guardada(&work, 0);
+        assert!(
+            fecha_pdf_completa(&m),
+            "el desfase horario debe ir como +HH'mm' o Z, llegó {m:?}"
+        );
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// Mover un comentario actualiza su fecha de modificación (Acrobat lo
+    /// hace) sin tocar el autor.
+    #[test]
+    fn mover_una_anotacion_refresca_la_fecha() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_m_transform.pdf");
+        crea_pdf(&["Hola"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        crate::anotaciones2::add_stamp(
+            work.clone(),
+            0,
+            "APROBADO".into(),
+            [0, 0, 0, 255],
+            200.0,
+            300.0,
+            14.0,
+            Some("Jorge".into()),
+        )
+        .expect("sello");
+
+        // fecha vieja a mano: el reloj no avanza dentro de un test
+        crate::cirugia(&work, |doc| {
+            let id = annot_id(doc, 0, 0)?;
+            let annot = doc
+                .get_object_mut(id)
+                .and_then(|o| o.as_dict_mut())
+                .map_err(|e| e.to_string())?;
+            annot.set("M", lopdf::Object::string_literal("D:20200101000000+00'00'"));
+            Ok(())
+        })
+        .expect("envejecer la fecha");
+        assert_eq!(fecha_guardada(&work, 0), "D:20200101000000+00'00'");
+
+        crate::anotaciones2::transform_annotation(work.clone(), 0, 0, 100.0, 100.0, 120.0, 40.0)
+            .expect("mover");
+
+        let m = fecha_guardada(&work, 0);
+        assert!(
+            m.starts_with(&format!("D:{}", chrono::Local::now().format("%Y"))),
+            "mover debe refrescar /M, sigue en {m}"
+        );
+        assert!(
+            fecha_pdf_completa(&m),
+            "la fecha tras mover es la de PDFium, no la nuestra: {m:?}"
+        );
+        let annots = get_annotations(work, 0).expect("listar");
+        assert_eq!(annots[0].author, "Jorge", "mover no debe tocar el autor");
         std::fs::remove_file(&tmp).ok();
     }
 }

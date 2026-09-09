@@ -3,7 +3,7 @@
 //! es la única vía que renderiza sin /AP y se borra como anotación) y sellos
 //! (Stamp con borde + texto dentro).
 
-use crate::anotaciones::{remata_annot, ui_rect_to_pdf, EstiloMarca};
+use crate::anotaciones::{remata_annot, remata_annot_en, ui_rect_to_pdf, EstiloMarca};
 use crate::historial::mutacion;
 use crate::{on_pdfium_thread, pdfium, save_and_close, Rect};
 use pdfium_render::prelude::*;
@@ -380,7 +380,9 @@ pub fn transform_annotation(
         }
         drop(page);
         save_and_close(doc, &work_path)?;
-        Ok(())
+        // mover un comentario actualiza su fecha de modificación (Acrobat);
+        // PDFium escribe una suya en UTC al guardar, así que la reescribimos
+        remata_annot_en(&work_path, page_index, Some(annot_index as usize), None, None)
     }))
 }
 
