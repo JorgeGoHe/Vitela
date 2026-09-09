@@ -3,9 +3,9 @@
 //! es la única vía que renderiza sin /AP y se borra como anotación) y sellos
 //! (Stamp con borde + texto dentro).
 
-use crate::anotaciones::ui_rect_to_pdf;
+use crate::anotaciones::{escribe_apariencia_marca, ui_rect_to_pdf, ultima_annot, EstiloMarca};
 use crate::historial::mutacion;
-use crate::{on_pdfium_thread, pdfium, save_and_close, Rect};
+use crate::{cirugia_en_hilo, on_pdfium_thread, pdfium, save_and_close, Rect};
 use pdfium_render::prelude::*;
 
 fn color_de(c: [u8; 4]) -> PdfColor {
@@ -76,24 +76,34 @@ pub fn add_markup(
                 }
             }};
         }
+        let estilo = match kind.as_str() {
+            "highlight" => EstiloMarca::Resaltado,
+            "underline" => EstiloMarca::Subrayado,
+            "strikeout" => EstiloMarca::Tachado,
+            otro => return Err(format!("Tipo de marca desconocido: {otro}")),
+        };
         {
             let annotations = page.annotations_mut();
-            match kind.as_str() {
-                "highlight" => {
+            match estilo {
+                EstiloMarca::Resaltado => {
                     configurar!(annotations.create_highlight_annotation(), [255, 220, 0, 140])
                 }
-                "underline" => {
+                EstiloMarca::Subrayado => {
                     configurar!(annotations.create_underline_annotation(), [46, 160, 67, 255])
                 }
-                "strikeout" => {
+                EstiloMarca::Tachado => {
                     configurar!(annotations.create_strikeout_annotation(), [226, 61, 61, 255])
                 }
-                otro => return Err(format!("Tipo de marca desconocido: {otro}")),
             }
         }
         drop(page);
         save_and_close(doc, &work_path)?;
-        Ok(())
+        // segundo pase: PDFium genera la apariencia en memoria pero no la
+        // escribe, así que la marca no existiría fuera de Vitela
+        cirugia_en_hilo(&work_path, |doc| {
+            let i = ultima_annot(doc, page_index)?;
+            escribe_apariencia_marca(doc, page_index, i, estilo)
+        })
     }))
 }
 

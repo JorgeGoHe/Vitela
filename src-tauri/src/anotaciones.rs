@@ -1,6 +1,6 @@
 //! Anotaciones básicas: resaltado, trazo (Ink), nota, listado y borrado.
 
-use crate::{on_pdfium_thread, pdfium, save_and_close, with_doc, with_lopdf, Rect};
+use crate::{cirugia_en_hilo, on_pdfium_thread, pdfium, save_and_close, with_doc, with_lopdf, Rect};
 use crate::historial::mutacion;
 use pdfium_render::prelude::*;
 use serde::Serialize;
@@ -73,7 +73,11 @@ pub fn add_highlight(work_path: String, page_index: u16, rects: Vec<Rect>) -> Re
         }
         drop(page);
         save_and_close(doc, &work_path)?;
-        Ok(())
+        // segundo pase: PDFium no escribe la apariencia del resaltado
+        cirugia_en_hilo(&work_path, |doc| {
+            let i = ultima_annot(doc, page_index)?;
+            escribe_apariencia_marca(doc, page_index, i, EstiloMarca::Resaltado)
+        })
     }))
 }
 
@@ -187,6 +191,252 @@ pub fn add_note(
         save_and_close(doc, &work_path)?;
         Ok(())
     }))
+}
+
+/// Estilo de la apariencia de una marca de texto.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EstiloMarca {
+    /// Rectángulo por quad en `/BM /Multiply`, como Acrobat.
+    Resaltado,
+    /// Línea fina en la base del quad.
+    Subrayado,
+    /// Línea fina a media altura del quad.
+    Tachado,
+}
+
+/// Grosor de la línea de subrayado/tachado, en puntos (el de Acrobat).
+const GROSOR_LINEA: f32 = 1.0;
+
+fn numero(o: &lopdf::Object) -> Option<f32> {
+    match o {
+        lopdf::Object::Integer(i) => Some(*i as f32),
+        lopdf::Object::Real(r) => Some(*r),
+        _ => None,
+    }
+}
+
+/// Quads de una anotación de marcado como rectángulos PDF
+/// `(x0, y0, x1, y1)` con origen abajo-izquierda.
+fn quads_de(annot: &lopdf::Dictionary) -> Vec<(f32, f32, f32, f32)> {
+    let Ok(lopdf::Object::Array(qp)) = annot.get(b"QuadPoints") else {
+        return Vec::new();
+    };
+    qp.chunks(8)
+        .filter(|c| c.len() == 8)
+        .filter_map(|c| {
+            let v: Vec<f32> = c.iter().filter_map(numero).collect();
+            if v.len() != 8 {
+                return None;
+            }
+            let xs = [v[0], v[2], v[4], v[6]];
+            let ys = [v[1], v[3], v[5], v[7]];
+            Some((
+                xs.iter().copied().fold(f32::MAX, f32::min),
+                ys.iter().copied().fold(f32::MAX, f32::min),
+                xs.iter().copied().fold(f32::MIN, f32::max),
+                ys.iter().copied().fold(f32::MIN, f32::max),
+            ))
+        })
+        .collect()
+}
+
+/// Escribe a mano el `/AP` (Form XObject de apariencia normal) de la marca
+/// de texto que está en el índice `annot_index` de `/Annots`, más `/F 4`
+/// (Print) y `/CA`.
+///
+/// Por qué a mano: PDFium genera la apariencia de las marcas en memoria al
+/// cargar el documento —por eso se ven en `render_page`— pero NO la escribe
+/// al guardar, así que el resaltado no existe para ningún otro visor, ni al
+/// imprimir desde otra aplicación, ni tras `flatten_pdf`. Acrobat siempre
+/// escribe el `/AP`; esto lo iguala.
+///
+/// El truco de coordenadas es el habitual: `/BBox` igual al `/Rect` de la
+/// anotación y `/Matrix` implícita (identidad), de modo que dentro del
+/// stream se dibuja directamente en coordenadas de página.
+pub(crate) fn escribe_apariencia_marca(
+    doc: &mut lopdf::Document,
+    page_index: u16,
+    annot_index: usize,
+    estilo: EstiloMarca,
+) -> Result<(), String> {
+    use lopdf::{Dictionary, Object, Stream};
+
+    let annot_id = crate::anotaciones::annot_id(doc, page_index, annot_index)?;
+    let annot = doc
+        .get_object(annot_id)
+        .and_then(|o| o.as_dict())
+        .map_err(|e| e.to_string())?
+        .clone();
+
+    let quads = quads_de(&annot);
+    if quads.is_empty() {
+        return Ok(()); // sin quads no hay nada que pintar
+    }
+    let color = match annot.get(b"C") {
+        Ok(Object::Array(c)) if c.len() == 3 => [
+            numero(&c[0]).unwrap_or(0.0),
+            numero(&c[1]).unwrap_or(0.0),
+            numero(&c[2]).unwrap_or(0.0),
+        ],
+        Ok(Object::Array(c)) if c.len() == 1 => {
+            let g = numero(&c[0]).unwrap_or(0.0);
+            [g, g, g]
+        }
+        _ => [1.0, 0.86, 0.0],
+    };
+
+    // BBox = envolvente de los quads, con holgura para el grosor de línea
+    let x0 = quads.iter().map(|q| q.0).fold(f32::MAX, f32::min);
+    let y0 = quads.iter().map(|q| q.1).fold(f32::MAX, f32::min);
+    let x1 = quads.iter().map(|q| q.2).fold(f32::MIN, f32::max);
+    let y1 = quads.iter().map(|q| q.3).fold(f32::MIN, f32::max);
+
+    let mut ops = String::new();
+    if estilo == EstiloMarca::Resaltado {
+        ops.push_str("/GSm gs\n");
+    }
+    ops.push_str(&format!("{:.4} {:.4} {:.4} rg\n", color[0], color[1], color[2]));
+    for (qx0, qy0, qx1, qy1) in &quads {
+        let (x, y, w, h) = match estilo {
+            EstiloMarca::Resaltado => (*qx0, *qy0, qx1 - qx0, qy1 - qy0),
+            // Acrobat deja el subrayado justo por debajo de la línea base
+            EstiloMarca::Subrayado => (*qx0, *qy0, qx1 - qx0, GROSOR_LINEA),
+            EstiloMarca::Tachado => (
+                *qx0,
+                (qy0 + qy1) / 2.0 - GROSOR_LINEA / 2.0,
+                qx1 - qx0,
+                GROSOR_LINEA,
+            ),
+        };
+        ops.push_str(&format!("{x:.4} {y:.4} {w:.4} {h:.4} re\n"));
+    }
+    ops.push_str("f\n");
+
+    let mut recursos = Dictionary::new();
+    if estilo == EstiloMarca::Resaltado {
+        // Multiply: el amarillo deja leer el texto que hay debajo, igual
+        // que Acrobat (que por eso usa opacidad 1 y no transparencia)
+        let mut gs = Dictionary::new();
+        gs.set("Type", Object::Name(b"ExtGState".to_vec()));
+        gs.set("BM", Object::Name(b"Multiply".to_vec()));
+        gs.set("CA", Object::Real(1.0));
+        gs.set("ca", Object::Real(1.0));
+        let mut estados = Dictionary::new();
+        estados.set("GSm", Object::Dictionary(gs));
+        recursos.set("ExtGState", Object::Dictionary(estados));
+    }
+
+    let mut forma = Dictionary::new();
+    forma.set("Type", Object::Name(b"XObject".to_vec()));
+    forma.set("Subtype", Object::Name(b"Form".to_vec()));
+    forma.set("FormType", 1i64);
+    forma.set(
+        "BBox",
+        Object::Array(vec![x0.into(), y0.into(), x1.into(), y1.into()]),
+    );
+    forma.set("Resources", Object::Dictionary(recursos));
+    if estilo == EstiloMarca::Resaltado {
+        // grupo de transparencia: sin él algunos visores ignoran el /BM
+        let mut grupo = Dictionary::new();
+        grupo.set("S", Object::Name(b"Transparency".to_vec()));
+        grupo.set("CS", Object::Name(b"DeviceRGB".to_vec()));
+        forma.set("Group", Object::Dictionary(grupo));
+    }
+    let ap_id = doc.add_object(Stream::new(forma, ops.into_bytes()));
+
+    let annot = doc
+        .get_object_mut(annot_id)
+        .and_then(|o| o.as_dict_mut())
+        .map_err(|e| e.to_string())?;
+    let mut ap = Dictionary::new();
+    ap.set("N", Object::Reference(ap_id));
+    annot.set("AP", Object::Dictionary(ap));
+    annot.set("F", 4i64); // Print
+    annot.set("CA", Object::Real(1.0));
+    Ok(())
+}
+
+/// Id del objeto de la anotación `index` de la página, resolviendo el
+/// `/Annots` esté por referencia o en línea. Si la entrada es un
+/// diccionario directo lo convierte en objeto propio para poder mutarlo.
+pub(crate) fn annot_id(
+    doc: &mut lopdf::Document,
+    page_index: u16,
+    index: usize,
+) -> Result<lopdf::ObjectId, String> {
+    use lopdf::Object;
+    let page_id = *doc
+        .get_pages()
+        .get(&(page_index as u32 + 1))
+        .ok_or("Página fuera de rango")?;
+    let annots_ref = doc
+        .get_object(page_id)
+        .and_then(|o| o.as_dict())
+        .map_err(|e| e.to_string())?
+        .get(b"Annots")
+        .map_err(|_| "La página no tiene anotaciones".to_string())?
+        .clone();
+    let (lista, contenedor) = match &annots_ref {
+        Object::Reference(rid) => (
+            doc.get_object(*rid)
+                .and_then(|o| o.as_array())
+                .map_err(|e| e.to_string())?
+                .clone(),
+            Some(*rid),
+        ),
+        Object::Array(a) => (a.clone(), None),
+        _ => return Err("El /Annots de la página no es una lista".into()),
+    };
+    let entrada = lista.get(index).ok_or("Anotación fuera de rango")?;
+    match entrada {
+        Object::Reference(rid) => Ok(*rid),
+        Object::Dictionary(d) => {
+            // anotación en línea: se promueve a objeto indirecto
+            let nuevo = doc.add_object(Object::Dictionary(d.clone()));
+            match contenedor {
+                Some(rid) => {
+                    doc.get_object_mut(rid)
+                        .and_then(|o| o.as_array_mut())
+                        .map_err(|e| e.to_string())?[index] = Object::Reference(nuevo);
+                }
+                None => {
+                    doc.get_object_mut(page_id)
+                        .and_then(|o| o.as_dict_mut())
+                        .and_then(|d| d.get_mut(b"Annots"))
+                        .and_then(|o| o.as_array_mut())
+                        .map_err(|e| e.to_string())?[index] = Object::Reference(nuevo);
+                }
+            }
+            Ok(nuevo)
+        }
+        _ => Err("Entrada de /Annots inesperada".into()),
+    }
+}
+
+/// Número de anotaciones de una página según el fichero en disco: el índice
+/// de la que acaba de crear PDFium es el último.
+pub(crate) fn ultima_annot(doc: &lopdf::Document, page_index: u16) -> Result<usize, String> {
+    use lopdf::Object;
+    let page_id = *doc
+        .get_pages()
+        .get(&(page_index as u32 + 1))
+        .ok_or("Página fuera de rango")?;
+    let annots = doc
+        .get_object(page_id)
+        .and_then(|o| o.as_dict())
+        .map_err(|e| e.to_string())?
+        .get(b"Annots")
+        .map_err(|_| "La página no tiene anotaciones".to_string())?;
+    let n = match annots {
+        Object::Reference(rid) => doc
+            .get_object(*rid)
+            .and_then(|o| o.as_array())
+            .map_err(|e| e.to_string())?
+            .len(),
+        Object::Array(a) => a.len(),
+        _ => return Err("El /Annots de la página no es una lista".into()),
+    };
+    n.checked_sub(1).ok_or_else(|| "La página no tiene anotaciones".into())
 }
 
 #[derive(Serialize, Debug)]
@@ -493,6 +743,162 @@ mod tests {
         // el render con anotaciones no debe fallar
         render_page_b64(work.clone(), 0, 200).expect("render con anotaciones");
 
+        std::fs::remove_file(&tmp).ok();
+    }
+}
+
+#[cfg(test)]
+mod tests_apariencia {
+    use super::*;
+    use crate::render_page_png;
+    use crate::tests::crea_pdf;
+
+    /// Píxel de un PNG en las coordenadas de UI dadas (puntos PDF) para un
+    /// render del ancho indicado sobre una página A4.
+    fn pixel(png: &[u8], ancho_px: u32, x_pt: f32, y_pt: f32) -> [u8; 4] {
+        let img = image::load_from_memory(png).expect("PNG").to_rgba8();
+        let escala = ancho_px as f32 / 595.0;
+        img.get_pixel((x_pt * escala) as u32, (y_pt * escala) as u32).0
+    }
+
+    /// Diccionario de la anotación `i` de la primera página, leído del
+    /// fichero ya guardado (no del documento en memoria de PDFium).
+    fn annot_guardada(work: &str, i: usize) -> lopdf::Dictionary {
+        let doc = lopdf::Document::load(work).expect("cargar con lopdf");
+        let page_id = *doc.get_pages().get(&1).expect("página 1");
+        let annots = doc
+            .get_object(page_id)
+            .and_then(|o| o.as_dict())
+            .and_then(|d| d.get(b"Annots"))
+            .and_then(|o| o.as_array())
+            .expect("Annots")
+            .clone();
+        match &annots[i] {
+            lopdf::Object::Reference(rid) => doc.get_object(*rid).unwrap().as_dict().unwrap().clone(),
+            lopdf::Object::Dictionary(d) => d.clone(),
+            otro => panic!("anotación inesperada: {otro:?}"),
+        }
+    }
+
+    /// La apariencia normal (`/AP /N`) tiene que ser un stream de verdad,
+    /// no una referencia colgante.
+    fn tiene_ap_con_stream(work: &str, i: usize) -> bool {
+        let doc = lopdf::Document::load(work).expect("cargar con lopdf");
+        let annot = annot_guardada(work, i);
+        let Ok(ap) = annot.get(b"AP").and_then(|o| o.as_dict()) else {
+            return false;
+        };
+        let Ok(n) = ap.get(b"N") else { return false };
+        let obj = match n {
+            lopdf::Object::Reference(rid) => doc.get_object(*rid).expect("stream de apariencia"),
+            otro => otro,
+        };
+        obj.as_stream().map(|s| !s.content.is_empty()).unwrap_or(false)
+    }
+
+    fn caja(y: f32) -> Rect {
+        Rect { x: 200.0, y, w: 200.0, h: 20.0 }
+    }
+
+    #[test]
+    fn resaltado_se_ve_en_el_render_y_conserva_ap() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_ap_resaltado.pdf");
+        crea_pdf(&["Hola"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        // zona en blanco de la página, lejos del texto
+        add_highlight(work.clone(), 0, vec![caja(300.0)]).expect("resaltar");
+
+        let png = render_page_png(work.clone(), 0, 300).expect("render");
+        let [r, g, b, _] = pixel(&png, 300, 300.0, 310.0);
+        assert!(
+            r > 200 && g > 150 && b < 120,
+            "el resaltado no se ve en el render: rgb({r},{g},{b})"
+        );
+
+        // lo que PDFium genera al vuelo no queda en el fichero: el /AP
+        // escrito a mano sí, y es lo que verá cualquier otro visor
+        assert!(
+            tiene_ap_con_stream(&work, 0),
+            "el resaltado guardado debe llevar /AP con su stream"
+        );
+        let annot = annot_guardada(&work, 0);
+        assert_eq!(annot.get(b"F").and_then(|o| o.as_i64()).unwrap_or(0), 4);
+        assert!(annot.get(b"CA").is_ok(), "el resaltado debe llevar /CA");
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn aplanar_conserva_el_resaltado() {
+        // con /AP escrito, aplanar ya no borra las marcas: es lo que
+        // permite quitar del diálogo la advertencia de que se pierden
+        let tmp = std::env::temp_dir().join("editor_pdf_test_ap_aplanado.pdf");
+        crea_pdf(&["Hola"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        add_highlight(work.clone(), 0, vec![caja(300.0)]).expect("resaltar");
+        crate::seguridad::flatten_pdf(work.clone()).expect("aplanar");
+
+        let png = render_page_png(work.clone(), 0, 300).expect("render");
+        let [r, g, b, _] = pixel(&png, 300, 300.0, 310.0);
+        assert!(
+            r > 200 && g > 150 && b < 120,
+            "el resaltado se perdió al aplanar: rgb({r},{g},{b})"
+        );
+        assert!(
+            get_annotations(work, 0).expect("listar").is_empty(),
+            "aplanar debe dejar la marca como contenido, no como anotación"
+        );
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn subrayado_pinta_la_base_y_no_el_centro() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_ap_subrayado.pdf");
+        crea_pdf(&["Hola"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        crate::anotaciones2::add_markup(
+            work.clone(),
+            0,
+            vec![caja(300.0)],
+            "underline".into(),
+            Some([0, 0, 255, 255]),
+        )
+        .expect("subrayar");
+
+        let png = render_page_png(work.clone(), 0, 300).expect("render");
+        let [_, _, base, _] = pixel(&png, 300, 300.0, 319.0);
+        assert!(base > 150, "el subrayado no se ve en la base del quad");
+        let [r, g, b, _] = pixel(&png, 300, 300.0, 308.0);
+        assert!(
+            r > 240 && g > 240 && b > 240,
+            "el subrayado no debe rellenar el quad: rgb({r},{g},{b})"
+        );
+        assert!(tiene_ap_con_stream(&work, 0), "el subrayado debe llevar /AP");
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn tachado_pinta_el_centro_y_no_la_base() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_ap_tachado.pdf");
+        crea_pdf(&["Hola"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        crate::anotaciones2::add_markup(
+            work.clone(),
+            0,
+            vec![caja(300.0)],
+            "strikeout".into(),
+            Some([255, 0, 0, 255]),
+        )
+        .expect("tachar");
+
+        let png = render_page_png(work.clone(), 0, 300).expect("render");
+        let [medio, _, _, _] = pixel(&png, 300, 300.0, 310.0);
+        assert!(medio > 150, "el tachado no se ve a media altura");
+        let [r, g, b, _] = pixel(&png, 300, 300.0, 302.0);
+        assert!(
+            r > 240 && g > 240 && b > 240,
+            "el tachado no debe rellenar el quad: rgb({r},{g},{b})"
+        );
+        assert!(tiene_ap_con_stream(&work, 0), "el tachado debe llevar /AP");
         std::fs::remove_file(&tmp).ok();
     }
 }

@@ -249,18 +249,31 @@ pub(crate) fn cirugia(
     work_path: &str,
     f: impl FnOnce(&mut lopdf::Document) -> Result<(), String> + Send + 'static,
 ) -> Result<(), String> {
-    historial::mutacion(work_path.to_string(), |work_path| on_pdfium_thread(move || {
-        invalidate_doc_cache();
-        let mut doc = lopdf::Document::load(&work_path)
-            .map_err(|e| format!("No se pudo leer el PDF: {e}"))?;
-        if doc.is_encrypted() {
-            return Err("El documento está cifrado: quita la contraseña antes".into());
-        }
-        f(&mut doc)?;
-        let tmp = format!("{work_path}.tmp");
-        doc.save(&tmp).map_err(|e| format!("No se pudo guardar: {e}"))?;
-        std::fs::rename(&tmp, &work_path).map_err(|e| e.to_string())
-    }))
+    historial::mutacion(work_path.to_string(), |work_path| {
+        on_pdfium_thread(move || cirugia_en_hilo(&work_path, f))
+    })
+}
+
+/// El cuerpo de [`cirugia`] sin el paso de historial y sin saltar de hilo:
+/// para comandos que YA están dentro de una `mutacion` y del hilo de PDFium
+/// y necesitan un segundo pase con lopdf (crear la anotación con PDFium y
+/// escribirle después su `/AP`, por ejemplo). Nunca llamarlo suelto: sin
+/// `mutacion` no habría paso de deshacer.
+pub(crate) fn cirugia_en_hilo(
+    work_path: &str,
+    f: impl FnOnce(&mut lopdf::Document) -> Result<(), String>,
+) -> Result<(), String> {
+    invalidate_doc_cache();
+    let mut doc = lopdf::Document::load(work_path)
+        .map_err(|e| format!("No se pudo leer el PDF: {e}"))?;
+    if doc.is_encrypted() {
+        return Err("El documento está cifrado: quita la contraseña antes".into());
+    }
+    f(&mut doc)?;
+    let tmp = format!("{work_path}.tmp");
+    doc.save(&tmp)
+        .map_err(|e| format!("No se pudo guardar: {e}"))?;
+    std::fs::rename(&tmp, work_path).map_err(|e| e.to_string())
 }
 
 /// Abre un PDF creando una copia de trabajo en temp. Todas las mutaciones
