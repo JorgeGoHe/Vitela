@@ -206,6 +206,13 @@ export function plural(n: number, singular: string, plural: string): string {
   return `${n} ${n === 1 ? singular : plural}`;
 }
 
+/** «834 KB» o «2,41 MB»: por debajo de 1 MB dos decimales de MB no
+ *  distinguen nada, y la coma decimal es la que escribe el español. */
+export function tamanoFichero(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(2).replace(".", ",")} MB`;
+}
+
 export function hexToRgba(hex: string, alpha = 255): Rgba {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255, alpha];
@@ -561,6 +568,26 @@ export function cargaResaltarCampos(): boolean {
 
 export function guardaResaltarCampos(v: boolean) {
   localStorage.setItem(CLAVE_CAMPOS, v ? "1" : "0");
+}
+
+/* ---- último zoom usado (persistido en localStorage) ---- */
+
+const CLAVE_ZOOM = "editorPdf.zoom";
+
+/** Los tres zooms de Acrobat: porcentaje fijo, al ancho, o la hoja entera. */
+export type Zoom = number | "ajuste" | "pagina";
+
+/** El zoom con el que se cerró la app. La preferencia «zoom al abrir: el
+ *  último» no hacía nada entre sesiones porque el zoom no se guardaba. */
+export function cargaZoom(): Zoom {
+  const g = localStorage.getItem(CLAVE_ZOOM);
+  if (g === "pagina" || g === "ajuste") return g;
+  const n = Number(g);
+  return Number.isFinite(n) && n > 0 ? n : "ajuste";
+}
+
+export function guardaZoom(z: Zoom) {
+  localStorage.setItem(CLAVE_ZOOM, String(z));
 }
 
 /* ---- aviso de pantalla completa (una sola vez, localStorage) ---- */

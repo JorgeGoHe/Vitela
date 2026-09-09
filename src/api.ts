@@ -687,6 +687,20 @@ export function squashHistory(
   return invoke("squash_history", { workPath, steps });
 }
 
+/** Lo que se puede saber de un PDF sin abrirlo como copia de trabajo. */
+export type PdfInfo = {
+  page_count: number;
+  bytes: number;
+  /** Va cifrado: hará falta la contraseña para hacer nada con él. */
+  encrypted: boolean;
+};
+
+/** Páginas, tamaño y cifrado de un PDF cualquiera, sin tocarlo: lo que
+ *  necesita la rejilla de combinar para no ordenar ficheros a ciegas. */
+export function pdfInfo(path: string): Promise<PdfInfo> {
+  return invoke("pdf_info", { path });
+}
+
 /* ---- menú nativo ---- */
 
 /** Avisa al backend de si hay documento abierto para que atenúe las

@@ -84,6 +84,7 @@ import {
   ATAJO_PANEL,
   avisoPantallaVisto,
   cargaPreferencias,
+  cargaZoom,
   cargaVista,
   estadoDeFirma,
   fechaLarga,
@@ -101,12 +102,15 @@ import {
   hexToRgba,
   guardaResaltarCampos,
   MOD,
+  guardaZoom,
   parseRango,
   plural,
+  tamanoFichero,
   type FiltroComentarios,
   type Mode,
   type PageSize,
   type Preferencias,
+  type Zoom,
 } from "./tipos";
 import Icon from "./components/Icon";
 import Busqueda from "./components/Busqueda";
@@ -206,7 +210,7 @@ function resumenFirmas(firmas: FirmaInfo[]): string {
 }
 
 /** Punto de lectura al que vuelve ⌥←: página, scroll y zoom. */
-type Vista = { page: number; scrollTop: number; zoom: number | "ajuste" | "pagina" };
+type Vista = { page: number; scrollTop: number; zoom: Zoom };
 
 function App() {
   const [originalPath, setOriginalPath] = useState<string | null>(null);
@@ -238,7 +242,7 @@ function App() {
   const [zoomDraft, setZoomDraft] = useState<string | null>(null);
   // tres modos de zoom, como en Acrobat: número = porcentaje fijo,
   // "ajuste" = al ancho de la ventana, "pagina" = la hoja entera a la vista
-  const [zoom, setZoom] = useState<number | "ajuste" | "pagina">("ajuste");
+  const [zoom, setZoom] = useState<Zoom>("ajuste");
   const [viewerW, setViewerW] = useState<number | null>(null);
   const [viewerH, setViewerH] = useState<number | null>(null);
   const viewerRef = useRef<HTMLElement | null>(null);
@@ -472,10 +476,12 @@ function App() {
       setWorkPath(info.work_path);
       setPageCount(info.page_count);
       setPageIndex(0);
-      // «Zoom al abrir» de las preferencias; «el último» no toca nada
+      // «Zoom al abrir» de las preferencias; «el último» es el de la última
+      // sesión, no el de esta: el zoom se guarda al cambiarlo
       if (prefs.zoomInicial === "pagina") setZoom("pagina");
       else if (prefs.zoomInicial === "ancho") setZoom("ajuste");
       else if (prefs.zoomInicial === "100") setZoom(1);
+      else setZoom(cargaZoom());
       setDocVersion((v) => v + 1);
       viewerRef.current?.scrollTo({ top: 0 });
       scrollAnchorRef.current = null;
@@ -1261,6 +1267,12 @@ function App() {
         : BASE_WIDTH * zoom;
   const ocupado = useSyncExternalStore(subscribeBusy, busyCount) > 0;
 
+  // el zoom sobrevive a cerrar la app: es lo que promete «zoom al abrir: el
+  // último», que hasta ahora solo valía dentro de la misma sesión
+  useEffect(() => {
+    guardaZoom(zoom);
+  }, [zoom]);
+
   const zoomNum = typeof zoom === "number" ? zoom : displayWidth / BASE_WIDTH;
   // el listener se registra una sola vez: lee el zoom vivo por referencia
   const zoomNumRef = useRef(zoomNum);
@@ -2026,15 +2038,10 @@ function App() {
       setCompressOpen(false);
       setNotice("Comprimiendo…", { persistente: true });
       const r = await compressPdf(workPath, compressQuality, compressDpi);
-      // por debajo de 1 MB dos decimales de MB no distinguen nada: KB
-      const tam = (n: number) =>
-        n < 1024 * 1024
-          ? `${Math.round(n / 1024)} KB`
-          : `${(n / 1024 / 1024).toFixed(2)} MB`;
       setNotice(
         r.imagenes === 0
           ? "No había imágenes que comprimir."
-          : `${plural(r.imagenes, "imagen recomprimida", "imágenes recomprimidas")}: ${tam(r.antes)} → ${tam(r.despues)}`,
+          : `${plural(r.imagenes, "imagen recomprimida", "imágenes recomprimidas")}: ${tamanoFichero(r.antes)} → ${tamanoFichero(r.despues)}`,
       );
       afterMutation(pageCount);
     } catch (e) {
@@ -3011,7 +3018,7 @@ function App() {
           }
           textoConfirmar="Guardar"
           secundario={{
-            texto: "Descartar",
+            texto: "No guardar",
             onClick: () => resolverUnsavedAsk("descartar"),
           }}
           onConfirm={() => resolverUnsavedAsk("guardar")}
@@ -3027,12 +3034,12 @@ function App() {
               manteniéndola o quitarla y dejarlo en claro.
             </p>
           }
-          textoConfirmar="Guardar sin contraseña"
+          textoConfirmar="Mantener la contraseña"
           secundario={{
-            texto: "Mantener contraseña",
-            onClick: () => resolverSaveAsk(true),
+            texto: "Guardar sin contraseña",
+            onClick: () => resolverSaveAsk(false),
           }}
-          onConfirm={() => resolverSaveAsk(false)}
+          onConfirm={() => resolverSaveAsk(true)}
           onClose={() => resolverSaveAsk(null)}
         />
       )}

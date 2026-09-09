@@ -1,7 +1,8 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { pdfInfo, type PdfInfo } from "../api";
 import { open } from "../dialogos";
 import { useModal } from "../hooks/useModal";
-import { plural } from "../tipos";
+import { plural, tamanoFichero } from "../tipos";
 import Icon from "./Icon";
 
 /** Nombre y carpeta de una ruta, para distinguir dos ficheros iguales. */
@@ -30,10 +31,29 @@ export default function DialogoCombinar({
   const [alFinal, setAlFinal] = useState(true);
   const arrastreRef = useRef<number | null>(null);
   const [dropIdx, setDropIdx] = useState<number | null>(null);
+  // páginas, tamaño y cifrado de cada fichero: sin esto el usuario ordena a
+  // ciegas ficheros que ha elegido por el nombre. `null` = no se ha podido
+  // leer (no es un PDF, o ya no está)
+  const [infos, setInfos] = useState<Record<string, PdfInfo | null>>({});
+  const pedidasRef = useRef(new Set<string>());
+  // un PDF cifrado no se puede combinar: mejor decirlo antes de aceptar que
+  // después, con un error rojo y la lista perdida
+  const protegidos = rutas.filter((r) => infos[r]?.encrypted).length;
   const confirmar = () => {
-    if (rutas.length > 0) onConfirm({ rutas, alFinal });
+    if (rutas.length > 0 && protegidos === 0) onConfirm({ rutas, alFinal });
   };
   const { ref, onKeyDown } = useModal({ onClose, onConfirm: confirmar });
+
+  // se pide una vez por ruta, aunque la fila se mueva o se repita
+  useEffect(() => {
+    for (const r of rutas) {
+      if (pedidasRef.current.has(r)) continue;
+      pedidasRef.current.add(r);
+      pdfInfo(r)
+        .then((i) => setInfos((m) => ({ ...m, [r]: i })))
+        .catch(() => setInfos((m) => ({ ...m, [r]: null })));
+    }
+  }, [rutas]);
 
   async function anadir() {
     const sel = await open({
@@ -113,6 +133,19 @@ export default function DialogoCombinar({
                   <span className="combinar-nombre">
                     <span>{nombre}</span>
                     <span className="reciente-dir">{dir}</span>
+                    {r in infos && (
+                      <span
+                        className={`dato combinar-info${
+                          infos[r]?.encrypted ? " mal" : ""
+                        }`}
+                      >
+                        {infos[r] === null
+                          ? "no se ha podido leer"
+                          : infos[r].encrypted
+                            ? "protegido con contraseña"
+                            : `${plural(infos[r].page_count, "página", "páginas")} · ${tamanoFichero(infos[r].bytes)}`}
+                      </span>
+                    )}
                   </span>
                   <button
                     className="btn"
@@ -139,6 +172,13 @@ export default function DialogoCombinar({
             </span>
           )}
         </div>
+        {protegidos > 0 && (
+          <p className="modal-file combinar-aviso" style={{ whiteSpace: "normal" }}>
+            {protegidos === 1
+              ? "Uno de los ficheros está protegido con contraseña y no se puede combinar: quítasela antes, o quítalo de la lista."
+              : `${protegidos} de los ficheros están protegidos con contraseña y no se pueden combinar: quítasela antes, o quítalos de la lista.`}
+          </p>
+        )}
         <span className="card-label">Dónde se añaden</span>
         <select
           className="size-select"
@@ -155,8 +195,14 @@ export default function DialogoCombinar({
           </button>
           <button
             className="btn btn-primary"
-            disabled={rutas.length === 0}
-            title={rutas.length === 0 ? "Añade antes algún PDF" : undefined}
+            disabled={rutas.length === 0 || protegidos > 0}
+            title={
+              rutas.length === 0
+                ? "Añade antes algún PDF"
+                : protegidos > 0
+                  ? "Hay ficheros protegidos con contraseña en la lista"
+                  : undefined
+            }
             onClick={confirmar}
           >
             Combinar

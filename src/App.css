@@ -1315,6 +1315,19 @@ textarea {
   white-space: nowrap;
 }
 
+/* páginas y tamaño del fichero: dato de imprenta, no interfaz (DESIGN.md) */
+.combinar-info {
+  color: var(--fg-muted);
+}
+
+.combinar-info.mal {
+  color: var(--danger);
+}
+
+.combinar-aviso {
+  color: var(--danger);
+}
+
 /* ---------- firmas del documento ---------- */
 
 /* banda de firmas: una línea, verde o roja, nunca las dos a la vez */
