@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { cropPage, redactArea, stampSignature, type RedactReport } from "../../api";
-import type { Mode, Rect } from "../../tipos";
+import type { Mode, PageSize, Rect } from "../../tipos";
+import { rectAPagina } from "./geometria";
 
 /**
  * Herramientas de área rectangular: recorte (modo crop), redacción (modo
@@ -12,6 +13,7 @@ export function useAreas(ctx: {
   index: number;
   pageCount: number;
   mode: Mode;
+  size: PageSize;
   activeSig: { png: string; ratio: number } | null;
   onPageMutated: (page: number) => void;
   onDocMutated: (newCount: number, nextPage?: number) => void;
@@ -24,6 +26,7 @@ export function useAreas(ctx: {
     index,
     pageCount,
     mode,
+    size,
     activeSig,
     onPageMutated,
     onDocMutated,
@@ -57,7 +60,7 @@ export function useAreas(ctx: {
   async function applyCrop(allPages: boolean) {
     if (!workPath || !cropDraft) return;
     try {
-      await cropPage(workPath, index, cropDraft, allPages);
+      await cropPage(workPath, index, rectAPagina(cropDraft, size), allPages);
       setCropDraft(null);
       onModeChange("select");
       onDocMutated(pageCount);
@@ -69,7 +72,9 @@ export function useAreas(ctx: {
   async function previewRedact(r: Rect) {
     if (!workPath) return;
     try {
-      setRedactReport(await redactArea(workPath, index, r, true));
+      setRedactReport(
+        await redactArea(workPath, index, rectAPagina(r, size), true),
+      );
     } catch (e) {
       onError(e);
     }
@@ -78,7 +83,7 @@ export function useAreas(ctx: {
   async function applyRedact() {
     if (!workPath || !redactDraft) return;
     try {
-      await redactArea(workPath, index, redactDraft, false);
+      await redactArea(workPath, index, rectAPagina(redactDraft, size), false);
       setRedactDraft(null);
       setRedactReport(null);
       onModeChange("select");
@@ -90,15 +95,16 @@ export function useAreas(ctx: {
 
   async function stampActiveSignature(r: Rect) {
     if (!workPath || !activeSig) return;
+    const pr = rectAPagina(r, size);
     try {
       await stampSignature({
         workPath,
         pageIndex: index,
         pngBase64: activeSig.png,
-        x: r.x,
-        y: r.y,
-        w: r.w,
-        h: r.h,
+        x: pr.x,
+        y: pr.y,
+        w: pr.w,
+        h: pr.h,
       });
       setSigDraft(null);
       // la firma estampada es una imagen: el modo imagen permite moverla,

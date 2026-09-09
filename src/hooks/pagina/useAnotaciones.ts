@@ -13,12 +13,13 @@ import {
   mergeLineRects,
   type AnnotationInfo,
   type Mode,
+  type PageSize,
   type Rect,
   type ResizeHandle,
 } from "../../tipos";
 import type { ToolProps } from "../../components/Pagina";
 import type { SeleccionTexto } from "./useSeleccionTexto";
-import { pagePoint } from "./geometria";
+import { pagePoint, puntoAPagina, rectAPagina } from "./geometria";
 
 /**
  * Anotaciones de la página: la lista (iconos de nota, overlays de marcas,
@@ -34,6 +35,7 @@ export function useAnotaciones(ctx: {
   pageVersion: number;
   mode: Mode;
   scale: number;
+  size: PageSize;
   tool: ToolProps;
   selOwner: number | null;
   seleccion: Pick<SeleccionTexto, "selection" | "pageText" | "setSelection">;
@@ -50,6 +52,7 @@ export function useAnotaciones(ctx: {
     pageVersion,
     mode,
     scale,
+    size,
     tool,
     selOwner,
     seleccion,
@@ -148,7 +151,9 @@ export function useAnotaciones(ctx: {
       await addMarkup({
         workPath,
         pageIndex: index,
-        rects,
+        // los comandos que escriben trabajan en el espacio propio de la
+        // página; en una página girada no es el mismo que el de la vista
+        rects: rects.map((r) => rectAPagina(r, size)),
         kind,
         color: hexToRgba(colorHex, kind === "highlight" ? 140 : 255),
         author: autorComentarios(),
@@ -169,15 +174,17 @@ export function useAnotaciones(ctx: {
   }) {
     if (!workPath) return;
     const fillable = tool.shapeKind === "rect" || tool.shapeKind === "ellipse";
+    const p1 = puntoAPagina({ x: d.x1, y: d.y1 }, size);
+    const p2 = puntoAPagina({ x: d.x2, y: d.y2 }, size);
     try {
       await addShape({
         workPath,
         pageIndex: index,
         kind: tool.shapeKind,
-        x1: d.x1,
-        y1: d.y1,
-        x2: d.x2,
-        y2: d.y2,
+        x1: p1.x,
+        y1: p1.y,
+        x2: p2.x,
+        y2: p2.y,
         stroke: hexToRgba(tool.shapeColor),
         fill: tool.shapeFill && fillable ? hexToRgba(tool.shapeColor, 70) : null,
         strokeWidth: tool.shapeWidth,
@@ -193,14 +200,15 @@ export function useAnotaciones(ctx: {
     const text =
       tool.stampText === "custom" ? tool.stampCustom.trim() : tool.stampText;
     if (!workPath || !text) return;
+    const p = puntoAPagina({ x, y }, size);
     try {
       await addStamp({
         workPath,
         pageIndex: index,
         text,
         color: hexToRgba(tool.stampColor),
-        x,
-        y,
+        x: p.x,
+        y: p.y,
         fontSize: 22,
         author: autorComentarios(),
       });
@@ -215,12 +223,13 @@ export function useAnotaciones(ctx: {
       setNoteDraft(null);
       return;
     }
+    const p = puntoAPagina({ x: noteDraft.x, y: noteDraft.y }, size);
     try {
       await invoke("add_note", {
         workPath,
         pageIndex: index,
-        x: noteDraft.x,
-        y: noteDraft.y,
+        x: p.x,
+        y: p.y,
         text: noteDraft.text,
         author: autorComentarios(),
       });
@@ -241,7 +250,10 @@ export function useAnotaciones(ctx: {
       await invoke("add_stroke", {
         workPath,
         pageIndex: index,
-        points: pts,
+        points: pts.map((q) => {
+          const p = puntoAPagina({ x: q[0], y: q[1] }, size);
+          return [p.x, p.y];
+        }),
         color: hexToRgba(tool.drawColor),
         width: tool.drawWidth,
         author: autorComentarios(),
@@ -330,15 +342,16 @@ export function useAnotaciones(ctx: {
 
   async function commitAnnot(a: AnnotationInfo, r: Rect) {
     if (!workPath) return;
+    const pr = rectAPagina(r, size);
     try {
       await transformAnnotation({
         workPath,
         pageIndex: index,
         annotIndex: a.index,
-        x: r.x,
-        y: r.y,
-        w: r.w,
-        h: r.h,
+        x: pr.x,
+        y: pr.y,
+        w: pr.w,
+        h: pr.h,
       });
       onAnnotated(index);
     } catch (e) {

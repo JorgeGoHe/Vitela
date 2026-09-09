@@ -3,6 +3,7 @@ import { invoke } from "../../ipc";
 import { open } from "../../dialogos";
 import { getImageData } from "../../api";
 import type { ImageInfo, ImgAction, Mode, PageSize, Rect, ResizeHandle } from "../../tipos";
+import { puntoAPagina, rectAPagina, rectAVista } from "./geometria";
 
 /**
  * Imágenes de la página (modo imagen): insertar, mover/redimensionar por
@@ -71,8 +72,11 @@ export function useImagenes(ctx: {
     }
     let cancelled = false;
     invoke<ImageInfo[]>("get_images", { path: workPath, pageIndex: index })
-      .then((list) => {
+      .then((lista) => {
         if (cancelled) return;
+        // igual que el texto, las imágenes vienen en el espacio propio de
+        // la página y el overlay las necesita en el de la vista
+        const list = lista.map((im) => ({ ...im, ...rectAVista(im, size) }));
         setImages(list);
         // el borrador y el parche del arrastre aguantan hasta que llegan los
         // datos frescos: así no reaparece la copia vieja mientras se re-renderiza
@@ -95,7 +99,7 @@ export function useImagenes(ctx: {
     return () => {
       cancelled = true;
     };
-  }, [workPath, index, visible, docVersion, mode, pageVersion, onError]);
+  }, [workPath, index, visible, docVersion, mode, pageVersion, size, onError]);
 
   async function insertImageAt(x: number, y: number) {
     if (!workPath) return;
@@ -110,13 +114,14 @@ export function useImagenes(ctx: {
       title: "Insertar imagen",
     });
     if (typeof sel !== "string") return;
+    const p = puntoAPagina({ x, y }, size);
     try {
       await invoke("add_image", {
         workPath,
         pageIndex: index,
         imagePath: sel,
-        x,
-        y,
+        x: p.x,
+        y: p.y,
       });
       onPageMutated(index);
     } catch (e) {
@@ -126,15 +131,16 @@ export function useImagenes(ctx: {
 
   async function commitImage(objectIndex: number, b: ImageInfo) {
     if (!workPath) return;
+    const pr = rectAPagina(b, size);
     try {
       await invoke("transform_image", {
         workPath,
         pageIndex: index,
         objectIndex,
-        x: b.x,
-        y: b.y,
-        w: b.w,
-        h: b.h,
+        x: pr.x,
+        y: pr.y,
+        w: pr.w,
+        h: pr.h,
       });
       onPageMutated(index);
     } catch (e) {

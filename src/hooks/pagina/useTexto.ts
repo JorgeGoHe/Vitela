@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "../../ipc";
-import type { Mode, TextBlock } from "../../tipos";
+import type { Mode, PageSize, TextBlock } from "../../tipos";
+import { puntoAPagina, puntoAVista } from "./geometria";
 
 /**
  * Edición real de texto (modo edit): los bloques de la página, la tarjeta
@@ -13,10 +14,21 @@ export function useTexto(ctx: {
   docVersion: number;
   pageVersion: number;
   mode: Mode;
+  size: PageSize;
   onPageMutated: (page: number) => void;
   onError: (e: unknown) => void;
 }) {
-  const { workPath, index, visible, docVersion, pageVersion, mode, onPageMutated, onError } = ctx;
+  const {
+    workPath,
+    index,
+    visible,
+    docVersion,
+    pageVersion,
+    mode,
+    size,
+    onPageMutated,
+    onError,
+  } = ctx;
   const [textBlocks, setTextBlocks] = useState<TextBlock[]>([]);
   const [blockDraft, setBlockDraft] = useState<{
     block: TextBlock;
@@ -49,7 +61,12 @@ export function useTexto(ctx: {
     let cancelled = false;
     invoke<TextBlock[]>("get_text_blocks", { path: workPath, pageIndex: index })
       .then((b) => {
-        if (!cancelled) setTextBlocks(b);
+        // los bloques vienen en el espacio propio de la página: al overlay
+        // le hacen falta en el de la vista para caer sobre lo que se ve
+        if (!cancelled)
+          setTextBlocks(
+            b.map((t) => ({ ...t, ...puntoAVista({ x: t.x, y: t.y }, size) })),
+          );
       })
       .catch((e) => {
         if (!cancelled) onError(e);
@@ -57,7 +74,7 @@ export function useTexto(ctx: {
     return () => {
       cancelled = true;
     };
-  }, [workPath, index, visible, docVersion, mode, pageVersion, onError]);
+  }, [workPath, index, visible, docVersion, mode, pageVersion, size, onError]);
 
   async function submitNewText() {
     if (!workPath || !newTextDraft) return;
@@ -65,12 +82,13 @@ export function useTexto(ctx: {
       setNewTextDraft(null);
       return;
     }
+    const p = puntoAPagina({ x: newTextDraft.x, y: newTextDraft.y }, size);
     try {
       await invoke("add_text_block", {
         workPath,
         pageIndex: index,
-        x: newTextDraft.x,
-        y: newTextDraft.y,
+        x: p.x,
+        y: p.y,
         text: newTextDraft.text,
         fontSize: newTextDraft.size,
         font: newTextDraft.font === "auto" ? null : newTextDraft.font,

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "../../ipc";
 import { createLink, getLinks, type LinkInfo } from "../../api";
-import type { Mode, Rect } from "../../tipos";
+import type { Mode, PageSize, Rect } from "../../tipos";
+import { rectAPagina } from "./geometria";
 
 /**
  * Enlaces de la página: las zonas clicables existentes (modo selección,
@@ -16,6 +17,7 @@ export function useEnlaces(ctx: {
   annotVersion: number;
   pageVersion: number;
   mode: Mode;
+  size: PageSize;
   pageCount: number;
   onAnnotated: (page: number) => void;
   onPageMutated: (page: number) => void;
@@ -32,6 +34,7 @@ export function useEnlaces(ctx: {
     annotVersion,
     pageVersion,
     mode,
+    size,
     pageCount,
     onAnnotated,
     onPageMutated,
@@ -101,7 +104,7 @@ export function useEnlaces(ctx: {
       await createLink({
         workPath,
         pageIndex: index,
-        rect: linkDraft,
+        rect: rectAPagina(linkDraft, size),
         uri: linkTipo === "url" ? linkValor.trim() : null,
         destPage:
           linkTipo === "pagina"

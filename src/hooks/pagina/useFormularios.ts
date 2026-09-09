@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "../../ipc";
 import { createFormField, deleteFormField } from "../../api";
-import type { FormFieldInfo, Mode, Rect } from "../../tipos";
+import type { FormFieldInfo, Mode, PageSize, Rect } from "../../tipos";
+import { rectAPagina } from "./geometria";
 
 /**
  * Formularios AcroForm: los campos de la página (rellenar texto, marcar
@@ -15,6 +16,7 @@ export function useFormularios(ctx: {
   annotVersion: number;
   pageVersion: number;
   mode: Mode;
+  size: PageSize;
   onAnnotated: (page: number) => void;
   onPageMutated: (page: number) => void;
   onError: (e: unknown) => void;
@@ -28,6 +30,7 @@ export function useFormularios(ctx: {
     annotVersion,
     pageVersion,
     mode,
+    size,
     onAnnotated,
     onPageMutated,
     onError,
@@ -126,7 +129,7 @@ export function useFormularios(ctx: {
         workPath,
         pageIndex: index,
         kind: formKind,
-        rect: formDraft,
+        rect: rectAPagina(formDraft, size),
         name: formName.trim(),
       });
       setFormDraft(null);

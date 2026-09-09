@@ -5,9 +5,11 @@ import {
   copyToClipboard,
   mergeLineRects,
   type Mode,
+  type PageSize,
   type PageText,
   type Selection,
 } from "../../tipos";
+import { rectAVista } from "./geometria";
 
 /**
  * Capa de texto de una página: los caracteres con sus cajas de glifos y la
@@ -21,6 +23,7 @@ export function useSeleccionTexto(ctx: {
   docVersion: number;
   pageVersion: number;
   mode: Mode;
+  size: PageSize;
   selOwner: number | null;
   /** Es la página que está leyendo el usuario (la de la píldora). */
   esActual: boolean;
@@ -34,6 +37,7 @@ export function useSeleccionTexto(ctx: {
     docVersion,
     pageVersion,
     mode,
+    size,
     selOwner,
     esActual,
     claimSel,
@@ -65,7 +69,13 @@ export function useSeleccionTexto(ctx: {
     setSelection(null);
     invoke<PageText>("get_page_text", { path: workPath, pageIndex: index })
       .then((t) => {
-        if (!cancelled) setPageText(t);
+        if (cancelled) return;
+        // las cajas de glifo vienen en el espacio propio de la página: la
+        // selección se pinta y se mide en el de la vista
+        setPageText({
+          ...t,
+          chars: t.chars.map((c) => ({ ...c, ...rectAVista(c, size) })),
+        });
       })
       .catch((e) => {
         if (!cancelled) onError(e);
@@ -73,7 +83,7 @@ export function useSeleccionTexto(ctx: {
     return () => {
       cancelled = true;
     };
-  }, [workPath, index, visible, docVersion, pageVersion, onError]);
+  }, [workPath, index, visible, docVersion, pageVersion, size, onError]);
 
   /** Doble clic selecciona la palabra y triple clic la línea (Acrobat). */
   const seleccionaBloque = useCallback(

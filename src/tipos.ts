@@ -10,7 +10,13 @@ export const MOD = navigator.platform.startsWith("Mac") ? "⌘" : "Ctrl+";
 export type CharBox = { ch: string; x: number; y: number; w: number; h: number };
 export type PageText = { width: number; height: number; chars: CharBox[] };
 export type Rect = { x: number; y: number; w: number; h: number };
-export type PageSize = { width: number; height: number };
+export type PageSize = {
+  /** Ancho y alto de la página TAL COMO SE VE (con /Rotate aplicado). */
+  width: number;
+  height: number;
+  /** /Rotate de la página: 0, 90, 180 o 270 grados en sentido horario. */
+  rotation: number;
+};
 export type SearchMatch = { page_index: number; rects: Rect[] };
 export type Selection = { start: number; end: number };
 export type AnnotationInfo = {
