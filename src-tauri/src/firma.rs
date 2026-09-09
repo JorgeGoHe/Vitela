@@ -193,6 +193,7 @@ fn apariencia_firma(
     h: f32,
     nombre: &str,
     fecha: &str,
+    motivo: Option<&str>,
     png: Option<&str>,
 ) -> Result<lopdf::ObjectId, String> {
     use lopdf::Stream;
@@ -230,7 +231,14 @@ fn apariencia_firma(
     let mut fuentes = Dictionary::new();
     fuentes.set("Helv", Object::Reference(helv));
     recursos.set("Font", Object::Dictionary(fuentes));
-    let base = if png.is_some() { alto_texto - size * 1.4 } else { h / 2.0 - size * 0.2 };
+    let n_lineas = 2.0 + if motivo.map(str::trim).is_some_and(|m| !m.is_empty()) { 1.0 } else { 0.0 };
+    // el texto arranca arriba de su banda: con el motivo son tres líneas y
+    // la última tiene que seguir cayendo dentro de la caja
+    let base = if png.is_some() {
+        alto_texto - size * 1.4
+    } else {
+        h / 2.0 + size * (n_lineas - 2.0) * 0.6 - size * 0.2
+    };
     ops.extend_from_slice(
         format!(
             "BT /Helv {size:.2} Tf {:.2} TL 0 0 0 rg 4 {:.2} Td\n",
@@ -239,10 +247,12 @@ fn apariencia_firma(
         )
         .as_bytes(),
     );
-    for (n, linea) in [format!("Firmado por {nombre}"), fecha.to_string()]
-        .iter()
-        .enumerate()
-    {
+    // el sello de Acrobat pone el motivo debajo del nombre y la fecha
+    let mut lineas = vec![format!("Firmado por {nombre}"), fecha.to_string()];
+    if let Some(motivo) = motivo.map(str::trim).filter(|m| !m.is_empty()) {
+        lineas.push(format!("Motivo: {motivo}"));
+    }
+    for (n, linea) in lineas.iter().enumerate() {
         if n > 0 {
             ops.extend_from_slice(b"T* ");
         }
@@ -306,7 +316,7 @@ pub fn sign(
         .clone()
         .unwrap_or_else(|| nombre_comun(&cred.cert.tbs_certificate.subject.to_string()));
     sig.set("Name", crate::documento::cadena_pdf(&nombre));
-    if let Some(r) = reason {
+    if let Some(r) = reason.as_deref() {
         sig.set("Reason", Object::string_literal(r));
     }
     let sig_id = doc.add_object(sig);
@@ -345,6 +355,7 @@ pub fn sign(
             caja[3] - caja[1],
             &nombre,
             &chrono::Local::now().format("%d/%m/%Y %H:%M").to_string(),
+            reason.as_deref(),
             apariencia.signature_png.as_deref(),
         )?;
         let mut ap = Dictionary::new();
@@ -1418,6 +1429,84 @@ mod tests {
         }
     }
     impl rsa::rand_core::CryptoRng for Entropia {}
+
+    /// El contenido del `/AP /N` del widget de firma de la página `pagina`.
+    fn ap_de_la_firma(path: &str) -> String {
+        let doc = LoDoc::load(path).expect("cargar");
+        for (n, _) in doc.get_pages() {
+            let Some(annots) = crate::anotaciones::lista_annots(&doc, n as u16 - 1) else {
+                continue;
+            };
+            for a in annots {
+                let Some(annot) = dict_de(&doc, &a) else { continue };
+                if annot.get(b"FT").and_then(|o| o.as_name()).unwrap_or_default() != b"Sig" {
+                    continue;
+                }
+                let Ok(ap) = annot.get(b"AP").and_then(|o| o.as_dict()) else {
+                    continue;
+                };
+                let id = ap.get(b"N").and_then(|o| o.as_reference()).expect("/AP /N");
+                let stream = doc.get_object(id).and_then(|o| o.as_stream()).expect("stream");
+                let bytes = stream
+                    .decompressed_content()
+                    .unwrap_or_else(|_| stream.content.clone());
+                return String::from_utf8_lossy(&bytes).into_owned();
+            }
+        }
+        panic!("el documento no tiene widget de firma con apariencia");
+    }
+
+    /// El sello de firma de Acrobat pone el motivo debajo del nombre y la
+    /// fecha: es lo que explica por qué se firmó, y sin él la firma visible
+    /// dice menos que el panel.
+    #[test]
+    fn la_firma_visible_lleva_el_motivo() {
+        let dir = std::env::temp_dir();
+        let src = dir.join("firma-motivo-src.pdf");
+        let dest = dir.join("firma-motivo-out.pdf");
+        crea_pdf(&["Contrato"], &src);
+        let ap = Apariencia {
+            rect: Some(crate::Rect { x: 60.0, y: 500.0, w: 240.0, h: 90.0 }),
+            page_index: Some(0),
+            signer_name: Some("Jorge Gómez".into()),
+            signature_png: None,
+        };
+        sign(
+            &src.to_string_lossy(),
+            &dest.to_string_lossy(),
+            &credenciales(),
+            Some("Conforme con el presupuesto".into()),
+            &ap,
+        )
+        .expect("firmar con motivo");
+        let contenido = ap_de_la_firma(&dest.to_string_lossy());
+        assert!(
+            contenido.contains("Firmado por Jorge"),
+            "falta el nombre: {contenido}"
+        );
+        assert!(
+            contenido.contains("Motivo: Conforme con el presupuesto"),
+            "el motivo no está en la apariencia: {contenido}"
+        );
+
+        // sin motivo, la apariencia no inventa una línea vacía
+        let sin = dir.join("firma-sin-motivo-out.pdf");
+        sign(
+            &src.to_string_lossy(),
+            &sin.to_string_lossy(),
+            &credenciales(),
+            None,
+            &ap,
+        )
+        .expect("firmar sin motivo");
+        assert!(
+            !ap_de_la_firma(&sin.to_string_lossy()).contains("Motivo"),
+            "sin motivo no se escribe la línea"
+        );
+        for p in [&src, &dest, &sin] {
+            std::fs::remove_file(p).ok();
+        }
+    }
 
     /// RSA-PSS es el otro relleno que se ve en las firmas modernas: se
     /// comprueba igual, no se da por manipulada.
