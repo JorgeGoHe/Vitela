@@ -382,9 +382,12 @@ export const TODO_PERMITIDO: Permisos = {
   editar: true,
 };
 
-/** Protege con contraseña (AES-256). Sin `destPath` cifra la copia de
- *  trabajo, así que el documento en pantalla queda protegido y ⌘Z lo
- *  devuelve; con destino escribe una copia y deja el original como está. */
+/** Protege con contraseña (AES-256). Sin `destPath` NO cifra nada todavía:
+ *  anota la protección del documento abierto y la aplica `save_pdf` al
+ *  guardar (cifrar la copia de trabajo la dejaría ilegible para el resto de
+ *  comandos). Como no es una mutación, ⌘Z no la quita: la quita
+ *  `removeEncryption`. Con destino escribe una copia protegida aparte y deja
+ *  el documento abierto como está. */
 export function encryptPdf(args: {
   workPath: string;
   destPath?: string | null;

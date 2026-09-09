@@ -1771,6 +1771,17 @@ textarea {
   color: var(--fg-muted);
 }
 
+/* protección anotada y todavía sin guardar: el fichero sigue en claro, así
+   que no lleva candado, lleva la frase que dice cuándo dejará de estarlo */
+.prot-pendiente {
+  color: var(--fg-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
 
 /* ===== mesa de trabajo: marcas de esquina y estado vacío ===== */
 

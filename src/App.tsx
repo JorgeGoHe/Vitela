@@ -219,8 +219,12 @@ function App() {
     password: string;
   } | null>(null);
   const [protectDraft, setProtectDraft] = useState<ProtegerDraft | null>(null);
-  // el documento de trabajo va cifrado: la barra lo dice y se puede quitar
+  // el FICHERO en disco está cifrado (se abrió con contraseña, o ya se ha
+  // guardado con la protección puesta): solo entonces la barra pone el candado
   const [protegido, setProtegido] = useState(false);
+  // protección anotada pero todavía sin aplicar: `encrypt_pdf` sin `destPath`
+  // no cifra nada, lo hace `save_pdf`. Hasta guardar, el fichero sigue en claro
+  const [protPendiente, setProtPendiente] = useState(false);
   const [quitarProtAsk, setQuitarProtAsk] = useState(false);
   const [flattenAsk, setFlattenAsk] = useState(false);
   // enlace externo pendiente de confirmar (los URI del PDF no son de fiar)
@@ -292,6 +296,7 @@ function App() {
       setModified(false);
       setPwdDraft(null);
       setProtegido(info.had_password);
+      setProtPendiente(false);
       setHadPassword(info.had_password);
       setDocPassword(info.had_password ? (password ?? null) : null);
       if (info.had_password) {
@@ -521,6 +526,7 @@ function App() {
     setHadPassword(false);
     setDocPassword(null);
     setProtegido(false);
+    setProtPendiente(false);
     setMode("select");
     setPageIndex(0);
     setOutlineState([]);
@@ -1223,7 +1229,11 @@ function App() {
       : TODO_PERMITIDO;
   }
 
-  /** Protege el documento abierto: viaja con ⌘S y ⌘Z lo devuelve. */
+  /** Anota la protección del documento abierto. `encrypt_pdf` sin `destPath`
+   *  NO cifra la copia de trabajo (quedaría ilegible para el resto de
+   *  comandos): apunta la contraseña y la aplica `save_pdf` al guardar. Por
+   *  eso ⌘Z no la quita —no es un paso del historial—; la quita
+   *  «Quitar la contraseña». */
   async function applyProtect() {
     if (!workPath || !protectDraft || !protectDraft.user) return;
     const d = protectDraft;
@@ -1236,13 +1246,15 @@ function App() {
         permisos: permisosDe(d),
       });
       setProtectDraft(null);
-      setProtegido(true);
-      // la copia de trabajo ya va cifrada: guardarla la escribe cifrada
+      // el candado no se pone todavía: el fichero en disco sigue en claro
+      setProtPendiente(true);
+      // manda la contraseña nueva, no la que traía el fichero al abrirse:
+      // guardar ya no tiene que preguntar cuál de las dos
       setHadPassword(false);
       setDocPassword(null);
-      afterMutation(pageCount);
+      setModified(true);
       setNotice(
-        "Protegido. La contraseña se pedirá la próxima vez que se abra",
+        "Se protegerá al guardar: a partir de entonces el fichero pedirá la contraseña para abrirse",
       );
     } catch (e) {
       setError(String(e));
@@ -1284,11 +1296,17 @@ function App() {
     try {
       await removeEncryption(workPath);
       setQuitarProtAsk(false);
+      const eraPendiente = protPendiente;
       setProtegido(false);
+      setProtPendiente(false);
       setHadPassword(false);
       setDocPassword(null);
       afterMutation(pageCount);
-      setNotice("Contraseña quitada: el fichero se abre sin pedir nada");
+      setNotice(
+        eraPendiente
+          ? "Ya no se protegerá al guardar: el fichero se escribirá en claro"
+          : "Contraseña quitada: al guardar, el fichero se abrirá sin pedir nada",
+      );
     } catch (e) {
       setError(String(e));
     }
@@ -1510,8 +1528,17 @@ function App() {
           userPassword: docPassword,
           ownerPassword: null,
         });
+        setProtegido(true);
       } else {
+        // con protección anotada, `save_pdf` cifra al escribir: solo aquí el
+        // fichero pasa a estar protegido de verdad y el candado dice la verdad
         await invoke("save_pdf", { workPath, destPath: dest });
+        if (protPendiente) {
+          setProtegido(true);
+          setProtPendiente(false);
+        } else {
+          setProtegido(false);
+        }
         // a partir de aquí el fichero de `dest` va en claro: el aviso de
         // «Documento protegido» que se puso al abrirlo ya no es cierto
         if (hadPassword) setNotice(null);
@@ -1762,6 +1789,14 @@ function App() {
               <Icon name="lock" size={13} />
             </span>
           )}
+          {!protegido && protPendiente && (
+            <span
+              className="prot-pendiente"
+              title="La contraseña se aplicará al guardar; hasta entonces el fichero sigue en claro"
+            >
+              se protegerá al guardar
+            </span>
+          )}
           {ocupado && <span className="status dato">trabajando…</span>}
         </div>
 
@@ -1879,7 +1914,7 @@ function App() {
                     ...TODO_PERMITIDO,
                   })
                 }
-                puedeQuitarProteccion={protegido}
+                puedeQuitarProteccion={protegido || protPendiente}
                 quitarProteccion={() => setQuitarProtAsk(true)}
                 abrirAplanar={() => setFlattenAsk(true)}
                 redactar={() => {
@@ -1995,11 +2030,16 @@ function App() {
       )}
       {quitarProtAsk && (
         <DialogoConfirmar
-          titulo="Quitar la contraseña"
+          titulo={
+            protPendiente && !protegido
+              ? "No proteger al guardar"
+              : "Quitar la contraseña"
+          }
           cuerpo={
             <p className="modal-file" style={{ whiteSpace: "normal" }}>
-              El documento dejará de estar cifrado: cualquiera podrá abrir el
-              fichero y hacer con él lo que quiera.
+              {protPendiente && !protegido
+                ? "Se olvidará la contraseña que ibas a poner: al guardar, el fichero se escribirá en claro."
+                : "El documento dejará de estar cifrado en cuanto lo guardes: cualquiera podrá abrir el fichero y hacer con él lo que quiera."}
             </p>
           }
           textoConfirmar="Quitar la contraseña"
