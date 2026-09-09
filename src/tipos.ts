@@ -6,6 +6,10 @@ import type { Rgba } from "./api";
 
 /** Tecla modificadora en los tooltips y los menús («⌘» en Mac, «Ctrl+»). */
 export const MOD = navigator.platform.startsWith("Mac") ? "⌘" : "Ctrl+";
+/** Atajo del panel lateral, escrito como lo escribe cada plataforma. */
+export const ATAJO_PANEL = navigator.platform.startsWith("Mac")
+  ? "⌥⌘1"
+  : "Ctrl+Alt+1";
 
 export type CharBox = { ch: string; x: number; y: number; w: number; h: number };
 export type PageText = { width: number; height: number; chars: CharBox[] };
@@ -120,6 +124,35 @@ export const KIND_LABELS: Record<string, string> = {
   Stamp: "Sello",
   Link: "Enlace",
 };
+
+/** Plurales para el filtro y el resumen del panel de comentarios. */
+export const KIND_PLURALS: Record<string, string> = {
+  Text: "Notas",
+  Highlight: "Resaltados",
+  Underline: "Subrayados",
+  Strikeout: "Tachados",
+  StrikeOut: "Tachados",
+  Ink: "Dibujos",
+  Stamp: "Sellos",
+  FreeText: "Cuadros de texto",
+  Link: "Enlaces",
+};
+
+/** Icono del set `Icon` que representa cada tipo de comentario. */
+export const KIND_ICONS: Record<string, string> = {
+  Text: "note",
+  Highlight: "highlight",
+  Underline: "underline",
+  Strikeout: "strike",
+  StrikeOut: "strike",
+  Ink: "pen",
+  Stamp: "stamp",
+  FreeText: "textedit",
+  Link: "link",
+};
+
+/** «todos» o el plural de un tipo (`KIND_PLURALS`). */
+export type FiltroComentarios = string;
 
 export function hexToRgba(hex: string, alpha = 255): Rgba {
   const n = parseInt(hex.slice(1), 16);

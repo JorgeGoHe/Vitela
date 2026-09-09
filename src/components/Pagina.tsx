@@ -69,6 +69,8 @@ type Props = {
   /** La página que marca la píldora: la que responde a ⌘A. */
   esActual: boolean;
   selOwner: number | null;
+  /** Índice del comentario elegido en el panel, si está en esta página. */
+  seleccionExterna: number | null;
   claimSel: (page: number | null) => void;
   requestRender: (page: number, width: number, pv: number) => Promise<string>;
   registerEl: (page: number, el: HTMLDivElement | null) => void;
@@ -99,6 +101,7 @@ function Pagina({
   currentGroup,
   esActual,
   selOwner,
+  seleccionExterna,
   claimSel,
   requestRender,
   registerEl,
@@ -204,6 +207,7 @@ function Pagina({
     size,
     tool,
     selOwner,
+    seleccionExterna,
     seleccion,
     onAnnotated,
     onError,

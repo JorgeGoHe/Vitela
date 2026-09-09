@@ -1,5 +1,5 @@
 import { invoke } from "./ipc";
-import type { SearchMatch } from "./tipos";
+import type { AnnotationInfo, SearchMatch } from "./tipos";
 
 /** Firma manuscrita guardada en la biblioteca del usuario. */
 export type FirmaGuardada = {
@@ -128,6 +128,16 @@ export async function renderPageSrc(
   return URL.createObjectURL(
     new Blob([r as ArrayBuffer], { type: "image/png" }),
   );
+}
+
+/** Un comentario del documento: lo mismo que devuelve `get_annotations`
+ *  más la página en la que está. */
+export type AnotacionDoc = AnnotationInfo & { page_index: number };
+
+/** Todos los comentarios del documento en una sola pasada (una llamada por
+ *  página serían 300 viajes por el canal del hilo de PDFium). */
+export function getDocumentAnnotations(path: string): Promise<AnotacionDoc[]> {
+  return invoke("get_document_annotations", { path });
 }
 
 /** Reescribe el texto de un comentario ya creado; el backend refresca `/M`

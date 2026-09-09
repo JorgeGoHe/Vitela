@@ -29,10 +29,12 @@ import {
   addWatermark,
   duplicatePage,
   insertPdfAt,
+  getDocumentAnnotations,
   listRecent,
   removeRecent,
   renderPageSrc,
   touchRecent,
+  type AnotacionDoc,
   type HeaderFooter,
   type Reciente,
 } from "./api";
@@ -50,9 +52,11 @@ import {
   type OutlineNode,
 } from "./api";
 import {
+  ATAJO_PANEL,
   cargaPreferencias,
   hexToRgba,
   MOD,
+  type FiltroComentarios,
   type Mode,
   type PageSize,
   type Preferencias,
@@ -68,6 +72,7 @@ import DibujarFirma from "./components/DibujarFirma";
 import DialogoMarcaAgua from "./components/DialogoMarcaAgua";
 import DialogoEncabezado from "./components/DialogoEncabezado";
 import PanelMarcadores from "./components/PanelMarcadores";
+import PanelComentarios from "./components/PanelComentarios";
 import DialogoPropiedades from "./components/DialogoPropiedades";
 import DialogoContrasena from "./components/DialogoContrasena";
 import DialogoProteger from "./components/DialogoProteger";
@@ -169,9 +174,17 @@ function App() {
     textos: number;
   } | null>(null);
   const [hfOpen, setHfOpen] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<"paginas" | "marcadores">(
-    "paginas",
-  );
+  const [sidebarTab, setSidebarTab] = useState<
+    "paginas" | "marcadores" | "comentarios"
+  >("paginas");
+  const [comentarios, setComentarios] = useState<AnotacionDoc[]>([]);
+  const [filtroComentarios, setFiltroComentarios] =
+    useState<FiltroComentarios>("todos");
+  // comentario elegido en el panel: la página lo abre en su popover
+  const [annotSel, setAnnotSel] = useState<{
+    page: number;
+    index: number;
+  } | null>(null);
   const [pwdDraft, setPwdDraft] = useState<{
     path: string;
     password: string;
@@ -446,6 +459,8 @@ function App() {
     setMode("select");
     setPageIndex(0);
     setOutlineState([]);
+    setComentarios([]);
+    setAnnotSel(null);
     evictAll();
     setDocVersion((v) => v + 1);
     invoke("close_document", { workPath: anterior }).catch((e) => setError(String(e)));
@@ -501,6 +516,49 @@ function App() {
       cancelled = true;
     };
   }, [workPath, docVersion]);
+
+  // Comentarios de todo el documento (pestaña del sidebar): se recargan con
+  // la misma versión que invalida el caché de renders y con cada anotación
+  useEffect(() => {
+    if (!workPath) {
+      setComentarios([]);
+      return;
+    }
+    let cancelled = false;
+    getDocumentAnnotations(workPath)
+      .then((c) => {
+        if (!cancelled) setComentarios(c);
+      })
+      .catch(() => {
+        if (!cancelled) setComentarios([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workPath, docVersion, annotVersion]);
+
+  /** Clic en una fila del panel: a su página y con su popover abierto. */
+  function irAComentario(c: AnotacionDoc) {
+    gotoPage(c.page_index);
+    setSelOwner(c.page_index);
+    setAnnotSel({ page: c.page_index, index: c.index });
+  }
+
+  async function borrarComentario(c: AnotacionDoc) {
+    if (!workPath) return;
+    try {
+      await invoke("remove_annotation", {
+        workPath,
+        pageIndex: c.page_index,
+        annotIndex: c.index,
+      });
+      setAnnotSel(null);
+      afterAnnotate(c.page_index);
+      setNotice(`Comentario eliminado · ${MOD}Z para deshacer`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   async function persistOutline(nodes: OutlineNode[]) {
     if (!workPath) return;
@@ -608,6 +666,14 @@ function App() {
       } else if (mod && e.key === ",") {
         e.preventDefault();
         setPrefsDraft(cargaPreferencias());
+      } else if (
+        mod &&
+        e.altKey &&
+        (e.key === "1" || e.code === "Digit1") &&
+        pageCount > 0
+      ) {
+        e.preventDefault();
+        setSidebarVisible((v) => !v);
       } else if (mod && e.key === "0" && pageCount > 0) {
         // los tres ajustes de Acrobat: ⌘0 página entera, ⌘1 tamaño real,
         // ⌘2 ajustar al ancho
@@ -1401,8 +1467,12 @@ function App() {
           {pageCount > 0 && (
             <button
               className="btn btn-icon"
-              title={sidebarVisible ? "Ocultar el panel lateral" : "Mostrar el panel lateral"}
-              aria-label={sidebarVisible ? "Ocultar el panel lateral" : "Mostrar el panel lateral"}
+              title={`${sidebarVisible ? "Ocultar" : "Mostrar"} el panel lateral (${ATAJO_PANEL})`}
+              aria-label={
+                sidebarVisible
+                  ? "Ocultar el panel lateral"
+                  : "Mostrar el panel lateral"
+              }
               aria-expanded={sidebarVisible}
               onClick={() => setSidebarVisible((v) => !v)}
             >
@@ -1845,17 +1915,36 @@ function App() {
             <div className="sidebar-tabs">
               <button
                 className={`btn${sidebarTab === "paginas" ? " on" : ""}`}
+                title="Páginas"
                 onClick={() => setSidebarTab("paginas")}
               >
                 Páginas
               </button>
               <button
                 className={`btn${sidebarTab === "marcadores" ? " on" : ""}`}
+                title="Marcadores"
                 onClick={() => setSidebarTab("marcadores")}
               >
                 Marcadores
               </button>
+              <button
+                className={`btn${sidebarTab === "comentarios" ? " on" : ""}`}
+                title="Comentarios"
+                onClick={() => setSidebarTab("comentarios")}
+              >
+                Comentarios
+              </button>
             </div>
+            {sidebarTab === "comentarios" && (
+              <PanelComentarios
+                comentarios={comentarios}
+                filtro={filtroComentarios}
+                setFiltro={setFiltroComentarios}
+                seleccionada={annotSel}
+                onSelect={irAComentario}
+                onDelete={borrarComentario}
+              />
+            )}
             {sidebarTab === "marcadores" && (
               <PanelMarcadores
                 outline={outline}
@@ -1946,6 +2035,9 @@ function App() {
                   currentGroup={busqueda.matchIdx}
                   esActual={i === pageIndex}
                   selOwner={selOwner}
+                  seleccionExterna={
+                    annotSel?.page === i ? annotSel.index : null
+                  }
                   claimSel={setSelOwner}
                   requestRender={requestRender}
                   registerEl={registerEl}

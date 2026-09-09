@@ -387,7 +387,9 @@ textarea {
 }
 
 .sidebar {
-  width: 172px;
+  /* tres pestañas de texto (Páginas · Marcadores · Comentarios) no caben en
+     menos: el ancho lo manda la barra, no las miniaturas */
+  width: 200px;
   flex-shrink: 0;
   overflow-y: auto;
   background: var(--bg-sidebar);
@@ -976,6 +978,8 @@ textarea {
 .sidebar-tabs {
   display: flex;
   gap: 4px;
+  /* recupera el padding del sidebar: las pestañas ocupan todo el ancho */
+  margin: -14px -14px 4px;
   padding: 4px;
   position: sticky;
   top: 0;
@@ -985,13 +989,122 @@ textarea {
 
 .sidebar-tabs .btn {
   flex: 1;
+  min-width: 0;
   justify-content: center;
   font-size: 11px;
-  padding: 4px 6px;
+  padding: 4px 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  text-align: center;
 }
 
 .sidebar-tabs .btn.on {
   background: var(--btn-active);
+}
+
+/* ---------- panel de comentarios ---------- */
+
+.com-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+}
+
+.com-total {
+  color: var(--fg-muted);
+  padding: 0 2px;
+}
+
+.com-filtro {
+  width: 100%;
+}
+
+.com-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 5px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.com-row:hover {
+  background: var(--btn-hover);
+}
+
+.com-row.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.com-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.com-row > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--fg-muted);
+}
+
+.com-cuerpo {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.com-firma {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.com-autor {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* el texto se recorta a dos líneas: la lista es un índice, no el comentario */
+.com-texto {
+  font-size: 12px;
+  color: var(--fg);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.com-borrar {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  border-radius: 4px;
+  padding: 2px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.com-row:hover .com-borrar,
+.com-borrar:focus-visible {
+  opacity: 1;
+}
+
+.com-borrar:hover {
+  color: var(--danger);
 }
 
 .bm-panel {

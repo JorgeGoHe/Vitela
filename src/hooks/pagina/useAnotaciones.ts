@@ -46,6 +46,9 @@ export function useAnotaciones(ctx: {
   size: PageSize;
   tool: ToolProps;
   selOwner: number | null;
+  /** Índice de la anotación que el panel de comentarios quiere seleccionar
+   *  en esta página (null si la elegida no está aquí). */
+  seleccionExterna: number | null;
   seleccion: Pick<SeleccionTexto, "selection" | "pageText" | "setSelection">;
   onAnnotated: (page: number) => void;
   onError: (e: unknown) => void;
@@ -64,6 +67,7 @@ export function useAnotaciones(ctx: {
     size,
     tool,
     selOwner,
+    seleccionExterna,
     seleccion,
     onAnnotated,
     onError,
@@ -148,6 +152,14 @@ export function useAnotaciones(ctx: {
       cancelled = true;
     };
   }, [workPath, index, visible, docVersion, annotVersion, pageVersion]);
+
+  // El panel de comentarios elige uno: en cuanto esta página tiene sus
+  // anotaciones cargadas, se abre su popover
+  useEffect(() => {
+    if (seleccionExterna === null) return;
+    const a = annots.find((x) => x.index === seleccionExterna);
+    if (a) setNotePopover(a);
+  }, [seleccionExterna, annots]);
 
   /** Resalta, subraya o tacha la selección actual. */
   async function markupSelection(kind: "highlight" | "underline" | "strikeout") {
