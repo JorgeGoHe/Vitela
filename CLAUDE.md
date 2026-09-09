@@ -534,8 +534,11 @@ compila los instaladores a mano o al etiquetar `v*`.
   geometría del visor, atajos e impresión; el resto vive en hooks
   (`src/hooks/`: `useHistorial`, `useRenderCache`, `useMiniaturas`,
   `useBusqueda`, `useFirmas`, `useHerramienta`, `useModal`) y componentes
-  (`Busqueda`, `OpcionesHerramienta`, `MenuAcciones`, `PanelPaginas`,
-  `PanelMarcadores`, `PanelComentarios`, `PanelFirmasDoc`, `Dialogo*`). El
+  (`Busqueda` + `CajonBusqueda`, `OpcionesHerramienta`, `MenuAcciones`,
+  `PanelPaginas`, `PanelMarcadores`, `PanelComentarios`, `PanelFirmasDoc`,
+  `RangoPaginas`, `Dialogo*`; `useReemplazo` lleva «Reemplazar» y
+  «Reemplazar todo», y se crea en `App` **después** de `afterMutation`,
+  que es un `useCallback` y no se iza). El
   sidebar tiene cuatro pestañas —Páginas, Marcadores, Comentarios y, solo
   en documentos firmados, Firmas— y por eso mide 200 px y las deja
   envolver a dos líneas. `PanelFirmas` (sin «Doc») es otra cosa: la
@@ -573,14 +576,32 @@ compila los instaladores a mano o al etiquetar `v*`.
   lleva el visor arriba en vez de hacer `scrollIntoView`. Toda la
   geometría del scroll (`alturasFila`, `onViewerScroll`, el ancla del
   zoom) trabaja por filas, no por páginas, y con dos columnas cada hoja se
-  queda con media anchura útil.
+  queda con media anchura útil. En las presentaciones de dos, ←, → y los
+  botones de la píldora avanzan **el pliego entero** (`paginaVecina`) y el
+  contador enseña la página izquierda, como Acrobat. Al cambiar de
+  presentación el visor se recoloca en la página que se estaba leyendo: el
+  scroll se quedaba donde estaba y nadie recalculaba el contador.
+- **Imprimir**: el diálogo propio rasteriza el rango pedido y monta las
+  páginas en `.print-pages`, que va **fuera de `.app`** con
+  `createPortal(…, document.body)`. El `@media print` esconde `.app`
+  entera, y un ancestro en `display:none` saca todo su subárbol de la caja
+  de renderizado: dentro, la hoja salía en blanco. Esc cancela la
+  preparación (`printCancelRef`) y los blob URLs se liberan en la limpieza
+  del efecto, no dentro del temporizador.
 - **Pantalla completa** (⌘L): estado de `App` + `ponerPantallaCompleta` de
   `ipc.ts` (`getCurrentWindow().setFullscreen`, no-op en el navegador de
   QA, donde el chrome se esconde igual). La clase `.app.presentacion`
-  esconde barra, panel y fila contextual; la presentación pasa a una hoja
-  cada vez, el clic y las flechas avanzan, se fuerza el modo Seleccionar
-  para que Esc sea siempre la salida y la primera vez se avisa de cómo
-  salir.
+  esconde barra, panel, fila contextual **y la píldora**, que vuelve al
+  acercar el ratón al borde inferior (clase `.pildora`, 200 ms); el
+  segmentado de modos no se pinta, porque en presentación manda «una sola
+  página». La presentación pasa a una hoja cada vez, el clic y las flechas
+  avanzan, se fuerza el modo Seleccionar para que Esc sea siempre la salida
+  y la primera vez se avisa de cómo salir (una sola vez de verdad:
+  `avisoPantallaVisto` en `localStorage`). `onPantallaCompleta` (`ipc.ts`)
+  escucha el redimensionado de la ventana y pregunta `isFullscreen()`:
+  Tauri no emite un evento propio y salir con el botón verde o ⌃⌘F dejaba
+  el chrome escondido. En QA se dispara con
+  `window.__vitelaPantallaCompleta(true)`.
 - **Modo nocturno del documento** (⇧⌘L y Preferencias): filtro CSS cálido
   sobre `.viewer.nocturno .page` —invertir y devolver el tono de la mesa;
   nunca `invert(1)` a secas, que deja el papel azul-pizarra—. Solo toca el
@@ -589,7 +610,12 @@ compila los instaladores a mano o al etiquetar `v*`.
   `{ page, scrollTop, zoom }`. `saltarA(page)` es el `gotoPage` de los
   saltos largos —enlaces, marcadores, comentarios del panel, firmas y
   coincidencias de búsqueda— y apila de dónde se viene; los dos botones
-  solo salen en la píldora cuando hay algo que recorrer.
+  solo salen en la píldora cuando hay algo que recorrer. **El punto de
+  partida se lee FUERA del updater de `setState`**: React los ejecuta al
+  procesar la cola, ya después del `scrollIntoView` síncrono de `gotoPage`,
+  así que lo que se apilaba era el destino y ⌥← no volvía a ninguna parte.
+  Las dos pilas se vacían al abrir y al cerrar documento (y el panel
+  lateral vuelve a «Páginas»): son del documento, no de la app.
 - **Giro de la vista** (`viewRotation`, estado de `App`): ⇧⌘+ y ⇧⌘− giran
   la hoja con un `transform` y la caja exterior intercambia alto y ancho;
   no toca el fichero, no marca el documento como modificado y se pierde al
@@ -613,6 +639,8 @@ compila los instaladores a mano o al etiquetar `v*`.
   (`menu.rs`) lee `src/**/*.ts*`, saca las claves de `accionesMenu` y exige
   que coincidan con `estructura()` en los dos sentidos. **Un id nuevo se
   añade en `estructura()` y en `accionesMenu`, o el test lo canta.**
+  «Ayuda ▸ Atajos de teclado» abre `DialogoAtajos`, la única pantalla donde
+  están escritos los veinticinco atajos.
 - **Preferencias y memoria de la UI** en `localStorage` (`src/tipos.ts`):
   colores por acción, opciones de búsqueda (`Aa` y `|ab|`), «Resaltar
   campos» de los formularios (encendido por defecto), la presentación de
@@ -620,7 +648,10 @@ compila los instaladores a mano o al etiquetar `v*`.
   de ⌘, (`cargaPreferencias`): `autor` de los comentarios —que se manda
   como `author` en cada comando que crea una anotación—, `nocturno`,
   `tema` (`automatico`/`claro`/`oscuro`), `zoomInicial`
-  (`pagina`/`ancho`/`100`/`ultimo`) y `lienzo` (`verde`/`gris`).
+  (`pagina`/`ancho`/`100`/`ultimo`) y `lienzo` (`verde`/`gris`). También el
+  **último zoom** (`cargaZoom`/`guardaZoom`), sin el cual «zoom al abrir: el
+  último» solo valía dentro de la misma sesión, y el aviso de pantalla
+  completa, que ahora se enseña una vez y no una por arranque.
   `DialogoPreferencias` es una sola columna sin pestañas y **aplica cada
   cambio al instante** (por eso su botón dice «Cerrar»); `App` guarda las
   preferencias vivas en estado y escribe `data-tema` y `data-lienzo` en el
@@ -637,10 +668,40 @@ compila los instaladores a mano o al etiquetar `v*`.
   mutación que salga bien: la banda roja se quedaba en pantalla a través
   de operaciones correctas. Los recuentos usan `plural(n, singular,
   plural)`, nunca «página(s)».
+- **Buscar y reemplazar**: del campo de búsqueda cuelga `CajonBusqueda`
+  (plegado por defecto) con «N coincidencias en M páginas», una fila por
+  coincidencia con su frase de contexto, y debajo «Reemplazar con…» con sus
+  dos botones. ↑/↓ recorren la lista sin salir del campo y los saltos pasan
+  por `saltarA`, así que ⌥← sigue funcionando. Reemplazar es una sola
+  mutación y el aviso dice cuántos bloques han cambiado y cuántos se han
+  saltado por la fuente: nunca canta un éxito redondo.
+- **Marca de agua y encabezados**: los dos diálogos comparten el bloque
+  `RangoPaginas` («todas» / «1-3, 8», con `indicesDeRango` en `tipos.ts`) y
+  enseñan **vista previa en vivo** sobre la miniatura que el panel lateral
+  ya tiene renderizada, con la marca dibujada por la propia UI: ni una
+  llamada al backend por cada tecla. La imagen de la marca se elige con el
+  selector del navegador (`<input type="file">` + `FileReader`) y no con el
+  diálogo nativo, porque la previa necesita los bytes de todas formas.
 - **Banda de firmas**: al abrir, `verify_signatures` y, si el documento
-  lleva firmas, una banda verde o roja (nunca las dos) con el resumen en
-  llano —ni «CMS», ni «ByteRange», ni «digest»—; el clic abre la pestaña
-  «Firmas». Se cierra y no vuelve hasta el documento siguiente.
+  lleva firmas, una banda con el resumen en llano —ni «CMS», ni
+  «ByteRange», ni «digest»—; el clic abre la pestaña «Firmas». Se cierra y
+  no vuelve hasta el documento siguiente. **Tres estados, no dos**
+  (`estadoDeFirma` → `nivel`: `ok`, `mal`, `duda`): «no se ha podido
+  comprobar» es neutro, con el gris lápiz, y nunca rojo — una firma ECDSA o
+  con SHA-512 salía acusando de manipulación un documento intacto. La banda
+  toma el peor estado de todas y nombra a quien firmó esa.
+- **Recuperación tras un cierre inesperado**: la UI apunta la sesión
+  (`autosaveState`) diez segundos después del último cambio y la borra al
+  guardar y al cerrar. Al arrancar, `recoverSession` y, si hay algo, una
+  banda de una línea con «Recuperar» y «Descartar». Recuperar abre la copia
+  de trabajo pero **conserva el fichero original** (`openPath(path, pwd,
+  original)`), para que ⌘S no escriba en el temporal.
+- **Fila contextual** (`OpcionesHerramienta`): además de trazo, formas,
+  sello y cuadro, el modo Editar lleva color («A» = el que ya tenga, que es
+  el defecto) y alineación, y el modo Firma la fila de marcas de rellenar
+  (✓, ✗, ●, línea y «Texto», que lleva al cuadro de texto). La fila va fija
+  bajo la barra y **baja lo que ocupen las bandas** (`--bandas` en el
+  `.app`): antes se pintaba encima de la de firmas.
 - **Atajos de teclado** (`App.tsx`, un solo `useEffect`; con un modal o el
   menú «Acciones» abiertos solo pasa Escape): ⌘O abrir · ⌘S guardar ·
   ⇧⌘S guardar como · ⌘P imprimir · ⌘D propiedades · ⌘, preferencias ·
@@ -657,7 +718,10 @@ compila los instaladores a mano o al etiquetar `v*`.
   del panel de páginas, seleccionarlas todas) · ⌘C copiar la selección.
   En los borradores de comentario y de cuadro de texto Enter salta de
   línea y ⌘Enter confirma; en un campo de formulario Tab y ⇧Tab confirman
-  y saltan al campo siguiente o anterior.
+  y saltan al campo siguiente o anterior. **Están todos escritos en
+  `DialogoAtajos`** («Ayuda ▸ Atajos de teclado»), agrupados como el menú;
+  un atajo nuevo se añade ahí, o solo lo descubre quien pase el ratón por
+  el botón.
 - **QA como usuario real**: `src/ipc.ts` y `src/dialogos.ts` son shims — en
   Tauri delegan en la API oficial; en un navegador normal hablan con el
   puente HTTP de desarrollo (`src-tauri/src/puente_dev.rs`, puerto 1422,
