@@ -109,8 +109,11 @@ function App() {
   const [pageDraft, setPageDraft] = useState<string | null>(null);
   // igual que la página, el porcentaje de zoom se puede teclear
   const [zoomDraft, setZoomDraft] = useState<string | null>(null);
-  const [zoom, setZoom] = useState<number | "ajuste">("ajuste");
+  // tres modos de zoom, como en Acrobat: número = porcentaje fijo,
+  // "ajuste" = al ancho de la ventana, "pagina" = la hoja entera a la vista
+  const [zoom, setZoom] = useState<number | "ajuste" | "pagina">("ajuste");
   const [viewerW, setViewerW] = useState<number | null>(null);
+  const [viewerH, setViewerH] = useState<number | null>(null);
   const viewerRef = useRef<HTMLElement | null>(null);
   const [sidebarVisible, setSidebarVisible] = useState(
     window.innerWidth >= 900,
@@ -129,9 +132,20 @@ function App() {
   );
   const pageElsRef = useRef<Map<number, HTMLDivElement>>(new Map());
   const scrollRafRef = useRef<number | null>(null);
-  // ancla del scroll (página superior visible y fracción ya desplazada)
-  // para conservar el punto de lectura al cambiar el zoom
-  const scrollAnchorRef = useRef<{ page: number; frac: number } | null>(null);
+  // ancla del scroll: qué punto de qué página debe quedar a qué altura del
+  // visor cuando cambia el zoom. Al desplazarse es el borde superior de la
+  // página visible (offset 0); con ⌘+rueda, el punto bajo el cursor, que es
+  // lo que hace Acrobat. `fracX`/`offsetX` solo los pone la rueda.
+  const scrollAnchorRef = useRef<{
+    page: number;
+    frac: number;
+    offset: number;
+    fracX?: number;
+    offsetX?: number;
+  } | null>(null);
+  // Esc quita primero las coincidencias de búsqueda y solo después sale de
+  // la herramienta: el efecto del modo lo consulta sin re-registrarse
+  const hayCoincidenciasRef = useRef(false);
 
   const [mode, setMode] = useState<Mode>("select");
   const [annotVersion, setAnnotVersion] = useState(0);
@@ -528,6 +542,8 @@ function App() {
     function onKey(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
       if (document.querySelector(".modal-backdrop")) return;
+      // con coincidencias pintadas el primer Esc es para la búsqueda
+      if (hayCoincidenciasRef.current) return;
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       setMode("select");
@@ -543,8 +559,10 @@ function App() {
     const el = viewerRef.current;
     if (!el) return;
     let timer: number | undefined;
-    const mide = () =>
+    const mide = () => {
       setViewerW(Math.max(320, Math.round(el.clientWidth / 16) * 16));
+      setViewerH(Math.max(240, Math.round(el.clientHeight / 16) * 16));
+    };
     const ro = new ResizeObserver(() => {
       window.clearTimeout(timer);
       timer = window.setTimeout(mide, 150);
@@ -560,13 +578,21 @@ function App() {
   // Atajos de teclado: ⌘O abrir, ⌘S guardar, ⌘F buscar, ⌘± zoom, ←/→ páginas
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      // con un modal abierto los atajos no actúan sobre el documento de
-      // debajo (solo Escape, que es cómo se cierran)
-      if (e.key !== "Escape" && document.querySelector(".modal-backdrop")) return;
+      // con un modal o un menú abierto los atajos no actúan sobre el
+      // documento de debajo (solo Escape, que es cómo se cierran)
+      if (
+        e.key !== "Escape" &&
+        document.querySelector(".modal-backdrop, .menu-backdrop")
+      )
+        return;
       const mod = e.metaKey || e.ctrlKey;
       const tag = (e.target as HTMLElement)?.tagName;
       const enCampo = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
-      if (mod && e.key === "o") {
+      if (e.key === "Escape" && !mod) {
+        // Acrobat quita los resaltados de coincidencia desde cualquier
+        // sitio, no solo con el foco dentro del campo
+        if (busqueda.matches.length > 0) busqueda.limpiar(true);
+      } else if (mod && e.key === "o") {
         e.preventDefault();
         openFile();
       } else if (mod && (e.key === "s" || e.key === "S")) {
@@ -578,11 +604,16 @@ function App() {
         e.preventDefault();
         setPrefsDraft(cargaPreferencias());
       } else if (mod && e.key === "0" && pageCount > 0) {
+        // los tres ajustes de Acrobat: ⌘0 página entera, ⌘1 tamaño real,
+        // ⌘2 ajustar al ancho
         e.preventDefault();
-        setZoom("ajuste");
+        setZoom("pagina");
       } else if (mod && e.key === "1" && pageCount > 0) {
         e.preventDefault();
         setZoom(1);
+      } else if (mod && e.key === "2" && pageCount > 0) {
+        e.preventDefault();
+        setZoom("ajuste");
       } else if (mod && e.shiftKey && (e.key === "n" || e.key === "N") && pageCount > 0) {
         e.preventDefault();
         setPageDraft(String(pageIndex + 1));
@@ -631,11 +662,26 @@ function App() {
   // del visor en modo "ajuste". El ancho de render (px físicos) es también
   // la clave del caché: unifica ambos modos.
   const PADDING_VIEWER = 48;
+  const VIEWER_PAD_BOTTOM = 72;
   const fitWidth = viewerW ? Math.max(320, viewerW - PADDING_VIEWER) : BASE_WIDTH;
-  const displayWidth = zoom === "ajuste" ? fitWidth : BASE_WIDTH * zoom;
+  const fitHeight = viewerH
+    ? Math.max(200, viewerH - VIEWER_PAD_TOP - VIEWER_PAD_BOTTOM)
+    : BASE_WIDTH;
+  // «ajustar a página»: el ancho que deja entrar la hoja entera a lo alto.
+  // Se usa la proporción más alta del documento para que el ancho no cambie
+  // al desplazarse entre páginas de tamaños distintos.
+  const ratioMax = pageSizes.reduce((m, s) => Math.max(m, s.height / s.width), 0);
+  const pageFitWidth =
+    ratioMax > 0 ? Math.max(160, Math.min(fitWidth, fitHeight / ratioMax)) : fitWidth;
+  const displayWidth =
+    zoom === "ajuste"
+      ? fitWidth
+      : zoom === "pagina"
+        ? pageFitWidth
+        : BASE_WIDTH * zoom;
   const ocupado = useSyncExternalStore(subscribeBusy, busyCount) > 0;
 
-  const zoomNum = zoom === "ajuste" ? displayWidth / BASE_WIDTH : zoom;
+  const zoomNum = typeof zoom === "number" ? zoom : displayWidth / BASE_WIDTH;
   // el listener se registra una sola vez: lee el zoom vivo por referencia
   const zoomNumRef = useRef(zoomNum);
   zoomNumRef.current = zoomNum;
@@ -648,14 +694,30 @@ function App() {
   }
 
   // ⌘+rueda y pinch del trackpad hacen zoom sobre el visor, como en
-  // Acrobat (el pinch llega como wheel con ctrlKey). Sin animación: el
-  // punto de lectura lo conserva el efecto de `displayWidth`.
+  // Acrobat (el pinch llega como wheel con ctrlKey). Sin animación: el punto
+  // bajo el cursor se queda bajo el cursor porque la rueda deja el ancla del
+  // scroll ahí y el efecto de `displayWidth` la restituye.
   useEffect(() => {
     const el = viewerRef.current;
     if (!el) return;
     function onWheel(e: WheelEvent) {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
+      const visor = viewerRef.current;
+      const hoja = (e.target as HTMLElement | null)?.closest?.(
+        ".page-wrap",
+      ) as HTMLElement | null;
+      if (visor && hoja) {
+        const rv = visor.getBoundingClientRect();
+        const rh = hoja.getBoundingClientRect();
+        scrollAnchorRef.current = {
+          page: Number(hoja.dataset.page),
+          frac: (e.clientY - rh.top) / rh.height,
+          offset: e.clientY - rv.top,
+          fracX: (e.clientX - rh.left) / rh.width,
+          offsetX: e.clientX - rv.left,
+        };
+      }
       setZoom(recortaZoom(zoomNumRef.current * Math.exp(-e.deltaY / 300)));
     }
     el.addEventListener("wheel", onWheel, { passive: false });
@@ -698,6 +760,7 @@ function App() {
     onError: (e) => setError(String(e)),
   });
   const limpiarBusqueda = busqueda.limpiar;
+  hayCoincidenciasRef.current = busqueda.matches.length > 0;
 
   // Seguimiento del scroll: la página cuyo centro queda más cerca del centro
   // del visor es la "actual" (píldora y sidebar), sin provocar scroll.
@@ -712,11 +775,15 @@ function App() {
       let y = VIEWER_PAD_TOP;
       let best = 0;
       let bestDist = Infinity;
-      let anchor: { page: number; frac: number } | null = null;
+      let anchor: { page: number; frac: number; offset: number } | null = null;
       for (let i = 0; i < alturas.length; i++) {
         const h = alturas[i];
         if (anchor === null && y + h > el.scrollTop) {
-          anchor = { page: i, frac: Math.max(0, (el.scrollTop - y) / h) };
+          anchor = {
+            page: i,
+            frac: Math.max(0, (el.scrollTop - y) / h),
+            offset: 0,
+          };
         }
         const d = Math.abs(y + h / 2 - centro);
         if (d < bestDist) {
@@ -731,23 +798,22 @@ function App() {
   }
 
   // Al cambiar el ancho de página (zoom o ajuste) se conserva el punto de
-  // lectura: misma página superior y misma fracción desplazada.
+  // lectura: el DOM ya tiene el ancho nuevo, así que se mide dónde ha
+  // quedado el punto ancla y se corrige el scroll para devolverlo a su sitio.
   const prevWidthRef = useRef(displayWidth);
   useLayoutEffect(() => {
     if (prevWidthRef.current === displayWidth) return;
     prevWidthRef.current = displayWidth;
     const el = viewerRef.current;
     const a = scrollAnchorRef.current;
-    if (!el || !a || pageSizes.length === 0) return;
-    const alturas = alturasPagina(displayWidth);
-    let y = VIEWER_PAD_TOP;
-    for (let i = 0; i < a.page && i < alturas.length; i++) {
-      y += alturas[i] + PAGE_GAP;
+    const hoja = a ? pageElsRef.current.get(a.page) : null;
+    if (!el || !a || !hoja) return;
+    const rv = el.getBoundingClientRect();
+    const rh = hoja.getBoundingClientRect();
+    el.scrollTop += rh.top - rv.top + a.frac * rh.height - a.offset;
+    if (a.fracX !== undefined && a.offsetX !== undefined) {
+      el.scrollLeft += rh.left - rv.left + a.fracX * rh.width - a.offsetX;
     }
-    el.scrollTop = y + a.frac * (alturas[a.page] ?? 0);
-    // solo debe correr cuando cambia el ancho (zoom): alturasPagina y
-    // pageSizes se leen del render actual a propósito
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayWidth]);
 
   /** Tras anotar: invalidar el render de esa página sin recargar todo. */
@@ -1936,7 +2002,7 @@ function App() {
               {zoomDraft === null ? (
                 <button
                   className="btn pill-boton"
-                  title={`Escribe un porcentaje de zoom (${MOD}1 = 100 %)`}
+                  title="Escribe un porcentaje de zoom"
                   aria-label="Porcentaje de zoom"
                   onClick={() =>
                     setZoomDraft(String(Math.round(zoomNum * 100)))
@@ -1972,15 +2038,30 @@ function App() {
               >
                 <Icon name="plus" size={14} />
               </button>
+              <div className="sep" />
+              <button
+                className={`btn${zoom === "pagina" ? " on" : ""}`}
+                title={`Ver la página entera (${MOD}0)`}
+                aria-pressed={zoom === "pagina"}
+                onClick={() => setZoom("pagina")}
+              >
+                Página
+              </button>
               <button
                 className={`btn${zoom === "ajuste" ? " on" : ""}`}
-                title={`Ajustar la página al ancho de la ventana (${MOD}0)`}
+                title={`Ajustar al ancho de la ventana (${MOD}2)`}
                 aria-pressed={zoom === "ajuste"}
-                onClick={() =>
-                  setZoom((z) => (z === "ajuste" ? 1 : "ajuste"))
-                }
+                onClick={() => setZoom("ajuste")}
               >
-                Ajustar
+                Ancho
+              </button>
+              <button
+                className={`btn${zoom === 1 ? " on" : ""}`}
+                title={`Tamaño real (${MOD}1)`}
+                aria-pressed={zoom === 1}
+                onClick={() => setZoom(1)}
+              >
+                100 %
               </button>
             </div>
           )}
