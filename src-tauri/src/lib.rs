@@ -681,6 +681,7 @@ impl Geo {
     }
 }
 
+mod adjuntos;
 mod anotaciones;
 mod anotaciones2;
 mod busqueda;
@@ -1109,6 +1110,11 @@ pub fn run() {
             seguridad2::unmark_all_redactions,
             seguridad2::apply_redactions,
             seguridad2::sanitize_pdf,
+            adjuntos::list_attachments,
+            adjuntos::save_attachment,
+            adjuntos::add_attachment,
+            adjuntos::list_layers,
+            adjuntos::set_layer_visible,
             exportar::export_pages_png,
             exportar::export_text,
             exportar::export_docx,
