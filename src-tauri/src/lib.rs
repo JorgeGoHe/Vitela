@@ -671,6 +671,44 @@ fn manda_pendiente(app: &tauri::AppHandle) {
     });
 }
 
+/// Nombre del evento con el que el backend le pregunta a la UI si se puede
+/// cerrar (⌘W, el botón rojo o ⌘Q). Carga `{}`.
+const EVENTO_CERRAR: &str = "cerrar-solicitado";
+
+/// La UI ya ha dicho que se puede cerrar: el siguiente intento no se frena.
+static CIERRE_CONFIRMADO: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// ¿Hay que frenar este cierre y preguntar a la UI? Solo la primera vez:
+/// una vez confirmado, cerrar de verdad.
+fn frenar_cierre() -> bool {
+    !CIERRE_CONFIRMADO.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Cierra la ventana principal de verdad. Lo llama la UI cuando ya ha
+/// resuelto los cambios sin guardar (los haya guardado o los descarte).
+///
+/// Sin esto, cerrar la ventana o salir de la app tiraba a la basura todo
+/// lo hecho desde la última vez que se guardó, sin preguntar: la copia de
+/// trabajo se borra en `RunEvent::Exit` y el original nunca se tocó.
+#[tauri::command(async)]
+fn confirmar_cierre(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    CIERRE_CONFIRMADO.store(true, std::sync::atomic::Ordering::SeqCst);
+    match app.get_webview_window("main") {
+        Some(w) => w.destroy().map_err(mensaje_llano),
+        None => {
+            app.exit(0);
+            Ok(())
+        }
+    }
+}
+
+/// Pide a la UI que decida sobre el cierre.
+fn pregunta_por_el_cierre<E: tauri::Emitter<tauri::Wry>>(emisor: &E) {
+    let _ = emisor.emit(EVENTO_CERRAR, serde_json::json!({}));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -701,6 +739,15 @@ pub fn run() {
         .on_page_load(|window, _| {
             use tauri::Manager;
             manda_pendiente(window.app_handle());
+        })
+        // ⌘W y el botón rojo: no se cierra sin que la UI lo confirme
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if frenar_cierre() {
+                    api.prevent_close();
+                    pregunta_por_el_cierre(window);
+                }
+            }
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -773,12 +820,21 @@ pub fn run() {
             recientes::list_recent,
             recientes::touch_recent,
             recientes::remove_recent,
+            confirmar_cierre,
             close_document
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|_app, event| match event {
             tauri::RunEvent::Exit => borra_copias_abiertas(),
+            // ⌘Q en macOS no siempre pasa por la ventana: si el intento de
+            // salida llega antes, se frena igual y se pregunta
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                if frenar_cierre() {
+                    api.prevent_exit();
+                    pregunta_por_el_cierre(_app);
+                }
+            }
             // macOS: doble clic en el Finder o `open -a Vitela x.pdf`,
             // tanto con la app cerrada como ya abierta
             #[cfg(target_os = "macos")]
@@ -898,6 +954,22 @@ pub(crate) mod tests {
 
         std::fs::remove_file(&danado).ok();
         std::fs::remove_file(&bueno).ok();
+    }
+
+    #[test]
+    fn el_cierre_se_frena_hasta_que_la_ui_lo_confirma() {
+        use std::sync::atomic::Ordering;
+        let antes = CIERRE_CONFIRMADO.swap(false, Ordering::SeqCst);
+        assert!(
+            frenar_cierre(),
+            "el primer intento de cierre se para para preguntar por los cambios"
+        );
+        CIERRE_CONFIRMADO.store(true, Ordering::SeqCst);
+        assert!(
+            !frenar_cierre(),
+            "una vez que la UI ha confirmado, el cierre sigue adelante"
+        );
+        CIERRE_CONFIRMADO.store(antes, Ordering::SeqCst);
     }
 
     #[test]

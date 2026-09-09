@@ -244,6 +244,8 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
             .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
         "touch_recent" => cmd!(crate::recientes::touch_recent, { path: String }),
         "remove_recent" => cmd!(crate::recientes::remove_recent, { path: String }),
+        // en el navegador de QA no hay ventana que cerrar
+        "confirmar_cierre" => Ok(Value::Null),
         otro => Err(format!("Comando desconocido en el puente: {otro}")),
     }
 }
