@@ -174,6 +174,10 @@ pub fn create_form_field(
             mk.set("R", Object::Integer(geo.rot as i64));
         }
         widget.set("MK", Object::Dictionary(mk));
+        let mut bs = Dictionary::new();
+        bs.set("W", Object::Integer(1));
+        bs.set("S", Object::Name(b"S".to_vec()));
+        widget.set("BS", Object::Dictionary(bs));
         // la apariencia va en el espacio del PDF: con la página rotada, el
         // ancho de la UI es el alto del PDF
         let caja = geo.ui_rect_a_pdf(&rect);
@@ -208,9 +212,17 @@ pub fn create_form_field(
                     d.set("Resources", Object::Dictionary(Dictionary::new()));
                     Stream::new(d, c.as_bytes().to_vec())
                 };
-                let off_id = doc.add_object(bbox("").clone());
+                // el marco va DENTRO de la apariencia: si lo dejamos en
+                // manos del visor (/MK), aplanar se queda sin nada que
+                // copiar y la casilla sin marcar desaparece
+                let marco = format!(
+                    "q 0 0 0 RG 1 w 0.5 0.5 {:.2} {:.2} re S Q\n",
+                    ancho - 1.0,
+                    alto - 1.0
+                );
+                let off_id = doc.add_object(bbox(&marco).clone());
                 let aspa = format!(
-                    "q 0 g 1.5 w 2 2 m {} {} l S 2 {} m {} 2 l S Q",
+                    "{marco}q 0 g 1.5 w 2 2 m {} {} l S 2 {} m {} 2 l S Q",
                     ancho - 2.0,
                     alto - 2.0,
                     alto - 2.0,

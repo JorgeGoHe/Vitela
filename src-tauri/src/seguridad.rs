@@ -476,6 +476,127 @@ fn apariencia_texto(
     Some(Object::Dictionary(ap))
 }
 
+/// Operadores de color para un `/BC` o `/BG` de `/MK` (gris, RGB o CMYK).
+/// Array vacío = sin color, que en el spec es «no pintes nada».
+fn ops_color(arr: &[Object], relleno: bool) -> Option<String> {
+    let v: Vec<f32> = arr.iter().filter_map(|o| o.as_float().ok()).collect();
+    let (op_g, op_rgb, op_cmyk) = if relleno {
+        ("g", "rg", "k")
+    } else {
+        ("G", "RG", "K")
+    };
+    match v.len() {
+        1 => Some(format!("{:.4} {op_g}", v[0])),
+        3 => Some(format!("{:.4} {:.4} {:.4} {op_rgb}", v[0], v[1], v[2])),
+        4 => Some(format!(
+            "{:.4} {:.4} {:.4} {:.4} {op_cmyk}",
+            v[0], v[1], v[2], v[3]
+        )),
+        _ => None,
+    }
+}
+
+/// Dibujo del marco de un widget (fondo `/MK /BG` y borde `/MK /BC` con el
+/// grosor de `/BS /W`) en una caja de `w`×`h` con origen en (0,0).
+///
+/// Es lo que pinta el entorno de formularios de PDFium al vuelo y lo que
+/// `FPDFPage_Flatten` no encuentra por ninguna parte si el `/AP` no lo trae.
+fn marco_widget(doc: &LoDoc, widget: &Dictionary, w: f32, h: f32) -> String {
+    let mk = widget.get(b"MK").ok().and_then(|o| dict_de(doc, o));
+    let bs = widget.get(b"BS").ok().and_then(|o| dict_de(doc, o));
+    let grosor = bs
+        .and_then(|d| d.get(b"W").ok())
+        .and_then(|o| o.as_float().ok())
+        .unwrap_or(1.0)
+        .max(0.0);
+    let mut ops = String::new();
+    if let Some(fondo) = mk
+        .and_then(|d| d.get(b"BG").ok())
+        .and_then(|o| o.as_array().ok())
+        .and_then(|a| ops_color(a, true))
+    {
+        ops.push_str(&format!("q {fondo} 0 0 {w:.2} {h:.2} re f Q\n"));
+    }
+    if grosor > 0.0 {
+        if let Some(borde) = mk
+            .and_then(|d| d.get(b"BC").ok())
+            .and_then(|o| o.as_array().ok())
+            .and_then(|a| ops_color(a, false))
+        {
+            ops.push_str(&format!(
+                "q {borde} {grosor:.2} w {:.2} {:.2} {:.2} {:.2} re S Q\n",
+                grosor / 2.0,
+                grosor / 2.0,
+                (w - grosor).max(0.0),
+                (h - grosor).max(0.0)
+            ));
+        }
+    }
+    ops
+}
+
+/// Apariencia normal de una casilla sin `/AP`: el marco en el estado Off y
+/// el marco con el aspa en el estado marcado. Devuelve `(/AP, estado)`.
+fn apariencia_casilla(doc: &mut LoDoc, widget: &Dictionary) -> Option<(Object, String)> {
+    let rect: Vec<f32> = widget
+        .get(b"Rect")
+        .ok()
+        .and_then(|r| r.as_array().ok())
+        .map(|a| a.iter().filter_map(|o| o.as_float().ok()).collect())?;
+    if rect.len() != 4 {
+        return None;
+    }
+    let w = (rect[2] - rect[0]).abs();
+    let h = (rect[3] - rect[1]).abs();
+    if w < 1.0 || h < 1.0 {
+        return None;
+    }
+    let marco = marco_widget(doc, widget, w, h);
+    // el nombre del estado marcado: el que ya use el campo, o «Yes»
+    let encendido = hereda(doc, widget, b"V")
+        .as_ref()
+        .and_then(estado_de)
+        .or_else(|| widget.get(b"AS").ok().and_then(estado_de))
+        .filter(|e| e != "Off")
+        .unwrap_or_else(|| "Yes".to_string());
+    let aspa = format!(
+        "{marco}q 0 g {:.2} w {:.2} {:.2} m {:.2} {:.2} l S {:.2} {:.2} m {:.2} {:.2} l S Q",
+        (w.min(h) * 0.12).max(1.0),
+        w * 0.2,
+        h * 0.2,
+        w * 0.8,
+        h * 0.8,
+        w * 0.2,
+        h * 0.8,
+        w * 0.8,
+        h * 0.2
+    );
+    let forma = |contenido: &str| {
+        let mut d = Dictionary::new();
+        d.set("Type", Object::Name(b"XObject".to_vec()));
+        d.set("Subtype", Object::Name(b"Form".to_vec()));
+        d.set(
+            "BBox",
+            Object::Array(vec![0.into(), 0.into(), w.into(), h.into()]),
+        );
+        d.set("Resources", Object::Dictionary(Dictionary::new()));
+        Stream::new(d, contenido.as_bytes().to_vec())
+    };
+    let off_id = doc.add_object(forma(&marco));
+    let on_id = doc.add_object(forma(&aspa));
+    let mut estados = Dictionary::new();
+    estados.set("Off", Object::Reference(off_id));
+    estados.set(encendido.clone(), Object::Reference(on_id));
+    let mut ap = Dictionary::new();
+    ap.set("N", Object::Dictionary(estados));
+    let actual = hereda(doc, widget, b"V")
+        .as_ref()
+        .and_then(estado_de)
+        .filter(|e| *e == encendido)
+        .unwrap_or_else(|| "Off".to_string());
+    Some((Object::Dictionary(ap), actual))
+}
+
 /// Estado /AS que debe mostrar una casilla según su /V y los estados de su
 /// /AP /N. `None` si no hay nada que corregir.
 fn estado_casilla(doc: &LoDoc, widget: &Dictionary) -> Option<String> {
@@ -541,6 +662,14 @@ fn prepara_para_aplanar(work_path: &str) -> Result<(), String> {
                         };
                         if let Some(ap) = apariencia_texto(&mut doc, &dict, h, &da_form) {
                             cambios.push(("AP", ap));
+                        }
+                    }
+                    // sin /AP el marco lo pintaba el visor al vuelo y el
+                    // aplanado se quedaba sin nada que copiar: se genera
+                    Some(b"Btn") if dict.get(b"AP").is_err() => {
+                        if let Some((ap, estado)) = apariencia_casilla(&mut doc, &dict) {
+                            cambios.push(("AP", ap));
+                            cambios.push(("AS", Object::Name(estado.into_bytes())));
                         }
                     }
                     Some(b"Btn") => {
@@ -914,6 +1043,66 @@ mod tests {
             p[0] < 100 && p[1] < 100 && p[2] < 100
         });
         assert!(marca > 0, "la marca de la casilla desapareció al aplanar");
+    }
+
+    /// Al aplanar, un campo deja de ser campo pero se sigue viendo igual
+    /// (Acrobat): la casilla sin marcar conservaba la marca pero perdía el
+    /// recuadro, porque el borde lo pintaba el entorno de formularios de
+    /// PDFium desde /MK y no estaba en el /AP que copia el aplanado.
+    #[test]
+    fn aplanar_conserva_el_marco_de_las_casillas() {
+        for sin_ap in [false, true] {
+            let pdf = std::env::temp_dir()
+                .join(format!("seguridad-flatten-casilla-{sin_ap}-test.pdf"));
+            crea_pdf(&["Consentimiento"], &pdf);
+            let work = pdf.to_string_lossy().to_string();
+            crate::formularios2::create_form_field(
+                work.clone(),
+                0,
+                "checkbox".into(),
+                Rect { x: 60.0, y: 250.0, w: 20.0, h: 20.0 },
+                "acepto".into(),
+            )
+            .expect("casilla");
+            if sin_ap {
+                // como los PDFs de fuera que dejan el marco en manos del
+                // visor: el aplanado no tendría nada que copiar
+                crate::cirugia(&work, |doc| {
+                    let ids: Vec<_> = doc
+                        .objects
+                        .iter()
+                        .filter(|(_, o)| {
+                            o.as_dict()
+                                .map(|d| matches!(d.get(b"FT").and_then(|f| f.as_name()), Ok(b"Btn")))
+                                .unwrap_or(false)
+                        })
+                        .map(|(id, _)| *id)
+                        .collect();
+                    for id in ids {
+                        if let Ok(d) = doc.get_object_mut(id).and_then(|o| o.as_dict_mut()) {
+                            d.remove(b"AP");
+                        }
+                    }
+                    Ok(())
+                })
+                .expect("quitar /AP");
+            }
+            let oscuros = |w: &str| {
+                pixeles_en(w, 60.0, 250.0, 80.0, 270.0, |p| {
+                    p[0] < 200 && p[1] < 200 && p[2] < 200
+                })
+            };
+            assert!(
+                oscuros(&work) > 0 || sin_ap,
+                "la casilla no se ve ni antes de aplanar"
+            );
+            flatten_pdf(work.clone()).expect("aplanar");
+            assert!(
+                oscuros(&work) > 0,
+                "sin /AP previo: {sin_ap} — el recuadro de la casilla desapareció al aplanar"
+            );
+            std::fs::remove_file(&pdf).ok();
+        }
     }
 
     #[test]
