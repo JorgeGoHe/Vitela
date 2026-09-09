@@ -63,15 +63,26 @@ pub fn get_page_text(path: String, page_index: u16) -> Result<PageText, String> 
     })
 }
 
-/// Normaliza para búsqueda sin distinción de mayúsculas; todo espacio en
-/// blanco (incl. \r\n que PDFium intercala) se trata como espacio simple.
-pub fn normalize(c: char) -> char {
-    let c = c.to_lowercase().next().unwrap_or(c);
+/// Normaliza para búsqueda: todo espacio en blanco (incl. el \r\n que
+/// PDFium intercala) se trata como espacio simple y, salvo que se pida
+/// distinguir mayúsculas, se pasa a minúscula.
+pub fn normalize(c: char, match_case: bool) -> char {
+    let c = if match_case {
+        c
+    } else {
+        c.to_lowercase().next().unwrap_or(c)
+    };
     if c.is_whitespace() {
         ' '
     } else {
         c
     }
+}
+
+/// Un carácter que forma parte de una palabra, para «solo palabras
+/// completas». Unicode-aware: los acentos y la ñ cuentan como letra.
+fn es_de_palabra(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }
 
 /// Une cajas de caracteres consecutivos en rectángulos por línea.
@@ -105,10 +116,13 @@ pub fn merge_line_rects(boxes: &[CharBox]) -> Vec<Rect> {
 
 /// Normaliza una secuencia colapsando rachas de espacios en uno solo.
 /// Devuelve pares (carácter normalizado, índice original).
-pub fn normaliza_colapsando(chars: impl Iterator<Item = char>) -> Vec<(char, usize)> {
+pub fn normaliza_colapsando(
+    chars: impl Iterator<Item = char>,
+    match_case: bool,
+) -> Vec<(char, usize)> {
     let mut out: Vec<(char, usize)> = Vec::new();
     for (i, c) in chars.enumerate() {
-        let n = normalize(c);
+        let n = normalize(c, match_case);
         if n == ' ' && matches!(out.last(), Some((' ', _))) {
             continue;
         }
@@ -117,12 +131,21 @@ pub fn normaliza_colapsando(chars: impl Iterator<Item = char>) -> Vec<(char, usi
     out
 }
 
-/// Busca `query` en todas las páginas (sin distinguir mayúsculas, sin
-/// solapamientos, y tratando cualquier racha de espacios/saltos de línea como
-/// un espacio) y devuelve los rectángulos de cada coincidencia.
+/// Busca `query` en todas las páginas, sin solapamientos y tratando
+/// cualquier racha de espacios/saltos de línea como un espacio, y devuelve
+/// los rectángulos de cada coincidencia.
+///
+/// `match_case` y `whole_word` son las dos casillas de Acrobat, apagadas
+/// por defecto: sin ellas la búsqueda no distingue mayúsculas y acepta
+/// coincidencias dentro de una palabra.
 #[tauri::command(async)]
-pub fn search_pdf(path: String, query: String) -> Result<Vec<SearchMatch>, String> {
-    let needle: Vec<char> = normaliza_colapsando(query.trim().chars())
+pub fn search_pdf(
+    path: String,
+    query: String,
+    match_case: bool,
+    whole_word: bool,
+) -> Result<Vec<SearchMatch>, String> {
+    let needle: Vec<char> = normaliza_colapsando(query.trim().chars(), match_case)
         .into_iter()
         .map(|(c, _)| c)
         .collect();
@@ -139,16 +162,24 @@ pub fn search_pdf(path: String, query: String) -> Result<Vec<SearchMatch>, Strin
                         .chars
                         .iter()
                         .map(|c| c.ch.chars().next().unwrap_or(' ')),
+                    match_case,
                 );
                 if hay.len() < needle.len() {
                     continue;
                 }
                 let mut start = 0;
                 while start + needle.len() <= hay.len() {
-                    if hay[start..start + needle.len()]
-                        .iter()
-                        .map(|(c, _)| *c)
-                        .eq(needle.iter().copied())
+                    let fin = start + needle.len();
+                    let en_limite_de_palabra = !whole_word
+                        || (start
+                            .checked_sub(1)
+                            .is_none_or(|i| !es_de_palabra(hay[i].0))
+                            && hay.get(fin).is_none_or(|(c, _)| !es_de_palabra(*c)));
+                    if en_limite_de_palabra
+                        && hay[start..fin]
+                            .iter()
+                            .map(|(c, _)| *c)
+                            .eq(needle.iter().copied())
                     {
                         let from = hay[start].1;
                         let to = hay[start + needle.len() - 1].1;
@@ -195,7 +226,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("editor_pdf_test_busqueda.pdf");
         crea_pdf(&["Hola Mundo"], &tmp);
         let matches =
-            search_pdf(tmp.to_string_lossy().into_owned(), "mundo".into()).expect("buscar");
+            search_pdf(tmp.to_string_lossy().into_owned(), "mundo".into(), false, false).expect("buscar");
         std::fs::remove_file(&tmp).ok();
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].page_index, 0);
@@ -209,17 +240,44 @@ mod tests {
         let path = tmp.to_string_lossy().into_owned();
 
         // no solapadas: una por "banana", no dos dentro de la misma palabra
-        let m = search_pdf(path.clone(), "ana".into()).expect("buscar ana");
+        let m = search_pdf(path.clone(), "ana".into(), false, false).expect("buscar ana");
         assert_eq!(m.len(), 2, "'ana' en 'banana banana'");
 
         // sin distinguir mayúsculas
-        let m = search_pdf(path.clone(), "hola".into()).expect("buscar hola");
+        let m = search_pdf(path.clone(), "hola".into(), false, false).expect("buscar hola");
         assert_eq!(m.len(), 4, "'hola' aparece 4 veces");
 
         // rachas de espacios en el documento cuentan como un espacio
-        let m = search_pdf(path.clone(), "hola mundo".into()).expect("buscar frase");
+        let m = search_pdf(path.clone(), "hola mundo".into(), false, false).expect("buscar frase");
         assert_eq!(m.len(), 1, "'Hola  Mundo' con doble espacio");
 
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn coincidir_mayusculas_y_palabra_completa() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_busqueda_opciones.pdf");
+        crea_pdf(&["Casa casaca CASA — año año, añoso"], &tmp);
+        let path = tmp.to_string_lossy().into_owned();
+        let cuenta = |q: &str, mc: bool, ww: bool| {
+            search_pdf(path.clone(), q.into(), mc, ww)
+                .expect("buscar")
+                .len()
+        };
+
+        // por defecto (las dos apagadas, como Acrobat)
+        assert_eq!(cuenta("casa", false, false), 3, "Casa, casaca, CASA");
+        // solo mayúsculas: descarta Casa y CASA, deja el trozo de «casaca»
+        assert_eq!(cuenta("casa", true, false), 1);
+        assert_eq!(cuenta("Casa", true, false), 1);
+        // solo palabra completa: descarta el trozo dentro de «casaca»
+        assert_eq!(cuenta("casa", false, true), 2, "Casa y CASA");
+        // las dos a la vez
+        assert_eq!(cuenta("CASA", true, true), 1);
+
+        // límites de palabra en Unicode: la ñ y los acentos son letra
+        assert_eq!(cuenta("año", false, false), 3, "año, año, añoso");
+        assert_eq!(cuenta("año", false, true), 2, "«añoso» no cuenta");
         std::fs::remove_file(&tmp).ok();
     }
 
