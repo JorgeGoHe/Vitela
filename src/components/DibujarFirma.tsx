@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { cargaColores, guardaColor } from "../tipos";
 import Icon from "./Icon";
+import { useModal } from "../hooks/useModal";
 
 const CANVAS_W = 560;
 const CANVAS_H = 220;
@@ -31,6 +32,7 @@ export default function DibujarFirma({
   const [empty, setEmpty] = useState(true);
   const colorRef = useRef(color);
   colorRef.current = color;
+  const { ref: modalRef, onKeyDown } = useModal({ onClose, onConfirm: save });
 
   // canvas nítido en pantallas retina
   useEffect(() => {
@@ -148,9 +150,9 @@ export default function DibujarFirma({
         aria-modal="true"
         aria-label="Dibujar firma"
         onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") onClose();
-        }}
+        onKeyDown={onKeyDown}
+        ref={modalRef}
+        tabIndex={-1}
       >
         <h3>Dibujar firma</h3>
         <canvas

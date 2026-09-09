@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Metadata } from "../api";
+import { useModal } from "../hooks/useModal";
 
 /** Propiedades del documento (metadatos del diccionario /Info). */
 export default function DialogoPropiedades({
@@ -12,6 +13,10 @@ export default function DialogoPropiedades({
   onClose: () => void;
 }) {
   const [meta, setMeta] = useState<Metadata>(initial);
+  const { ref, onKeyDown } = useModal({
+    onClose,
+    onConfirm: () => onSave(meta),
+  });
 
   function campo(key: keyof Metadata, label: string) {
     return (
@@ -34,6 +39,9 @@ export default function DialogoPropiedades({
         aria-modal="true"
         aria-label="Propiedades del documento"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={onKeyDown}
+        ref={ref}
+        tabIndex={-1}
       >
         <h3>Propiedades del documento</h3>
         {campo("title", "Título")}

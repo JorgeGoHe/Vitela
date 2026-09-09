@@ -1,3 +1,5 @@
+import { useModal } from "../hooks/useModal";
+
 /** Modal para proteger el documento con contraseña (copia cifrada AES-256). */
 export default function DialogoProteger({
   valor,
@@ -10,6 +12,13 @@ export default function DialogoProteger({
   onConfirm: () => void;
   onClose: () => void;
 }) {
+  const { ref, onKeyDown } = useModal({
+    onClose,
+    onConfirm: () => {
+      if (valor.user) onConfirm();
+    },
+  });
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
@@ -18,11 +27,13 @@ export default function DialogoProteger({
         aria-modal="true"
         aria-label="Proteger con contraseña"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={onKeyDown}
+        ref={ref}
+        tabIndex={-1}
       >
         <h3>Proteger con contraseña</h3>
         <input
           type="password"
-          autoFocus
           placeholder="Contraseña (necesaria para abrir)"
           value={valor.user}
           onChange={(e) => onChange({ ...valor, user: e.target.value })}

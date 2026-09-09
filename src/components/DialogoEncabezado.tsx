@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { HeaderFooter } from "../api";
+import { useModal } from "../hooks/useModal";
 
 /**
  * Diálogo de encabezado y pie: seis zonas con plantillas {n}, {total} y
@@ -28,6 +29,12 @@ export default function DialogoEncabezado({
 
   const vacio = Object.values(zonas).every((v) => !v?.trim());
 
+  function aplicar() {
+    if (!vacio) onApply(zonas, fontSize);
+  }
+
+  const { ref, onKeyDown } = useModal({ onClose, onConfirm: aplicar });
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
@@ -36,6 +43,9 @@ export default function DialogoEncabezado({
         aria-modal="true"
         aria-label="Encabezado y pie de página"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={onKeyDown}
+        ref={ref}
+        tabIndex={-1}
       >
         <h3>Encabezado y pie de página</h3>
         <span className="card-label">Encabezado</span>
@@ -80,7 +90,7 @@ export default function DialogoEncabezado({
           <button
             className="btn btn-primary"
             disabled={vacio}
-            onClick={() => onApply(zonas, fontSize)}
+            onClick={aplicar}
           >
             Aplicar
           </button>

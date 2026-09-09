@@ -1,3 +1,5 @@
+import { useModal } from "../hooks/useModal";
+
 /** Modal de exportación de las páginas como imágenes (formato y resolución). */
 export default function DialogoExportar({
   fmt,
@@ -14,6 +16,8 @@ export default function DialogoExportar({
   onConfirm: () => void;
   onClose: () => void;
 }) {
+  const { ref, onKeyDown } = useModal({ onClose, onConfirm });
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
@@ -22,6 +26,9 @@ export default function DialogoExportar({
         aria-modal="true"
         aria-label="Exportar como imágenes"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={onKeyDown}
+        ref={ref}
+        tabIndex={-1}
       >
         <h3>Exportar como imágenes</h3>
         <div className="card-row">

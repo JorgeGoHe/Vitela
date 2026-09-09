@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { cargaColores, guardaColor } from "../tipos";
 import Icon from "./Icon";
+import { useModal } from "../hooks/useModal";
 
 const COLORS = ["#c0392b", "#6f6a5c", "#2743c0", "#2ea043"];
 
@@ -30,6 +31,13 @@ export default function DialogoMarcaAgua({
   const [diagonal, setDiagonal] = useState(true);
   const [position, setPosition] = useState<PosicionMarca>("c");
 
+  function aplicar() {
+    if (!text.trim()) return;
+    onApply({ text, fontSize, color, opacity, diagonal, position });
+  }
+
+  const { ref, onKeyDown } = useModal({ onClose, onConfirm: aplicar });
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
@@ -38,11 +46,13 @@ export default function DialogoMarcaAgua({
         aria-modal="true"
         aria-label="Marca de agua"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={onKeyDown}
+        ref={ref}
+        tabIndex={-1}
       >
         <h3>Marca de agua</h3>
         <input
           type="text"
-          autoFocus
           placeholder="Texto de la marca de agua"
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -132,7 +142,7 @@ export default function DialogoMarcaAgua({
           <button
             className="btn btn-primary"
             disabled={!text.trim()}
-            onClick={() => onApply({ text, fontSize, color, opacity, diagonal, position })}
+            onClick={aplicar}
           >
             Aplicar
           </button>

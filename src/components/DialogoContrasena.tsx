@@ -1,3 +1,5 @@
+import { useModal } from "../hooks/useModal";
+
 /** Modal de contraseña para un fichero (documento protegido o .p12). */
 export default function DialogoContrasena({
   titulo,
@@ -20,6 +22,8 @@ export default function DialogoContrasena({
   etiqueta: string;
   placeholder?: string;
 }) {
+  const { ref, onKeyDown } = useModal({ onClose, onConfirm });
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
@@ -28,19 +32,17 @@ export default function DialogoContrasena({
         aria-modal="true"
         aria-label={titulo}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={onKeyDown}
+        ref={ref}
+        tabIndex={-1}
       >
         <h3>{titulo}</h3>
         <p className="modal-file">{fichero.split(/[\\/]/).pop()}</p>
         <input
           type="password"
-          autoFocus
           placeholder={placeholder}
           value={valor}
           onChange={(e) => onChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") onConfirm();
-            if (e.key === "Escape") onClose();
-          }}
         />
         <div className="card-actions">
           <button className="btn" onClick={onClose}>

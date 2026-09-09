@@ -1,3 +1,5 @@
+import { useModal } from "../hooks/useModal";
+
 /** Modal para reducir el tamaño del PDF recomprimiendo sus imágenes. */
 export default function DialogoComprimir({
   quality,
@@ -14,6 +16,8 @@ export default function DialogoComprimir({
   onConfirm: () => void;
   onClose: () => void;
 }) {
+  const { ref, onKeyDown } = useModal({ onClose, onConfirm });
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
@@ -22,6 +26,9 @@ export default function DialogoComprimir({
         aria-modal="true"
         aria-label="Reducir tamaño del PDF"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={onKeyDown}
+        ref={ref}
+        tabIndex={-1}
       >
         <h3>Reducir tamaño del PDF</h3>
         <div className="card-row">

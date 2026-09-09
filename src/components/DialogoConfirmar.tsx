@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useModal } from "../hooks/useModal";
 
 /** Modal genérico de confirmación: título, cuerpo libre y botón de acción
  *  (rojo si la acción es destructiva). `secundario` añade una tercera
@@ -20,6 +21,8 @@ export default function DialogoConfirmar({
   onConfirm: () => void;
   onClose: () => void;
 }) {
+  const { ref, onKeyDown } = useModal({ onClose, onConfirm });
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
@@ -28,6 +31,9 @@ export default function DialogoConfirmar({
         aria-modal="true"
         aria-label={titulo}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={onKeyDown}
+        ref={ref}
+        tabIndex={-1}
       >
         <h3>{titulo}</h3>
         {cuerpo}
