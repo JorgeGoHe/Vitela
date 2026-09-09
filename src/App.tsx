@@ -396,6 +396,9 @@ function App() {
   // Atajos de teclado: ⌘O abrir, ⌘S guardar, ⌘F buscar, ⌘± zoom, ←/→ páginas
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      // con un modal abierto los atajos no actúan sobre el documento de
+      // debajo (solo Escape, que es cómo se cierran)
+      if (e.key !== "Escape" && document.querySelector(".modal-backdrop")) return;
       const mod = e.metaKey || e.ctrlKey;
       const tag = (e.target as HTMLElement)?.tagName;
       const enCampo = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
