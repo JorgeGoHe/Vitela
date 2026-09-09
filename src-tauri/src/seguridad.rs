@@ -297,6 +297,8 @@ pub(crate) fn cifra_a(
         o.extend_from_slice(&oks);
         let oe = aes256_cbc_iv0_nopad(&hash_2b(&owner, &oks, &u), &fek);
 
+        crate::documento::marca_creador(&mut doc);
+
         // permisos del diálogo, metadatos cifrados
         let p: i64 = mascara_p(&permisos);
         let mut perms_block = [0u8; 16];

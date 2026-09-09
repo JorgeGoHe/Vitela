@@ -747,10 +747,36 @@ fn save_pdf(work_path: String, dest_path: String) -> Result<(), String> {
     // en el hilo de PDFium: nadie puede estar renombrando la copia a la vez
     on_pdfium_thread(move || {
         invalidate_doc_cache();
-        std::fs::copy(&work_path, &dest_path)
-            .map(|_| ())
-            .map_err(|e| mensaje_llano(format!("No se ha podido guardar en {dest_path}: {e}")))
+        copia_firmando(&work_path, &dest_path)
     })
+}
+
+/// Copia la copia de trabajo al destino dejando `/Creator (Vitela)` en su
+/// `/Info`, que es lo que hace cualquier editor con el documento que
+/// escribe. Si el PDF va firmado se copia tal cual, sin tocar un byte:
+/// reescribirlo con lopdf desplazaría el `/ByteRange` e invalidaría la
+/// firma. Si la reescritura falla por lo que sea, también se copia tal cual:
+/// guardar nunca puede depender de una marca cosmética.
+fn copia_firmando(work_path: &str, dest_path: &str) -> Result<(), String> {
+    let bytes = std::fs::read(work_path)
+        .map_err(|e| mensaje_llano(format!("No se ha podido leer el documento: {e}")))?;
+    let firmado = bytes.windows(10).any(|v| v == b"/ByteRange");
+    if !firmado {
+        if let Ok(mut doc) = lopdf::Document::load_mem(&bytes) {
+            documento::marca_creador(&mut doc);
+            let tmp = format!("{dest_path}.vitela.tmp");
+            if doc.save(&tmp).is_ok() {
+                if std::fs::rename(&tmp, dest_path).is_ok() {
+                    return Ok(());
+                }
+                let _ = std::fs::remove_file(&tmp);
+            } else {
+                let _ = std::fs::remove_file(&tmp);
+            }
+        }
+    }
+    std::fs::write(dest_path, &bytes)
+        .map_err(|e| mensaje_llano(format!("No se ha podido guardar en {dest_path}: {e}")))
 }
 
 /// Nombre del evento con el que el backend le pide a la UI que abra un
@@ -1260,6 +1286,41 @@ pub(crate) mod tests {
             .recv_timeout(std::time::Duration::from_secs(10))
             .expect("la llamada anidada se ha colgado");
         assert_eq!(v, 42);
+    }
+
+    /// Guardar deja `/Creator (Vitela)` en el documento, como cualquier
+    /// editor con lo que escribe.
+    #[test]
+    fn guardar_firma_el_documento_como_vitela() {
+        let dir = std::env::temp_dir();
+        let origen = dir.join("editor_pdf_test_creator.pdf");
+        let destino = dir.join("editor_pdf_test_creator_dest.pdf");
+        crea_pdf(&["Hola"], &origen);
+        save_pdf(
+            origen.to_string_lossy().into_owned(),
+            destino.to_string_lossy().into_owned(),
+        )
+        .expect("guardar");
+
+        let doc = lopdf::Document::load(&destino).expect("cargar guardado");
+        let info = match doc.trailer.get(b"Info").expect("/Info") {
+            lopdf::Object::Reference(rid) => doc.get_object(*rid).unwrap().as_dict().unwrap().clone(),
+            lopdf::Object::Dictionary(d) => d.clone(),
+            otro => panic!("/Info inesperado: {otro:?}"),
+        };
+        let creator = match info.get(b"Creator").expect("/Creator") {
+            lopdf::Object::String(b, _) => b.iter().map(|c| *c as char).collect::<String>(),
+            otro => panic!("/Creator inesperado: {otro:?}"),
+        };
+        assert_eq!(creator, "Vitela");
+        // y el documento sigue abriéndose y con su texto
+        let info = open_pdf(destino.to_string_lossy().into_owned(), None).expect("reabrir");
+        assert_eq!(info.page_count, 1);
+        close_document(info.work_path).expect("cerrar");
+
+        for f in [&origen, &destino] {
+            std::fs::remove_file(f).ok();
+        }
     }
 
     #[test]

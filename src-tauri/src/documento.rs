@@ -185,6 +185,24 @@ pub fn get_metadata(path: String) -> Result<Metadata, String> {
     })
 }
 
+/// Deja `/Creator (Vitela)` en el `/Info` del documento: quien lo abra
+/// después sabe con qué se escribió, como hace cualquier editor.
+pub(crate) fn marca_creador(doc: &mut lopdf::Document) {
+    let mut info = match doc.trailer.get(b"Info") {
+        Ok(Object::Reference(rid)) => doc
+            .get_object(*rid)
+            .ok()
+            .and_then(|o| o.as_dict().ok())
+            .cloned()
+            .unwrap_or_default(),
+        Ok(Object::Dictionary(d)) => d.clone(),
+        _ => Dictionary::new(),
+    };
+    info.set("Creator", cadena_pdf("Vitela"));
+    let info_id = doc.add_object(info);
+    doc.trailer.set("Info", Object::Reference(info_id));
+}
+
 /// Escribe título, autor, asunto y palabras clave en /Info (lopdf).
 #[tauri::command(async)]
 pub fn set_metadata(work_path: String, meta: Metadata) -> Result<(), String> {

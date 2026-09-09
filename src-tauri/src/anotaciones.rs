@@ -617,6 +617,11 @@ pub(crate) fn remata_annot_en(
         if explicito || !annot.has(b"T") {
             annot.set("T", crate::documento::cadena_pdf(&autor));
         }
+        if annot_index.is_none() {
+            // recién creada: PDFium le pone un /CreationDate suyo en UTC y
+            // quedaban dos horas distintas en la misma anotación
+            annot.set("CreationDate", lopdf::Object::string_literal(fecha.clone()));
+        }
         annot.set("M", lopdf::Object::string_literal(fecha));
         Ok(())
     })
@@ -1823,5 +1828,46 @@ mod tests_apariencia {
         );
         std::fs::remove_file(&tmp).ok();
         std::fs::remove_file(&vacio).ok();
+    }
+
+    /// `/M` y `/CreationDate` de la misma anotación tienen que decir la
+    /// misma hora: PDFium escribía la suya en UTC y en el mismo objeto
+    /// convivían las 12:46 y las 10:46 de la misma nota.
+    #[test]
+    fn la_fecha_de_creacion_y_la_de_cambio_dicen_lo_mismo() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_fechas_coherentes.pdf");
+        crea_pdf(&["Hola"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        add_note(work.clone(), 0, 200.0, 100.0, "Una nota".into(), None).expect("nota");
+        crate::anotaciones2::add_shape(
+            work.clone(),
+            0,
+            "rect".into(),
+            50.0,
+            50.0,
+            150.0,
+            120.0,
+            [0, 0, 0, 255],
+            None,
+            1.0,
+            None,
+        )
+        .expect("forma");
+
+        for i in [0usize, 2] {
+            let annot = annot_guardada(&work, i);
+            let cadena = |clave: &[u8]| match annot.get(clave) {
+                Ok(lopdf::Object::String(b, _)) => b.iter().map(|c| *c as char).collect::<String>(),
+                otro => panic!("falta la fecha {clave:?}: {otro:?}"),
+            };
+            let m = cadena(b"M");
+            let creacion = cadena(b"CreationDate");
+            assert!(fecha_pdf_completa(&m), "/M: {m}");
+            assert!(fecha_pdf_completa(&creacion), "/CreationDate: {creacion}");
+            // misma hora local hasta el minuto y misma zona
+            assert_eq!(&m[..14], &creacion[..14], "{m} vs {creacion}");
+            assert_eq!(&m[16..], &creacion[16..], "zonas distintas");
+        }
+        std::fs::remove_file(&tmp).ok();
     }
 }

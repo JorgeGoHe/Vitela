@@ -523,6 +523,7 @@ pub fn add_free_text(
         );
         annot.set("F", 4i64); // Print
         annot.set("T", crate::documento::cadena_pdf(&autor));
+        annot.set("CreationDate", Object::string_literal(fecha.clone()));
         annot.set("M", Object::string_literal(fecha));
         let mut bs = Dictionary::new();
         bs.set("W", Object::Integer(if border { 1 } else { 0 }));
