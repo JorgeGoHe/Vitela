@@ -888,6 +888,7 @@ pub fn run() {
             formularios::get_form_fields,
             formularios::set_form_text,
             formularios::set_form_checked,
+            formularios::set_form_choice,
             texto::get_text_blocks,
             texto::edit_text_block,
             texto::add_text_block,

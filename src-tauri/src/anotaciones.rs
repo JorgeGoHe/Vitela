@@ -623,7 +623,7 @@ pub(crate) fn remata_annot_en(
 }
 
 /// Decodifica una cadena PDF (literal en PDFDocEncoding o UTF-16BE con BOM).
-fn texto_de_cadena_pdf(o: &lopdf::Object) -> String {
+pub(crate) fn texto_de_cadena_pdf(o: &lopdf::Object) -> String {
     let lopdf::Object::String(bytes, _) = o else {
         return String::new();
     };

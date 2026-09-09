@@ -12,6 +12,8 @@ pub struct FormFieldInfo {
     pub kind: String,
     pub value: String,
     pub checked: bool,
+    /// Opciones de un desplegable o una lista (`/Opt`); vacío en el resto.
+    pub options: Vec<String>,
     pub x: f32,
     pub y: f32,
     pub w: f32,
@@ -60,7 +62,34 @@ pub fn get_form_fields(path: String, page_index: u16) -> Result<Vec<FormFieldInf
                             .unwrap_or_default(),
                         false,
                     ),
+                    // desplegables y listas: el valor elegido, y sus
+                    // opciones aparte
+                    PdfFormFieldType::ComboBox => (
+                        field
+                            .as_combo_box_field()
+                            .and_then(|c| c.value())
+                            .unwrap_or_default(),
+                        false,
+                    ),
+                    PdfFormFieldType::ListBox => (
+                        field
+                            .as_list_box_field()
+                            .and_then(|l| l.value())
+                            .unwrap_or_default(),
+                        false,
+                    ),
                     _ => (String::new(), false),
+                };
+                let options: Vec<String> = match field.field_type() {
+                    PdfFormFieldType::ComboBox => field
+                        .as_combo_box_field()
+                        .map(|c| etiquetas(c.options()))
+                        .unwrap_or_default(),
+                    PdfFormFieldType::ListBox => field
+                        .as_list_box_field()
+                        .map(|l| etiquetas(l.options()))
+                        .unwrap_or_default(),
+                    _ => Vec::new(),
                 };
                 let caja = geo.pdf_rect_a_ui(&b);
                 out.push(FormFieldInfo {
@@ -69,6 +98,7 @@ pub fn get_form_fields(path: String, page_index: u16) -> Result<Vec<FormFieldInf
                     kind,
                     value,
                     checked,
+                    options,
                     x: caja.x,
                     y: caja.y,
                     w: caja.w,
@@ -112,6 +142,14 @@ pub fn set_form_text(
     }))
 }
 
+/// Etiquetas de las opciones de un desplegable o una lista, en su orden.
+fn etiquetas(opciones: &PdfFormFieldOptions) -> Vec<String> {
+    opciones
+        .iter()
+        .map(|o| o.label().cloned().unwrap_or_default())
+        .collect()
+}
+
 /// Marca o desmarca una casilla (o selecciona un radio button).
 #[tauri::command(async)]
 pub fn set_form_checked(
@@ -148,6 +186,103 @@ pub fn set_form_checked(
         save_and_close(doc, &work_path)?;
         Ok(())
     }))
+}
+
+/// Elige una opción de un desplegable o una lista. `field_index` es el
+/// `annot_index` que devuelve `get_form_fields`.
+///
+/// Va con lopdf: pdfium-render 0.8 lee las opciones pero no deja escribir el
+/// valor. Se escribe `/V` (y `/I` en las listas, que es donde el spec quiere
+/// el índice) y se enciende `NeedAppearances`, como ya hacen los campos
+/// creados por Vitela, para que el visor vuelva a dibujar el campo.
+#[tauri::command(async)]
+pub fn set_form_choice(
+    work_path: String,
+    page_index: u16,
+    field_index: u16,
+    value: String,
+) -> Result<(), String> {
+    crate::cirugia(&work_path, move |doc| {
+        use lopdf::Object;
+        let lista = crate::anotaciones::lista_annots(doc, page_index)
+            .ok_or("La página no tiene campos de formulario")?;
+        let widget_id = match lista.get(field_index as usize) {
+            Some(Object::Reference(rid)) => *rid,
+            _ => return Err("Ese campo ya no está en la página".into()),
+        };
+        // el campo puede ser el propio widget o su padre (widgets hermanos)
+        let campo_id = {
+            let w = doc
+                .get_object(widget_id)
+                .and_then(|o| o.as_dict())
+                .map_err(|e| e.to_string())?;
+            if w.has(b"FT") {
+                widget_id
+            } else {
+                w.get(b"Parent")
+                    .and_then(|o| o.as_reference())
+                    .map_err(|_| "Ese campo no es un desplegable".to_string())?
+            }
+        };
+        let campo = doc
+            .get_object(campo_id)
+            .and_then(|o| o.as_dict())
+            .map_err(|e| e.to_string())?
+            .clone();
+        if campo.get(b"FT").and_then(|o| o.as_name()).unwrap_or_default() != b"Ch" {
+            return Err("Ese campo no es un desplegable ni una lista".into());
+        }
+        let opciones = campo
+            .get(b"Opt")
+            .and_then(|o| o.as_array())
+            .map_err(|_| "El desplegable no tiene opciones".to_string())?
+            .clone();
+        // cada /Opt es una cadena o [exportación, etiqueta]
+        let par = |o: &Object| -> (String, String) {
+            match o {
+                Object::Array(a) if a.len() >= 2 => (
+                    crate::anotaciones::texto_de_cadena_pdf(&a[0]),
+                    crate::anotaciones::texto_de_cadena_pdf(&a[1]),
+                ),
+                otro => {
+                    let t = crate::anotaciones::texto_de_cadena_pdf(otro);
+                    (t.clone(), t)
+                }
+            }
+        };
+        let elegido = opciones
+            .iter()
+            .enumerate()
+            .find(|(_, o)| {
+                let (exportacion, etiqueta) = par(o);
+                etiqueta == value || exportacion == value
+            })
+            .map(|(i, o)| (i, par(o).0))
+            .ok_or_else(|| format!("«{value}» no es una de las opciones"))?;
+        // bit 18 de /Ff (131072): desplegable; sin él, lista
+        let es_lista = campo
+            .get(b"Ff")
+            .and_then(|o| o.as_i64())
+            .map(|f| f & 131_072 == 0)
+            .unwrap_or(true);
+        {
+            let campo = doc
+                .get_object_mut(campo_id)
+                .and_then(|o| o.as_dict_mut())
+                .map_err(|e| e.to_string())?;
+            campo.set("V", crate::documento::cadena_pdf(&elegido.1));
+            if es_lista {
+                campo.set("I", Object::Array(vec![Object::Integer(elegido.0 as i64)]));
+            } else {
+                campo.remove(b"I");
+            }
+        }
+        // la apariencia guardada es la del valor viejo
+        if let Ok(w) = doc.get_object_mut(widget_id).and_then(|o| o.as_dict_mut()) {
+            w.remove(b"AP");
+        }
+        crate::formularios2::pide_apariencias(doc)
+    })
 }
 
 #[cfg(test)]
@@ -208,9 +343,14 @@ mod tests {
                 ),
             ),
         ];
+        escribe_pdf(&objs, dest);
+    }
+
+    /// Serializa una lista de objetos numerados como un PDF con su xref.
+    fn escribe_pdf(objs: &[(u32, String)], dest: &std::path::Path) {
         let mut out: Vec<u8> = b"%PDF-1.7\n".to_vec();
         let mut offsets = vec![0usize; objs.len() + 1];
-        for (num, body) in &objs {
+        for (num, body) in objs {
             offsets[*num as usize] = out.len();
             out.extend_from_slice(format!("{num} 0 obj\n{body}\nendobj\n").as_bytes());
         }
@@ -229,6 +369,117 @@ mod tests {
             .as_bytes(),
         );
         std::fs::write(dest, out).expect("escribir PDF de formulario");
+    }
+
+    /// PDF con un desplegable (ComboBox) sin valor y una lista (ListBox) con
+    /// «Verde» elegido. PDFium no crea campos: se escribe a mano.
+    fn crea_pdf_desplegables(dest: &std::path::Path) {
+        let objs: Vec<(u32, String)> = vec![
+            (
+                1,
+                "<</Type/Catalog/Pages 2 0 R/AcroForm<</Fields[4 0 R 5 0 R]\
+                 /DA(/Helv 0 Tf 0 g)/DR<</Font<</Helv 6 0 R>>>>>>>>"
+                    .into(),
+            ),
+            (2, "<</Type/Pages/Kids[3 0 R]/Count 1>>".into()),
+            (
+                3,
+                "<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]\
+                 /Annots[4 0 R 5 0 R]/Resources<</Font<</Helv 6 0 R>>>>>>"
+                    .into(),
+            ),
+            (
+                4,
+                "<</Type/Annot/Subtype/Widget/FT/Ch/Ff 131072/T(ciudad)\
+                 /Rect[50 600 250 620]/F 4/DA(/Helv 12 Tf 0 g)\
+                 /Opt[(Madrid)(Barcelona)(Sevilla)]>>"
+                    .into(),
+            ),
+            (
+                5,
+                "<</Type/Annot/Subtype/Widget/FT/Ch/T(color)\
+                 /Rect[50 500 250 560]/F 4/DA(/Helv 12 Tf 0 g)\
+                 /Opt[(Rojo)(Verde)(Azul)]/V(Verde)/I[1]>>"
+                    .into(),
+            ),
+            (6, "<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>".into()),
+        ];
+        escribe_pdf(&objs, dest);
+    }
+
+    /// Un PDF rellenable se nota que lo es: el desplegable ofrece las
+    /// opciones del documento y lo elegido sobrevive a guardar.
+    #[test]
+    fn desplegables_y_listas() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_desplegable.pdf");
+        crea_pdf_desplegables(&tmp);
+        let work = tmp.to_string_lossy().into_owned();
+
+        let campos = get_form_fields(work.clone(), 0).expect("listar");
+        let ciudad = campos.iter().find(|c| c.name == "ciudad").expect("desplegable");
+        assert_eq!(ciudad.kind, "ComboBox");
+        assert_eq!(ciudad.options, vec!["Madrid", "Barcelona", "Sevilla"]);
+        assert_eq!(ciudad.value, "");
+        let color = campos.iter().find(|c| c.name == "color").expect("lista");
+        assert_eq!(color.kind, "ListBox");
+        assert_eq!(color.options, vec!["Rojo", "Verde", "Azul"]);
+        assert_eq!(color.value, "Verde");
+
+        // sin valor, el desplegable está en blanco
+        let tinta = |w: &str| {
+            let png = render_page_png(w.to_string(), 0, 600).expect("render");
+            let img = image::load_from_memory(&png).expect("PNG").to_rgba8();
+            let escala = 600.0 / 595.0;
+            let mut n = 0;
+            for y in (222.0 * escala) as u32..(242.0 * escala) as u32 {
+                for x in (52.0 * escala) as u32..(248.0 * escala) as u32 {
+                    let p = img.get_pixel(x, y).0;
+                    if p[0] < 200 && p[1] < 200 && p[2] < 200 {
+                        n += 1;
+                    }
+                }
+            }
+            n
+        };
+        let vacio = tinta(&work);
+
+        set_form_choice(work.clone(), 0, ciudad.annot_index, "Sevilla".into())
+            .expect("elegir ciudad");
+        set_form_choice(work.clone(), 0, color.annot_index, "Azul".into()).expect("elegir color");
+
+        let campos = get_form_fields(work.clone(), 0).expect("relistar");
+        assert_eq!(
+            campos.iter().find(|c| c.name == "ciudad").unwrap().value,
+            "Sevilla"
+        );
+        assert_eq!(
+            campos.iter().find(|c| c.name == "color").unwrap().value,
+            "Azul"
+        );
+        assert!(
+            tinta(&work) > vacio,
+            "lo elegido tiene que verse en el render ({vacio} píxeles antes, {} después)",
+            tinta(&work)
+        );
+
+        // el índice de la lista acompaña al valor, como pide el spec
+        let doc = lopdf::Document::load(&work).expect("cargar");
+        let lista = doc
+            .objects
+            .values()
+            .filter_map(|o| o.as_dict().ok())
+            .find(|d| {
+                matches!(d.get(b"T"), Ok(lopdf::Object::String(t, _)) if t == b"color")
+            })
+            .expect("campo color");
+        assert_eq!(
+            lista.get(b"I").and_then(|o| o.as_array()).expect("/I"),
+            &vec![lopdf::Object::Integer(2)]
+        );
+
+        // una opción que no está no se acepta
+        assert!(set_form_choice(work.clone(), 0, ciudad.annot_index, "Bilbao".into()).is_err());
+        std::fs::remove_file(&tmp).ok();
     }
 
     #[test]

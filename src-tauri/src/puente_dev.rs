@@ -178,6 +178,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "get_form_fields" => cmd!(formularios::get_form_fields, { path: String, page_index: u16 }),
         "set_form_text" => cmd!(formularios::set_form_text, { work_path: String, page_index: u16, annot_index: u16, value: String }),
         "set_form_checked" => cmd!(formularios::set_form_checked, { work_path: String, page_index: u16, annot_index: u16, checked: bool }),
+        "set_form_choice" => cmd!(formularios::set_form_choice, { work_path: String, page_index: u16, field_index: u16, value: String }),
         "get_text_blocks" => cmd!(texto::get_text_blocks, { path: String, page_index: u16 }),
         "edit_text_block" => cmd!(texto::edit_text_block, { work_path: String, page_index: u16, object_index: u32, new_text: String }),
         "add_text_block" => cmd!(texto::add_text_block, { work_path: String, page_index: u16, x: f32, y: f32, text: String, font_size: f32, font: Option<String> }),

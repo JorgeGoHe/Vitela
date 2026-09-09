@@ -287,6 +287,40 @@ pub fn create_form_field(
     })
 }
 
+/// Enciende `NeedAppearances` en el AcroForm (creándolo si no lo hay): le
+/// dice al visor que vuelva a dibujar los campos porque su valor ha
+/// cambiado. Es lo que ya hacen los campos que crea Vitela.
+pub(crate) fn pide_apariencias(doc: &mut LoDoc) -> Result<(), String> {
+    let catalog_id = doc
+        .trailer
+        .get(b"Root")
+        .and_then(|o| o.as_reference())
+        .map_err(|e| e.to_string())?;
+    let form_ref = doc
+        .get_object(catalog_id)
+        .and_then(|o| o.as_dict())
+        .map_err(|e| e.to_string())?
+        .get(b"AcroForm")
+        .cloned();
+    match form_ref {
+        Ok(Object::Reference(rid)) => {
+            doc.get_object_mut(rid)
+                .and_then(|o| o.as_dict_mut())
+                .map_err(|e| e.to_string())?
+                .set("NeedAppearances", Object::Boolean(true));
+        }
+        Ok(Object::Dictionary(mut d)) => {
+            d.set("NeedAppearances", Object::Boolean(true));
+            doc.get_object_mut(catalog_id)
+                .and_then(|o| o.as_dict_mut())
+                .map_err(|e| e.to_string())?
+                .set("AcroForm", Object::Dictionary(d));
+        }
+        _ => return Err("El documento no tiene formulario".into()),
+    }
+    Ok(())
+}
+
 /// Solo se escriben enlaces web y de correo; sin esquema se asume https.
 fn normaliza_uri(u: &str) -> Result<String, String> {
     let u = u.trim();
