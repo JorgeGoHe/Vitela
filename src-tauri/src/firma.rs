@@ -1210,6 +1210,52 @@ mod tests {
         assert_eq!(fuera_de_vigor(ahora + dia, ahora + 2 * dia, ahora), (true, true));
     }
 
+    /// **Orden 13 del informe de QA.** Un PDF firmado con **ECDSA de
+    /// verdad**, guardado en `fixtures/`: hasta ahora la firma ECDSA se
+    /// fabricaba en el propio test, así que el camino que recorre un
+    /// documento que llega de fuera —abrirlo del disco y verificarlo— no lo
+    /// probaba nadie. El fixture se generó con `cms_a_mano` y el
+    /// certificado P-256 de pruebas, y no cambia: sus bytes son los que
+    /// verifica este test.
+    ///
+    /// Es también el fixture del tercer estado: quien quiera comprobar que
+    /// «no se ha podido comprobar» no acusa a nadie ya no tiene que
+    /// manipular bytes a mano.
+    #[test]
+    fn el_fixture_firmado_con_ecdsa_se_verifica_al_abrirlo() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/firmado_ecdsa.pdf");
+        let firmas = verify_signatures(fixture.to_string_lossy().into_owned())
+            .expect("verificar el fixture");
+        assert_eq!(firmas.len(), 1, "el fixture lleva una firma");
+        let f = &firmas[0];
+        assert_eq!(f.estado, ESTADO_OK, "algoritmo: {}", f.algoritmo);
+        assert!(f.digest_ok, "el documento no ha cambiado desde la firma");
+        assert!(f.covers_whole_file);
+        assert!(
+            f.algoritmo.contains("ECDSA P-256") && f.algoritmo.contains("SHA-256"),
+            "{}",
+            f.algoritmo
+        );
+        assert!(f.cert_subject.contains("Ada Lovelace"), "{}", f.cert_subject);
+        assert_eq!(
+            f.confianza,
+            crate::confianza::AUTOFIRMADO,
+            "el certificado de pruebas es autofirmado"
+        );
+
+        // y tocar un byte del cuerpo del fixture sí lo rompe
+        let tocado = std::env::temp_dir().join("firma-ecdsa-fixture-tocado.pdf");
+        let mut bytes = std::fs::read(&fixture).expect("leer el fixture");
+        let i = find_subslice(&bytes, b"stream").expect("un stream") + 20;
+        bytes[i] ^= 0xFF;
+        std::fs::write(&tocado, &bytes).expect("escribir");
+        let f = &verify_signatures(tocado.to_string_lossy().into_owned()).expect("verificar")[0];
+        assert!(!f.digest_ok, "cambiar un byte tiene que romper la firma");
+        assert_eq!(f.estado, ESTADO_MODIFICADO);
+        std::fs::remove_file(&tocado).ok();
+    }
+
     /// **Distinto 5.** Un campo de firma no es un campo que se rellene: con
     /// él en la lista de `get_form_fields`, un PDF que solo lleva una firma
     /// se anunciaba como «este documento se puede rellenar», y encima en el
@@ -1576,6 +1622,7 @@ mod tests {
         let f = &verify_signatures(invisible.to_string_lossy().into_owned()).expect("verificar")[0];
         assert!(f.digest_ok && f.covers_whole_file);
         assert!(f.rect.is_none(), "sin rect no hay firma que ver");
+
 
         for p in [&src, &dest, &tocado, &invisible] {
             std::fs::remove_file(p).ok();
