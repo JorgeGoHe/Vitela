@@ -582,12 +582,21 @@ function App() {
       } else if (mod && e.key === "f" && pageCount > 0) {
         e.preventDefault();
         (document.querySelector(".search input") as HTMLInputElement)?.focus();
-      } else if (mod && (e.key === "+" || e.key === "=") && pageCount > 0) {
+      } else if (
+        mod &&
+        !e.shiftKey &&
+        (e.key === "+" || e.key === "=") &&
+        pageCount > 0
+      ) {
+        // sin Shift: ⇧⌘+ y ⇧⌘− quedan reservados para girar la vista
         e.preventDefault();
-        setZoom(Math.min(4, Math.round((zoomNum + 0.25) * 4) / 4));
-      } else if (mod && e.key === "-" && pageCount > 0) {
+        setZoom(recortaZoom(Math.round((zoomNum + 0.25) * 4) / 4));
+      } else if (mod && !e.shiftKey && e.key === "-" && pageCount > 0) {
         e.preventDefault();
-        setZoom(Math.max(0.5, Math.round((zoomNum - 0.25) * 4) / 4));
+        setZoom(recortaZoom(Math.round((zoomNum - 0.25) * 4) / 4));
+      } else if (mod && (e.key === "g" || e.key === "G") && pageCount > 0) {
+        e.preventDefault();
+        busqueda.gotoMatch(e.shiftKey ? -1 : 1);
       } else if (mod && !enCampo && (e.key === "z" || e.key === "Z") && pageCount > 0) {
         e.preventDefault();
         if (e.shiftKey) historial.rehacer();
@@ -1358,6 +1367,7 @@ function App() {
                 matchIdx={busqueda.matchIdx}
                 searched={busqueda.searched}
                 runSearch={busqueda.runSearch}
+                limpiar={busqueda.limpiar}
                 opciones={busqueda.opciones}
                 cambiaOpcion={busqueda.cambiaOpcion}
                 gotoMatch={busqueda.gotoMatch}
@@ -1834,6 +1844,7 @@ function App() {
                   tool={tool}
                   matches={busqueda.matchesByPage.get(i)}
                   currentGroup={busqueda.matchIdx}
+                  esActual={i === pageIndex}
                   selOwner={selOwner}
                   claimSel={setSelOwner}
                   requestRender={requestRender}

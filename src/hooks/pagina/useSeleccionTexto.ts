@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "../../ipc";
 import {
+  charIndexAt,
   copyToClipboard,
   mergeLineRects,
   type Mode,
@@ -21,9 +22,23 @@ export function useSeleccionTexto(ctx: {
   pageVersion: number;
   mode: Mode;
   selOwner: number | null;
+  /** Es la página que está leyendo el usuario (la de la píldora). */
+  esActual: boolean;
+  claimSel: (page: number | null) => void;
   onError: (e: unknown) => void;
 }) {
-  const { workPath, index, visible, docVersion, pageVersion, mode, selOwner, onError } = ctx;
+  const {
+    workPath,
+    index,
+    visible,
+    docVersion,
+    pageVersion,
+    mode,
+    selOwner,
+    esActual,
+    claimSel,
+    onError,
+  } = ctx;
   const [pageText, setPageText] = useState<PageText | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -59,6 +74,57 @@ export function useSeleccionTexto(ctx: {
       cancelled = true;
     };
   }, [workPath, index, visible, docVersion, pageVersion, onError]);
+
+  /** Doble clic selecciona la palabra y triple clic la línea (Acrobat). */
+  const seleccionaBloque = useCallback(
+    (x: number, y: number, linea: boolean) => {
+      if (!pageText) return;
+      const i = charIndexAt(pageText, x, y);
+      if (i === null) return;
+      const chars = pageText.chars;
+      const separa = (c: string) =>
+        /[\s.,;:!?()[\]{}"'«»¿¡…/\\]/.test(c);
+      let start = i;
+      let end = i;
+      if (linea) {
+        const alto = Math.max(1, chars[i].h);
+        while (
+          start > 0 &&
+          Math.abs(chars[start - 1].y - chars[i].y) < alto * 0.7
+        )
+          start--;
+        while (
+          end < chars.length - 1 &&
+          Math.abs(chars[end + 1].y - chars[i].y) < alto * 0.7
+        )
+          end++;
+      } else {
+        if (separa(chars[i].ch)) return;
+        while (start > 0 && !separa(chars[start - 1].ch)) start--;
+        while (end < chars.length - 1 && !separa(chars[end + 1].ch)) end++;
+      }
+      setSelection({ start, end });
+    },
+    [pageText],
+  );
+
+  // ⌘A selecciona todo el texto de la página que se está leyendo
+  useEffect(() => {
+    if (!esActual || mode !== "select" || !pageText) return;
+    const chars = pageText.chars.length;
+    if (chars === 0) return;
+    function onKey(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey) || (e.key !== "a" && e.key !== "A")) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (document.querySelector(".modal-backdrop")) return;
+      e.preventDefault();
+      claimSel(index);
+      setSelection({ start: 0, end: chars - 1 });
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [esActual, mode, pageText, claimSel, index]);
 
   const copySelection = useCallback(() => {
     if (!selection || !pageText) return;
@@ -99,6 +165,7 @@ export function useSeleccionTexto(ctx: {
     setDragging,
     anchorRef,
     downPosRef,
+    seleccionaBloque,
     copySelection,
     selectionRects,
     lastSelRect,

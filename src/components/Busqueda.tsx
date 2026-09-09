@@ -11,6 +11,7 @@ export default function Busqueda({
   matchIdx,
   searched,
   runSearch,
+  limpiar,
   opciones,
   cambiaOpcion,
   gotoMatch,
@@ -23,6 +24,8 @@ export default function Busqueda({
   matchIdx: number;
   searched: boolean;
   runSearch: () => void;
+  /** Descarta las coincidencias y, con `true`, también el término. */
+  limpiar: (conQuery?: boolean) => void;
   /** Coincidir mayúsculas y palabra completa (recordadas entre sesiones). */
   opciones: OpcionesBusqueda;
   cambiaOpcion: (clave: keyof OpcionesBusqueda) => void;
@@ -39,6 +42,14 @@ export default function Busqueda({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            // Esc cierra la búsqueda y devuelve el foco al documento; el
+            // atajo no sigue hasta la app (allí sale de la herramienta)
+            e.stopPropagation();
+            limpiar(true);
+            e.currentTarget.blur();
+            return;
+          }
           if (e.key !== "Enter") return;
           if (searched && total > 0 && query === lastQuery) {
             gotoMatch(e.shiftKey ? -1 : 1);

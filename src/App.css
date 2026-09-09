@@ -102,6 +102,21 @@ body,
   height: 100%;
 }
 
+/* el texto de la interfaz no se selecciona (arrastrar sobre la barra o el
+   panel no debe pintar sus etiquetas); el del documento y los campos sí */
+.app {
+  user-select: none;
+}
+
+input,
+textarea,
+.modal-file,
+.banner-error p,
+.banner-notice p,
+.card p {
+  user-select: text;
+}
+
 body {
   font-family: var(--font-ui);
   font-size: 13px;

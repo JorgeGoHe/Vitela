@@ -66,6 +66,8 @@ type Props = {
   tool: ToolProps;
   matches?: PageMatch[];
   currentGroup: number;
+  /** La página que marca la píldora: la que responde a ⌘A. */
+  esActual: boolean;
   selOwner: number | null;
   claimSel: (page: number | null) => void;
   requestRender: (page: number, width: number, pv: number) => Promise<string>;
@@ -94,6 +96,7 @@ function Pagina({
   tool,
   matches,
   currentGroup,
+  esActual,
   selOwner,
   claimSel,
   requestRender,
@@ -179,6 +182,8 @@ function Pagina({
     pageVersion,
     mode,
     selOwner,
+    esActual,
+    claimSel,
     onError,
   });
   const anotaciones = useAnotaciones({
@@ -326,6 +331,11 @@ function Pagina({
     }
     if (!seleccion.pageText) return;
     claimSel(index);
+    // doble clic: palabra; triple: línea (no arranca arrastre)
+    if (e.detail >= 2) {
+      seleccion.seleccionaBloque(x, y, e.detail >= 3);
+      return;
+    }
     seleccion.anchorRef.current = charIndexAt(seleccion.pageText, x, y);
     // el jitter de un clic simple no debe crear una selección de 1 carácter
     // (bloquearía el clic-para-borrar de las anotaciones)
