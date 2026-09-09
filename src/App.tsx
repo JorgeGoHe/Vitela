@@ -230,7 +230,10 @@ function App() {
     password?: string,
   ): Promise<string | null> {
     try {
+      // los avisos son del documento que se deja atrás: no deben sobrevivir
+      // a la apertura de otro
       setError(null);
+      setNotice(null);
       const anterior = workPath;
       const info = await invoke<{
         page_count: number;
@@ -428,6 +431,8 @@ function App() {
   function cerrarDocumento() {
     if (!workPath) return;
     const anterior = workPath;
+    setError(null);
+    setNotice(null);
     setWorkPath(null);
     setOriginalPath(null);
     setPageCount(0);
@@ -1195,7 +1200,9 @@ function App() {
         });
       } else {
         await invoke("save_pdf", { workPath, destPath: dest });
-        // a partir de aquí el fichero de `dest` va en claro
+        // a partir de aquí el fichero de `dest` va en claro: el aviso de
+        // «Documento protegido» que se puso al abrirlo ya no es cierto
+        if (hadPassword) setNotice(null);
         setHadPassword(false);
         setDocPassword(null);
       }
