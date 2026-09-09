@@ -423,6 +423,14 @@ textarea {
   font-weight: 500;
 }
 
+/* lo que no se va a poder reemplazar, dicho antes de pulsar */
+.search-aviso {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .search-reemplazo {
   display: flex;
   align-items: center;

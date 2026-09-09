@@ -1729,6 +1729,7 @@ function App() {
     matches: busqueda.matches,
     matchIdx: busqueda.matchIdx,
     pageCount,
+    activo: cajonBusqueda,
     onNotice: setNotice,
     onError: mostrarError,
     afterMutation,

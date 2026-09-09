@@ -51,6 +51,19 @@ export default function CajonBusqueda({
           </button>
         ))}
       </div>
+      {/* lo que no se va a poder hacer se dice ANTES de pulsar, como el
+          diálogo de combinar: después ya no hay decisión que tomar */}
+      {reemplazo.previo && reemplazo.previo.fuera > 0 && (
+        <p className="search-aviso">
+          {reemplazo.previo.tratables === 0
+            ? `Ninguna de las ${reemplazo.previo.total} está en un texto que se pueda reescribir.`
+            : `${reemplazo.previo.fuera} de las ${reemplazo.previo.total} están en un texto que no se puede reescribir; se ${
+                reemplazo.previo.tratables === 1
+                  ? "reemplazará 1"
+                  : `reemplazarán ${reemplazo.previo.tratables}`
+              }.`}
+        </p>
+      )}
       <div className="search-reemplazo">
         <input
           type="text"

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getTextBlocks, replaceText, type Reemplazo } from "../api";
 import { MOD, plural, type SearchMatch, type TextBlock } from "../tipos";
 
@@ -18,12 +18,22 @@ function bloqueDe(
   );
 }
 
+/** Dónde cae cada coincidencia: el bloque que la contiene, o `null` si no
+ *  hay ninguno que se pueda reescribir. Un elemento por coincidencia y en su
+ *  mismo orden, para poder contar las que se quedan fuera. */
+type Sitio = number | null;
+
 /**
  * «Reemplazar» y «Reemplazar todo» del cajón de búsqueda. El motor ya existía
  * (`edit_text_block`), lo que faltaba era el flujo: la UI cruza cada
  * coincidencia con el bloque de texto que la contiene y manda el lote entero
  * a `replace_text`, que lo hace en una sola mutación. Nada destructivo sin un
  * ⌘Z que lo devuelva de una vez.
+ *
+ * Los recuentos son en **coincidencias**, que es lo que el usuario ha
+ * contado en la lista: ni «bloques» (vocabulario del motor) ni un número que
+ * no cuadre con el que acaba de leer. Y lo que no se va a poder hacer se
+ * dice **antes**, no después.
  */
 export function useReemplazo(ctx: {
   workPath: string | null;
@@ -33,6 +43,9 @@ export function useReemplazo(ctx: {
   matches: SearchMatch[];
   matchIdx: number;
   pageCount: number;
+  /** El cajón está abierto: solo entonces se sitúan las coincidencias, que
+   *  es trabajo que quien únicamente busca no tiene por qué pagar. */
+  activo: boolean;
   onNotice: (texto: string, opts?: { persistente?: boolean }) => void;
   onError: (e: unknown) => void;
   afterMutation: (newCount: number) => void;
@@ -44,77 +57,116 @@ export function useReemplazo(ctx: {
     matches,
     matchIdx,
     pageCount,
+    activo,
     onNotice,
     onError,
     afterMutation,
   } = ctx;
   const [texto, setTexto] = useState("");
   const [trabajando, setTrabajando] = useState(false);
+  const [sitios, setSitios] = useState<Sitio[] | null>(null);
 
-  /** Los bloques a cambiar, sin repetir: dos coincidencias de la misma línea
-   *  son un solo bloque, y `replace_text` cambia las dos de una pasada. */
-  const juntaBloques = useCallback(
-    async (aTratar: SearchMatch[]): Promise<Reemplazo[]> => {
-      if (!workPath) return [];
-      const paginas = [...new Set(aTratar.map((m) => m.page_index))];
-      const porPagina = new Map<number, TextBlock[]>();
-      for (const p of paginas) {
-        porPagina.set(p, await getTextBlocks(workPath, p));
-      }
-      const vistos = new Set<string>();
-      const salida: Reemplazo[] = [];
-      const buscado = matchCase ? query : query.toLowerCase();
-      for (const m of aTratar) {
-        const b = bloqueDe(porPagina.get(m.page_index) ?? [], m);
-        if (!b) continue;
-        const suyo = matchCase ? b.text : b.text.toLowerCase();
-        if (!suyo.includes(buscado)) continue;
-        const clave = `${m.page_index}:${b.object_index}`;
-        if (vistos.has(clave)) continue;
-        vistos.add(clave);
-        salida.push({
-          page_index: m.page_index,
-          block_index: b.object_index,
-          from: query,
-          to: texto,
-        });
-      }
-      return salida;
-    },
-    [workPath, query, matchCase, texto],
-  );
+  /** Sitúa cada coincidencia en su bloque de texto. */
+  const situa = useCallback(async (): Promise<Sitio[]> => {
+    if (!workPath || !query) return matches.map(() => null);
+    const porPagina = new Map<number, TextBlock[]>();
+    for (const p of new Set(matches.map((m) => m.page_index))) {
+      porPagina.set(p, await getTextBlocks(workPath, p));
+    }
+    const buscado = matchCase ? query : query.toLowerCase();
+    return matches.map((m) => {
+      const b = bloqueDe(porPagina.get(m.page_index) ?? [], m);
+      if (!b) return null;
+      const suyo = matchCase ? b.text : b.text.toLowerCase();
+      return suyo.includes(buscado) ? b.object_index : null;
+    });
+  }, [workPath, query, matchCase, matches]);
+
+  // Con el cajón abierto se sitúan las coincidencias por adelantado: es lo
+  // que permite avisar de las que no se van a poder tocar ANTES de pulsar
+  useEffect(() => {
+    if (!activo || !workPath || !query || matches.length === 0) {
+      setSitios(null);
+      return;
+    }
+    let cancelado = false;
+    situa()
+      .then((s) => {
+        if (!cancelado) setSitios(s);
+      })
+      .catch(() => {
+        if (!cancelado) setSitios(null);
+      });
+    return () => {
+      cancelado = true;
+    };
+  }, [activo, workPath, query, matches, situa]);
+
+  /** Lo que se va a poder hacer, para decirlo antes: cuántas coincidencias
+   *  hay, cuántas se van a reemplazar y cuántas se quedan fuera. */
+  const previo =
+    sitios && sitios.length === matches.length
+      ? {
+          total: matches.length,
+          tratables: sitios.filter((s) => s !== null).length,
+          fuera: sitios.filter((s) => s === null).length,
+        }
+      : null;
 
   /** Con `todas`, el documento entero; sin ella, solo la coincidencia que
    *  está señalada (y las de su misma línea, que viven en el mismo bloque). */
   const reemplazar = useCallback(
     async (todas: boolean) => {
       if (!workPath || matches.length === 0 || !query) return;
-      const aTratar = todas ? matches : matches.slice(matchIdx, matchIdx + 1);
       setTrabajando(true);
       try {
         onNotice("Reemplazando…", { persistente: true });
-        const lote = await juntaBloques(aTratar);
+        const donde =
+          sitios && sitios.length === matches.length ? sitios : await situa();
+        const cuales = todas ? matches.map((_, i) => i) : [matchIdx];
+        // dos coincidencias de la misma línea son un solo bloque, y
+        // `replace_text` cambia las dos de una pasada
+        const vistos = new Set<string>();
+        const lote: Reemplazo[] = [];
+        let fuera = 0;
+        for (const i of cuales) {
+          const bloque = donde[i];
+          if (bloque === null || bloque === undefined) {
+            fuera++;
+            continue;
+          }
+          const clave = `${matches[i].page_index}:${bloque}`;
+          if (vistos.has(clave)) continue;
+          vistos.add(clave);
+          lote.push({
+            page_index: matches[i].page_index,
+            block_index: bloque,
+            from: query,
+            to: texto,
+          });
+        }
         if (lote.length === 0) {
           onNotice(
-            "No se ha podido reemplazar: el texto no está en un bloque que se pueda reescribir.",
+            "No se ha podido reemplazar: ese texto no está en ningún sitio que se pueda reescribir.",
           );
           return;
         }
-        const { hechas: hechos, saltadas } = await replaceText(workPath, lote);
+        const { hechas, saltadas } = await replaceText(workPath, lote);
         afterMutation(pageCount);
-        if (hechos === 0) {
+        // el recuento es honesto y en coincidencias, que es lo que el
+        // usuario acaba de contar en la lista: las que el backend se saltó
+        // por la fuente y las que ni llegaron a mandarse suman igual
+        const sinTocar = saltadas + fuera;
+        if (hechas === 0) {
           onNotice(
             "No se ha cambiado nada: ese texto está en una fuente que no se puede reescribir.",
           );
           return;
         }
-        // el recuento es honesto: si el backend se ha saltado bloques que no
-        // sabía reescribir, se dice, en vez de cantar un éxito redondo
-        const saltados = saltadas;
         onNotice(
-          `${plural(hechos, "bloque de texto reemplazado", "bloques de texto reemplazados")}${
-            saltados > 0
-              ? ` · ${saltados} en una fuente que no se puede reescribir`
+          `${plural(hechas, "coincidencia reemplazada", "coincidencias reemplazadas")}${
+            sinTocar > 0
+              ? ` · ${sinTocar} en un texto que no se puede reescribir`
               : ""
           } · ${MOD}Z lo devuelve`,
         );
@@ -129,15 +181,17 @@ export function useReemplazo(ctx: {
       matches,
       matchIdx,
       query,
+      texto,
+      sitios,
+      situa,
       pageCount,
-      juntaBloques,
       onNotice,
       onError,
       afterMutation,
     ],
   );
 
-  return { texto, setTexto, trabajando, reemplazar };
+  return { texto, setTexto, trabajando, previo, reemplazar };
 }
 
 export type Reemplazador = ReturnType<typeof useReemplazo>;
