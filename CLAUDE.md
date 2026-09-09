@@ -50,7 +50,9 @@ compila los instaladores a mano o al etiquetar `v*`.
   sobre `work_path`; el original solo se toca con `save_pdf(work_path,
   dest_path)` (Guardar / Guardar como). Las mutaciones guardan sobre la copia
   vía `save_and_close(doc, path)` (PDFium) o `cirugia(work_path, f)` (lopdf,
-  en `lib.rs`): escriben a `.tmp`, **cierran el documento y el caché, y solo
+  en `lib.rs`; `cirugia_en_hilo` es su cuerpo sin el paso de historial, para
+  los comandos que ya están dentro de una `mutacion` y del hilo de PDFium y
+  necesitan rematar con lopdf): escriben a `.tmp`, **cierran el documento y el caché, y solo
   entonces renombran** — PDFium lee el fichero abierto de forma perezosa y
   en Windows no se puede renombrar encima de un fichero abierto. Las copias
   se registran y se borran con `close_document(work_path)` (la UI lo llama
@@ -76,7 +78,7 @@ compila los instaladores a mano o al etiquetar `v*`.
   `add_highlight` (quadpoints en orden spec UL,UR,LL,LR),
   `add_stroke` (anotación Ink con path object como apariencia),
   `add_note` (anotación Text), `get_annotations` (incluye los quads de los
-  resaltados como `rects`), `remove_annotation`,
+  resaltados como `rects`, más `author` y `modified`), `remove_annotation`,
   `get_form_fields` / `set_form_text` / `set_form_checked` (formularios),
   `get_text_blocks` / `edit_text_block` / `add_text_block` (texto nuevo en un
   punto, una línea por objeto; parámetro `font` opcional — sin él se detecta
@@ -87,16 +89,30 @@ compila los instaladores a mano o al etiquetar `v*`.
   `replace_image` (borra + recrea en los mismos bounds) / `delete_image`,
   `sign_pdf(work, dest, cert_pem, key_pem, reason)` (módulo `firma`, no usa
   PDFium; test con fixtures en `src-tauri/fixtures/`).
-- Anotaciones: **el render de PDFium NO genera apariencia** para las
-  anotaciones sin `/AP` (comprobado empíricamente con Highlight y Text) — la
-  única vía que renderiza es añadir objetos DENTRO de la anotación
-  (`FPDFAnnot_AppendObject`), que en pdfium-render 0.8 solo exponen Ink y
-  Stamp (`objects_mut`). Por eso: los trazos son Ink con su path dentro
-  (visibles en el render), y los resaltados/notas los pinta la UI como
-  overlay con los datos de `get_annotations` (en otros visores se ven bien
-  porque sí generan apariencia). **El color de las anotaciones se lee
-  siempre con lopdf (`/C` + `/CA`, documento cacheado en el hilo), nunca
-  con `stroke_color()` de pdfium-render 0.8**: cuando la anotación tiene
+- Anotaciones: PDFium **no escribe** el `/AP` de las marcas de texto. Lo
+  genera en memoria al cargar el documento (por eso se veían en
+  `render_page`), pero al guardar no queda nada: fuera de Vitela el
+  resaltado no existía, no se imprimía y desaparecía al aplanar. Por eso
+  `add_highlight` y `add_markup` rematan con un segundo pase de lopdf
+  (`anotaciones::escribe_apariencia_marca`) que escribe el Form XObject a
+  mano, con `/BBox` igual al `/Rect` para dibujar en coordenadas de
+  página: rectángulo por quad en `/BM /Multiply` y `/CA 1` para el
+  resaltado (lo que hace Acrobat), línea de 1 pt en la base o a media
+  altura para subrayado y tachado, y `/F 4` en los tres. Para las notas
+  (Text) sigue sin haber apariencia: las pinta la UI como overlay con los
+  datos de `get_annotations`. Añadir objetos DENTRO de la anotación
+  (`FPDFAnnot_AppendObject`) sigue siendo la vía de los trazos y las
+  formas: en pdfium-render 0.8 solo Ink y Stamp exponen `objects_mut`.
+- **Autor y fecha**: los seis comandos que crean anotaciones
+  (`add_highlight`, `add_stroke`, `add_note`, `add_markup`, `add_shape`,
+  `add_stamp`) aceptan `author: Option<String>`; sin él se usa el usuario
+  del sistema (`USER`/`USERNAME`/`LOGNAME`). El remate lo hace
+  `anotaciones::remata_annot`, el mismo pase de lopdf de la apariencia:
+  escribe `/T` y `/M` (`D:YYYYMMDDHHmmSS`). `get_annotations` los
+  devuelve como `author` y `modified` (ISO 8601, o vacíos).
+  **El color de las anotaciones se lee
+  siempre con lopdf (`anotaciones::datos_annots`, documento cacheado en el
+  hilo), nunca con `stroke_color()` de pdfium-render 0.8**: cuando la anotación tiene
   `/AP` (formas, sellos, Ink, y todas tras un render) esa función castea el
   handle de anotación a objeto de página y en Linux es un SIGSEGV. Formas y
   sellos escriben `/C` al crearse por eso mismo. Ojo si se quitan objetos de página con
@@ -134,13 +150,44 @@ compila los instaladores a mano o al etiquetar `v*`.
   admite http/https/mailto y asume https si falta el esquema;
   `delete_form_field` borra el widget y su entrada de /Fields; los enlaces
   se borran con `remove_annotation`); `close_document`, `undo`, `redo`,
-  `history_state`, `squash_history` (ver arriba).
+  `history_state`, `squash_history` (ver arriba); `list_recent` /
+  `touch_recent` / `remove_recent` (recientes.rs) y `confirmar_cierre`
+  (lib.rs, ver abajo).
+- **Recientes** (`recientes.rs`): lista de ocho en
+  `DIR_DATOS/recientes.json`. Solo se guardan ruta y fecha; `name`, `dir`
+  y `exists` se recalculan al listar. `open_pdf` NO toca la lista: la
+  llama la UI tras abrir con éxito (un PDF protegido cuya contraseña se
+  cancela no se ha abierto). Una lista corrupta o un `DIR_DATOS` sin
+  fijar devuelven vacío, nunca un error.
+- **Eventos hacia la UI** (los dos con `listen`; en el navegador de QA no
+  existen, los shims de `ipc.ts` los dejan en nada):
+  - `abrir-fichero` con `{ path }` — doble clic en el Finder/Explorador o
+    PDF en la línea de órdenes. `bundle.fileAssociations` declara la
+    extensión; en Windows y Linux llega por `std::env::args()`, en macOS
+    por `RunEvent::Opened` (también con la app ya abierta). Los eventos de
+    Tauri no se encolan y el `listen` de la UI se registra por IPC, así
+    que en arranque frío el PDF se guarda y se manda tras `on_page_load`.
+    Sin test automático: se prueba con `open -a Vitela fichero.pdf`.
+  - `cerrar-solicitado` con `{}` — ⌘W, el botón rojo o ⌘Q. El primer
+    intento se frena (`prevent_close` en la ventana y `prevent_exit` en la
+    salida, porque en macOS ⌘Q no siempre pasa por la ventana); la UI
+    resuelve los cambios sin guardar y llama a `confirmar_cierre`, que
+    destruye la ventana de verdad. **Si la UI no escucha este evento la
+    app no se puede cerrar.**
+- **Errores para humanos**: `mensaje_llano` (lib.rs) traduce la jerga de
+  las librerías (el `Display` de `PdfiumError` es el `Debug` de Rust; los
+  de E/S acaban en `(os error 2)`) a una frase con la causa y la salida,
+  conservando el contexto en español que ya escribimos nosotros. Vive en
+  los embudos por los que pasa todo comando —`mutacion`, `with_doc`,
+  `with_lopdf`, `cirugia_en_hilo`— más los pocos que no pasan por
+  ninguno; no hace falta llamarla en cada `map_err`.
 - **Módulos del core**: `lib.rs` solo tiene la infraestructura (hilo,
   cachés, copia de trabajo, `open_pdf`, render, firma, `run()`); el resto
   por dominio: `busqueda.rs`, `paginas.rs`/`paginas2.rs`,
   `anotaciones.rs`/`anotaciones2.rs`, `formularios.rs`/`formularios2.rs`,
   `texto.rs`, `imagenes.rs`, `documento.rs`, `seguridad.rs`, `exportar.rs`,
-  `firma.rs`, `firmas_visuales.rs`, `historial.rs`, `puente_dev.rs`.
+  `firma.rs`, `firmas_visuales.rs`, `historial.rs`, `recientes.rs`,
+  `puente_dev.rs`.
   `generate_handler!` y `despachar` referencian los comandos por ruta de
   módulo (con re-exports no funciona el macro).
 - **Estructura de la UI**: `App.tsx` conserva el ciclo de apertura, la
