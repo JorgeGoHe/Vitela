@@ -647,12 +647,15 @@ function App() {
         e.preventDefault();
         busqueda.gotoMatch(e.shiftKey ? -1 : 1);
       } else if (mod && !enCampo && (e.key === "z" || e.key === "Z") && pageCount > 0) {
+        // sin historial el atajo no hace nada, como en Acrobat: llamar al
+        // backend solo dejaba un error rojo de «Nada que deshacer»
         e.preventDefault();
-        if (e.shiftKey) historial.rehacer();
-        else historial.deshacer();
+        if (e.shiftKey) {
+          if (historial.puedeRehacer) historial.rehacer();
+        } else if (historial.puedeDeshacer) historial.deshacer();
       } else if (mod && !enCampo && e.key === "y" && pageCount > 0) {
         e.preventDefault();
-        historial.rehacer();
+        if (historial.puedeRehacer) historial.rehacer();
       } else if (!mod && !enCampo && e.key === "ArrowRight") {
         gotoPage(pageIndex + 1);
       } else if (!mod && !enCampo && e.key === "ArrowLeft") {
