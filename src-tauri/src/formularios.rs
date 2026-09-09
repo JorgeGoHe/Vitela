@@ -25,7 +25,7 @@ pub fn get_form_fields(path: String, page_index: u16) -> Result<Vec<FormFieldInf
     on_pdfium_thread(move || {
         with_doc(&path, |doc| {
             let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-            let page_h = page.height().value;
+            let geo = crate::Geo::de_pagina(&page);
             let annotations = page.annotations();
             let mut out = Vec::new();
             for i in 0..annotations.len() {
@@ -62,16 +62,17 @@ pub fn get_form_fields(path: String, page_index: u16) -> Result<Vec<FormFieldInf
                     ),
                     _ => (String::new(), false),
                 };
+                let caja = geo.pdf_rect_a_ui(&b);
                 out.push(FormFieldInfo {
                     annot_index: i as u16,
                     name: field.name().unwrap_or_default(),
                     kind,
                     value,
                     checked,
-                    x: b.left().value,
-                    y: page_h - b.top().value,
-                    w: b.right().value - b.left().value,
-                    h: b.top().value - b.bottom().value,
+                    x: caja.x,
+                    y: caja.y,
+                    w: caja.w,
+                    h: caja.h,
                 });
             }
             Ok(out)

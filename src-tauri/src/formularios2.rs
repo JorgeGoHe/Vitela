@@ -73,16 +73,39 @@ fn anade_a_annots(doc: &mut LoDoc, page_id: ObjectId, annot_id: ObjectId) -> Res
     Ok(())
 }
 
+/// `/Rotate` de la página (heredable, como el MediaBox).
+fn rotacion(doc: &LoDoc, page_id: ObjectId) -> u16 {
+    let mut actual = page_id;
+    for _ in 0..32 {
+        let Ok(dict) = doc.get_object(actual).and_then(|o| o.as_dict()) else {
+            break;
+        };
+        if let Ok(r) = dict.get(b"Rotate").and_then(|o| o.as_i64()) {
+            return r.rem_euclid(360) as u16;
+        }
+        match dict.get(b"Parent") {
+            Ok(Object::Reference(rid)) => actual = *rid,
+            _ => break,
+        }
+    }
+    0
+}
+
+/// Geometría de la página para convertir las coordenadas de la UI, con su
+/// rotación: sin ella, en una página girada el campo o el enlace caen fuera.
+fn geo_pagina(doc: &LoDoc, page_id: ObjectId) -> Result<crate::Geo, String> {
+    let mb = media_box(doc, page_id)?;
+    Ok(crate::Geo::nueva(&mb, rotacion(doc, page_id)))
+}
+
 /// Rect de UI (origen arriba-izquierda) a array Rect PDF de la página dada.
-fn rect_pdf(rect: &Rect, mb: &[f32; 4]) -> Object {
-    let alto = mb[3] - mb[1];
-    let x0 = mb[0] + rect.x;
-    let y1 = mb[1] + alto - rect.y;
+fn rect_pdf(rect: &Rect, geo: &crate::Geo) -> Object {
+    let r = geo.ui_rect_a_pdf(rect);
     Object::Array(vec![
-        x0.into(),
-        (y1 - rect.h).into(),
-        (x0 + rect.w).into(),
-        y1.into(),
+        r.left().value.into(),
+        r.bottom().value.into(),
+        r.right().value.into(),
+        r.top().value.into(),
     ])
 }
 
@@ -107,7 +130,7 @@ pub fn create_form_field(
             .get_pages()
             .get(&(page_index as u32 + 1))
             .ok_or("Página fuera de rango")?;
-        let mb = media_box(doc, page_id)?;
+        let geo = geo_pagina(doc, page_id)?;
 
         // nombres existentes para garantizar unicidad de T
         let existentes: Vec<String> = doc
@@ -136,7 +159,7 @@ pub fn create_form_field(
         let mut widget = Dictionary::new();
         widget.set("Type", Object::Name(b"Annot".to_vec()));
         widget.set("Subtype", Object::Name(b"Widget".to_vec()));
-        widget.set("Rect", rect_pdf(&rect, &mb));
+        widget.set("Rect", rect_pdf(&rect, &geo));
         widget.set("T", Object::string_literal(nombre));
         widget.set("F", 4i64); // Print
         widget.set("DA", Object::string_literal("/Helv 0 Tf 0 g"));
@@ -145,7 +168,19 @@ pub fn create_form_field(
             "BC",
             Object::Array(vec![0.into(), 0.into(), 0.into()]),
         );
+        if geo.rot != 0 {
+            // /R gira el widget al revés que la página para que se lea
+            // derecho, que es lo que hace Acrobat
+            mk.set("R", Object::Integer(geo.rot as i64));
+        }
         widget.set("MK", Object::Dictionary(mk));
+        // la apariencia va en el espacio del PDF: con la página rotada, el
+        // ancho de la UI es el alto del PDF
+        let caja = geo.ui_rect_a_pdf(&rect);
+        let (ancho, alto) = (
+            caja.right().value - caja.left().value,
+            caja.top().value - caja.bottom().value,
+        );
         match kind.as_str() {
             "text" => {
                 widget.set("FT", Object::Name(b"Tx".to_vec()));
@@ -166,8 +201,8 @@ pub fn create_form_field(
                         Object::Array(vec![
                             0.into(),
                             0.into(),
-                            rect.w.into(),
-                            rect.h.into(),
+                            ancho.into(),
+                            alto.into(),
                         ]),
                     );
                     d.set("Resources", Object::Dictionary(Dictionary::new()));
@@ -176,10 +211,10 @@ pub fn create_form_field(
                 let off_id = doc.add_object(bbox("").clone());
                 let aspa = format!(
                     "q 0 g 1.5 w 2 2 m {} {} l S 2 {} m {} 2 l S Q",
-                    rect.w - 2.0,
-                    rect.h - 2.0,
-                    rect.h - 2.0,
-                    rect.w - 2.0
+                    ancho - 2.0,
+                    alto - 2.0,
+                    alto - 2.0,
+                    ancho - 2.0
                 );
                 let yes_id = doc.add_object(bbox(&aspa).clone());
                 let mut estados = Dictionary::new();
@@ -270,11 +305,11 @@ pub fn create_link(
         let page_id = *paginas
             .get(&(page_index as u32 + 1))
             .ok_or("Página fuera de rango")?;
-        let mb = media_box(doc, page_id)?;
+        let geo = geo_pagina(doc, page_id)?;
         let mut link = Dictionary::new();
         link.set("Type", Object::Name(b"Annot".to_vec()));
         link.set("Subtype", Object::Name(b"Link".to_vec()));
-        link.set("Rect", rect_pdf(&rect, &mb));
+        link.set("Rect", rect_pdf(&rect, &geo));
         link.set(
             "Border",
             Object::Array(vec![0.into(), 0.into(), 0.into()]),
@@ -311,6 +346,83 @@ pub fn create_link(
 mod tests {
     use super::*;
     use crate::tests::crea_pdf;
+
+    /// En una página rotada, el campo y el enlace tienen que quedar donde
+    /// se dibujó el área: el `/Rect` vive en el espacio SIN rotar, así que
+    /// hay que convertirlo, no volcarlo tal cual.
+    #[test]
+    fn campos_y_enlaces_en_una_pagina_rotada() {
+        let pdf = std::env::temp_dir().join("formularios2-rotada-test.pdf");
+        crea_pdf(&["Solicitud"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+        crate::paginas::rotate_page(work.clone(), 0).expect("girar 90°");
+
+        let area = Rect { x: 100.0, y: 400.0, w: 150.0, h: 30.0 };
+        create_form_field(work.clone(), 0, "text".into(), area.clone(), "nombre".into())
+            .expect("crear campo");
+        create_link(
+            work.clone(),
+            0,
+            Rect { x: 100.0, y: 200.0, w: 150.0, h: 30.0 },
+            Some("https://ejemplo.org".into()),
+            None,
+        )
+        .expect("crear enlace");
+
+        let campo = &crate::formularios::get_form_fields(work.clone(), 0).expect("listar")[0];
+        assert!(
+            (campo.x - 100.0).abs() < 1.0
+                && (campo.y - 400.0).abs() < 1.0
+                && (campo.w - 150.0).abs() < 1.0
+                && (campo.h - 30.0).abs() < 1.0,
+            "el campo se lee en ({},{}) {}×{}",
+            campo.x,
+            campo.y,
+            campo.w,
+            campo.h
+        );
+        let enlace = &crate::documento::get_links(work.clone(), 0).expect("enlaces")[0];
+        assert!(
+            (enlace.x - 100.0).abs() < 1.0 && (enlace.y - 200.0).abs() < 1.0,
+            "el enlace se lee en ({},{})",
+            enlace.x,
+            enlace.y
+        );
+
+        // y en el fichero, el /Rect está dentro de la página sin rotar:
+        // (100,400) de la UI con /Rotate 90 es (400,100) en el PDF
+        let doc = LoDoc::load(&work).expect("cargar");
+        let page_id = *doc.get_pages().get(&1).expect("página 1");
+        let annots = doc
+            .get_object(page_id)
+            .and_then(|o| o.as_dict())
+            .and_then(|d| d.get(b"Annots"))
+            .and_then(|o| o.as_array())
+            .expect("Annots")
+            .clone();
+        let rid = annots[0].as_reference().expect("referencia");
+        let r: Vec<f32> = doc
+            .get_object(rid)
+            .and_then(|o| o.as_dict())
+            .and_then(|d| d.get(b"Rect"))
+            .and_then(|o| o.as_array())
+            .expect("Rect")
+            .iter()
+            .map(|o| match o {
+                Object::Integer(i) => *i as f32,
+                Object::Real(v) => *v,
+                _ => 0.0,
+            })
+            .collect();
+        assert!(
+            (r[0] - 400.0).abs() < 1.0
+                && (r[1] - 100.0).abs() < 1.0
+                && (r[2] - 430.0).abs() < 1.0
+                && (r[3] - 250.0).abs() < 1.0,
+            "/Rect del campo: {r:?}"
+        );
+        std::fs::remove_file(&pdf).ok();
+    }
 
     #[test]
     fn campo_de_texto_visible_y_rellenable_por_pdfium() {

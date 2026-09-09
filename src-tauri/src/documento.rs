@@ -236,7 +236,7 @@ pub fn get_links(path: String, page_index: u16) -> Result<Vec<LinkInfo>, String>
     on_pdfium_thread(move || {
         with_doc(&path, |doc| {
             let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-            let page_h = page.height().value;
+            let geo = crate::Geo::de_pagina(&page);
             let mut out = Vec::new();
             // se recorren las anotaciones (no `page.links()`) para poder
             // devolver el índice que entiende `remove_annotation`
@@ -266,12 +266,13 @@ pub fn get_links(path: String, page_index: u16) -> Result<Vec<LinkInfo>, String>
                 if uri.is_none() && dest_page.is_none() {
                     continue;
                 }
+                let caja = geo.pdf_rect_a_ui(&r);
                 out.push(LinkInfo {
                     annot_index: i as u16,
-                    x: r.left().value,
-                    y: page_h - r.top().value,
-                    w: r.right().value - r.left().value,
-                    h: r.top().value - r.bottom().value,
+                    x: caja.x,
+                    y: caja.y,
+                    w: caja.w,
+                    h: caja.h,
                     uri,
                     dest_page,
                 });

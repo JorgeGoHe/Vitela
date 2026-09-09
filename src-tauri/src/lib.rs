@@ -484,10 +484,14 @@ pub(crate) struct Rect {
 struct PageSize {
     width: f32,
     height: f32,
+    /// `/Rotate` de la página en grados horarios (0, 90, 180 o 270). El
+    /// `width`/`height` de arriba ya la lleva aplicada (es el tamaño que se
+    /// ve), pero la UI la necesita para girar sus overlays.
+    rotation: u16,
 }
 
 /// Tamaño de todas las páginas en puntos PDF (para el layout del scroll
-/// continuo sin renderizar nada).
+/// continuo sin renderizar nada) y su rotación.
 #[tauri::command(async)]
 fn get_page_sizes(path: String) -> Result<Vec<PageSize>, String> {
     on_pdfium_thread(move || {
@@ -498,10 +502,115 @@ fn get_page_sizes(path: String) -> Result<Vec<PageSize>, String> {
                 .map(|p| PageSize {
                     width: p.width().value,
                     height: p.height().value,
+                    rotation: Geo::de_pagina(&p).rot,
                 })
                 .collect())
         })
     })
+}
+
+/// Geometría de una página para convertir entre las coordenadas de la UI
+/// (las del render: origen arriba-izquierda, con la rotación ya aplicada) y
+/// las del PDF (origen abajo-izquierda y SIN rotar, que es donde viven los
+/// `/Rect` de las anotaciones y las cajas de los objetos de página).
+///
+/// Por qué hace falta: `page.height()` de PDFium devuelve la altura YA
+/// rotada, mientras que `annotation.bounds()` sigue en el espacio sin
+/// rotar. Voltear la `y` con esa altura descoloca todo en cuanto la página
+/// lleva `/Rotate` — el sello caía a 246 pt del clic en una A4 girada.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Geo {
+    /// Esquina inferior izquierda de la caja de la página, sin rotar.
+    x0: f32,
+    y0: f32,
+    /// Tamaño de la página sin rotar.
+    w: f32,
+    h: f32,
+    /// `/Rotate` en grados horarios: 0, 90, 180 o 270.
+    pub(crate) rot: u16,
+}
+
+impl Geo {
+    /// A partir de la caja de la página (`[x0, y0, x1, y1]`, sin rotar) y su
+    /// `/Rotate`: para el código que trabaja con lopdf y no tiene PdfPage.
+    pub(crate) fn nueva(caja: &[f32; 4], rot: u16) -> Self {
+        Geo {
+            x0: caja[0],
+            y0: caja[1],
+            w: caja[2] - caja[0],
+            h: caja[3] - caja[1],
+            rot: rot % 360,
+        }
+    }
+
+    pub(crate) fn de_pagina(page: &PdfPage) -> Self {
+        let rot = page
+            .rotation()
+            .map(|r| r.as_degrees() as u16)
+            .unwrap_or(0)
+            % 360;
+        // el tamaño visible lo da PDFium ya rotado: deshacemos la rotación
+        // en vez de leer la caja, para no separarnos nunca del render
+        let (vw, vh) = (page.width().value, page.height().value);
+        let (w, h) = if rot == 90 || rot == 270 { (vh, vw) } else { (vw, vh) };
+        // el origen sí sale de la caja de la página (casi siempre 0,0)
+        let caja = page
+            .boundaries()
+            .crop()
+            .or_else(|_| page.boundaries().media())
+            .ok();
+        let (x0, y0) = caja
+            .map(|c| (c.bounds.left().value, c.bounds.bottom().value))
+            .unwrap_or((0.0, 0.0));
+        Geo { x0, y0, w, h, rot }
+    }
+
+    /// Un punto de la UI a coordenadas PDF.
+    pub(crate) fn ui_a_pdf(&self, x: f32, y: f32) -> (f32, f32) {
+        let (ax, ay) = match self.rot {
+            90 => (y, x),
+            180 => (self.w - x, y),
+            270 => (self.w - y, self.h - x),
+            _ => (x, self.h - y),
+        };
+        (ax + self.x0, ay + self.y0)
+    }
+
+    /// Un punto en coordenadas PDF a las de la UI.
+    pub(crate) fn pdf_a_ui(&self, px: f32, py: f32) -> (f32, f32) {
+        let (ax, ay) = (px - self.x0, py - self.y0);
+        match self.rot {
+            90 => (ay, ax),
+            180 => (self.w - ax, ay),
+            270 => (self.h - ay, self.w - ax),
+            _ => (ax, self.h - ay),
+        }
+    }
+
+    /// Un rect de la UI a `PdfRect` (los giros son múltiplos de 90°, así que
+    /// el rect sigue siendo paralelo a los ejes: basta con las esquinas).
+    pub(crate) fn ui_rect_a_pdf(&self, r: &Rect) -> PdfRect {
+        let (ax, ay) = self.ui_a_pdf(r.x, r.y);
+        let (bx, by) = self.ui_a_pdf(r.x + r.w, r.y + r.h);
+        PdfRect::new(
+            PdfPoints::new(ay.min(by)),
+            PdfPoints::new(ax.min(bx)),
+            PdfPoints::new(ay.max(by)),
+            PdfPoints::new(ax.max(bx)),
+        )
+    }
+
+    /// Un `PdfRect` a rect de la UI.
+    pub(crate) fn pdf_rect_a_ui(&self, r: &PdfRect) -> Rect {
+        let (ax, ay) = self.pdf_a_ui(r.left().value, r.top().value);
+        let (bx, by) = self.pdf_a_ui(r.right().value, r.bottom().value);
+        Rect {
+            x: ax.min(bx),
+            y: ay.min(by),
+            w: (bx - ax).abs(),
+            h: (by - ay).abs(),
+        }
+    }
 }
 
 mod anotaciones;

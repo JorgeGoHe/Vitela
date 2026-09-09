@@ -1,20 +1,11 @@
 //! Anotaciones básicas: resaltado, trazo (Ink), nota, listado y borrado.
 
-use crate::{cirugia_en_hilo, on_pdfium_thread, pdfium, save_and_close, with_doc, with_lopdf, Rect};
+use crate::{cirugia_en_hilo, on_pdfium_thread, pdfium, save_and_close, with_doc, with_lopdf, Geo, Rect};
 use crate::historial::mutacion;
 use pdfium_render::prelude::*;
 use serde::Serialize;
 
-/// Convierte un rect en coords de UI (origen arriba-izquierda) a PdfRect
-/// (origen abajo-izquierda).
-pub(crate) fn ui_rect_to_pdf(r: &Rect, page_h: f32) -> PdfRect {
-    PdfRect::new(
-        PdfPoints::new(page_h - r.y - r.h),
-        PdfPoints::new(r.x),
-        PdfPoints::new(page_h - r.y),
-        PdfPoints::new(r.x + r.w),
-    )
-}
+
 
 /// Crea una anotación de resaltado amarillo sobre los rects dados
 /// (coords de UI en puntos PDF).
@@ -34,7 +25,7 @@ pub fn add_highlight(
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let page_h = page.height().value;
+        let geo = Geo::de_pagina(&page);
         let mut annot = page
             .annotations_mut()
             .create_highlight_annotation()
@@ -55,10 +46,10 @@ pub fn add_highlight(
             h: bottom - top,
         };
         annot
-            .set_bounds(ui_rect_to_pdf(&envelope, page_h))
+            .set_bounds(geo.ui_rect_a_pdf(&envelope))
             .map_err(|e| e.to_string())?;
         for r in &rects {
-            let pr = ui_rect_to_pdf(r, page_h);
+            let pr = geo.ui_rect_a_pdf(r);
             // Orden del spec (UL, UR, LL, LR): otros visores generan la
             // apariencia a partir de los quads y el orden importa.
             let quad = PdfQuadPoints::new(
@@ -107,7 +98,10 @@ pub fn add_stroke(
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let page_h = page.height().value;
+        let geo = Geo::de_pagina(&page);
+        // los puntos van uno a uno: así el trazo sale igual que se dibujó
+        // aunque la página esté rotada
+        let puntos: Vec<(f32, f32)> = points.iter().map(|p| geo.ui_a_pdf(p[0], p[1])).collect();
         let mut annot = page
             .annotations_mut()
             .create_ink_annotation()
@@ -119,29 +113,29 @@ pub fn add_stroke(
             .set_stroke_color(PdfColor::new(c[0], c[1], c[2], c[3]))
             .map_err(|e| e.to_string())?;
         const MARGIN: f32 = 3.0;
-        let min_x = points.iter().map(|p| p[0]).fold(f32::MAX, f32::min) - MARGIN;
-        let max_x = points.iter().map(|p| p[0]).fold(f32::MIN, f32::max) + MARGIN;
-        let min_y = points.iter().map(|p| p[1]).fold(f32::MAX, f32::min) - MARGIN;
-        let max_y = points.iter().map(|p| p[1]).fold(f32::MIN, f32::max) + MARGIN;
+        let min_x = puntos.iter().map(|p| p.0).fold(f32::MAX, f32::min) - MARGIN;
+        let max_x = puntos.iter().map(|p| p.0).fold(f32::MIN, f32::max) + MARGIN;
+        let min_y = puntos.iter().map(|p| p.1).fold(f32::MAX, f32::min) - MARGIN;
+        let max_y = puntos.iter().map(|p| p.1).fold(f32::MIN, f32::max) + MARGIN;
         annot
             .set_bounds(PdfRect::new(
-                PdfPoints::new(page_h - max_y),
+                PdfPoints::new(min_y),
                 PdfPoints::new(min_x),
-                PdfPoints::new(page_h - min_y),
+                PdfPoints::new(max_y),
                 PdfPoints::new(max_x),
             ))
             .map_err(|e| e.to_string())?;
         let mut path = PdfPagePathObject::new(
             &doc,
-            PdfPoints::new(points[0][0]),
-            PdfPoints::new(page_h - points[0][1]),
+            PdfPoints::new(puntos[0].0),
+            PdfPoints::new(puntos[0].1),
             Some(PdfColor::new(c[0], c[1], c[2], c[3])),
             Some(PdfPoints::new(w)),
             None,
         )
         .map_err(|e| e.to_string())?;
-        for p in &points[1..] {
-            path.line_to(PdfPoints::new(p[0]), PdfPoints::new(page_h - p[1]))
+        for p in &puntos[1..] {
+            path.line_to(PdfPoints::new(p.0), PdfPoints::new(p.1))
                 .map_err(|e| e.to_string())?;
         }
         annot
@@ -173,7 +167,7 @@ pub fn add_note(
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let page_h = page.height().value;
+        let geo = Geo::de_pagina(&page);
         let mut annot = page
             .annotations_mut()
             .create_text_annotation(&text)
@@ -181,15 +175,12 @@ pub fn add_note(
         annot.set_is_printed(true).map_err(|e| e.to_string())?;
         const ICON: f32 = 22.0;
         annot
-            .set_bounds(ui_rect_to_pdf(
-                &Rect {
-                    x,
-                    y,
-                    w: ICON,
-                    h: ICON,
-                },
-                page_h,
-            ))
+            .set_bounds(geo.ui_rect_a_pdf(&Rect {
+                x,
+                y,
+                w: ICON,
+                h: ICON,
+            }))
             .map_err(|e| e.to_string())?;
         drop(page);
         save_and_close(doc, &work_path)?;
@@ -621,7 +612,7 @@ pub fn get_annotations(path: String, page_index: u16) -> Result<Vec<AnnotationIn
     on_pdfium_thread(move || {
         with_doc(&path, |doc| {
             let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-            let page_h = page.height().value;
+            let geo = Geo::de_pagina(&page);
             let annotations = page.annotations();
             let mut out = Vec::new();
             for i in 0..annotations.len() {
@@ -639,12 +630,12 @@ pub fn get_annotations(path: String, page_index: u16) -> Result<Vec<AnnotationIn
                                 let points = m.attachment_points_mut();
                                 for j in 0..points.len() {
                                     if let Ok(q) = points.get(j) {
-                                        rects.push(Rect {
-                                            x: q.left().value,
-                                            y: page_h - q.top().value,
-                                            w: q.right().value - q.left().value,
-                                            h: q.top().value - q.bottom().value,
-                                        });
+                                        rects.push(geo.pdf_rect_a_ui(&PdfRect::new(
+                                            q.bottom(),
+                                            q.left(),
+                                            q.top(),
+                                            q.right(),
+                                        )));
                                     }
                                 }
                             }
@@ -654,13 +645,14 @@ pub fn get_annotations(path: String, page_index: u16) -> Result<Vec<AnnotationIn
                     lee_quads!(a.as_underline_annotation_mut());
                     lee_quads!(a.as_strikeout_annotation_mut());
                 }
+                let caja = geo.pdf_rect_a_ui(&b);
                 out.push(AnnotationInfo {
                     index: i as u16,
                     kind: format!("{:?}", a.annotation_type()),
-                    x: b.left().value,
-                    y: page_h - b.top().value,
-                    w: b.right().value - b.left().value,
-                    h: b.top().value - b.bottom().value,
+                    x: caja.x,
+                    y: caja.y,
+                    w: caja.w,
+                    h: caja.h,
                     contents: a.contents().unwrap_or_default(),
                     rects,
                     color: None,

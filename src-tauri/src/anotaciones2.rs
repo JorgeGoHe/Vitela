@@ -3,9 +3,9 @@
 //! es la única vía que renderiza sin /AP y se borra como anotación) y sellos
 //! (Stamp con borde + texto dentro).
 
-use crate::anotaciones::{remata_annot, remata_annot_en, ui_rect_to_pdf, EstiloMarca};
+use crate::anotaciones::{remata_annot, remata_annot_en, EstiloMarca};
 use crate::historial::mutacion;
-use crate::{on_pdfium_thread, pdfium, save_and_close, Rect};
+use crate::{on_pdfium_thread, pdfium, save_and_close, Geo, Rect};
 use pdfium_render::prelude::*;
 
 fn color_de(c: [u8; 4]) -> PdfColor {
@@ -32,20 +32,17 @@ pub fn add_markup(
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let page_h = page.height().value;
+        let geo = Geo::de_pagina(&page);
         let left = rects.iter().map(|r| r.x).fold(f32::MAX, f32::min);
         let top = rects.iter().map(|r| r.y).fold(f32::MAX, f32::min);
         let right = rects.iter().map(|r| r.x + r.w).fold(f32::MIN, f32::max);
         let bottom = rects.iter().map(|r| r.y + r.h).fold(f32::MIN, f32::max);
-        let envelope = ui_rect_to_pdf(
-            &Rect {
-                x: left,
-                y: top,
-                w: right - left,
-                h: bottom - top,
-            },
-            page_h,
-        );
+        let envelope = geo.ui_rect_a_pdf(&Rect {
+            x: left,
+            y: top,
+            w: right - left,
+            h: bottom - top,
+        });
         // los tres subtipos comparten API pero son tipos distintos sin trait
         // común para los quadpoints: macro local en vez de duplicar
         macro_rules! configurar {
@@ -59,7 +56,7 @@ pub fn add_markup(
                 annot.set_bounds(envelope).map_err(|e| e.to_string())?;
                 let points = annot.attachment_points_mut();
                 for r in &rects {
-                    let pr = ui_rect_to_pdf(r, page_h);
+                    let pr = geo.ui_rect_a_pdf(r);
                     // orden del spec (UL, UR, LL, LR)
                     let quad = PdfQuadPoints::new(
                         pr.left(),
@@ -130,14 +127,14 @@ pub fn add_shape(
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let page_h = page.height().value;
+        let geo = Geo::de_pagina(&page);
         let stroke_color = color_de(stroke);
         let width = PdfPoints::new(stroke_width.max(0.5));
         let fill_color = fill.map(color_de);
 
-        // coords PDF (origen abajo-izquierda)
-        let (px1, py1) = (x1, page_h - y1);
-        let (px2, py2) = (x2, page_h - y2);
+        // coords PDF (origen abajo-izquierda y sin rotar)
+        let (px1, py1) = geo.ui_a_pdf(x1, y1);
+        let (px2, py2) = geo.ui_a_pdf(x2, y2);
         let bbox = PdfRect::new(
             PdfPoints::new(py1.min(py2)),
             PdfPoints::new(px1.min(px2)),
@@ -257,16 +254,16 @@ pub fn add_stamp(
             .map_err(|e| e.to_string())?;
         let font = doc.fonts_mut().helvetica_bold();
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let page_h = page.height().value;
+        let geo = Geo::de_pagina(&page);
         let size = font_size.clamp(8.0, 96.0);
         // Helvetica Bold en mayúsculas ronda 0.66 em de media por carácter
         let text_w = text.chars().count() as f32 * size * 0.66;
         let pad = size * 0.45;
         let w = text_w + pad * 2.0;
         let h = size + pad * 2.0;
-        // centrado en el punto de clic
-        let left = x - w / 2.0;
-        let bottom = page_h - y - h / 2.0;
+        // la caja se calcula en coords de UI (centrada en el clic) y se
+        // convierte entera: en una página rotada cambia hasta la orientación
+        let caja = geo.ui_rect_a_pdf(&Rect { x: x - w / 2.0, y: y - h / 2.0, w, h });
         let c = color_de(color);
 
         let mut annot = page
@@ -277,20 +274,15 @@ pub fn add_stamp(
         annot.set_stroke_color(c).map_err(|e| e.to_string())?;
         annot
             .set_bounds(PdfRect::new(
-                PdfPoints::new(bottom - 2.0),
-                PdfPoints::new(left - 2.0),
-                PdfPoints::new(bottom + h + 2.0),
-                PdfPoints::new(left + w + 2.0),
+                PdfPoints::new(caja.bottom().value - 2.0),
+                PdfPoints::new(caja.left().value - 2.0),
+                PdfPoints::new(caja.top().value + 2.0),
+                PdfPoints::new(caja.right().value + 2.0),
             ))
             .map_err(|e| e.to_string())?;
         let border = PdfPagePathObject::new_rect(
             &doc,
-            PdfRect::new(
-                PdfPoints::new(bottom),
-                PdfPoints::new(left),
-                PdfPoints::new(bottom + h),
-                PdfPoints::new(left + w),
-            ),
+            caja,
             Some(c),
             Some(PdfPoints::new((size * 0.09).max(1.2))),
             None,
@@ -299,12 +291,13 @@ pub fn add_stamp(
         let mut texto = PdfPageTextObject::new(&doc, &text, font, PdfPoints::new(size))
             .map_err(|e| e.to_string())?;
         texto.set_fill_color(c).map_err(|e| e.to_string())?;
-        // origen del texto = izquierda de la línea base
+        // origen del texto = izquierda de la línea base, en coords de UI…
+        let (tx, ty) = geo.ui_a_pdf(x - w / 2.0 + pad, y + h / 2.0 - pad - size * 0.14);
+        // …y girado al revés que la página, para que se lea derecho
+        let rad = (geo.rot as f32).to_radians();
+        let (sen, cos) = (rad.sin(), rad.cos());
         texto
-            .translate(
-                PdfPoints::new(left + pad),
-                PdfPoints::new(bottom + pad + size * 0.14),
-            )
+            .transform(cos, sen, -sen, cos, tx, ty)
             .map_err(|e| e.to_string())?;
         annot
             .objects_mut()
@@ -342,8 +335,8 @@ pub fn transform_annotation(
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let page_h = page.height().value;
-        let nuevo = ui_rect_to_pdf(&Rect { x, y, w, h }, page_h);
+        let geo = Geo::de_pagina(&page);
+        let nuevo = geo.ui_rect_a_pdf(&Rect { x, y, w, h });
         {
             let mut annot = page
                 .annotations_mut()
@@ -357,8 +350,10 @@ pub fn transform_annotation(
             if vw <= 0.0 || vh <= 0.0 {
                 return Err("La anotación no tiene tamaño".into());
             }
-            let sx = w / vw;
-            let sy = h / vh;
+            // las escalas se calculan en el espacio del PDF: con la página
+            // rotada, el ancho de la UI puede ser el alto del PDF
+            let sx = (nuevo.right().value - nuevo.left().value) / vw;
+            let sy = (nuevo.top().value - nuevo.bottom().value) / vh;
             // matriz compuesta: llevar el rect viejo al origen, escalar y
             // colocarlo en el rect nuevo
             let e = nuevo.left().value - viejo.left().value * sx;
@@ -398,6 +393,129 @@ mod tests {
             .decode(png_b64)
             .expect("base64");
         image::load_from_memory(&png).expect("PNG").to_rgba8()
+    }
+
+    /// Centro del rect que devuelve `get_annotations` para la anotación `i`.
+    fn centro(work: &str, i: usize) -> (f32, f32) {
+        let a = &crate::anotaciones::get_annotations(work.to_string(), 0).expect("listar")[i];
+        (a.x + a.w / 2.0, a.y + a.h / 2.0)
+    }
+
+    fn gira(work: &str, veces: u8) {
+        for _ in 0..veces {
+            crate::paginas::rotate_page(work.to_string(), 0).expect("girar");
+        }
+    }
+
+    /// ¿Hay tinta en el render alrededor de ese punto en coordenadas de UI?
+    /// Es el único juez: la UI dibuja sus overlays sobre el render.
+    fn hay_tinta(work: &str, x: f32, y: f32) -> bool {
+        let sizes = crate::get_page_sizes(work.to_string()).expect("tamaños");
+        let escala = 600.0 / sizes[0].width;
+        let img = render_rgba(work);
+        let (px, py) = ((x * escala) as i64, (y * escala) as i64);
+        for dx in -4i64..=4 {
+            for dy in -4i64..=4 {
+                let (cx, cy) = (px + dx, py + dy);
+                if cx < 0 || cy < 0 || cx >= img.width() as i64 || cy >= img.height() as i64 {
+                    continue;
+                }
+                let p = img.get_pixel(cx as u32, cy as u32).0;
+                if p[0] < 250 || p[1] < 250 || p[2] < 250 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// En una página rotada, lo que se pone donde se pulsa tiene que caer
+    /// donde se pulsó: `page.height()` de PDFium ya viene rotada y el
+    /// `/Rect` de la anotación no, así que voltear la `y` con ella
+    /// descolocaba sellos, trazos, formas y resaltados 246 pt en una A4.
+    #[test]
+    fn las_anotaciones_caen_donde_se_pulsa_en_una_pagina_rotada() {
+        for veces in 0..4u8 {
+            let grados = veces as u32 * 90;
+            let pdf = std::env::temp_dir().join(format!("anotaciones2-rotada-{veces}-test.pdf"));
+            crea_pdf(&["Página"], &pdf);
+            let work = pdf.to_string_lossy().to_string();
+            gira(&work, veces);
+
+            add_stamp(work.clone(), 0, "X".into(), [192, 57, 43, 255], 100.0, 200.0, 22.0, None)
+                .expect("sello");
+            assert!(
+                hay_tinta(&work, 100.0, 200.0),
+                "con /Rotate {grados} el sello no se pinta donde se pulsó"
+            );
+            let (cx, cy) = centro(&work, 0);
+            assert!(
+                (cx - 100.0).abs() < 3.0 && (cy - 200.0).abs() < 3.0,
+                "con /Rotate {grados}: el sello se lee en ({cx:.1},{cy:.1})"
+            );
+
+            // trazo: sus puntos van uno a uno
+            crate::anotaciones::add_stroke(
+                work.clone(),
+                0,
+                vec![[300.0, 400.0], [340.0, 400.0]],
+                Some([0, 0, 255, 255]),
+                Some(3.0),
+                None,
+            )
+            .expect("trazo");
+            assert!(
+                hay_tinta(&work, 320.0, 400.0),
+                "con /Rotate {grados} el trazo no pasa por donde se dibujó"
+            );
+
+            // marca de texto: el /AP se pinta sobre los quads
+            crate::anotaciones::add_highlight(
+                work.clone(),
+                0,
+                vec![Rect { x: 60.0, y: 500.0, w: 120.0, h: 16.0 }],
+                None,
+            )
+            .expect("resaltar");
+            assert!(
+                hay_tinta(&work, 120.0, 508.0),
+                "con /Rotate {grados} el resaltado no cae sobre lo resaltado"
+            );
+            let a = &crate::anotaciones::get_annotations(work.clone(), 0).expect("listar")[2];
+            assert!(
+                (a.rects[0].x - 60.0).abs() < 1.0
+                    && (a.rects[0].y - 500.0).abs() < 1.0
+                    && (a.rects[0].w - 120.0).abs() < 1.0
+                    && (a.rects[0].h - 16.0).abs() < 1.0,
+                "con /Rotate {grados}: quad en {:?}",
+                a.rects[0]
+            );
+            std::fs::remove_file(&pdf).ok();
+        }
+    }
+
+    /// Rotar la página mueve las anotaciones con ella, y donde
+    /// `get_annotations` dice que están es donde el render las pinta.
+    #[test]
+    fn rotar_la_pagina_lleva_las_anotaciones_a_su_sitio_en_el_render() {
+        let pdf = std::env::temp_dir().join("anotaciones2-rotada-render-test.pdf");
+        crea_pdf(&["Página"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+        add_stamp(work.clone(), 0, "X".into(), [192, 57, 43, 255], 100.0, 200.0, 22.0, None)
+            .expect("sello");
+        gira(&work, 1);
+
+        // A4: (100,200) sin rotar → (841,89 − 200, 100) al girar 90° CW
+        let (cx, cy) = centro(&work, 0);
+        assert!(
+            (cx - 641.9).abs() < 3.0 && (cy - 100.0).abs() < 3.0,
+            "tras girar 90° el sello se lee en ({cx:.1},{cy:.1})"
+        );
+        assert!(hay_tinta(&work, cx, cy), "el render no pinta nada ahí");
+
+        let sizes = crate::get_page_sizes(work.clone()).expect("tamaños");
+        assert_eq!(sizes[0].rotation, 90, "get_page_sizes debe dar la rotación");
+        std::fs::remove_file(&pdf).ok();
     }
 
     #[test]
