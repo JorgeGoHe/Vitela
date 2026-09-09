@@ -25,8 +25,10 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. tell Vite to ignore watching `src-tauri` y los worktrees de los
+      //    agentes (`.claude/worktrees/`): si no, cada compilación en otro
+      //    worktree recarga la sesión de QA del checkout principal
+      ignored: ["**/src-tauri/**", "**/.claude/**"],
     },
   },
 }));
