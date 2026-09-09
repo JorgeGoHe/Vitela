@@ -44,6 +44,9 @@ export default function MenuAcciones({
   closeDocument,
   addPdf,
   abrirExtraer,
+  abrirReemplazar,
+  abrirDividir,
+  abrirCombinar,
   insertPdfHere,
   recortarPagina,
   abrirMarcaAgua,
@@ -76,6 +79,10 @@ export default function MenuAcciones({
   closeDocument: () => void;
   addPdf: () => void;
   abrirExtraer: () => void;
+  abrirReemplazar: () => void;
+  abrirDividir: () => void;
+  /** Rejilla de «Combinar ficheros…»; «Añadir PDF…» se queda para uno solo. */
+  abrirCombinar: () => void;
   insertPdfHere: () => void;
   recortarPagina: () => void;
   abrirMarcaAgua: () => void;
@@ -214,6 +221,21 @@ export default function MenuAcciones({
               icon="merge"
               texto="Insertar PDF aquí…"
               onSelect={ejecutar(insertPdfHere)}
+            />
+            <Entrada
+              icon="merge"
+              texto="Combinar ficheros…"
+              onSelect={ejecutar(abrirCombinar)}
+            />
+            <Entrada
+              icon="extract"
+              texto="Reemplazar páginas…"
+              onSelect={ejecutar(abrirReemplazar)}
+            />
+            <Entrada
+              icon="extract"
+              texto="Dividir documento…"
+              onSelect={ejecutar(abrirDividir)}
             />
             <Entrada
               icon="sliders"

@@ -1219,6 +1219,55 @@ textarea {
   background: var(--btn-active);
 }
 
+/* ---------- rejilla de «Combinar ficheros» ---------- */
+
+.combinar-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.combinar-fila {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card-bg);
+  cursor: grab;
+}
+
+.combinar-fila.drop-antes {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.combinar-fila.drop-despues {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.combinar-orden {
+  color: var(--fg-muted);
+  min-width: 18px;
+  text-align: right;
+}
+
+.combinar-nombre {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.combinar-nombre > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---------- firmas del documento ---------- */
 
 /* banda de firmas: una línea, verde o roja, nunca las dos a la vez */

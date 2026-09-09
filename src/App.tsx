@@ -38,6 +38,9 @@ import {
   listRecent,
   listRedactions,
   applyRedactions,
+  mergeMany,
+  replacePages,
+  splitPdf,
   sanitizePdf,
   unmarkRedaction,
   rotatePages,
@@ -124,6 +127,9 @@ import DialogoExportar from "./components/DialogoExportar";
 import DialogoComprimir from "./components/DialogoComprimir";
 import DialogoPreferencias from "./components/DialogoPreferencias";
 import DialogoImprimir from "./components/DialogoImprimir";
+import DialogoReemplazar from "./components/DialogoReemplazar";
+import DialogoDividir from "./components/DialogoDividir";
+import DialogoCombinar from "./components/DialogoCombinar";
 import "./App.css";
 
 const BASE_WIDTH = 900;
@@ -277,6 +283,9 @@ function App() {
   // páginas marcadas en el panel para actuar en lote
   const [paginasSel, setPaginasSel] = useState<Set<number>>(new Set());
   const [extraerOpen, setExtraerOpen] = useState(false);
+  const [reemplazarOpen, setReemplazarOpen] = useState(false);
+  const [dividirOpen, setDividirOpen] = useState(false);
+  const [combinarOpen, setCombinarOpen] = useState(false);
   // giro SOLO de la vista (⇧⌘+ / ⇧⌘−): no toca el fichero y se pierde al
   // cerrar, como en Acrobat
   const [viewRotation, setViewRotation] = useState(0);
@@ -2037,6 +2046,92 @@ function App() {
     }
   }
 
+  /** Sustituye un rango por las páginas de otro PDF, en una sola mutación. */
+  async function aplicarReemplazo(opts: {
+    rango: string;
+    otherPath: string;
+    rangoOrigen: string;
+  }) {
+    if (!workPath) return;
+    const idx = parseRango(opts.rango, pageCount);
+    if (idx.length === 0) {
+      setError(
+        `Escribe qué páginas quieres sustituir, por ejemplo «1-3, 8» (el documento tiene ${pageCount})`,
+      );
+      return;
+    }
+    // el rango del origen se lee sin tope: cuántas páginas tiene el otro PDF
+    // lo sabe el backend, que descarta lo que se salga
+    const origen = opts.rangoOrigen.trim()
+      ? parseRango(opts.rangoOrigen, 100000)
+      : null;
+    setReemplazarOpen(false);
+    try {
+      const total = await replacePages({
+        workPath,
+        pageIndices: idx,
+        otherPath: opts.otherPath,
+        otherIndices: origen,
+      });
+      setPaginasSel(new Set());
+      afterMutation(total);
+      setNotice(
+        `${plural(idx.length, "página sustituida", "páginas sustituidas")} · ${MOD}Z para deshacer`,
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  /** Parte el documento en varios ficheros; el original no se toca. */
+  async function aplicarDivision(opts: {
+    modo: "cada" | "marcadores";
+    cada: number;
+  }) {
+    if (!workPath) return;
+    setDividirOpen(false);
+    const dir = await open({
+      directory: true,
+      multiple: false,
+      title: "Carpeta para los ficheros",
+    });
+    if (typeof dir !== "string") return;
+    try {
+      setNotice("Dividiendo…", { persistente: true });
+      const rutas = await splitPdf({
+        workPath,
+        destDir: dir,
+        modo: opts.modo,
+        cada: opts.modo === "cada" ? opts.cada : null,
+      });
+      setNotice(
+        `${plural(rutas.length, "fichero creado", "ficheros creados")} en ${dir}`,
+      );
+    } catch (e) {
+      setNotice(null);
+      setError(String(e));
+    }
+  }
+
+  /** Añade varios PDF de una vez, en el orden de la rejilla. */
+  async function aplicarCombinar(opts: { rutas: string[]; alFinal: boolean }) {
+    if (!workPath) return;
+    setCombinarOpen(false);
+    try {
+      const total = await mergeMany({
+        workPath,
+        others: opts.rutas,
+        at: opts.alFinal ? null : pageIndex + 1,
+      });
+      afterMutation(total);
+      setNotice(
+        `${plural(opts.rutas.length, "PDF añadido", "PDF añadidos")} · ${MOD}Z para deshacer`,
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   /** Escribe la copia de trabajo en `dest`, cifrada con la contraseña
    *  original si `mantener`. Devuelve si se llegó a guardar. */
   async function escribirEn(dest: string, mantener: boolean): Promise<boolean> {
@@ -2210,6 +2305,9 @@ function App() {
     imprimir: printDocument,
     "anadir-pdf": addPdf,
     extraer: () => setExtraerOpen(true),
+    reemplazar: () => setReemplazarOpen(true),
+    dividir: () => setDividirOpen(true),
+    combinar: () => setCombinarOpen(true),
     "insertar-pdf": insertPdfHere,
     deshacer: () => {
       if (historial.puedeDeshacer) historial.deshacer();
@@ -2505,6 +2603,9 @@ function App() {
                 closeDocument={closeDocument}
                 addPdf={addPdf}
                 abrirExtraer={() => setExtraerOpen(true)}
+                abrirReemplazar={() => setReemplazarOpen(true)}
+                abrirDividir={() => setDividirOpen(true)}
+                abrirCombinar={() => setCombinarOpen(true)}
                 insertPdfHere={insertPdfHere}
                 recortarPagina={() => {
                   selectMode("select");
@@ -2895,6 +2996,33 @@ function App() {
           pageCount={pageCount}
           onConfirm={aplicarExtraer}
           onClose={() => setExtraerOpen(false)}
+        />
+      )}
+      {reemplazarOpen && (
+        <DialogoReemplazar
+          inicial={
+            paginasSel.size > 0
+              ? formateaRango([...paginasSel])
+              : String(pageIndex + 1)
+          }
+          pageCount={pageCount}
+          onConfirm={aplicarReemplazo}
+          onClose={() => setReemplazarOpen(false)}
+        />
+      )}
+      {dividirOpen && (
+        <DialogoDividir
+          pageCount={pageCount}
+          hayMarcadores={outline.length > 0}
+          onConfirm={aplicarDivision}
+          onClose={() => setDividirOpen(false)}
+        />
+      )}
+      {combinarOpen && (
+        <DialogoCombinar
+          paginaActual={pageIndex}
+          onConfirm={aplicarCombinar}
+          onClose={() => setCombinarOpen(false)}
         />
       )}
       {exportOpen && (

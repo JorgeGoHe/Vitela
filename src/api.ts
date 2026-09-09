@@ -190,6 +190,38 @@ export function extractPages(args: {
   return invoke("extract_pages", { ...args });
 }
 
+/** Sustituye las páginas `pageIndices` por las de otro PDF (todas, o las
+ *  de `otherIndices`), conservando el resto. Devuelve el total. */
+export function replacePages(args: {
+  workPath: string;
+  pageIndices: number[];
+  otherPath: string;
+  otherIndices?: number[] | null;
+}): Promise<number> {
+  return invoke("replace_pages", { otherIndices: null, ...args });
+}
+
+/** Parte el documento en varios ficheros dentro de `destDir`; devuelve las
+ *  rutas escritas. `modo`: "cada" (con `cada` páginas) o "marcadores". */
+export function splitPdf(args: {
+  workPath: string;
+  destDir: string;
+  modo: "cada" | "marcadores";
+  cada?: number | null;
+}): Promise<string[]> {
+  return invoke("split_pdf", { cada: null, ...args });
+}
+
+/** Añade varios PDF de una vez, en el orden dado; sin `at`, al final.
+ *  Una sola mutación: un solo paso de deshacer. */
+export function mergeMany(args: {
+  workPath: string;
+  others: string[];
+  at?: number | null;
+}): Promise<number> {
+  return invoke("merge_many", { at: null, ...args });
+}
+
 /** Cuadro de texto de Acrobat: una anotación FreeText que escribe ENCIMA
  *  del documento, sin tocar el contenido de la página. */
 export function addFreeText(args: {
