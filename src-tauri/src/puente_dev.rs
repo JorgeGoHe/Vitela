@@ -212,6 +212,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "add_free_text" => cmd!(anotaciones2::add_free_text, { work_path: String, page_index: u16, rect: crate::Rect, text: String, font_size: f32, color: [u8; 4], border: bool, author: Option<String> }),
         "transform_annotation" => cmd!(anotaciones2::transform_annotation, { work_path: String, page_index: u16, annot_index: u16, x: f32, y: f32, w: f32, h: f32 }),
         "add_blank_page" => cmd!(paginas2::add_blank_page, { work_path: String, index: u16 }),
+        "pdf_from_images" => cmd!(paginas2::pdf_from_images, { image_paths: Vec<String>, dest_path: String, tamano: String }),
         "duplicate_page" => cmd!(paginas2::duplicate_page, { work_path: String, page_index: u16 }),
         "insert_pdf_at" => cmd!(paginas2::insert_pdf_at, { work_path: String, other_path: String, index: u16 }),
         "replace_pages" => cmd!(paginas2::replace_pages, { work_path: String, page_indices: Vec<u16>, other_path: String, other_indices: Option<Vec<u16>> }),

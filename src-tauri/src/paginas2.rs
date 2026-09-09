@@ -30,6 +30,79 @@ pub fn add_blank_page(work_path: String, index: u16) -> Result<u16, String> {
     }))
 }
 
+/// Crea un PDF nuevo con una imagen por página. Es «Crear PDF desde
+/// archivo» de Acrobat para el caso que se usa de verdad: unas fotos o unos
+/// escaneos sueltos que hay que mandar como un solo documento.
+///
+/// `tamano` es `"a4"`, `"carta"` o `"imagen"`. Con los dos primeros la
+/// imagen se ajusta a la página dejando 36 pt de margen (media pulgada,
+/// como Acrobat) y se centra, sin deformarla nunca; con `"imagen"` la
+/// página mide lo que mide la imagen a 72 dpi y no hay margen.
+///
+/// Escribe un fichero nuevo: no toca ningún documento abierto y no deja
+/// paso de deshacer.
+#[tauri::command(async)]
+pub fn pdf_from_images(
+    image_paths: Vec<String>,
+    dest_path: String,
+    tamano: String,
+) -> Result<u16, String> {
+    if image_paths.is_empty() {
+        return Err("No hay ninguna imagen con la que hacer el PDF".into());
+    }
+    on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let mut doc = pdfium.create_new_pdf().map_err(crate::mensaje_llano)?;
+        const MARGEN: f32 = 36.0;
+        for ruta in &image_paths {
+            let img = image::open(ruta).map_err(|e| {
+                crate::mensaje_llano(format!("No se ha podido leer la imagen {ruta}: {e}"))
+            })?;
+            let (iw, ih) = (img.width() as f32, img.height() as f32);
+            if iw < 1.0 || ih < 1.0 {
+                return Err(format!("La imagen {ruta} está vacía"));
+            }
+            let papel = match tamano.as_str() {
+                "carta" => PdfPagePaperSize::from_points(PdfPoints::new(612.0), PdfPoints::new(792.0)),
+                "imagen" => PdfPagePaperSize::from_points(PdfPoints::new(iw), PdfPoints::new(ih)),
+                _ => PdfPagePaperSize::a4(),
+            };
+            let mut page = doc
+                .pages_mut()
+                .create_page_at_end(papel)
+                .map_err(crate::mensaje_llano)?;
+            let (pw, ph) = (page.width().value, page.height().value);
+            let margen = if tamano == "imagen" { 0.0 } else { MARGEN };
+            // se ajusta al hueco sin deformarla: la escala es la misma en
+            // los dos ejes, la que quepa
+            let escala = ((pw - margen * 2.0) / iw).min((ph - margen * 2.0) / ih);
+            let (w, h) = (iw * escala, ih * escala);
+            let mut obj = PdfPageImageObject::new_with_size(
+                &doc,
+                &img,
+                PdfPoints::new(w),
+                PdfPoints::new(h),
+            )
+            .map_err(crate::mensaje_llano)?;
+            // centrada en la página, que es donde se espera una foto
+            obj.translate(
+                PdfPoints::new((pw - w) / 2.0),
+                PdfPoints::new((ph - h) / 2.0),
+            )
+            .map_err(|e| e.to_string())?;
+            page.objects_mut()
+                .add_image_object(obj)
+                .map_err(crate::mensaje_llano)?;
+            page.regenerate_content().map_err(crate::mensaje_llano)?;
+        }
+        let total = doc.pages().len();
+        doc.save_to_file(&dest_path).map_err(|e| {
+            crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}"))
+        })?;
+        Ok(total)
+    })
+}
+
 /// Duplica la página dada (la copia queda justo después). Devuelve el total.
 #[tauri::command(async)]
 pub fn duplicate_page(work_path: String, page_index: u16) -> Result<u16, String> {
@@ -462,6 +535,67 @@ pub fn add_header_footer(
 
 #[cfg(test)]
 mod tests {
+
+    /// **G6.** Un PDF desde unas fotos: una página por imagen, ajustada sin
+    /// deformarla y centrada, con el margen de media pulgada de Acrobat.
+    #[test]
+    fn un_pdf_desde_tres_imagenes_sale_con_tres_paginas_con_tinta() {
+        let dir = std::env::temp_dir();
+        let dest = dir.join("pdf-desde-imagenes.pdf");
+        let mut rutas = Vec::new();
+        for (n, color) in [[220u8, 40, 40], [40, 200, 40], [40, 40, 220]].iter().enumerate() {
+            let ruta = dir.join(format!("pdf-desde-imagenes-{n}.png"));
+            image::RgbaImage::from_pixel(120, 60, image::Rgba([color[0], color[1], color[2], 255]))
+                .save(&ruta)
+                .expect("crear png");
+            rutas.push(ruta.to_string_lossy().into_owned());
+        }
+
+        let total = pdf_from_images(rutas.clone(), dest.to_string_lossy().into_owned(), "a4".into())
+            .expect("crear el PDF");
+        assert_eq!(total, 3, "una página por imagen");
+        let d = dest.to_string_lossy().into_owned();
+        let sizes = crate::get_page_sizes(d.clone()).expect("tamaños");
+        assert_eq!(sizes.len(), 3);
+        assert!((sizes[0].width - 595.0).abs() < 2.0, "A4: {}", sizes[0].width);
+        for p in 0..3u16 {
+            let png = crate::render_page_png(d.clone(), p, 300, true).expect("render");
+            let img = image::load_from_memory(&png).expect("PNG").to_rgba8();
+            assert!(
+                img.pixels().any(|x| x.0[0] < 200 || x.0[1] < 200 || x.0[2] < 200),
+                "la página {p} tiene que llevar su foto"
+            );
+        }
+        // la imagen no se deforma: 120x60 sigue siendo el doble de ancha
+        let imagenes = crate::imagenes::get_images(d.clone(), 0).expect("imágenes");
+        assert_eq!(imagenes.len(), 1);
+        assert!(
+            (imagenes[0].w / imagenes[0].h - 2.0).abs() < 0.05,
+            "proporción {:.2}",
+            imagenes[0].w / imagenes[0].h
+        );
+
+        // con «imagen», la página mide lo que la foto
+        let dest2 = dir.join("pdf-desde-imagenes-natural.pdf");
+        let d2 = dest2.to_string_lossy().into_owned();
+        pdf_from_images(rutas.clone(), d2.clone(), "imagen".into()).expect("tamaño imagen");
+        let sizes = crate::get_page_sizes(d2.clone()).expect("tamaños");
+        assert!(
+            (sizes[0].width - 120.0).abs() < 1.0 && (sizes[0].height - 60.0).abs() < 1.0,
+            "la página mide {:.1}x{:.1}",
+            sizes[0].width,
+            sizes[0].height
+        );
+        std::fs::remove_file(&dest2).ok();
+
+        // sin imágenes no hay PDF, y se dice
+        assert!(pdf_from_images(vec![], d.clone(), "a4".into()).is_err());
+
+        std::fs::remove_file(&dest).ok();
+        for r in rutas {
+            std::fs::remove_file(r).ok();
+        }
+    }
     use super::*;
     use crate::tests::crea_pdf;
 

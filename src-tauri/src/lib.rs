@@ -1085,6 +1085,7 @@ pub fn run() {
             anotaciones2::add_free_text,
             anotaciones2::transform_annotation,
             paginas2::add_blank_page,
+            paginas2::pdf_from_images,
             paginas2::duplicate_page,
             paginas2::insert_pdf_at,
             paginas2::replace_pages,
