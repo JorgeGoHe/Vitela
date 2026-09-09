@@ -747,6 +747,10 @@ export function stampSignature(args: {
  *  caro. */
 export type EstadoFirma = "ok" | "modificado" | "desconocido";
 
+/** Los tres niveles de confianza del certificado, separados de la validez
+ *  criptográfica de la firma. */
+export type Confianza = "raiz_conocida" | "autofirmado" | "desconocida";
+
 export type FirmaInfo = {
   /** Nombre del firmante escrito en la firma. */
   name: string;
@@ -763,6 +767,12 @@ export type FirmaInfo = {
   digest_ok: boolean;
   cert_subject: string;
   cert_issuer: string;
+  /** Quién responde por el certificado, evaluado contra el almacén de
+   *  certificados del sistema. **No se consulta revocación** (ni CRL ni
+   *  OCSP), así que `raiz_conocida` quiere decir «emitido por una autoridad
+   *  reconocida», nunca «la firma es válida»: la confianza es del
+   *  certificado y la validez es del documento. */
+  confianza: Confianza;
   not_before: string;
   not_after: string;
   expired: boolean;
