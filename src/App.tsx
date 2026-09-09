@@ -38,9 +38,13 @@ import {
   rotatePages,
   removeRecent,
   renderPageSrc,
+  signPdf,
+  signPdfP12,
   touchRecent,
   uiLista,
+  verifySignatures,
   type AnotacionDoc,
+  type FirmaInfo,
   type HeaderFooter,
   type Reciente,
 } from "./api";
@@ -65,7 +69,11 @@ import {
   ATAJO_PANEL,
   cargaPreferencias,
   cargaVista,
+  estadoDeFirma,
+  fechaLarga,
   filasDePaginas,
+  FIRMA_VACIA,
+  type FirmaDraft,
   guardaPreferencias,
   guardaVista,
   IMPRIMIR_POR_DEFECTO,
@@ -90,6 +98,8 @@ import MenuAcciones from "./components/MenuAcciones";
 import PanelPaginas from "./components/PanelPaginas";
 import Pagina from "./components/Pagina";
 import PanelFirmas from "./components/PanelFirmas";
+import PanelFirmasDoc from "./components/PanelFirmasDoc";
+import DialogoFirmar from "./components/DialogoFirmar";
 import DibujarFirma from "./components/DibujarFirma";
 import DialogoMarcaAgua from "./components/DialogoMarcaAgua";
 import DialogoEncabezado from "./components/DialogoEncabezado";
@@ -116,6 +126,19 @@ function recortaZoom(z: number): number {
 /** Separación vertical entre páginas y padding superior del visor (px). */
 const PAGE_GAP = 24;
 const VIEWER_PAD_TOP = 28;
+
+/** La banda de firmas, en una línea y sin jerga. */
+function resumenFirmas(firmas: FirmaInfo[]): string {
+  const mala = firmas.find((f) => !estadoDeFirma(f).ok);
+  if (mala) return estadoDeFirma(mala).texto;
+  const quien = firmas[0].name || firmas[0].cert_subject || "";
+  const cuando = firmas[0].signed_at ? ` el ${fechaLarga(firmas[0].signed_at)}` : "";
+  const cabecera =
+    firmas.length > 1
+      ? `Firmado por ${firmas.length} personas`
+      : `Firmado${quien ? ` por ${quien}` : ""}${cuando}`;
+  return `${cabecera} · el documento no ha cambiado desde la firma`;
+}
 
 /** Punto de lectura al que vuelve ⌥←: página, scroll y zoom. */
 type Vista = { page: number; scrollTop: number; zoom: number | "ajuste" | "pagina" };
@@ -198,10 +221,6 @@ function App() {
     onError: (e) => setError(String(e)),
   });
   const refrescarHistorial = historial.refrescar;
-  const [p12Draft, setP12Draft] = useState<{
-    path: string;
-    password: string;
-  } | null>(null);
   const [wmOpen, setWmOpen] = useState(false);
   const [marginalAsk, setMarginalAsk] = useState<{
     zona: "watermark" | "header" | "footer";
@@ -209,8 +228,18 @@ function App() {
   } | null>(null);
   const [hfOpen, setHfOpen] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<
-    "paginas" | "marcadores" | "comentarios"
+    "paginas" | "marcadores" | "comentarios" | "firmas"
   >("paginas");
+  // firmas del fichero abierto y la banda que las resume, que se cierra y
+  // no vuelve hasta el documento siguiente
+  const [firmasDoc, setFirmasDoc] = useState<FirmaInfo[]>([]);
+  const [bandaFirmas, setBandaFirmas] = useState(false);
+  // recuadro dibujado para la firma con certificado, y su diálogo
+  const [firmaRect, setFirmaRect] = useState<{
+    page: number;
+    rect: { x: number; y: number; w: number; h: number };
+  } | null>(null);
+  const [firmaDraft, setFirmaDraft] = useState<FirmaDraft>(FIRMA_VACIA);
   // el atajo de una pestaña la abre Y le lleva el foco: subir el contador es
   // la señal para el panel (un booleano no distinguiría dos peticiones)
   const [focoComentarios, setFocoComentarios] = useState(0);
@@ -362,6 +391,8 @@ function App() {
       // PDF recién abierto es lo último que quiere nadie
       setMode("select");
       setActiveSig(null);
+      setFirmasDoc([]);
+      setBandaFirmas(false);
       setNombreProvisional(null);
       setOriginalPath(path);
       setWorkPath(info.work_path);
@@ -604,6 +635,8 @@ function App() {
     setPaginasSel(new Set());
     setViewRotation(0);
     setHayFormularios(false);
+    setFirmasDoc([]);
+    setBandaFirmas(false);
     evictAll();
     setDocVersion((v) => v + 1);
     invoke("close_document", { workPath: anterior }).catch((e) => setError(String(e)));
@@ -664,6 +697,29 @@ function App() {
     };
   }, [workPath, docVersion]);
 
+  // Firmas del documento: se comprueban al abrirlo y tras cada cambio del
+  // fichero (firmar escribe una copia, pero deshacer o guardar sí cambian
+  // lo que hay). Un PDF sin firmas no enseña nada.
+  useEffect(() => {
+    if (!workPath) {
+      setFirmasDoc([]);
+      return;
+    }
+    let cancelled = false;
+    verifySignatures(workPath)
+      .then((f) => {
+        if (cancelled) return;
+        setFirmasDoc(f);
+        if (f.length > 0) setBandaFirmas(true);
+      })
+      .catch(() => {
+        if (!cancelled) setFirmasDoc([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workPath, docVersion]);
+
   // Marcadores del documento (pestaña del sidebar)
   useEffect(() => {
     if (!workPath) {
@@ -705,7 +761,9 @@ function App() {
 
   /** Abre una pestaña del panel lateral y le lleva el foco: con el teclado
    *  se llega a la lista sin pasar por el ratón. */
-  function abrirPestana(tab: "paginas" | "marcadores" | "comentarios") {
+  function abrirPestana(
+    tab: "paginas" | "marcadores" | "comentarios" | "firmas",
+  ) {
     setSidebarVisible(true);
     setSidebarTab(tab);
     if (tab === "comentarios") setFocoComentarios((n) => n + 1);
@@ -1917,63 +1975,64 @@ function App() {
     });
   }
 
-  async function signPdf() {
+  /** «Firmar con certificado…»: primero se dibuja el recuadro en la página,
+   *  como en Acrobat, y después se pregunta todo de una vez. */
+  function empezarFirma() {
     if (!workPath) return;
-    const certPath = await open({
-      filters: [
-        {
-          name: "Certificado (PEM o PKCS#12)",
-          extensions: ["pem", "crt", "cer", "p12", "pfx"],
-        },
-      ],
-      multiple: false,
-      title: "Certificado (PEM) o contenedor .p12/.pfx",
-    });
-    if (typeof certPath !== "string") return;
-    if (/\.(p12|pfx)$/i.test(certPath)) {
-      setP12Draft({ path: certPath, password: "" });
-      return;
-    }
-    const keyPath = await open({
-      filters: [{ name: "Clave privada PEM", extensions: ["pem", "key"] }],
-      multiple: false,
-      title: "Clave privada (PEM, RSA sin cifrar)",
-    });
-    if (typeof keyPath !== "string") return;
-    const dest = await pickSignedDest();
-    if (!dest) return;
-    try {
-      setNotice("Firmando…", { persistente: true });
-      await invoke("sign_pdf", {
-        workPath,
-        destPath: dest,
-        certPemPath: certPath,
-        keyPemPath: keyPath,
-        reason: null,
-      });
-      // la firma va a OTRO fichero, que no se abre: sin aviso, la única
-      // forma de saber si ha funcionado era ir al Finder
-      setNotice(`Firmado y guardado en ${dest}`);
-    } catch (e) {
-      setNotice(null);
-      setError(String(e));
-    }
+    setActiveSig(null);
+    setMode("firma-cert");
+    setNotice(
+      "Arrastra en la página el recuadro donde quieres que se vea la firma",
+    );
   }
 
-  async function signWithP12() {
-    if (!workPath || !p12Draft) return;
+  const recibeFirmaRect = useCallback(
+    (page: number, rect: { x: number; y: number; w: number; h: number }) => {
+      setMode("select");
+      setNotice(null);
+      setFirmaRect({ page, rect });
+    },
+    [setNotice],
+  );
+
+  /** Firma con lo recogido en el diálogo y escribe una copia firmada. El
+   *  destino se pide al final: nadie elige carpeta para descubrir después
+   *  que faltaba el certificado (U-13). */
+  async function aplicarFirma(d: FirmaDraft) {
+    if (!workPath || !firmaRect) return;
     const dest = await pickSignedDest();
     if (!dest) return;
+    const png = firmas.find((f) => f.id === d.firmaId)?.png_base64 ?? null;
+    const apariencia = {
+      rect: firmaRect.rect,
+      pageIndex: firmaRect.page,
+      signerName: d.signerName.trim() || null,
+      signaturePng: png,
+    };
     try {
       setNotice("Firmando…", { persistente: true });
-      await invoke("sign_pdf_p12", {
-        workPath,
-        destPath: dest,
-        p12Path: p12Draft.path,
-        password: p12Draft.password,
-        reason: null,
-      });
-      setP12Draft(null);
+      if (/\.(p12|pfx)$/i.test(d.certPath)) {
+        await signPdfP12({
+          workPath,
+          destPath: dest,
+          p12Path: d.certPath,
+          password: d.password,
+          reason: d.reason.trim() || null,
+          ...apariencia,
+        });
+      } else {
+        await signPdf({
+          workPath,
+          destPath: dest,
+          certPemPath: d.certPath,
+          keyPemPath: d.keyPath,
+          reason: d.reason.trim() || null,
+          ...apariencia,
+        });
+      }
+      setFirmaRect(null);
+      // la contraseña del certificado no se queda en memoria más de lo justo
+      setFirmaDraft({ ...d, password: "" });
       setNotice(`Firmado y guardado en ${dest}`);
     } catch (e) {
       setNotice(null);
@@ -2227,7 +2286,7 @@ function App() {
                 abrirEncabezado={() => setHfOpen(true)}
                 askRemoveMarginal={askRemoveMarginal}
                 openProperties={openProperties}
-                signPdf={signPdf}
+                signPdf={empezarFirma}
                 abrirProteger={() =>
                   setProtectDraft({
                     user: "",
@@ -2269,6 +2328,32 @@ function App() {
           </button>
         </div>
       )}
+      {bandaFirmas && firmasDoc.length > 0 && (
+        <div
+          className={`banner-firmas${
+            firmasDoc.every((f) => estadoDeFirma(f).ok) ? "" : " mal"
+          }`}
+        >
+          <button
+            className="banner-firmas-texto"
+            title="Ver las firmas del documento"
+            onClick={() => {
+              abrirPestana("firmas");
+              setBandaFirmas(false);
+            }}
+          >
+            <Icon name="lock" size={13} />
+            {resumenFirmas(firmasDoc)}
+          </button>
+          <button
+            className="btn btn-icon"
+            aria-label="Cerrar el aviso de las firmas"
+            onClick={() => setBandaFirmas(false)}
+          >
+            <Icon name="close" size={13} />
+          </button>
+        </div>
+      )}
       {notice && (
         <div className={`banner-notice${noticeSaliendo ? " saliendo" : ""}`}>
           <p title={notice}>{notice}</p>
@@ -2284,15 +2369,13 @@ function App() {
         </div>
       )}
 
-      {p12Draft && (
-        <DialogoContrasena
-          titulo="Contraseña del .p12"
-          fichero={p12Draft.path}
-          valor={p12Draft.password}
-          onChange={(v) => setP12Draft({ ...p12Draft, password: v })}
-          onConfirm={signWithP12}
-          onClose={() => setP12Draft(null)}
-          etiqueta="Firmar"
+      {firmaRect && (
+        <DialogoFirmar
+          inicial={firmaDraft}
+          pagina={firmaRect.page + 1}
+          firmas={firmas}
+          onConfirm={aplicarFirma}
+          onClose={() => setFirmaRect(null)}
         />
       )}
 
@@ -2518,6 +2601,11 @@ function App() {
           guarda · Esc cancela
         </div>
       )}
+      {mode === "firma-cert" && (
+        <div className="sign-hint">
+          Arrastra el recuadro donde quieras que se vea la firma · Esc cancela
+        </div>
+      )}
       {mode === "redact" && (
         <div className="sign-hint">
           Arrastra sobre el área a censurar: el contenido se ELIMINA de verdad
@@ -2659,7 +2747,20 @@ function App() {
               >
                 Comentarios
               </button>
+              {firmasDoc.length > 0 && (
+                <button
+                  className={`btn${sidebarTab === "firmas" ? " on" : ""}`}
+                  title="Firmas del documento"
+                  aria-pressed={sidebarTab === "firmas"}
+                  onClick={() => abrirPestana("firmas")}
+                >
+                  Firmas
+                </button>
+              )}
             </div>
+            {sidebarTab === "firmas" && (
+              <PanelFirmasDoc firmas={firmasDoc} onGoto={saltarA} />
+            )}
             {sidebarTab === "comentarios" && (
               <PanelComentarios
                 comentarios={comentarios}
@@ -2799,6 +2900,7 @@ function App() {
                   onLinkGoto={saltarA}
                   onLinkUri={onLinkUri}
                   onSigStamped={onSigStamped}
+                  onFirmaRect={recibeFirmaRect}
                   pedirTextoNuevo={pedirTextoNuevo}
                   pedirImagen={pedirImagen}
                 />

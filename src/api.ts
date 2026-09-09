@@ -498,6 +498,79 @@ export function stampSignature(args: {
   return invoke("stamp_signature", { ...args });
 }
 
+/* ---- firma digital ---- */
+
+/** Una firma del documento, tal como la lee `verify_signatures`. Los
+ *  nombres técnicos se quedan aquí: la UI no los enseña nunca. */
+export type FirmaInfo = {
+  /** Nombre del firmante escrito en la firma. */
+  name: string;
+  reason: string;
+  /** Momento de la firma, en ISO 8601. */
+  signed_at: string;
+  /** La firma cubre todo el fichero (no solo un trozo). */
+  covers_whole_file: boolean;
+  /** El contenido firmado sigue siendo el que hay. */
+  digest_ok: boolean;
+  cert_subject: string;
+  cert_issuer: string;
+  not_before: string;
+  not_after: string;
+  expired: boolean;
+  self_signed: boolean;
+  /** Página del recuadro de la firma, si es visible. */
+  page_index: number | null;
+  rect: { x: number; y: number; w: number; h: number } | null;
+};
+
+/** Comprueba las firmas de un PDF. Sin firmas, lista vacía. */
+export function verifySignatures(path: string): Promise<FirmaInfo[]> {
+  return invoke("verify_signatures", { path });
+}
+
+/** Lo que la UI puede añadir a la firma: dónde se dibuja y con qué cara. */
+export type AparienciaFirma = {
+  /** Recuadro en el espacio propio de la página; sin él, firma invisible. */
+  rect?: { x: number; y: number; w: number; h: number } | null;
+  pageIndex?: number | null;
+  signerName?: string | null;
+  /** PNG en base64 de la firma manuscrita guardada. */
+  signaturePng?: string | null;
+};
+
+const SIN_APARIENCIA: Required<AparienciaFirma> = {
+  rect: null,
+  pageIndex: null,
+  signerName: null,
+  signaturePng: null,
+};
+
+/** Firma con certificado y clave en PEM. */
+export function signPdf(
+  args: {
+    workPath: string;
+    destPath: string;
+    certPemPath: string;
+    keyPemPath: string;
+    reason?: string | null;
+  } & AparienciaFirma,
+): Promise<void> {
+  return invoke("sign_pdf", { reason: null, ...SIN_APARIENCIA, ...args });
+}
+
+/** Firma con un contenedor .p12/.pfx protegido con contraseña. */
+export function signPdfP12(
+  args: {
+    workPath: string;
+    destPath: string;
+    p12Path: string;
+    password: string;
+    reason?: string | null;
+  } & AparienciaFirma,
+): Promise<void> {
+  return invoke("sign_pdf_p12", { reason: null, ...SIN_APARIENCIA, ...args });
+}
+
 /** Pasos de deshacer/rehacer disponibles y páginas del documento. */
 export type HistoryState = { undo: number; redo: number; page_count: number };
 

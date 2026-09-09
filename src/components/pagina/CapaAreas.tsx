@@ -28,6 +28,7 @@ export default function CapaAreas({
     redactReport,
     setRedactReport,
     sigDraft,
+    certDraft,
     applyCrop,
     applyRedact,
   } = areas;
@@ -119,6 +120,17 @@ export default function CapaAreas({
             </div>
           </div>
         </>
+      )}
+      {mode === "firma-cert" && certDraft && (
+        <div
+          className="crop-rect"
+          style={{
+            left: certDraft.x * scale,
+            top: certDraft.y * scale,
+            width: certDraft.w * scale,
+            height: certDraft.h * scale,
+          }}
+        />
       )}
       {mode === "firmar" && activeSig && sigDraft && (
         <img

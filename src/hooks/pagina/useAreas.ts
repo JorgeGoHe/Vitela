@@ -40,6 +40,11 @@ export function useAreas(ctx: {
   const redactStartRef = useRef<{ x: number; y: number } | null>(null);
   const redactLiveRef = useRef<Rect | null>(null);
   const [redactReport, setRedactReport] = useState<RedactReport | null>(null);
+  // recuadro de la firma con certificado: el rectángulo se dibuja aquí y lo
+  // resuelve App, que es quien tiene el diálogo y el destino
+  const [certDraft, setCertDraft] = useState<Rect | null>(null);
+  const certStartRef = useRef<{ x: number; y: number } | null>(null);
+  const certLiveRef = useRef<Rect | null>(null);
   const [sigDraft, setSigDraft] = useState<Rect | null>(null);
   const sigLiveRef = useRef<Rect | null>(null);
   const sigDragRef = useRef<{ x: number; y: number } | null>(null);
@@ -55,6 +60,9 @@ export function useAreas(ctx: {
     setRedactReport(null);
     redactStartRef.current = null;
     redactLiveRef.current = null;
+    setCertDraft(null);
+    certStartRef.current = null;
+    certLiveRef.current = null;
   }, [mode]);
 
   async function applyCrop(allPages: boolean) {
@@ -117,6 +125,10 @@ export function useAreas(ctx: {
   }
 
   return {
+    certDraft,
+    setCertDraft,
+    certStartRef,
+    certLiveRef,
     cropDraft,
     setCropDraft,
     cropStartRef,

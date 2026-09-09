@@ -12,7 +12,7 @@ import {
   type Rect,
   type ShapeKind,
 } from "../tipos";
-import { pagePoint, resizeRect } from "../hooks/pagina/geometria";
+import { pagePoint, rectAPagina, resizeRect } from "../hooks/pagina/geometria";
 import { useEnlaces } from "../hooks/pagina/useEnlaces";
 import { useFormularios } from "../hooks/pagina/useFormularios";
 import { useImagenes } from "../hooks/pagina/useImagenes";
@@ -92,6 +92,9 @@ type Props = {
   onLinkGoto: (page: number) => void;
   onLinkUri: (uri: string) => void;
   onSigStamped: () => void;
+  /** Recuadro dibujado para la firma con certificado, ya en el espacio
+   *  propio de la página: lo resuelve App, que abre el diálogo. */
+  onFirmaRect: (page: number, rect: Rect) => void;
   /** Suben cuando la fila contextual pide «Añadir texto» o «Insertar
    *  imagen…»: la página actual abre el borrador sin obligar a descubrir el
    *  clic en zona libre. */
@@ -131,6 +134,7 @@ function Pagina({
   onLinkGoto,
   onLinkUri,
   onSigStamped,
+  onFirmaRect,
   pedirTextoNuevo,
   pedirImagen,
 }: Props) {
@@ -384,6 +388,11 @@ function Pagina({
       areas.setRedactReport(null);
       return;
     }
+    if (mode === "firma-cert") {
+      areas.certStartRef.current = { x, y };
+      areas.setCertDraft(null);
+      return;
+    }
     if (mode === "form-new") {
       formularios.formStartRef.current = { x, y };
       formularios.setFormDraft(null);
@@ -507,6 +516,20 @@ function Pagina({
       areas.setRedactDraft(d);
       return;
     }
+    if (mode === "firma-cert") {
+      const start = areas.certStartRef.current;
+      if (!start) return;
+      const { x, y } = pagePoint(e, scale, viewRotation);
+      const d = {
+        x: Math.min(x, start.x),
+        y: Math.min(y, start.y),
+        w: Math.abs(x - start.x),
+        h: Math.abs(y - start.y),
+      };
+      areas.certLiveRef.current = d;
+      areas.setCertDraft(d);
+      return;
+    }
     if (mode === "freetext") {
       const start = anotaciones.freeTextStartRef.current;
       if (!start) return;
@@ -619,6 +642,18 @@ function Pagina({
         areas.setRedactDraft(d);
         areas.previewRedact(d);
       }
+      return;
+    }
+    if (mode === "firma-cert") {
+      const start = areas.certStartRef.current;
+      areas.certStartRef.current = null;
+      const d = areas.certLiveRef.current;
+      areas.certLiveRef.current = null;
+      areas.setCertDraft(null);
+      if (!start) return;
+      // un clic simple vale: recuadro por defecto, como el de Acrobat
+      const caja = d && d.w > 24 && d.h > 12 ? d : { x: start.x, y: start.y, w: 200, h: 60 };
+      onFirmaRect(index, rectAPagina(caja, size));
       return;
     }
     if (mode === "form-new") {

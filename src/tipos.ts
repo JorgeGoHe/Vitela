@@ -99,7 +99,9 @@ export type Mode =
   | "redact"
   | "form-new"
   | "link-new"
-  | "freetext";
+  | "freetext"
+  /** Dibujar el recuadro donde se verá la firma con certificado. */
+  | "firma-cert";
 export type ShapeKind = "rect" | "ellipse" | "line" | "arrow";
 
 /* Paleta única de anotación (DESIGN.md): la comparten dibujo, formas,
@@ -453,6 +455,57 @@ export function filasDePaginas(
     filas.push(i + 1 < pageCount ? [i, i + 1] : [i]);
   }
   return filas;
+}
+
+/* ---- firma digital ---- */
+
+/** Todo lo que hace falta para firmar, recogido de una sola vez. */
+export type FirmaDraft = {
+  /** Certificado: un .p12/.pfx, o un .pem con su clave aparte. */
+  certPath: string;
+  keyPath: string;
+  password: string;
+  reason: string;
+  signerName: string;
+  /** Id de la firma manuscrita guardada que se dibuja en el recuadro. */
+  firmaId: string;
+};
+
+export const FIRMA_VACIA: FirmaDraft = {
+  certPath: "",
+  keyPath: "",
+  password: "",
+  reason: "",
+  signerName: "",
+  firmaId: "",
+};
+
+/** Lo que se ha comprobado de una firma, dicho en llano. Nunca «CMS», ni
+ *  «ByteRange», ni «digest»: el usuario quiere saber si el documento es el
+ *  que se firmó, no cómo se ha averiguado. */
+export function estadoDeFirma(f: {
+  covers_whole_file: boolean;
+  digest_ok: boolean;
+}): { ok: boolean; texto: string } {
+  if (!f.covers_whole_file) {
+    return { ok: false, texto: "Se ha añadido contenido después de firmarse" };
+  }
+  if (!f.digest_ok) {
+    return { ok: false, texto: "El documento ha cambiado después de firmarse" };
+  }
+  return { ok: true, texto: "El documento no ha cambiado desde la firma" };
+}
+
+/** «9 de septiembre de 2026» a partir de un ISO 8601; el texto tal cual si
+ *  no se puede leer como fecha. */
+export function fechaLarga(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("es-ES", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
 }
 
 /* ---- opciones de búsqueda (persistidas en localStorage) ---- */
