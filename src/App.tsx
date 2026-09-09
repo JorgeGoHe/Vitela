@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -12,6 +13,7 @@ import {
   onAbrirFichero,
   onArrastreFicheros,
   onCerrarSolicitado,
+  ponerPantallaCompleta,
   subscribeBusy,
 } from "./ipc";
 import { useHistorial } from "./hooks/useHistorial";
@@ -62,7 +64,12 @@ import {
   ATAJO_MARCADORES,
   ATAJO_PANEL,
   cargaPreferencias,
+  cargaVista,
+  filasDePaginas,
+  guardaPreferencias,
+  guardaVista,
   IMPRIMIR_POR_DEFECTO,
+  type ModoPagina,
   type OpcionesImprimir,
   cargaResaltarCampos,
   formateaRango,
@@ -109,6 +116,9 @@ function recortaZoom(z: number): number {
 /** Separación vertical entre páginas y padding superior del visor (px). */
 const PAGE_GAP = 24;
 const VIEWER_PAD_TOP = 28;
+
+/** Punto de lectura al que vuelve ⌥←: página, scroll y zoom. */
+type Vista = { page: number; scrollTop: number; zoom: number | "ajuste" | "pagina" };
 
 function App() {
   const [originalPath, setOriginalPath] = useState<string | null>(null);
@@ -217,6 +227,17 @@ function App() {
   // giro SOLO de la vista (⇧⌘+ / ⇧⌘−): no toca el fichero y se pierde al
   // cerrar, como en Acrobat
   const [viewRotation, setViewRotation] = useState(0);
+  // presentación de página (las cuatro de Acrobat) y portada suelta en las
+  // vistas de dos: estados de la vista, recordados entre sesiones
+  const [vista, setVista] = useState(cargaVista);
+  // preferencias vivas: de aquí sale el modo nocturno del documento
+  const [prefs, setPrefs] = useState<Preferencias>(cargaPreferencias);
+  const [pantallaCompleta, setPantallaCompleta] = useState(false);
+  // el aviso de cómo salir sale una sola vez por sesión, como en Acrobat
+  const avisoPantallaRef = useRef(false);
+  // historial de vistas (⌥← / ⌥→): el modelo del navegador, dos pilas
+  const [vistasAtras, setVistasAtras] = useState<Vista[]>([]);
+  const [vistasAdelante, setVistasAdelante] = useState<Vista[]>([]);
   // «Resaltar campos existentes» de Acrobat: encendido por defecto
   const [resaltarCampos, setResaltarCampos] = useState(cargaResaltarCampos);
   const [hayFormularios, setHayFormularios] = useState(false);
@@ -692,7 +713,7 @@ function App() {
 
   /** Clic en una fila del panel: a su página y con su popover abierto. */
   function irAComentario(c: AnotacionDoc) {
-    gotoPage(c.page_index);
+    saltarA(c.page_index);
     setSelOwner(c.page_index);
     setAnnotSel({ page: c.page_index, index: c.index });
   }
@@ -806,9 +827,28 @@ function App() {
       const tag = (e.target as HTMLElement)?.tagName;
       const enCampo = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
       if (e.key === "Escape" && !mod) {
+        // en pantalla completa la primera salida es la de la presentación
+        if (pantallaCompleta) {
+          e.preventDefault();
+          cambiaPantallaCompleta(false);
+          return;
+        }
         // Acrobat quita los resaltados de coincidencia desde cualquier
         // sitio, no solo con el foco dentro del campo
         if (busqueda.matches.length > 0) busqueda.limpiar(true);
+      } else if (mod && !e.shiftKey && (e.key === "l" || e.key === "L") && pageCount > 0) {
+        e.preventDefault();
+        cambiaPantallaCompleta(!pantallaCompleta);
+      } else if (mod && e.shiftKey && (e.key === "l" || e.key === "L")) {
+        // el modo nocturno del documento: solo cambia lo que se ve
+        e.preventDefault();
+        aplicaPrefs({ ...prefs, nocturno: !prefs.nocturno });
+      } else if (!mod && e.altKey && e.key === "ArrowLeft" && pageCount > 0) {
+        e.preventDefault();
+        atrasVista();
+      } else if (!mod && e.altKey && e.key === "ArrowRight" && pageCount > 0) {
+        e.preventDefault();
+        adelanteVista();
       } else if (mod && e.key === "o") {
         e.preventDefault();
         openFile();
@@ -819,7 +859,7 @@ function App() {
         } else if (modified) guardar();
       } else if (mod && e.key === ",") {
         e.preventDefault();
-        setPrefsDraft(cargaPreferencias());
+        setPrefsDraft(prefs);
       } else if (
         mod &&
         e.altKey &&
@@ -902,9 +942,9 @@ function App() {
       } else if (mod && !enCampo && e.key === "y" && pageCount > 0) {
         e.preventDefault();
         if (historial.puedeRehacer) historial.rehacer();
-      } else if (!mod && !enCampo && e.key === "ArrowRight") {
+      } else if (!mod && !e.altKey && !enCampo && e.key === "ArrowRight") {
         gotoPage(pageIndex + 1);
-      } else if (!mod && !enCampo && e.key === "ArrowLeft") {
+      } else if (!mod && !e.altKey && !enCampo && e.key === "ArrowLeft") {
         gotoPage(pageIndex - 1);
       }
     }
@@ -918,7 +958,25 @@ function App() {
   const vistaGirada = viewRotation === 90 || viewRotation === 270;
   const PADDING_VIEWER = 48;
   const VIEWER_PAD_BOTTOM = 72;
+  // en pantalla completa manda la presentación de Acrobat: una hoja cada vez
+  const modoPagina: ModoPagina = pantallaCompleta ? "una" : vista.modoPagina;
+  const dobles = modoPagina === "dos" || modoPagina === "dos-continuo";
+  const continuo = modoPagina === "continuo" || modoPagina === "dos-continuo";
+  const columnas = dobles ? 2 : 1;
+  // filas de pantalla: una página por fila, o de dos en dos con la portada
+  // suelta. En las presentaciones no continuas solo se pinta la fila actual
+  const filas = useMemo(
+    () => filasDePaginas(pageCount, dobles, vista.portadaSola),
+    [pageCount, dobles, vista.portadaSola],
+  );
+  const filaActual = Math.max(
+    0,
+    filas.findIndex((f) => f.includes(pageIndex)),
+  );
+  const filasVisibles = continuo ? filas : filas.slice(filaActual, filaActual + 1);
   const fitWidth = viewerW ? Math.max(320, viewerW - PADDING_VIEWER) : BASE_WIDTH;
+  // con dos hojas por fila cada una se queda con la mitad, menos el hueco
+  const anchoColumna = (fitWidth - (columnas - 1) * PAGE_GAP) / columnas;
   const fitHeight = viewerH
     ? Math.max(200, viewerH - VIEWER_PAD_TOP - VIEWER_PAD_BOTTOM)
     : BASE_WIDTH;
@@ -928,7 +986,7 @@ function App() {
   // cuenta el giro de la vista, que intercambia alto y ancho en pantalla.
   const ratioMax = pageSizes.reduce((m, s) => Math.max(m, s.height / s.width), 0);
   const anchoAjuste =
-    vistaGirada && ratioMax > 0 ? fitWidth / ratioMax : fitWidth;
+    vistaGirada && ratioMax > 0 ? anchoColumna / ratioMax : anchoColumna;
   const anchoPagina =
     ratioMax > 0
       ? Math.max(
@@ -992,11 +1050,18 @@ function App() {
     else pageElsRef.current.delete(page);
   }, []);
 
-  /** Alturas en pantalla de cada página con el ancho de hoja dado. Con la
-   *  vista girada un cuarto, alto y ancho se intercambian. */
-  function alturasPagina(width: number): number[] {
-    return pageSizes.map((s) =>
-      vistaGirada ? width : (width * s.height) / s.width,
+  /** Alturas en pantalla de cada fila con el ancho de hoja dado: la de la
+   *  hoja más alta de la fila. Con la vista girada un cuarto, alto y ancho
+   *  se intercambian. */
+  function alturasFila(width: number): number[] {
+    return filas.map((fila) =>
+      Math.max(
+        ...fila.map((i) => {
+          const s = pageSizes[i];
+          if (!s) return width;
+          return vistaGirada ? width : (width * s.height) / s.width;
+        }),
+      ),
     );
   }
 
@@ -1007,9 +1072,15 @@ function App() {
       if (pageCount === 0) return;
       const target = Math.max(0, Math.min(i, pageCount - 1));
       setPageIndex(target);
+      // en las presentaciones de una fila cada vez, la página nueva sustituye
+      // a la anterior: el sitio al que ir es el principio del visor
+      if (!continuo) {
+        viewerRef.current?.scrollTo({ top: 0 });
+        return;
+      }
       pageElsRef.current.get(target)?.scrollIntoView({ block: "start" });
     },
-    [pageCount],
+    [pageCount, continuo],
   );
 
   /** Salta a la página escrita en la píldora; fuera de rango, gotoPage la
@@ -1020,9 +1091,82 @@ function App() {
     if (!Number.isNaN(n)) gotoPage(n - 1);
   }
 
+  /** El punto de lectura de ahora mismo. */
+  function vistaActual(): Vista {
+    return {
+      page: pageIndex,
+      scrollTop: viewerRef.current?.scrollTop ?? 0,
+      zoom,
+    };
+  }
+
+  /** Deja el punto de lectura restaurado: primero el zoom y la página, y
+   *  cuando el visor ya tiene su alto nuevo, el scroll. */
+  function restaurarVista(v: Vista) {
+    setZoom(v.zoom);
+    setPageIndex(v.page);
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() =>
+        viewerRef.current?.scrollTo({ top: v.scrollTop }),
+      ),
+    );
+  }
+
+  /** Salto largo (enlace, marcador, comentario o coincidencia): apila de
+   *  dónde se viene para que ⌥← devuelva ahí, como en Acrobat. */
+  function saltarA(page: number) {
+    setVistasAtras((v) => [...v.slice(-49), vistaActual()]);
+    setVistasAdelante([]);
+    gotoPage(page);
+  }
+
+  function atrasVista() {
+    if (vistasAtras.length === 0) return;
+    const v = vistasAtras[vistasAtras.length - 1];
+    setVistasAtras((p) => p.slice(0, -1));
+    setVistasAdelante((p) => [...p, vistaActual()]);
+    restaurarVista(v);
+  }
+
+  function adelanteVista() {
+    if (vistasAdelante.length === 0) return;
+    const v = vistasAdelante[vistasAdelante.length - 1];
+    setVistasAdelante((p) => p.slice(0, -1));
+    setVistasAtras((p) => [...p, vistaActual()]);
+    restaurarVista(v);
+  }
+
+  /** Presentación a pantalla completa: el chrome desaparece y la hoja se
+   *  queda sola. Esc sale, y la primera vez se dice cómo. */
+  function cambiaPantallaCompleta(valor: boolean) {
+    setPantallaCompleta(valor);
+    // la presentación no tiene herramientas (tampoco en Acrobat): así Esc
+    // es siempre la salida, sin tener que pulsarlo dos veces
+    if (valor) setMode("select");
+    ponerPantallaCompleta(valor).catch((e) => setError(String(e)));
+    if (valor && !avisoPantallaRef.current) {
+      avisoPantallaRef.current = true;
+      setNotice("Pulsa Esc para salir de la pantalla completa");
+    }
+  }
+
+  function cambiaVista(parte: Partial<typeof vista>) {
+    const siguiente = { ...vista, ...parte };
+    setVista(siguiente);
+    guardaVista(siguiente);
+  }
+
+  /** Guarda y aplica al instante una preferencia (el modo nocturno). */
+  function aplicaPrefs(p: Preferencias) {
+    guardaPreferencias(p);
+    setPrefs(p);
+  }
+
   const busqueda = useBusqueda({
     workPath,
-    gotoPage,
+    // los saltos entre coincidencias también se apilan: ⌥← vuelve a donde
+    // se estaba leyendo antes de buscar
+    gotoPage: saltarA,
     onError: (e) => setError(String(e)),
   });
   const limpiarBusqueda = busqueda.limpiar;
@@ -1035,9 +1179,20 @@ function App() {
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = null;
       const el = viewerRef.current;
-      if (!el || pageSizes.length === 0) return;
+      if (!el || pageSizes.length === 0 || filas.length === 0) return;
+      // en las presentaciones no continuas no hay páginas que seguir: el
+      // ancla del zoom es la única fila que hay en pantalla
+      if (!continuo) {
+        const alto = alturasFila(displayWidth)[filaActual] ?? 1;
+        scrollAnchorRef.current = {
+          page: pageIndex,
+          frac: Math.max(0, (el.scrollTop - VIEWER_PAD_TOP) / alto),
+          offset: 0,
+        };
+        return;
+      }
       const centro = el.scrollTop + el.clientHeight / 2;
-      const alturas = alturasPagina(displayWidth);
+      const alturas = alturasFila(displayWidth);
       let y = VIEWER_PAD_TOP;
       let best = 0;
       let bestDist = Infinity;
@@ -1046,7 +1201,7 @@ function App() {
         const h = alturas[i];
         if (anchor === null && y + h > el.scrollTop) {
           anchor = {
-            page: i,
+            page: filas[i][0],
             frac: Math.max(0, (el.scrollTop - y) / h),
             offset: 0,
           };
@@ -1059,7 +1214,7 @@ function App() {
         y += h + PAGE_GAP;
       }
       scrollAnchorRef.current = anchor;
-      setPageIndex(best);
+      setPageIndex(filas[best]?.[0] ?? 0);
     });
   }
 
@@ -1913,7 +2068,7 @@ function App() {
   }
 
   return (
-    <div className="app">
+    <div className={`app${pantallaCompleta ? " presentacion" : ""}`}>
       <header className="toolbar">
         <div className="toolbar-left">
           <button
@@ -2096,7 +2251,7 @@ function App() {
                   setMode("link-new");
                 }}
                 printDocument={printDocument}
-                abrirPreferencias={() => setPrefsDraft(cargaPreferencias())}
+                abrirPreferencias={() => setPrefsDraft(prefs)}
                 abrirExportar={() => setExportOpen(true)}
                 exportPlainText={exportPlainText}
                 abrirComprimir={() => setCompressOpen(true)}
@@ -2169,6 +2324,7 @@ function App() {
       {prefsDraft && (
         <DialogoPreferencias
           initial={prefsDraft}
+          onGuardar={aplicaPrefs}
           onClose={() => setPrefsDraft(null)}
         />
       )}
@@ -2521,7 +2677,7 @@ function App() {
               <PanelMarcadores
                 outline={outline}
                 currentPage={pageIndex}
-                onGoto={gotoPage}
+                onGoto={saltarA}
                 onChange={persistOutline}
               />
             )}
@@ -2548,9 +2704,15 @@ function App() {
 
         <div className="viewer-wrap">
           <main
-            className={`viewer${arrastrando ? " arrastrando" : ""}`}
+            className={`viewer${arrastrando ? " arrastrando" : ""}${
+              prefs.nocturno ? " nocturno" : ""
+            }`}
             ref={viewerRef}
             onScroll={onViewerScroll}
+            onClick={
+              // en presentación el clic avanza, como en Acrobat
+              pantallaCompleta ? () => gotoPage(pageIndex + 1) : undefined
+            }
           >
             {!workPath && (
               <div className="placeholder">
@@ -2594,12 +2756,19 @@ function App() {
               </div>
             )}
             {workPath &&
-              pageSizes.slice(0, pageCount).map((size, i) => (
+              filasVisibles.map((fila) => (
+              <div
+                className={`fila-paginas${fila.length > 1 ? " doble" : ""}`}
+                key={fila[0]}
+              >
+                {fila
+                  .filter((i) => pageSizes[i])
+                  .map((i) => (
                 <Pagina
                   key={i}
                   index={i}
                   workPath={workPath}
-                  size={size}
+                  size={pageSizes[i]}
                   pageCount={pageCount}
                   displayWidth={displayWidth}
                   viewRotation={viewRotation}
@@ -2627,12 +2796,14 @@ function App() {
                   onFormularios={onFormularios}
                   resaltarCampos={resaltarCampos}
                   onModeChange={setMode}
-                  onLinkGoto={gotoPage}
+                  onLinkGoto={saltarA}
                   onLinkUri={onLinkUri}
                   onSigStamped={onSigStamped}
                   pedirTextoNuevo={pedirTextoNuevo}
                   pedirImagen={pedirImagen}
                 />
+                  ))}
+              </div>
               ))}
           </main>
 
@@ -2758,6 +2929,87 @@ function App() {
               >
                 100 %
               </button>
+              <div className="sep" />
+              {(
+                [
+                  ["una", "pageOne", "Una sola página"],
+                  ["continuo", "pageScroll", "Desplazamiento continuo"],
+                  ["dos", "pageTwo", "Dos páginas"],
+                  [
+                    "dos-continuo",
+                    "pageTwoScroll",
+                    "Dos páginas con desplazamiento continuo",
+                  ],
+                ] as [ModoPagina, string, string][]
+              ).map(([id, icono, etiqueta]) => (
+                <button
+                  key={id}
+                  className={`btn btn-icon${
+                    vista.modoPagina === id ? " on" : ""
+                  }`}
+                  title={etiqueta}
+                  aria-label={etiqueta}
+                  aria-pressed={vista.modoPagina === id}
+                  onClick={() => cambiaVista({ modoPagina: id })}
+                >
+                  <Icon name={icono} size={14} />
+                </button>
+              ))}
+              {dobles && !pantallaCompleta && (
+                <button
+                  className={`btn${vista.portadaSola ? " on" : ""}`}
+                  title="Mostrar la portada sola en la vista de dos páginas"
+                  aria-pressed={vista.portadaSola}
+                  onClick={() =>
+                    cambiaVista({ portadaSola: !vista.portadaSola })
+                  }
+                >
+                  Portada
+                </button>
+              )}
+              <button
+                className={`btn btn-icon${pantallaCompleta ? " on" : ""}`}
+                title={`Pantalla completa (${MOD}L; Esc sale)`}
+                aria-label="Pantalla completa"
+                aria-pressed={pantallaCompleta}
+                onClick={() => cambiaPantallaCompleta(!pantallaCompleta)}
+              >
+                <Icon name="expand" size={14} />
+              </button>
+              <button
+                className={`btn btn-icon${prefs.nocturno ? " on" : ""}`}
+                title={`Modo nocturno: solo cambia lo que ves, el fichero no se toca (⇧${MOD}L)`}
+                aria-label="Modo nocturno del documento"
+                aria-pressed={prefs.nocturno}
+                onClick={() =>
+                  aplicaPrefs({ ...prefs, nocturno: !prefs.nocturno })
+                }
+              >
+                <Icon name="moon" size={14} />
+              </button>
+              {(vistasAtras.length > 0 || vistasAdelante.length > 0) && (
+                <>
+                  <div className="sep" />
+                  <button
+                    className="btn btn-icon"
+                    title="Volver a la vista anterior (⌥←)"
+                    aria-label="Volver a la vista anterior"
+                    disabled={vistasAtras.length === 0}
+                    onClick={atrasVista}
+                  >
+                    <Icon name="back" size={14} />
+                  </button>
+                  <button
+                    className="btn btn-icon"
+                    title="Ir a la vista siguiente (⌥→)"
+                    aria-label="Ir a la vista siguiente"
+                    disabled={vistasAdelante.length === 0}
+                    onClick={adelanteVista}
+                  >
+                    <Icon name="forward" size={14} />
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>

@@ -5,6 +5,7 @@
  */
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export const hayTauri = "__TAURI_INTERNALS__" in window;
 
@@ -90,6 +91,16 @@ export function onArrastreFicheros(h: {
   return () => {
     for (const p of pendientes) p.then((quitar) => quitar()).catch(() => {});
   };
+}
+
+/**
+ * Pantalla completa de la ventana (⌘L). En el navegador de QA no hay
+ * ventana que agrandar: la app esconde igual su chrome, que es lo que se
+ * puede probar ahí.
+ */
+export async function ponerPantallaCompleta(valor: boolean): Promise<void> {
+  if (!hayTauri) return;
+  await getCurrentWindow().setFullscreen(valor);
 }
 
 export async function invoke<T>(

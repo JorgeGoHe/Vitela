@@ -349,14 +349,23 @@ export function altoCuadro(lineas: number, fontSize: number): number {
 
 const CLAVE_PREFS = "editorPdf.preferencias";
 
-export type Preferencias = { autor: string };
+export type Preferencias = {
+  autor: string;
+  /** Modo nocturno del documento: solo cambia lo que se ve en pantalla. */
+  nocturno: boolean;
+};
+
+const PREFS_POR_DEFECTO: Preferencias = { autor: "", nocturno: false };
 
 export function cargaPreferencias(): Preferencias {
   try {
     const g = JSON.parse(localStorage.getItem(CLAVE_PREFS) ?? "{}");
-    return { autor: typeof g.autor === "string" ? g.autor : "" };
+    return {
+      autor: typeof g.autor === "string" ? g.autor : "",
+      nocturno: !!g.nocturno,
+    };
   } catch {
-    return { autor: "" };
+    return { ...PREFS_POR_DEFECTO };
   }
 }
 
@@ -391,6 +400,59 @@ export function firmaAnotacion(author: string, modified: string): string {
     }
   }
   return partes.join(" · ");
+}
+
+/* ---- presentación de página (persistida en localStorage) ---- */
+
+const CLAVE_VISTA = "editorPdf.vista";
+
+/** Las cuatro presentaciones de Acrobat. «continuo» es la de siempre. */
+export type ModoPagina = "una" | "continuo" | "dos" | "dos-continuo";
+
+export type PrefsVista = {
+  modoPagina: ModoPagina;
+  /** «Mostrar portada en vista de dos páginas». */
+  portadaSola: boolean;
+};
+
+const MODOS_PAGINA: ModoPagina[] = ["una", "continuo", "dos", "dos-continuo"];
+
+export function cargaVista(): PrefsVista {
+  try {
+    const g = JSON.parse(localStorage.getItem(CLAVE_VISTA) ?? "{}");
+    return {
+      modoPagina: MODOS_PAGINA.includes(g.modoPagina)
+        ? g.modoPagina
+        : "continuo",
+      portadaSola: g.portadaSola !== false,
+    };
+  } catch {
+    return { modoPagina: "continuo", portadaSola: true };
+  }
+}
+
+export function guardaVista(v: PrefsVista) {
+  localStorage.setItem(CLAVE_VISTA, JSON.stringify(v));
+}
+
+/** Reparte las páginas en filas de pantalla: una por fila, o de dos en dos
+ *  con la portada sola si así se pide (como el «Two Page View» de Acrobat). */
+export function filasDePaginas(
+  pageCount: number,
+  dobles: boolean,
+  portadaSola: boolean,
+): number[][] {
+  if (!dobles) return Array.from({ length: pageCount }, (_, i) => [i]);
+  const filas: number[][] = [];
+  let i = 0;
+  if (portadaSola && pageCount > 0) {
+    filas.push([0]);
+    i = 1;
+  }
+  for (; i < pageCount; i += 2) {
+    filas.push(i + 1 < pageCount ? [i, i + 1] : [i]);
+  }
+  return filas;
 }
 
 /* ---- opciones de búsqueda (persistidas en localStorage) ---- */

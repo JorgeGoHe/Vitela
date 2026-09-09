@@ -569,6 +569,9 @@ textarea {
   transform: translateX(-50%);
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: calc(100% - 32px);
   gap: 2px;
   background: var(--card-bg);
   border: 1px solid var(--border);
@@ -729,9 +732,38 @@ textarea {
   cursor: default;
 }
 
+/* una fila del visor: una hoja, o dos en las presentaciones de dos páginas */
+.fila-paginas {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 24px;
+}
+
 .page-wrap {
   position: relative;
   flex-shrink: 0;
+}
+
+/* modo nocturno del documento: invertir y devolver el tono cálido de la
+   mesa. Nada de invert(1) a secas, que deja el papel azul-pizarra
+   (prohibido en DESIGN.md). Solo toca el render: los overlays, las
+   imágenes exportadas y el fichero se quedan como están */
+.viewer.nocturno .page {
+  filter: invert(1) hue-rotate(180deg) sepia(0.22) saturate(1.08)
+    brightness(0.88);
+}
+
+/* pantalla completa: solo queda el documento (y la píldora, que se aparta
+   sola al no pasar el ratón por encima) */
+.app.presentacion .toolbar,
+.app.presentacion .sidebar,
+.app.presentacion .tool-options {
+  display: none;
+}
+
+.app.presentacion .viewer {
+  cursor: pointer;
 }
 
 /* la hoja de verdad: es la que gira con la vista (⇧⌘+ / ⇧⌘−) */
