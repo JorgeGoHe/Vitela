@@ -24,6 +24,17 @@ pub struct PageText {
 pub struct SearchMatch {
     pub page_index: u16,
     pub rects: Vec<Rect>,
+    /// Los 30 caracteres anteriores a la coincidencia, para la lista de
+    /// resultados («…el contrato se firma el 3 de…»). Vacío si no se pidió
+    /// contexto.
+    pub before: String,
+    /// Ídem, los 30 siguientes.
+    pub after: String,
+    /// Bloque de texto (`object_index` de `get_text_blocks`) en el que cae
+    /// la coincidencia, que es lo que necesita `replace_text` para
+    /// reescribirla. `None` si no se pidió contexto o si la coincidencia no
+    /// cae dentro de ningún bloque editable.
+    pub block_index: Option<u32>,
 }
 
 /// Extrae los caracteres de una página con sus cajas de glifos, en puntos PDF
@@ -147,15 +158,23 @@ pub fn normaliza_colapsando(
 /// por defecto: sin ellas la búsqueda no distingue mayúsculas y acepta
 /// coincidencias dentro de una palabra. Se pueden omitir (`null`), que es
 /// lo mismo que apagadas.
+///
+/// Con `context` cada coincidencia trae además la frase de alrededor (30
+/// caracteres a cada lado) y el bloque de texto en el que cae: es lo que
+/// necesita la lista de resultados y lo que `replace_text` reescribe.
+/// Cuesta una pasada más por los objetos de la página, así que solo se hace
+/// si se pide.
 #[tauri::command(async)]
 pub fn search_pdf(
     path: String,
     query: String,
     match_case: Option<bool>,
     whole_word: Option<bool>,
+    context: Option<bool>,
 ) -> Result<Vec<SearchMatch>, String> {
     let match_case = match_case.unwrap_or(false);
     let whole_word = whole_word.unwrap_or(false);
+    let context = context.unwrap_or(false);
     let needle: Vec<char> = normaliza_colapsando(query.trim().chars(), match_case)
         .into_iter()
         .map(|(c, _)| c)
@@ -168,6 +187,7 @@ pub fn search_pdf(
             let mut results = Vec::new();
             for (page_index, page) in doc.pages().iter().enumerate() {
                 let page_text = extract_chars(&page)?;
+                let bloques = if context { bloques_de_texto(&page) } else { Vec::new() };
                 let hay = normaliza_colapsando(
                     page_text
                         .chars
@@ -196,9 +216,22 @@ pub fn search_pdf(
                         let to = hay[start + needle.len() - 1].1;
                         let rects = merge_line_rects(&page_text.chars[from..=to]);
                         if !rects.is_empty() {
+                            let (before, after) = if context {
+                                alrededor(&page_text.chars, from, to)
+                            } else {
+                                (String::new(), String::new())
+                            };
+                            let block_index = if context {
+                                bloque_en(&bloques, &rects[0])
+                            } else {
+                                None
+                            };
                             results.push(SearchMatch {
                                 page_index: page_index as u16,
                                 rects,
+                                before,
+                                after,
+                                block_index,
                             });
                         }
                         start += needle.len();
@@ -210,6 +243,68 @@ pub fn search_pdf(
             Ok(results)
         })
     })
+}
+
+/// Cuántos caracteres de contexto se devuelven a cada lado.
+const CONTEXTO: usize = 30;
+
+/// La frase de alrededor de una coincidencia, para la lista de resultados.
+/// Las rachas de espacios y saltos se colapsan: en una lista, un salto de
+/// línea del PDF solo estorba.
+fn alrededor(chars: &[CharBox], from: usize, to: usize) -> (String, String) {
+    let junta = |trozo: &[CharBox]| {
+        let bruto: String = trozo.iter().map(|c| c.ch.as_str()).collect();
+        let mut out = String::new();
+        for c in bruto.chars() {
+            if c.is_whitespace() {
+                if !out.ends_with(' ') {
+                    out.push(' ');
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    };
+    let ini = from.saturating_sub(CONTEXTO);
+    let fin = (to + 1 + CONTEXTO).min(chars.len());
+    (junta(&chars[ini..from]), junta(&chars[to + 1..fin]))
+}
+
+/// Los bloques de texto de la página con su caja, en el espacio propio de
+/// la página (el mismo en el que se devuelven los rects de la búsqueda).
+fn bloques_de_texto(page: &PdfPage) -> Vec<(u32, Rect)> {
+    let geo = Geo::de_pagina(page).propia();
+    let objects = page.objects();
+    let mut out = Vec::new();
+    for i in 0..objects.len() {
+        let Ok(obj) = objects.get(i) else { continue };
+        let Some(t) = obj.as_text_object() else { continue };
+        if t.text().trim().is_empty() {
+            continue;
+        }
+        let Ok(b) = obj.bounds() else { continue };
+        let caja = geo.pdf_rect_a_ui(&PdfRect::new(b.bottom(), b.left(), b.top(), b.right()));
+        out.push((i as u32, caja));
+    }
+    out
+}
+
+/// El bloque que contiene el centro de esa caja (el más pequeño, si hay
+/// varios solapados: es el más ajustado a la coincidencia).
+fn bloque_en(bloques: &[(u32, Rect)], r: &Rect) -> Option<u32> {
+    let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+    bloques
+        .iter()
+        .filter(|(_, b)| {
+            cx >= b.x - 1.0 && cx <= b.x + b.w + 1.0 && cy >= b.y - 1.0 && cy <= b.y + b.h + 1.0
+        })
+        .min_by(|(_, a), (_, b)| {
+            (a.w * a.h)
+                .partial_cmp(&(b.w * b.h))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(i, _)| *i)
 }
 
 #[cfg(test)]
@@ -237,7 +332,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("editor_pdf_test_busqueda.pdf");
         crea_pdf(&["Hola Mundo"], &tmp);
         let matches =
-            search_pdf(tmp.to_string_lossy().into_owned(), "mundo".into(), None, None).expect("buscar");
+            search_pdf(tmp.to_string_lossy().into_owned(), "mundo".into(), None, None, None).expect("buscar");
         std::fs::remove_file(&tmp).ok();
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].page_index, 0);
@@ -251,15 +346,15 @@ mod tests {
         let path = tmp.to_string_lossy().into_owned();
 
         // no solapadas: una por "banana", no dos dentro de la misma palabra
-        let m = search_pdf(path.clone(), "ana".into(), None, None).expect("buscar ana");
+        let m = search_pdf(path.clone(), "ana".into(), None, None, None).expect("buscar ana");
         assert_eq!(m.len(), 2, "'ana' en 'banana banana'");
 
         // sin distinguir mayúsculas
-        let m = search_pdf(path.clone(), "hola".into(), None, None).expect("buscar hola");
+        let m = search_pdf(path.clone(), "hola".into(), None, None, None).expect("buscar hola");
         assert_eq!(m.len(), 4, "'hola' aparece 4 veces");
 
         // rachas de espacios en el documento cuentan como un espacio
-        let m = search_pdf(path.clone(), "hola mundo".into(), None, None).expect("buscar frase");
+        let m = search_pdf(path.clone(), "hola mundo".into(), None, None, None).expect("buscar frase");
         assert_eq!(m.len(), 1, "'Hola  Mundo' con doble espacio");
 
         std::fs::remove_file(&tmp).ok();
@@ -271,7 +366,7 @@ mod tests {
         crea_pdf(&["Casa casaca CASA — año año, añoso"], &tmp);
         let path = tmp.to_string_lossy().into_owned();
         let cuenta = |q: &str, mc: bool, ww: bool| {
-            search_pdf(path.clone(), q.into(), Some(mc), Some(ww))
+            search_pdf(path.clone(), q.into(), Some(mc), Some(ww), None)
                 .expect("buscar")
                 .len()
         };
@@ -279,7 +374,7 @@ mod tests {
         // por defecto (las dos apagadas, como Acrobat) y omitiéndolas
         assert_eq!(cuenta("casa", false, false), 3, "Casa, casaca, CASA");
         assert_eq!(
-            search_pdf(path.clone(), "casa".into(), None, None)
+            search_pdf(path.clone(), "casa".into(), None, None, None)
                 .expect("buscar sin flags")
                 .len(),
             3,
@@ -386,7 +481,7 @@ mod tests {
         // vista, y `get_annotations` ya devuelve ese espacio.
         let s = &crate::get_page_sizes(work.clone()).expect("tamaños")[0];
         assert_eq!(s.rotation, 270, "el test gira la página tres veces");
-        let m = &search_pdf(work.clone(), "Mundo".into(), None, None).expect("buscar")[0].rects[0];
+        let m = &search_pdf(work.clone(), "Mundo".into(), None, None, None).expect("buscar")[0].rects[0];
         let (px, py) = (m.x + m.w / 2.0, m.y + m.h / 2.0);
         // página propia -> vista con /Rotate 270, lo que hace `puntoAVista`
         let (vx, vy) = (py, s.height - px);
@@ -418,7 +513,7 @@ mod tests {
         let mut out = Vec::new();
         let t = get_page_text(work.to_string(), 0).expect("texto");
         out.extend(t.chars.iter().map(|c| (c.x, c.y, c.w, c.h)));
-        for m in search_pdf(work.to_string(), "Mundo".into(), None, None).expect("buscar") {
+        for m in search_pdf(work.to_string(), "Mundo".into(), None, None, None).expect("buscar") {
             out.extend(m.rects.iter().map(|r| (r.x, r.y, r.w, r.h)));
         }
         for b in crate::texto::get_text_blocks(work.to_string(), 0).expect("bloques") {

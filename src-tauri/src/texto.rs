@@ -266,6 +266,87 @@ pub fn edit_text_block(
     }))
 }
 
+/// Una coincidencia que hay que reescribir: el bloque donde está (el
+/// `object_index` de `get_text_blocks`, que trae también `search_pdf` con
+/// `context`), el texto que se busca y el que lo sustituye.
+#[derive(serde::Deserialize, Clone)]
+pub struct Reemplazo {
+    pub page_index: u16,
+    pub block_index: u32,
+    pub from: String,
+    pub to: String,
+}
+
+/// «Reemplazar todo»: reescribe de una vez todas las coincidencias que se
+/// le pasen, **en una sola mutación**, así que un ⌘Z las devuelve todas
+/// juntas. Devuelve cuántas ha cambiado.
+///
+/// Una coincidencia cuyo bloque ya no dice lo que decía —porque el
+/// documento ha cambiado entre la búsqueda y el reemplazo, o porque el
+/// texto no se puede reescribir— se salta sin romper el lote: es mejor
+/// cambiar 9 de 12 y decirlo que no cambiar ninguna.
+#[tauri::command(async)]
+pub fn replace_text(work_path: String, matches: Vec<Reemplazo>) -> Result<u16, String> {
+    if matches.is_empty() {
+        return Err("No hay ninguna coincidencia que reemplazar".into());
+    }
+    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(crate::mensaje_llano)?;
+        // varias coincidencias pueden caer en el mismo bloque: se agrupan
+        // para tocar cada objeto una sola vez y reemplazar tantas
+        // ocurrencias como coincidencias se hayan pedido
+        let mut por_bloque: std::collections::BTreeMap<(u16, u32, String, String), usize> =
+            Default::default();
+        for m in matches {
+            *por_bloque
+                .entry((m.page_index, m.block_index, m.from, m.to))
+                .or_default() += 1;
+        }
+        let mut hechas = 0u16;
+        let mut paginas_tocadas: Vec<u16> = Vec::new();
+        for ((page_index, block_index, from, to), veces) in por_bloque {
+            if from.is_empty() {
+                continue;
+            }
+            let Ok(mut page) = doc.pages().get(page_index) else {
+                continue;
+            };
+            let Ok(mut obj) = page.objects_mut().get(block_index as usize) else {
+                continue;
+            };
+            let Some(t) = obj.as_text_object_mut() else {
+                continue;
+            };
+            let viejo = t.text();
+            let cuantas = viejo.matches(&from).count().min(veces);
+            if cuantas == 0 {
+                // el bloque ya no dice lo que decía: se salta
+                continue;
+            }
+            let nuevo = viejo.replacen(&from, &to, cuantas);
+            if t.set_text(&nuevo).is_err() {
+                continue;
+            }
+            drop(obj);
+            page.regenerate_content().map_err(crate::mensaje_llano)?;
+            hechas += cuantas as u16;
+            if !paginas_tocadas.contains(&page_index) {
+                paginas_tocadas.push(page_index);
+            }
+        }
+        if hechas == 0 {
+            return Err(
+                "Ninguna de esas coincidencias sigue donde estaba: vuelve a buscar".into(),
+            );
+        }
+        save_and_close(doc, &work_path)?;
+        Ok(hechas)
+    }))
+}
+
 /// Añade un bloque de texto nuevo en el punto dado (coords de UI, el punto
 /// es la esquina superior izquierda de la primera línea). Cada línea del
 /// texto se inserta como un objeto propio. La fuente puede elegirse por
@@ -636,4 +717,97 @@ mod tests {
         std::fs::remove_file(&png).ok();
     }
 
+    /// Buscar y reemplazar: el lote entero es UNA mutación (un ⌘Z lo
+    /// devuelve), y una coincidencia cuyo bloque ha cambiado entre la
+    /// búsqueda y el reemplazo se salta sin romper el resto.
+    #[test]
+    fn reemplazar_todo_es_un_solo_paso_y_se_salta_lo_que_ya_no_esta() {
+        let pdf = std::env::temp_dir().join("texto-reemplazar-test.pdf");
+        crate::tests::crea_pdf(&["Vitela edita Vitela", "Vitela firma"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        let pasos = |w: &str| {
+            crate::historial::history_state(w.to_string())
+                .expect("historial")
+                .undo
+        };
+
+        // la búsqueda con contexto trae el bloque donde cae cada una
+        let coincidencias =
+            crate::busqueda::search_pdf(work.clone(), "Vitela".into(), None, None, Some(true))
+                .expect("buscar");
+        assert_eq!(coincidencias.len(), 3, "tres veces en dos páginas");
+        assert!(
+            coincidencias.iter().all(|m| m.block_index.is_some()),
+            "sin bloque no se puede reemplazar"
+        );
+        assert!(
+            coincidencias[0].after.contains("edita"),
+            "el contexto de la lista: {:?}",
+            coincidencias[0].after
+        );
+
+        let lote: Vec<Reemplazo> = coincidencias
+            .iter()
+            .map(|m| Reemplazo {
+                page_index: m.page_index,
+                block_index: m.block_index.unwrap(),
+                from: "Vitela".into(),
+                to: "Pergamino".into(),
+            })
+            .collect();
+        let antes = pasos(&work);
+        assert_eq!(replace_text(work.clone(), lote).expect("reemplazar"), 3);
+        assert_eq!(pasos(&work), antes + 1, "reemplazar todo es UN paso");
+
+        let texto_de = |p: u16| -> String {
+            crate::busqueda::get_page_text(work.clone(), p)
+                .expect("texto")
+                .chars
+                .iter()
+                .map(|c| c.ch.as_str())
+                .collect()
+        };
+        assert!(!texto_de(0).contains("Vitela"), "{}", texto_de(0));
+        assert_eq!(texto_de(0).matches("Pergamino").count(), 2);
+        assert!(texto_de(1).contains("Pergamino"));
+        assert!(
+            crate::busqueda::search_pdf(work.clone(), "Vitela".into(), None, None, None)
+                .expect("buscar")
+                .is_empty(),
+            "ya no queda ninguna"
+        );
+
+        // ⌘Z devuelve las tres de una vez
+        crate::historial::undo(work.clone()).expect("deshacer");
+        assert_eq!(
+            crate::busqueda::search_pdf(work.clone(), "Vitela".into(), None, None, None)
+                .expect("buscar")
+                .len(),
+            3
+        );
+
+        // una coincidencia que ya no dice lo que decía se salta, y las
+        // demás se hacen igual
+        let lote = vec![
+            Reemplazo {
+                page_index: 0,
+                block_index: 0,
+                from: "Vitela".into(),
+                to: "Pergamino".into(),
+            },
+            Reemplazo {
+                page_index: 1,
+                block_index: 0,
+                from: "Lo que ya no está".into(),
+                to: "Nada".into(),
+            },
+        ];
+        assert_eq!(
+            replace_text(work.clone(), lote).expect("reemplazar"),
+            1,
+            "una hecha, la otra saltada"
+        );
+        assert!(texto_de(1).contains("Vitela"), "la página 2 no se ha tocado");
+        std::fs::remove_file(&pdf).ok();
+    }
 }

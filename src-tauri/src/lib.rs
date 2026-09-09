@@ -1042,6 +1042,7 @@ pub fn run() {
             formularios::set_form_choice,
             texto::get_text_blocks,
             texto::edit_text_block,
+            texto::replace_text,
             texto::add_text_block,
             texto::delete_text_block,
             imagenes::get_images,
