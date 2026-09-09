@@ -106,6 +106,11 @@ pub fn add_stroke(
             .create_ink_annotation()
             .map_err(|e| e.to_string())?;
         annot.set_is_printed(true).map_err(|e| e.to_string())?;
+        // /C antes de añadir el path (con /AP PDFium ya no deja fijarlo);
+        // es lo que lee get_annotations, el color del path no se ve fuera
+        annot
+            .set_stroke_color(PdfColor::new(c[0], c[1], c[2], c[3]))
+            .map_err(|e| e.to_string())?;
         const MARGIN: f32 = 3.0;
         let min_x = points.iter().map(|p| p[0]).fold(f32::MAX, f32::min) - MARGIN;
         let max_x = points.iter().map(|p| p[0]).fold(f32::MIN, f32::max) + MARGIN;
@@ -382,6 +387,19 @@ mod tests {
             }
         }
         assert!(cambiado, "el trazo no cambió ningún píxel");
+        // el color del trazo tiene que llegar a la UI en get_annotations
+        add_stroke(
+            work.clone(),
+            0,
+            vec![[50.0, 200.0], [250.0, 200.0]],
+            Some([46, 160, 67, 255]),
+            None,
+        )
+        .expect("trazo con color");
+        let annots = get_annotations(work, 0).expect("annots");
+        let ultimo = annots.last().expect("hay anotaciones");
+        assert_eq!(ultimo.kind, "Ink");
+        assert_eq!(ultimo.color, Some([46, 160, 67, 255]));
         std::fs::remove_file(&tmp).ok();
     }
 
