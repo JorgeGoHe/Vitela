@@ -268,6 +268,27 @@ pub(crate) fn cirugia(
 /// está cifrado hace falta `password`: la copia de trabajo se guarda ya
 /// descifrada para que el resto de comandos no tengan que saber nada. El
 /// error "PASSWORD_REQUIRED" indica a la UI que pida contraseña.
+/// Traduce el error de PDFium al abrir (su `Display` es el `Debug` de Rust,
+/// que no le sirve de nada al usuario).
+fn mensaje_apertura(e: &PdfiumError) -> String {
+    match e {
+        PdfiumError::IoError(io) if io.kind() == std::io::ErrorKind::NotFound => {
+            "No se encuentra el fichero".into()
+        }
+        PdfiumError::IoError(io) => format!("No se pudo leer el fichero: {io}"),
+        PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::FormatError) => {
+            "El fichero no es un PDF válido o está dañado".into()
+        }
+        PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::FileError) => {
+            "No se pudo abrir el fichero".into()
+        }
+        PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::SecurityError) => {
+            "El PDF no permite abrirse con esta contraseña".into()
+        }
+        otro => format!("No se pudo abrir el PDF: {otro}"),
+    }
+}
+
 #[tauri::command(async)]
 fn open_pdf(path: String, password: Option<String>) -> Result<DocumentInfo, String> {
     let work = work_copy_path(&path);
@@ -279,7 +300,7 @@ fn open_pdf(path: String, password: Option<String>) -> Result<DocumentInfo, Stri
             Err(PdfiumError::PdfiumLibraryInternalError(
                 PdfiumInternalError::PasswordError,
             )) => return Err("PASSWORD_REQUIRED".into()),
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(mensaje_apertura(&e)),
         };
         let page_count = doc.pages().len();
         let had_password = password.is_some();
@@ -666,6 +687,17 @@ pub(crate) mod tests {
             .recv_timeout(std::time::Duration::from_secs(10))
             .expect("la llamada anidada se ha colgado");
         assert_eq!(v, 42);
+    }
+
+    #[test]
+    fn errores_de_apertura_en_castellano() {
+        let e = open_pdf("/no/existe/de-verdad.pdf".into(), None).unwrap_err();
+        assert_eq!(e, "No se encuentra el fichero");
+        let txt = std::env::temp_dir().join("vitela-no-soy-un-pdf.txt");
+        std::fs::write(&txt, b"esto no es un PDF").expect("escribir txt");
+        let e = open_pdf(txt.to_string_lossy().to_string(), None).unwrap_err();
+        assert_eq!(e, "El fichero no es un PDF válido o está dañado");
+        std::fs::remove_file(&txt).ok();
     }
 
     #[test]
