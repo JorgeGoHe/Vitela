@@ -2610,6 +2610,8 @@ function App() {
     "pagina-dos-continua": () => cambiaVista({ modoPagina: "dos-continuo" }),
     "girar-vista-derecha": () => setViewRotation((r) => (r + 90) % 360),
     "girar-vista-izquierda": () => setViewRotation((r) => (r + 270) % 360),
+    "vista-atras": () => atrasVista(),
+    "vista-adelante": () => adelanteVista(),
     "panel-lateral": () => setSidebarVisible((v) => !v),
     "pantalla-completa": () => cambiaPantallaCompleta(!pantallaCompleta),
     "modo-nocturno": () => aplicaPrefs({ ...prefs, nocturno: !prefs.nocturno }),
