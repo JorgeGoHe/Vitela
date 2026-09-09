@@ -217,7 +217,7 @@ export default function MenuAcciones({
             />
             <Entrada
               icon="flatten"
-              texto="Aplanar anotaciones…"
+              texto="Fijar las anotaciones en la página…"
               onSelect={ejecutar(abrirAplanar)}
             />
             <Entrada

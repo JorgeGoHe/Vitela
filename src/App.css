@@ -840,6 +840,12 @@ textarea {
   color: var(--fg);
 }
 
+/* los avisos de éxito se desvanecen solos (motion corto de DESIGN.md) */
+.banner-notice.saliendo {
+  opacity: 0;
+  transition: opacity 200ms ease-in;
+}
+
 .banner-notice p {
   overflow: hidden;
   text-overflow: ellipsis;

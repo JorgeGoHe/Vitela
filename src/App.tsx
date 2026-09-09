@@ -158,6 +158,7 @@ function App() {
   const [compressQuality, setCompressQuality] = useState(75);
   const [compressDpi, setCompressDpi] = useState(150);
   const [notice, setNotice] = useState<string | null>(null);
+  const [noticeSaliendo, setNoticeSaliendo] = useState(false);
   const [outline, setOutlineState] = useState<OutlineNode[]>([]);
   const [propsDraft, setPropsDraft] = useState<Metadata | null>(null);
   const {
@@ -780,6 +781,7 @@ function App() {
         ownerPassword: protectDraft.owner || null,
       });
       setProtectDraft(null);
+      setNotice(`Copia protegida guardada en ${dest}`);
     } catch (e) {
       setError(String(e));
     }
@@ -812,6 +814,19 @@ function App() {
       setError(String(e));
     }
   }
+
+  // Los avisos de éxito se van solos a los 6 s con un desvanecido corto
+  // (U-14); los errores se quedan hasta que se cierran a mano.
+  useEffect(() => {
+    if (!notice) return;
+    setNoticeSaliendo(false);
+    const irse = setTimeout(() => setNoticeSaliendo(true), 6000);
+    const quitar = setTimeout(() => setNotice(null), 6200);
+    return () => {
+      clearTimeout(irse);
+      clearTimeout(quitar);
+    };
+  }, [notice]);
 
   // cuando las páginas de impresión están montadas, abrir el diálogo
   useEffect(() => {
@@ -1279,7 +1294,7 @@ function App() {
         </div>
       )}
       {notice && (
-        <div className="banner-notice">
+        <div className={`banner-notice${noticeSaliendo ? " saliendo" : ""}`}>
           <p title={notice}>{notice}</p>
           <button className="btn btn-icon" aria-label="Cerrar el aviso" onClick={() => setNotice(null)}>
             <Icon name="close" size={13} />
@@ -1375,16 +1390,15 @@ function App() {
       )}
       {flattenAsk && (
         <DialogoConfirmar
-          titulo="Aplanar anotaciones y formularios"
+          titulo="Fijar las anotaciones en la página"
           cuerpo={
             <p className="modal-file" style={{ whiteSpace: "normal" }}>
-              Los sellos, formas, trazos y campos rellenados pasan a ser
-              contenido fijo de la página (ya no se podrán editar ni borrar).
-              Ojo: los resaltados, subrayados y notas creados con esta app se
-              perderán al aplanar.
+              Los resaltados, subrayados, notas, sellos, formas, trazos y
+              campos rellenados pasan a ser contenido fijo de la página: ya no
+              se podrán editar ni borrar.
             </p>
           }
-          textoConfirmar="Aplanar"
+          textoConfirmar="Fijar"
           onConfirm={applyFlatten}
           onClose={() => setFlattenAsk(false)}
         />
