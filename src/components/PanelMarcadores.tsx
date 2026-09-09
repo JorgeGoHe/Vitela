@@ -55,13 +55,16 @@ export default function PanelMarcadores({
               value={editing.text}
               onChange={(e) => setEditing({ path, text: e.target.value })}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && editing.text.trim()) {
-                  onChange(
-                    actualiza(outline, path, (m) => ({
-                      ...m,
-                      title: editing.text.trim(),
-                    })),
-                  );
+                if (e.key === "Enter") {
+                  // un título vacío no se aplica: Enter cancela como Esc
+                  if (editing.text.trim()) {
+                    onChange(
+                      actualiza(outline, path, (m) => ({
+                        ...m,
+                        title: editing.text.trim(),
+                      })),
+                    );
+                  }
                   setEditing(null);
                 }
                 if (e.key === "Escape") setEditing(null);
