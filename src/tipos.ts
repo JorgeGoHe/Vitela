@@ -105,6 +105,7 @@ export const KIND_LABELS: Record<string, string> = {
   Strikeout: "Tachado",
   StrikeOut: "Tachado",
   Stamp: "Sello",
+  Link: "Enlace",
 };
 
 export function hexToRgba(hex: string, alpha = 255): Rgba {

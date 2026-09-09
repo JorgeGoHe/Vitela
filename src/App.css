@@ -942,6 +942,11 @@ textarea {
   outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
+/* popover del enlace: tres acciones, que quepan en la tarjeta */
+.link-card .card-actions {
+  flex-wrap: wrap;
+}
+
 .hf-grid {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;

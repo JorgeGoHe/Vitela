@@ -223,6 +223,8 @@ export type LinkInfo = {
   h: number;
   uri: string | null;
   dest_page: number | null;
+  /** Índice de la anotación en la página (el que entiende `remove_annotation`). */
+  annot_index: number;
 };
 
 export function getLinks(

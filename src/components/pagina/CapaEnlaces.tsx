@@ -1,7 +1,9 @@
-/** Zonas de enlace clicables (modo selección) y tarjeta del enlace nuevo. */
-import type { Mode } from "../../tipos";
+/** Zonas de enlace clicables (modo selección) con su popover
+ *  (Abrir / Ir a la página / Eliminar) y tarjeta del enlace nuevo. */
+import { KIND_LABELS, type Mode } from "../../tipos";
 import { clampCardLeft } from "../../hooks/pagina/geometria";
 import type { Enlaces } from "../../hooks/pagina/useEnlaces";
+import Icon from "../Icon";
 
 type Props = {
   mode: Mode;
@@ -20,6 +22,9 @@ export default function CapaEnlaces({
 }: Props) {
   const {
     links,
+    linkPopover,
+    setLinkPopover,
+    deleteLink,
     linkDraft,
     setLinkDraft,
     linkTipo,
@@ -46,10 +51,45 @@ export default function CapaEnlaces({
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
-              onLinkClick(l);
+              setLinkPopover((p) => (p === l ? null : l));
             }}
           />
         ))}
+      {mode === "select" && linkPopover && (
+        <div
+          className="card link-card"
+          style={{
+            left: clampCardLeft(linkPopover.x * scale, displayWidth),
+            top: (linkPopover.y + linkPopover.h) * scale + 6,
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <p>
+            {KIND_LABELS.Link}:{" "}
+            {linkPopover.uri ?? `página ${(linkPopover.dest_page ?? 0) + 1}`}
+          </p>
+          <div className="card-actions">
+            <button
+              className="btn btn-primary"
+              onClick={() => onLinkClick(linkPopover)}
+            >
+              {linkPopover.uri
+                ? "Abrir"
+                : `Ir a la página ${(linkPopover.dest_page ?? 0) + 1}`}
+            </button>
+            <button
+              className="btn btn-danger"
+              onClick={() => deleteLink(linkPopover)}
+            >
+              <Icon name="trash" size={13} />
+              Eliminar
+            </button>
+            <button className="btn" onClick={() => setLinkPopover(null)}>
+              Cerrar
+            </button>
+          </div>
+        </div>
+      )}
       {mode === "link-new" && linkDraft && (
         <>
           <div
