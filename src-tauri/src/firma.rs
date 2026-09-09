@@ -1210,6 +1210,56 @@ mod tests {
         assert_eq!(fuera_de_vigor(ahora + dia, ahora + 2 * dia, ahora), (true, true));
     }
 
+    /// **Distinto 5.** Un campo de firma no es un campo que se rellene: con
+    /// él en la lista de `get_form_fields`, un PDF que solo lleva una firma
+    /// se anunciaba como «este documento se puede rellenar», y encima en el
+    /// momento en que el usuario está mirando la firma. Tampoco es un
+    /// comentario, así que no sale en el panel.
+    #[test]
+    fn un_campo_de_firma_no_es_un_campo_de_formulario_ni_un_comentario() {
+        let dir = std::env::temp_dir();
+        let src = dir.join("firma-campo-src.pdf");
+        let dest = dir.join("firma-campo-out.pdf");
+        crea_pdf(&["Contrato"], &src);
+        let ap = Apariencia {
+            rect: Some(crate::Rect { x: 60.0, y: 500.0, w: 220.0, h: 90.0 }),
+            page_index: Some(0),
+            signer_name: Some("Jorge".into()),
+            signature_png: None,
+        };
+        sign(
+            &src.to_string_lossy(),
+            &dest.to_string_lossy(),
+            &credenciales(),
+            None,
+            &ap,
+        )
+        .expect("firmar");
+        let ruta = dest.to_string_lossy().into_owned();
+
+        // la firma está ahí (el widget existe en el fichero)
+        assert_eq!(
+            verify_signatures(ruta.clone()).expect("verificar").len(),
+            1
+        );
+        let campos = crate::formularios::get_form_fields(ruta.clone(), 0).expect("campos");
+        assert!(
+            campos.is_empty(),
+            "un campo de firma no se rellena: {} campos",
+            campos.len()
+        );
+        let comentarios =
+            crate::anotaciones::get_document_annotations(ruta.clone()).expect("comentarios");
+        assert!(
+            comentarios.is_empty(),
+            "ni es un comentario: {} anotaciones",
+            comentarios.len()
+        );
+        for f in [&src, &dest] {
+            std::fs::remove_file(f).ok();
+        }
+    }
+
     /// **G1.** La confianza es una pregunta distinta de la validez: el
     /// documento puede estar intacto y la firma cuadrar, y aun así no
     /// haber nadie que responda por el certificado. Vitela firma con uno

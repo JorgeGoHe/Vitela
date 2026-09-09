@@ -38,6 +38,14 @@ pub fn get_form_fields(path: String, page_index: u16) -> Result<Vec<FormFieldInf
                 let Some(field) = widget.form_field() else {
                     continue;
                 };
+                // un campo de firma NO es un campo que se rellene: con él
+                // en la lista, un PDF que solo lleva una firma se anunciaba
+                // como «este documento se puede rellenar», justo cuando lo
+                // que el usuario está mirando es la firma. Acrobat también
+                // los separa.
+                if field.field_type() == PdfFormFieldType::Signature {
+                    continue;
+                }
                 let Ok(b) = a.bounds() else { continue };
                 let kind = format!("{:?}", field.field_type());
                 let (value, checked) = match field.field_type() {

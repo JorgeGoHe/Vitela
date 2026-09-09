@@ -812,6 +812,16 @@ fn lee_annots(
         if kind == "Popup" {
             continue;
         }
+        // el widget de una firma tampoco: ni es un comentario ni es un
+        // campo que se rellene (ver `get_form_fields`)
+        let es_firma = a
+            .as_widget_annotation()
+            .and_then(|w| w.form_field())
+            .map(|f| f.field_type() == PdfFormFieldType::Signature)
+            .unwrap_or(false);
+        if es_firma {
+            continue;
+        }
         let Ok(b) = a.bounds() else { continue };
         let mut rects = Vec::new();
         {
