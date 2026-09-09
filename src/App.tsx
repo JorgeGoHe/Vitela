@@ -86,7 +86,6 @@ import {
 } from "./api";
 import {
   ATAJO_COMENTARIOS,
-  ES_MAC,
   ATAJO_MARCADORES,
   ATAJO_PANEL,
   avisoPantallaVisto,
@@ -166,18 +165,6 @@ function recortaZoom(z: number): number {
  * la página que se está leyendo, o el panel de páginas si tiene el foco), en
  * vez de abrir un segundo camino que pueda separarse del primero.
  */
-function reenviaTecla(key: string) {
-  window.dispatchEvent(
-    new KeyboardEvent("keydown", {
-      key,
-      metaKey: ES_MAC,
-      ctrlKey: !ES_MAC,
-      bubbles: true,
-      cancelable: true,
-    }),
-  );
-}
-
 /** Los cuatro modos de presentación en el segmentado de la píldora. */
 const MODOS_PILDORA: [ModoPagina, string, string][] = [
   ["una", "pageOne", "Una sola página"],
@@ -2590,7 +2577,6 @@ function App() {
     rehacer: () => {
       if (historial.puedeRehacer) historial.rehacer();
     },
-    copiar: () => reenviaTecla("c"),
     buscar: () =>
       (document.querySelector(".search input") as HTMLInputElement)?.focus(),
     "buscar-siguiente": () => busqueda.gotoMatch(1),
