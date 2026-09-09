@@ -78,6 +78,9 @@ function App() {
     dest: string;
     resolve: (ok: boolean) => void;
   } | null>(null);
+  // acción pendiente (abrir otro PDF, cerrar) hasta decidir qué hacer con
+  // los cambios sin guardar
+  const [unsavedAsk, setUnsavedAsk] = useState<(() => void) | null>(null);
   const [docVersion, setDocVersion] = useState(0);
   const [pageCount, setPageCount] = useState(0);
   const [pageSizes, setPageSizes] = useState<PageSize[]>([]);
@@ -211,11 +214,41 @@ function App() {
     }
   }
 
-  /** Cierra el documento: vuelve al estado vacío y borra la copia de trabajo. */
+  /** Ejecuta `continuar` directamente si no hay cambios; si los hay,
+   *  pregunta antes (Guardar / Descartar / Cancelar). */
+  function conCambiosGuardados(continuar: () => void) {
+    if (!modified) {
+      continuar();
+      return;
+    }
+    setUnsavedAsk(() => continuar);
+  }
+
+  function resolverUnsavedAsk(accion: "guardar" | "descartar" | "cancelar") {
+    if (!unsavedAsk) return;
+    const continuar = unsavedAsk;
+    setUnsavedAsk(null);
+    if (accion === "cancelar") return;
+    if (accion === "descartar") {
+      continuar();
+      return;
+    }
+    (originalPath ? saveFile() : saveFileAs()).then((ok) => {
+      if (ok) continuar();
+    });
+  }
+
+  /** Cierra el documento (preguntando si hay cambios sin guardar). */
   function closeDocument() {
     if (!workPath) return;
-    const anterior = workPath;
     setMenuOpen(false);
+    conCambiosGuardados(cerrarDocumento);
+  }
+
+  /** Vuelve al estado vacío y borra la copia de trabajo. */
+  function cerrarDocumento() {
+    if (!workPath) return;
+    const anterior = workPath;
     setWorkPath(null);
     setOriginalPath(null);
     setPageCount(0);
@@ -234,13 +267,17 @@ function App() {
     invoke("close_document", { workPath: anterior }).catch((e) => setError(String(e)));
   }
 
-  async function openFile() {
-    const selected = await open({
-      filters: [{ name: "PDF", extensions: ["pdf"] }],
-      multiple: false,
+  function openFile() {
+    // el diálogo nativo se abre solo después de decidir qué hacer con los
+    // cambios pendientes
+    conCambiosGuardados(async () => {
+      const selected = await open({
+        filters: [{ name: "PDF", extensions: ["pdf"] }],
+        multiple: false,
+      });
+      if (typeof selected !== "string") return;
+      await openPath(selected);
     });
-    if (typeof selected !== "string") return;
-    await openPath(selected);
   }
 
   // Tamaños de página del documento: el esqueleto del scroll continuo
@@ -1274,6 +1311,24 @@ function App() {
           textoConfirmar="Aplanar"
           onConfirm={applyFlatten}
           onClose={() => setFlattenAsk(false)}
+        />
+      )}
+      {unsavedAsk && (
+        <DialogoConfirmar
+          titulo="Cambios sin guardar"
+          cuerpo={
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              {fileName ?? "El documento"} tiene cambios sin guardar. ¿Quieres
+              guardarlos antes de continuar?
+            </p>
+          }
+          textoConfirmar="Guardar"
+          secundario={{
+            texto: "Descartar",
+            onClick: () => resolverUnsavedAsk("descartar"),
+          }}
+          onConfirm={() => resolverUnsavedAsk("guardar")}
+          onClose={() => resolverUnsavedAsk("cancelar")}
         />
       )}
       {saveAsk && (
