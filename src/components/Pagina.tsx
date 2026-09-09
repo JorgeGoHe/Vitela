@@ -46,6 +46,9 @@ export type ToolProps = {
   stampText: string;
   stampCustom: string;
   stampColor: string;
+  freeTextColor: string;
+  freeTextSize: number;
+  freeTextBorder: boolean;
   activeSig: { png: string; ratio: number } | null;
 };
 
@@ -342,6 +345,11 @@ function Pagina({
       enlaces.setLinkDraft(null);
       return;
     }
+    if (mode === "freetext") {
+      anotaciones.freeTextStartRef.current = { x, y };
+      anotaciones.setFreeTextDraft(null);
+      return;
+    }
     if (!seleccion.pageText) return;
     claimSel(index);
     // doble clic: palabra; triple: línea (no arranca arrastre)
@@ -450,6 +458,21 @@ function Pagina({
       areas.setRedactDraft(d);
       return;
     }
+    if (mode === "freetext") {
+      const start = anotaciones.freeTextStartRef.current;
+      if (!start) return;
+      const { x, y } = pagePoint(e, scale);
+      const d = {
+        x: Math.min(x, start.x),
+        y: Math.min(y, start.y),
+        w: Math.abs(x - start.x),
+        h: Math.abs(y - start.y),
+        text: anotaciones.freeTextDraft?.text ?? "",
+      };
+      anotaciones.freeTextLiveRef.current = d;
+      anotaciones.setFreeTextDraft(d);
+      return;
+    }
     if (mode === "form-new" || mode === "link-new") {
       const start = (mode === "form-new" ? formularios.formStartRef : enlaces.linkStartRef).current;
       if (!start) return;
@@ -556,6 +579,20 @@ function Pagina({
     }
     if (mode === "link-new") {
       enlaces.linkStartRef.current = null;
+      return;
+    }
+    if (mode === "freetext") {
+      const start = anotaciones.freeTextStartRef.current;
+      anotaciones.freeTextStartRef.current = null;
+      const d = anotaciones.freeTextLiveRef.current;
+      anotaciones.freeTextLiveRef.current = null;
+      if (!start) return;
+      // un clic simple vale: caja por defecto para no obligar a arrastrar
+      const caja =
+        d && d.w > 20 && d.h > 12
+          ? d
+          : { x: start.x, y: start.y, w: 180, h: 48, text: "" };
+      anotaciones.setFreeTextDraft(caja);
       return;
     }
     if (mode === "image" && imagenes.imgActionRef.current) {

@@ -33,14 +33,20 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
   const [stampText, setStampText] = useState(STAMP_PRESETS[0]);
   const [stampCustom, setStampCustom] = useState("");
   const [stampColor, setStampColor] = useState(() => cargaColores().sello ?? "#c0392b");
+  const [freeTextColor, setFreeTextColor] = useState(
+    () => cargaColores().cuadro ?? "#1d1c18",
+  );
+  const [freeTextSize, setFreeTextSize] = useState(12);
+  const [freeTextBorder, setFreeTextBorder] = useState(true);
 
   function cambiaColorAccion(
-    accion: "dibujo" | "forma" | "sello",
+    accion: "dibujo" | "forma" | "sello" | "cuadro",
     color: string,
   ) {
     guardaColor(accion, color);
     if (accion === "dibujo") setDrawColor(color);
     else if (accion === "forma") setShapeColor(color);
+    else if (accion === "cuadro") setFreeTextColor(color);
     else setStampColor(color);
   }
 
@@ -76,6 +82,9 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
       stampText,
       stampCustom,
       stampColor,
+      freeTextColor,
+      freeTextSize,
+      freeTextBorder,
       activeSig,
     }),
     [
@@ -91,6 +100,9 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
       stampText,
       stampCustom,
       stampColor,
+      freeTextColor,
+      freeTextSize,
+      freeTextBorder,
       activeSig,
     ],
   );
@@ -111,6 +123,11 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
     stampCustom,
     setStampCustom,
     stampColor,
+    freeTextColor,
+    freeTextSize,
+    setFreeTextSize,
+    freeTextBorder,
+    setFreeTextBorder,
     cambiaColorAccion,
     tool,
   };

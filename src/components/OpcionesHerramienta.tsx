@@ -23,6 +23,11 @@ export default function OpcionesHerramienta({
   stampCustom,
   setStampCustom,
   stampColor,
+  freeTextColor,
+  freeTextSize,
+  setFreeTextSize,
+  freeTextBorder,
+  setFreeTextBorder,
   cambiaColorAccion,
 }: {
   mode: Mode;
@@ -41,8 +46,13 @@ export default function OpcionesHerramienta({
   stampCustom: string;
   setStampCustom: (t: string) => void;
   stampColor: string;
+  freeTextColor: string;
+  freeTextSize: number;
+  setFreeTextSize: (s: number) => void;
+  freeTextBorder: boolean;
+  setFreeTextBorder: (b: boolean) => void;
   cambiaColorAccion: (
-    accion: "dibujo" | "forma" | "sello",
+    accion: "dibujo" | "forma" | "sello" | "cuadro",
     color: string,
   ) => void;
 }) {
@@ -162,6 +172,61 @@ export default function OpcionesHerramienta({
               </option>
             ))}
           </select>
+        </div>
+      )}
+      {mode === "freetext" && (
+        <div className="tool-options">
+          <span>Cuadro</span>
+          <div className="swatches">
+            {SHAPE_COLORS.map((c) => (
+              <button
+                key={c}
+                className={`swatch${freeTextColor === c ? " on" : ""}`}
+                style={{ background: c }}
+                title={NOMBRE_COLOR[c] ?? c}
+                aria-label={NOMBRE_COLOR[c] ?? c}
+                aria-pressed={freeTextColor === c}
+                onClick={() => cambiaColorAccion("cuadro", c)}
+              />
+            ))}
+            <label
+              className={`swatch swatch-custom${
+                !SHAPE_COLORS.includes(freeTextColor) ? " on" : ""
+              }`}
+              title="Color personalizado"
+            >
+              <input
+                type="color"
+                value={freeTextColor}
+                onChange={(e) => cambiaColorAccion("cuadro", e.target.value)}
+              />
+              <Icon name="plus" size={10} />
+            </label>
+          </div>
+          <select
+            className="size-select"
+            title="Tamaño de letra"
+            aria-label="Tamaño de letra"
+            value={freeTextSize}
+            onChange={(e) => setFreeTextSize(Number(e.target.value))}
+          >
+            {[8, 10, 12, 14, 18, 24, 32].map((t) => (
+              <option key={t} value={t}>
+                {t} pt
+              </option>
+            ))}
+          </select>
+          <label className="opt-check">
+            <input
+              type="checkbox"
+              checked={freeTextBorder}
+              onChange={(e) => setFreeTextBorder(e.target.checked)}
+            />
+            Con borde
+          </label>
+          <span className="opt-hint">
+            Arrastra el rectángulo y escribe dentro
+          </span>
         </div>
       )}
       {mode === "stamp" && (

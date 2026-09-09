@@ -88,7 +88,8 @@ export type Mode =
   | "crop"
   | "redact"
   | "form-new"
-  | "link-new";
+  | "link-new"
+  | "freetext";
 export type ShapeKind = "rect" | "ellipse" | "line" | "arrow";
 
 /* Paleta única de anotación (DESIGN.md): la comparten dibujo, formas,
@@ -123,6 +124,7 @@ export const KIND_LABELS: Record<string, string> = {
   StrikeOut: "Tachado",
   Stamp: "Sello",
   Link: "Enlace",
+  FreeText: "Cuadro de texto",
 };
 
 /** Plurales para el filtro y el resumen del panel de comentarios. */
@@ -147,7 +149,7 @@ export const KIND_ICONS: Record<string, string> = {
   StrikeOut: "strike",
   Ink: "pen",
   Stamp: "stamp",
-  FreeText: "textedit",
+  FreeText: "textbox",
   Link: "link",
 };
 

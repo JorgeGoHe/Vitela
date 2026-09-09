@@ -140,6 +140,21 @@ export function getDocumentAnnotations(path: string): Promise<AnotacionDoc[]> {
   return invoke("get_document_annotations", { path });
 }
 
+/** Cuadro de texto de Acrobat: una anotación FreeText que escribe ENCIMA
+ *  del documento, sin tocar el contenido de la página. */
+export function addFreeText(args: {
+  workPath: string;
+  pageIndex: number;
+  rect: { x: number; y: number; w: number; h: number };
+  text: string;
+  fontSize: number;
+  color: Rgba;
+  border: boolean;
+  author?: string | null;
+}): Promise<void> {
+  return invoke("add_free_text", { author: null, ...args });
+}
+
 /** Reescribe el texto de un comentario ya creado; el backend refresca `/M`
  *  (y `/T` si llega `author`). */
 export function setAnnotationContents(args: {

@@ -119,7 +119,10 @@ export function MarcasAnotaciones({
           )}
       {mode === "select" &&
         annots
-          .filter((a) => a.kind === "Ink" || a.kind === "Stamp")
+          .filter(
+            (a) =>
+              a.kind === "Ink" || a.kind === "Stamp" || a.kind === "FreeText",
+          )
           .map((a) => {
             const d =
               annotDraft && annotDraft.index === a.index ? annotDraft : a;
@@ -185,6 +188,9 @@ export default function CapaAnotaciones({
     submitNote,
     deleteAnnotation,
     startAnnotAction,
+    freeTextDraft,
+    setFreeTextDraft,
+    commitFreeText,
   } = anotaciones;
   const editando =
     notePopover && noteEdit?.index === notePopover.index ? noteEdit : null;
@@ -353,6 +359,43 @@ export default function CapaAnotaciones({
               } else if (e.key === "Escape") {
                 e.stopPropagation();
                 setNoteDraft(null);
+              }
+            }}
+          />
+        </div>
+      )}
+      {mode === "freetext" && freeTextDraft && (
+        <div
+          className="freetext-draft"
+          style={{
+            left: freeTextDraft.x * scale,
+            top: freeTextDraft.y * scale,
+            width: Math.max(40, freeTextDraft.w * scale),
+            height: Math.max(24, freeTextDraft.h * scale),
+            borderStyle: tool.freeTextBorder ? "solid" : "dashed",
+            borderColor: tool.freeTextColor,
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <textarea
+            autoFocus
+            aria-label="Texto del cuadro"
+            placeholder={`Escribe aquí · ${MOD}Enter lo añade`}
+            style={{
+              color: tool.freeTextColor,
+              fontSize: tool.freeTextSize * scale,
+            }}
+            value={freeTextDraft.text}
+            onChange={(e) =>
+              setFreeTextDraft({ ...freeTextDraft, text: e.target.value })
+            }
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                commitFreeText();
+              } else if (e.key === "Escape") {
+                e.stopPropagation();
+                setFreeTextDraft(null);
               }
             }}
           />

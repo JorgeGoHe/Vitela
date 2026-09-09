@@ -1415,10 +1415,16 @@ function App() {
     { id: "draw", icon: "pen", label: "Dibujar", hint: "Dibujar a mano alzada" },
     { id: "note", icon: "note", label: "Nota", hint: "Añadir una nota (clic en la página)" },
     {
+      id: "freetext",
+      icon: "textbox",
+      label: "Cuadro de texto",
+      hint: "Comentario encima del documento (no cambia el texto del PDF)",
+    },
+    {
       id: "edit",
       icon: "textedit",
       label: "Editar",
-      hint: "Editar un bloque de texto o añadir texto nuevo (clic en zona libre)",
+      hint: "Cambia el texto que hay en el PDF",
     },
     {
       id: "image",
@@ -1493,7 +1499,7 @@ function App() {
             {(
               [
                 ["select"],
-                ["draw", "note", "shape", "stamp"],
+                ["draw", "note", "freetext", "shape", "stamp"],
                 ["edit", "image"],
                 ["firmar"],
               ] as Mode[][]
@@ -1829,6 +1835,13 @@ function App() {
           onClose={() => setLinkAsk(null)}
         />
       )}
+      {mode === "freetext" && (
+        <div className="sign-hint">
+          Comentario encima del documento (no cambia el texto del PDF) ·
+          arrastra el rectángulo y escribe dentro · {MOD}Enter lo añade · Esc
+          cancela
+        </div>
+      )}
       {mode === "note" && (
         <div className="sign-hint">
           Haz clic donde quieras la nota · Enter salta de línea, {MOD}Enter la
@@ -1906,6 +1919,11 @@ function App() {
         stampCustom={herramienta.stampCustom}
         setStampCustom={herramienta.setStampCustom}
         stampColor={herramienta.stampColor}
+        freeTextColor={herramienta.freeTextColor}
+        freeTextSize={herramienta.freeTextSize}
+        setFreeTextSize={herramienta.setFreeTextSize}
+        freeTextBorder={herramienta.freeTextBorder}
+        setFreeTextBorder={herramienta.setFreeTextBorder}
         cambiaColorAccion={herramienta.cambiaColorAccion}
       />
 

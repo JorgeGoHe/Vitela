@@ -857,6 +857,7 @@ textarea {
 }
 
 .textlayer.mode-firmar,
+.textlayer.mode-freetext,
 .textlayer.mode-shape,
 .textlayer.mode-crop,
 .textlayer.mode-form-new,
@@ -1002,6 +1003,29 @@ textarea {
 
 .sidebar-tabs .btn.on {
   background: var(--btn-active);
+}
+
+/* borrador del cuadro de texto: la caja que se está escribiendo antes de
+   convertirse en anotación FreeText */
+.freetext-draft {
+  position: absolute;
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  background: var(--card-bg);
+  z-index: 30;
+  overflow: hidden;
+}
+
+.freetext-draft textarea {
+  width: 100%;
+  height: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  resize: none;
+  padding: 2px 4px;
+  font-family: inherit;
+  line-height: 1.25;
 }
 
 /* ---------- panel de comentarios ---------- */

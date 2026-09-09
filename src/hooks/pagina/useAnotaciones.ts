@@ -7,6 +7,7 @@ import {
 } from "react";
 import { invoke } from "../../ipc";
 import {
+  addFreeText,
   addMarkup,
   addShape,
   addStamp,
@@ -102,6 +103,14 @@ export function useAnotaciones(ctx: {
   } | null>(null);
   const annotLiveRef = useRef<(Rect & { index: number }) | null>(null);
 
+  // cuadro de texto (FreeText): el rectángulo se arrastra y el texto se
+  // escribe dentro antes de crear la anotación
+  const [freeTextDraft, setFreeTextDraft] = useState<
+    (Rect & { text: string }) | null
+  >(null);
+  const freeTextStartRef = useRef<{ x: number; y: number } | null>(null);
+  const freeTextLiveRef = useRef<(Rect & { text: string }) | null>(null);
+
   const [shapeDraft, setShapeDraft] = useState<{
     x1: number;
     y1: number;
@@ -121,6 +130,9 @@ export function useAnotaciones(ctx: {
     setShapeDraft(null);
     shapeStartRef.current = null;
     shapeLiveRef.current = null;
+    setFreeTextDraft(null);
+    freeTextStartRef.current = null;
+    freeTextLiveRef.current = null;
     setAnnotDraft(null);
     annotActionRef.current = null;
     annotLiveRef.current = null;
@@ -219,6 +231,33 @@ export function useAnotaciones(ctx: {
         strokeWidth: tool.shapeWidth,
         author: autorComentarios(),
       });
+      onAnnotated(index);
+    } catch (e) {
+      onError(e);
+    }
+  }
+
+  /** Crea el cuadro de texto con lo escrito dentro (⌘Enter o «Añadir»). */
+  async function commitFreeText() {
+    const d = freeTextDraft;
+    if (!workPath || !d) return;
+    if (!d.text.trim()) {
+      setFreeTextDraft(null);
+      return;
+    }
+    try {
+      await addFreeText({
+        workPath,
+        pageIndex: index,
+        rect: rectAPagina({ x: d.x, y: d.y, w: d.w, h: d.h }, size),
+        text: d.text,
+        fontSize: tool.freeTextSize,
+        color: hexToRgba(tool.freeTextColor),
+        border: tool.freeTextBorder,
+        author: autorComentarios(),
+      });
+      setFreeTextDraft(null);
+      onModeChange("select");
       onAnnotated(index);
     } catch (e) {
       onError(e);
@@ -467,6 +506,11 @@ export function useAnotaciones(ctx: {
     setShapeDraft,
     shapeStartRef,
     shapeLiveRef,
+    freeTextDraft,
+    setFreeTextDraft,
+    freeTextStartRef,
+    freeTextLiveRef,
+    commitFreeText,
     markupSelection,
     commitShape,
     placeStamp,
