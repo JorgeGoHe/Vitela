@@ -319,6 +319,12 @@ compila los instaladores a mano o al etiquetar `v*`.
     misma mutación, así que un fallo a mitad no deja el trabajo hecho a
     medias ni dos pasos de deshacer.
   - `set_menu_state(has_document)` (`menu.rs`, ver «Menú nativo»).
+  - Los envoltorios de todo lo anterior están en `src/api.ts` con el mismo
+    nombre en camelCase. `render_page` acepta `with_annotations:
+    Option<bool>` (sin el campo, el render de siempre; la UI solo lo manda
+    a `false` al imprimir con «Solo el documento»). `redact_area` ya no lo
+    usa la UI. El `mark_index` de `unmark_redaction` es la posición de la
+    marca dentro de su página, en el orden de `list_redactions`.
 - **Menú nativo** (`menu.rs`): Archivo, Editar, Ver, Documento, Ventana y
   Ayuda en la barra del sistema, espejo del menú «Acciones» de la app —
   con esto la búsqueda de menús de macOS encuentra por fin «Marca de
@@ -365,6 +371,10 @@ compila los instaladores a mano o al etiquetar `v*`.
   documento y movería el `/ByteRange`, así que `encrypt_pdf` (con
   `dest_path` y sin él) y `save_pdf` con protección anotada se niegan con
   `firma::AVISO_FIRMADO` en vez de romper la firma.
+  La UI lo cuenta tal cual: el candado de la barra sale solo cuando el
+  fichero en disco está cifrado de verdad (se abrió con contraseña, o ya se
+  ha guardado con la protección puesta) y mientras tanto lleva la etiqueta
+  «se protegerá al guardar».
 - **Aplanar y casillas**: el marco de un widget lo pinta el entorno de
   formularios de PDFium desde `/MK` y `/BS` al vuelo, así que
   `FPDFPage_Flatten` no tiene nada que copiar y la casilla sin marcar
@@ -435,8 +445,11 @@ compila los instaladores a mano o al etiquetar `v*`.
   (`src/hooks/`: `useHistorial`, `useRenderCache`, `useMiniaturas`,
   `useBusqueda`, `useFirmas`, `useHerramienta`, `useModal`) y componentes
   (`Busqueda`, `OpcionesHerramienta`, `MenuAcciones`, `PanelPaginas`,
-  `PanelMarcadores`, `PanelComentarios`, `Dialogo*`). El sidebar tiene tres
-  pestañas —Páginas, Marcadores y Comentarios— y por eso mide 200 px.
+  `PanelMarcadores`, `PanelComentarios`, `PanelFirmasDoc`, `Dialogo*`). El
+  sidebar tiene cuatro pestañas —Páginas, Marcadores, Comentarios y, solo
+  en documentos firmados, Firmas— y por eso mide 200 px y las deja
+  envolver a dos líneas. `PanelFirmas` (sin «Doc») es otra cosa: la
+  biblioteca de firmas manuscritas del modo Firma.
   **Todo modal usa `useModal`** (Esc cierra —también con el foco fuera del
   diálogo, gracias a un listener en fase de captura—, Enter confirma, foco
   inicial en el primer campo o en la acción principal, trampa de foco): un
@@ -461,6 +474,32 @@ compila los instaladores a mano o al etiquetar `v*`.
   página (`get_page_text`, `get_text_blocks`, `get_images`).
   `get_annotations`, `get_links` y `get_form_fields` ya llegan en espacio
   de vista y no se tocan. Con `/Rotate 0` todo es la identidad.
+- **Presentación de página** (`cargaVista`/`guardaVista` en `tipos.ts`):
+  las cuatro de Acrobat —`una`, `continuo` (por defecto), `dos` y
+  `dos-continuo`— con su segmentado en la píldora de navegación.
+  `filasDePaginas(pageCount, dobles, portadaSola)` reparte las páginas en
+  filas de pantalla (la portada sola si se marca «Portada»); en las
+  presentaciones no continuas solo se monta la fila actual y `gotoPage`
+  lleva el visor arriba en vez de hacer `scrollIntoView`. Toda la
+  geometría del scroll (`alturasFila`, `onViewerScroll`, el ancla del
+  zoom) trabaja por filas, no por páginas, y con dos columnas cada hoja se
+  queda con media anchura útil.
+- **Pantalla completa** (⌘L): estado de `App` + `ponerPantallaCompleta` de
+  `ipc.ts` (`getCurrentWindow().setFullscreen`, no-op en el navegador de
+  QA, donde el chrome se esconde igual). La clase `.app.presentacion`
+  esconde barra, panel y fila contextual; la presentación pasa a una hoja
+  cada vez, el clic y las flechas avanzan, se fuerza el modo Seleccionar
+  para que Esc sea siempre la salida y la primera vez se avisa de cómo
+  salir.
+- **Modo nocturno del documento** (⇧⌘L y Preferencias): filtro CSS cálido
+  sobre `.viewer.nocturno .page` —invertir y devolver el tono de la mesa;
+  nunca `invert(1)` a secas, que deja el papel azul-pizarra—. Solo toca el
+  render: overlays, exportación y fichero se quedan como están.
+- **Historial de vistas** (⌥← / ⌥→): dos pilas en `App` con
+  `{ page, scrollTop, zoom }`. `saltarA(page)` es el `gotoPage` de los
+  saltos largos —enlaces, marcadores, comentarios del panel, firmas y
+  coincidencias de búsqueda— y apila de dónde se viene; los dos botones
+  solo salen en la píldora cuando hay algo que recorrer.
 - **Giro de la vista** (`viewRotation`, estado de `App`): ⇧⌘+ y ⇧⌘− giran
   la hoja con un `transform` y la caja exterior intercambia alto y ancho;
   no toca el fichero, no marca el documento como modificado y se pierde al
@@ -472,23 +511,65 @@ compila los instaladores a mano o al etiquetar `v*`.
   fichero, así que el gesto solo existe dentro de Tauri) y
   `onCerrarSolicitado` (evento `cerrar-solicitado`; la UI responde con el
   comando `confirmar_cierre`, y en QA se dispara con
-  `window.__vitelaCerrar()`).
+  `window.__vitelaCerrar()`) y `onMenuAccion` (evento `menu-accion` con
+  `{ id }` del menú nativo; en QA se dispara con
+  `window.__vitelaMenu("guardar")`).
+- **Menú nativo** (D5): es el **espejo** del menú «Acciones», no un
+  segundo sitio con cosas distintas. El backend lo pinta y emite
+  `menu-accion`; `App.tsx` tiene el mapa `accionesMenu`, y cada id hace
+  exactamente lo mismo que su botón. Ids:
+  `abrir`, `guardar`, `guardar-como`, `cerrar-documento`, `imprimir`,
+  `anadir-pdf`, `extraer`, `insertar-pdf`, `combinar`, `reemplazar`,
+  `dividir`; `deshacer`, `rehacer`, `buscar`, `preferencias`;
+  `zoom-pagina`, `zoom-ancho`, `zoom-100`, `ampliar`, `reducir`,
+  `girar-vista-derecha`, `girar-vista-izquierda`, `pantalla-completa`,
+  `nocturno`, `panel-lateral`, `pagina-una`, `pagina-continuo`,
+  `pagina-dos`, `pagina-dos-continuo`, `vista-atras`, `vista-adelante`;
+  `recortar`, `marca-agua`, `encabezado`, `quitar-marca-agua`,
+  `quitar-encabezados`, `propiedades`, `proteger`, `quitar-proteccion`,
+  `firmar`, `aplanar`, `redactar`, `sanear`, `campo-nuevo`,
+  `enlace-nuevo`; `exportar-imagenes`, `exportar-texto`, `comprimir`.
+  Copiar, cortar y pegar son entradas nativas de Tauri y no emiten evento.
+  **Un id nuevo en el menú se añade también a `accionesMenu`**, o la
+  entrada no hace nada.
 - **Preferencias y memoria de la UI** en `localStorage` (`src/tipos.ts`):
   colores por acción, opciones de búsqueda (`Aa` y `|ab|`), «Resaltar
-  campos» de los formularios (encendido por defecto) y preferencias
-  (`autor` de los comentarios, que se manda como `author` en cada comando
-  que crea una anotación).
-- **Avisos**: `setNotice(texto, { persistente: true })` para el progreso
-  («Comprimiendo…»), que se queda hasta que lo sustituye su resultado; sin
-  la opción, el aviso se va solo a los 6 s. Aviso y error se limpian al
-  abrir y al cerrar documento: son del documento que los provocó.
+  campos» de los formularios (encendido por defecto), la presentación de
+  página (`cargaVista`: `modoPagina` y `portadaSola`) y las preferencias
+  de ⌘, (`cargaPreferencias`): `autor` de los comentarios —que se manda
+  como `author` en cada comando que crea una anotación—, `nocturno`,
+  `tema` (`automatico`/`claro`/`oscuro`), `zoomInicial`
+  (`pagina`/`ancho`/`100`/`ultimo`) y `lienzo` (`verde`/`gris`).
+  `DialogoPreferencias` es una sola columna sin pestañas y **aplica cada
+  cambio al instante** (por eso su botón dice «Cerrar»); `App` guarda las
+  preferencias vivas en estado y escribe `data-tema` y `data-lienzo` en el
+  `<html>`, que es donde el CSS los espera (con `automatico` no pone
+  `data-tema` y manda `prefers-color-scheme`).
+- **Avisos**: `setNotice(texto, { persistente, dato, accion })`.
+  `persistente` es el progreso («Comprimiendo…»), que se queda hasta que
+  lo sustituye su resultado; sin la opción, el aviso se va solo a los 6 s.
+  `dato` es el contador honesto en Fragment Mono («12 / 200», lo que pide
+  DESIGN.md) y `accion` el botón de la propia banda, que es como se
+  cancela la preparación de la impresión. Aviso y error se limpian al
+  abrir y al cerrar documento —son del documento que los provocó— y **el
+  error se limpia también con el primer aviso de éxito** o con cualquier
+  mutación que salga bien: la banda roja se quedaba en pantalla a través
+  de operaciones correctas. Los recuentos usan `plural(n, singular,
+  plural)`, nunca «página(s)».
+- **Banda de firmas**: al abrir, `verify_signatures` y, si el documento
+  lleva firmas, una banda verde o roja (nunca las dos) con el resumen en
+  llano —ni «CMS», ni «ByteRange», ni «digest»—; el clic abre la pestaña
+  «Firmas». Se cierra y no vuelve hasta el documento siguiente.
 - **Atajos de teclado** (`App.tsx`, un solo `useEffect`; con un modal o el
   menú «Acciones» abiertos solo pasa Escape): ⌘O abrir · ⌘S guardar ·
   ⇧⌘S guardar como · ⌘P imprimir · ⌘D propiedades · ⌘, preferencias ·
   ⌘F buscar · ⌘G y ⇧⌘G coincidencia siguiente/anterior · ⌘Z y ⇧⌘Z
   deshacer/rehacer (no llaman al backend si no hay historial) · ⌘+ y ⌘−
   zoom · ⇧⌘+ y ⇧⌘− giran la vista · ⌘0 página entera, ⌘1 al 100 % y ⌘2
-  al ancho (los tres de Acrobat) · ⌥⌘1 plegar el panel lateral ·
+  al ancho (los tres de Acrobat) · ⌥⌘1 plegar el panel lateral, ⌥⌘2
+  Marcadores y ⌥⌘3 Comentarios (abren la pestaña Y le llevan el foco) ·
+  ⌘L pantalla completa (Esc sale) · ⇧⌘L modo nocturno del documento ·
+  ⌥← y ⌥→ historial de vistas ·
   ⇧⌘N ir a la página · ←/→ página anterior y siguiente · Esc quita las
   coincidencias de búsqueda y, si no hay, sale de la herramienta · Supr
   borra la anotación seleccionada · ⌘A todo el texto de la página (dentro
