@@ -245,6 +245,71 @@ export function copyToClipboard(text: string) {
   });
 }
 
+/* ---- ajuste de línea del cuadro de texto (FreeText) ---- */
+
+/** Interlineado del `/AP` del cuadro de texto. */
+export const FREETEXT_INTERLINEA = 1.2;
+/** Margen interior del `/AP` (2 pt por lado). */
+const FREETEXT_MARGEN = 4;
+
+let medidor: CanvasRenderingContext2D | null = null;
+
+/** Ancho en puntos de un texto en Helvetica al tamaño dado. La apariencia
+ *  del cuadro de texto se escribe en Helvetica; Arial es métricamente
+ *  compatible y hace de reserva donde Helvetica no esté instalada. */
+function anchoTexto(texto: string, fontSize: number): number {
+  if (!medidor) medidor = document.createElement("canvas").getContext("2d");
+  // sin canvas (entornos sin 2d) queda la media de Helvetica: 0,5 em
+  if (!medidor) return texto.length * fontSize * 0.5;
+  medidor.font = `${fontSize}px Helvetica, Arial, sans-serif`;
+  return medidor.measureText(texto).width;
+}
+
+/** Reparte el texto en las líneas que caben en una caja de `ancho` puntos,
+ *  como hace el cuadro de texto de Acrobat: respeta los saltos escritos,
+ *  parte por espacios y, si una palabra no cabe entera, por letras. La UI
+ *  manda las líneas ya hechas para que la apariencia guardada en el PDF sea
+ *  la que se ve al escribir. */
+export function ajustaLineas(
+  texto: string,
+  ancho: number,
+  fontSize: number,
+): string[] {
+  const util = Math.max(fontSize, ancho - FREETEXT_MARGEN);
+  const salida: string[] = [];
+  for (const parrafo of texto.split("\n")) {
+    let linea = "";
+    for (const palabra of parrafo.split(" ")) {
+      const tentativa = linea === "" ? palabra : `${linea} ${palabra}`;
+      if (anchoTexto(tentativa, fontSize) <= util) {
+        linea = tentativa;
+        continue;
+      }
+      if (linea !== "") salida.push(linea);
+      let resto = palabra;
+      while (resto.length > 1 && anchoTexto(resto, fontSize) > util) {
+        let corte = 1;
+        while (
+          corte < resto.length &&
+          anchoTexto(resto.slice(0, corte + 1), fontSize) <= util
+        ) {
+          corte++;
+        }
+        salida.push(resto.slice(0, corte));
+        resto = resto.slice(corte);
+      }
+      linea = resto;
+    }
+    salida.push(linea);
+  }
+  return salida;
+}
+
+/** Alto en puntos que necesita una caja para enseñar `lineas` renglones. */
+export function altoCuadro(lineas: number, fontSize: number): number {
+  return Math.max(1, lineas) * fontSize * FREETEXT_INTERLINEA + FREETEXT_MARGEN;
+}
+
 /* ---- preferencias de la app (persistidas en localStorage) ---- */
 
 const CLAVE_PREFS = "editorPdf.preferencias";

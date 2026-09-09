@@ -5,6 +5,8 @@
  * previsualizaciones de trazo/forma (`CapaAnotaciones`) encima.
  */
 import {
+  ajustaLineas,
+  altoCuadro,
   ANNOT_COLORS,
   firmaAnotacion,
   KIND_LABELS,
@@ -371,7 +373,21 @@ export default function CapaAnotaciones({
             left: freeTextDraft.x * scale,
             top: freeTextDraft.y * scale,
             width: Math.max(40, freeTextDraft.w * scale),
-            height: Math.max(24, freeTextDraft.h * scale),
+            // la caja crece con las líneas que hace el texto al ancho que
+            // tiene: lo que se ve escribiendo es lo que se guarda
+            height:
+              Math.max(
+                24 / scale,
+                freeTextDraft.h,
+                altoCuadro(
+                  ajustaLineas(
+                    freeTextDraft.text,
+                    freeTextDraft.w,
+                    tool.freeTextSize,
+                  ).length,
+                  tool.freeTextSize,
+                ),
+              ) * scale,
             borderStyle: tool.freeTextBorder ? "solid" : "dashed",
             borderColor: tool.freeTextColor,
           }}

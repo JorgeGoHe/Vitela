@@ -16,6 +16,8 @@ import {
   transformAnnotation,
 } from "../../api";
 import {
+  ajustaLineas,
+  altoCuadro,
   autorComentarios,
   hexToRgba,
   MOD,
@@ -240,7 +242,10 @@ export function useAnotaciones(ctx: {
     }
   }
 
-  /** Crea el cuadro de texto con lo escrito dentro (⌘Enter o «Añadir»). */
+  /** Crea el cuadro de texto con lo escrito dentro (⌘Enter o «Añadir»).
+   *  El texto se reparte en líneas al ancho de la caja antes de mandarlo:
+   *  la apariencia que se guarda en el PDF es la que se ve al escribir, y no
+   *  una frase que se sale por el borde derecho en cualquier visor. */
   async function commitFreeText() {
     const d = freeTextDraft;
     if (!workPath || !d) return;
@@ -248,12 +253,15 @@ export function useAnotaciones(ctx: {
       setFreeTextDraft(null);
       return;
     }
+    const lineas = ajustaLineas(d.text, d.w, tool.freeTextSize);
+    // la caja crece hasta caber, como en Acrobat: nunca recorta lo escrito
+    const alto = Math.max(d.h, altoCuadro(lineas.length, tool.freeTextSize));
     try {
       await addFreeText({
         workPath,
         pageIndex: index,
-        rect: rectAPagina({ x: d.x, y: d.y, w: d.w, h: d.h }, size),
-        text: d.text,
+        rect: rectAPagina({ x: d.x, y: d.y, w: d.w, h: alto }, size),
+        text: lineas.join("\n"),
         fontSize: tool.freeTextSize,
         color: hexToRgba(tool.freeTextColor),
         border: tool.freeTextBorder,
