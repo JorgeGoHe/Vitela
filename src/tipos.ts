@@ -563,6 +563,20 @@ export function guardaResaltarCampos(v: boolean) {
   localStorage.setItem(CLAVE_CAMPOS, v ? "1" : "0");
 }
 
+/* ---- aviso de pantalla completa (una sola vez, localStorage) ---- */
+
+const CLAVE_AVISO_PANTALLA = "editorPdf.avisoPantallaCompleta";
+
+/** «Pulsa Esc para salir» se enseña una vez y ya está. Vivía en un `useRef`,
+ *  así que volvía a salir en cada arranque de la app. */
+export function avisoPantallaVisto(): boolean {
+  return localStorage.getItem(CLAVE_AVISO_PANTALLA) === "1";
+}
+
+export function marcaAvisoPantalla() {
+  localStorage.setItem(CLAVE_AVISO_PANTALLA, "1");
+}
+
 /* ---- memoria de color por acción (persistida en localStorage) ---- */
 
 const CLAVE_COLORES = "editorPdf.coloresAccion";

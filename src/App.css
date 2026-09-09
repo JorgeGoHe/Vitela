@@ -794,12 +794,25 @@ textarea {
     brightness(0.88);
 }
 
-/* pantalla completa: solo queda el documento (y la píldora, que se aparta
-   sola al no pasar el ratón por encima) */
+/* pantalla completa: solo queda el documento. La píldora se va con el resto
+   —quince botones flotando sobre el papel no son «la herramienta desaparece
+   y queda el documento»— y vuelve al acercar el ratón al borde inferior */
 .app.presentacion .toolbar,
 .app.presentacion .sidebar,
 .app.presentacion .tool-options {
   display: none;
+}
+
+.app.presentacion .nav-pill {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease-in;
+}
+
+.app.presentacion.pildora .nav-pill {
+  opacity: 1;
+  pointer-events: auto;
+  transition: opacity 200ms ease-out;
 }
 
 .app.presentacion .viewer {

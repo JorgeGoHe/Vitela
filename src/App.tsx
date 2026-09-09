@@ -15,6 +15,7 @@ import {
   onArrastreFicheros,
   onCerrarSolicitado,
   onMenuAccion,
+  onPantallaCompleta,
   ponerPantallaCompleta,
   subscribeBusy,
 } from "./ipc";
@@ -81,6 +82,7 @@ import {
   ES_MAC,
   ATAJO_MARCADORES,
   ATAJO_PANEL,
+  avisoPantallaVisto,
   cargaPreferencias,
   cargaVista,
   estadoDeFirma,
@@ -91,6 +93,7 @@ import {
   guardaPreferencias,
   guardaVista,
   IMPRIMIR_POR_DEFECTO,
+  marcaAvisoPantalla,
   type ModoPagina,
   type OpcionesImprimir,
   cargaResaltarCampos,
@@ -160,6 +163,14 @@ function reenviaTecla(key: string) {
     }),
   );
 }
+
+/** Los cuatro modos de presentación en el segmentado de la píldora. */
+const MODOS_PILDORA: [ModoPagina, string, string][] = [
+  ["una", "pageOne", "Una sola página"],
+  ["continuo", "pageScroll", "Desplazamiento continuo"],
+  ["dos", "pageTwo", "Dos páginas"],
+  ["dos-continuo", "pageTwoScroll", "Dos páginas con desplazamiento continuo"],
+];
 
 /** Separación vertical entre páginas y padding superior del visor (px). */
 const PAGE_GAP = 24;
@@ -319,8 +330,8 @@ function App() {
   // preferencias vivas: de aquí sale el modo nocturno del documento
   const [prefs, setPrefs] = useState<Preferencias>(cargaPreferencias);
   const [pantallaCompleta, setPantallaCompleta] = useState(false);
-  // el aviso de cómo salir sale una sola vez por sesión, como en Acrobat
-  const avisoPantallaRef = useRef(false);
+  // en presentación la píldora asoma al acercar el ratón al borde inferior
+  const [pildoraVisible, setPildoraVisible] = useState(false);
   // historial de vistas (⌥← / ⌥→): el modelo del navegador, dos pilas
   const [vistasAtras, setVistasAtras] = useState<Vista[]>([]);
   const [vistasAdelante, setVistasAdelante] = useState<Vista[]>([]);
@@ -1384,19 +1395,49 @@ function App() {
     restaurarVista(v);
   }
 
+  /** Deja la app en presentación o la saca. Lo llaman ⌘L y el evento de la
+   *  ventana (botón verde, ⌃⌘F), para que las dos entradas dejen la misma
+   *  app: es el que faltaba, y salir por el botón verde dejaba el chrome
+   *  escondido. */
+  const aplicaPantallaCompleta = useCallback(
+    (valor: boolean) => {
+      setPantallaCompleta(valor);
+      // la presentación no tiene herramientas (tampoco en Acrobat): así Esc
+      // es siempre la salida, sin tener que pulsarlo dos veces
+      if (!valor) return;
+      setMode("select");
+      if (avisoPantallaVisto()) return;
+      marcaAvisoPantalla();
+      setNotice("Pulsa Esc para salir de la pantalla completa");
+    },
+    [setNotice],
+  );
+
   /** Presentación a pantalla completa: el chrome desaparece y la hoja se
    *  queda sola. Esc sale, y la primera vez se dice cómo. */
   function cambiaPantallaCompleta(valor: boolean) {
-    setPantallaCompleta(valor);
-    // la presentación no tiene herramientas (tampoco en Acrobat): así Esc
-    // es siempre la salida, sin tener que pulsarlo dos veces
-    if (valor) setMode("select");
+    aplicaPantallaCompleta(valor);
     ponerPantallaCompleta(valor).catch((e) => setError(String(e)));
-    if (valor && !avisoPantallaRef.current) {
-      avisoPantallaRef.current = true;
-      setNotice("Pulsa Esc para salir de la pantalla completa");
-    }
   }
+
+  useEffect(
+    () => onPantallaCompleta(aplicaPantallaCompleta),
+    [aplicaPantallaCompleta],
+  );
+
+  // la píldora vuelve al acercar el ratón al borde inferior, como el Dock:
+  // el resto del tiempo la presentación es papel y nada más
+  useEffect(() => {
+    if (!pantallaCompleta) {
+      setPildoraVisible(false);
+      return;
+    }
+    function onMove(e: MouseEvent) {
+      setPildoraVisible(e.clientY > window.innerHeight - 96);
+    }
+    window.addEventListener("mousemove", onMove);
+    return () => window.removeEventListener("mousemove", onMove);
+  }, [pantallaCompleta]);
 
   function cambiaVista(parte: Partial<typeof vista>) {
     const siguiente = { ...vista, ...parte };
@@ -2524,7 +2565,11 @@ function App() {
   }
 
   return (
-    <div className={`app${pantallaCompleta ? " presentacion" : ""}`}>
+    <div
+      className={`app${pantallaCompleta ? " presentacion" : ""}${
+        pantallaCompleta && pildoraVisible ? " pildora" : ""
+      }`}
+    >
       <header className="toolbar">
         <div className="toolbar-left">
           <button
@@ -3510,32 +3555,28 @@ function App() {
               >
                 100 %
               </button>
-              <div className="sep" />
-              {(
-                [
-                  ["una", "pageOne", "Una sola página"],
-                  ["continuo", "pageScroll", "Desplazamiento continuo"],
-                  ["dos", "pageTwo", "Dos páginas"],
-                  [
-                    "dos-continuo",
-                    "pageTwoScroll",
-                    "Dos páginas con desplazamiento continuo",
-                  ],
-                ] as [ModoPagina, string, string][]
-              ).map(([id, icono, etiqueta]) => (
-                <button
-                  key={id}
-                  className={`btn btn-icon${
-                    vista.modoPagina === id ? " on" : ""
-                  }`}
-                  title={etiqueta}
-                  aria-label={etiqueta}
-                  aria-pressed={vista.modoPagina === id}
-                  onClick={() => cambiaVista({ modoPagina: id })}
-                >
-                  <Icon name={icono} size={14} />
-                </button>
-              ))}
+              {/* en presentación manda «una sola página»: el segmentado
+                  marcaría un modo que no es el que se ve y pulsarlo no haría
+                  nada, así que ni él ni su separador se pintan */}
+              {!pantallaCompleta && (
+                <>
+                  <div className="sep" />
+                  {MODOS_PILDORA.map(([id, icono, etiqueta]) => (
+                    <button
+                      key={id}
+                      className={`btn btn-icon${
+                        vista.modoPagina === id ? " on" : ""
+                      }`}
+                      title={etiqueta}
+                      aria-label={etiqueta}
+                      aria-pressed={vista.modoPagina === id}
+                      onClick={() => cambiaVista({ modoPagina: id })}
+                    >
+                      <Icon name={icono} size={14} />
+                    </button>
+                  ))}
+                </>
+              )}
               {dobles && !pantallaCompleta && (
                 <button
                   className={`btn${vista.portadaSola ? " on" : ""}`}

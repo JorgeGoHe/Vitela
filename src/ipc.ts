@@ -127,6 +127,35 @@ export async function ponerPantallaCompleta(valor: boolean): Promise<void> {
   await getCurrentWindow().setFullscreen(valor);
 }
 
+/** Ventana de la app en el navegador de QA: sin ventana de verdad, el cambio
+ *  se dispara con `window.__vitelaPantallaCompleta(true)`. */
+type VentanaPantalla = Window & {
+  __vitelaPantallaCompleta?: (valor: boolean) => void;
+};
+
+/**
+ * La ventana entra o sale de pantalla completa por su cuenta: el botón verde
+ * de macOS, ⌃⌘F o el gestor de ventanas. Tauri no emite un evento propio, así
+ * que se pregunta tras cada redimensionado, que es cuando puede haber
+ * cambiado. Sin esto, salir con el botón verde dejaba la app con el chrome
+ * escondido y solo Esc lo recuperaba.
+ */
+export function onPantallaCompleta(cb: (valor: boolean) => void): () => void {
+  if (!hayTauri) {
+    (window as VentanaPantalla).__vitelaPantallaCompleta = cb;
+    return () => {
+      delete (window as VentanaPantalla).__vitelaPantallaCompleta;
+    };
+  }
+  const ventana = getCurrentWindow();
+  const pendiente = ventana.onResized(() => {
+    ventana.isFullscreen().then(cb).catch(() => {});
+  });
+  return () => {
+    pendiente.then((quitar) => quitar()).catch(() => {});
+  };
+}
+
 export async function invoke<T>(
   cmd: string,
   args?: Record<string, unknown>,
