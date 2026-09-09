@@ -152,6 +152,7 @@ fn copias_abiertas() -> std::sync::MutexGuard<'static, std::collections::HashSet
 /// desde el hilo de PDFium (invalida el caché antes de borrar).
 fn borra_copia(work_path: &str) {
     invalidate_doc_cache();
+    seguridad::olvida_proteccion(work_path);
     historial::limpia(work_path);
     let _ = std::fs::remove_file(work_path);
     copias_abiertas().remove(work_path);
@@ -721,6 +722,17 @@ pub(crate) fn crea_pdf(textos: &[&str], dest: &std::path::Path) {
 /// Vuelca la copia de trabajo en el destino (guardar / guardar como).
 #[tauri::command(async)]
 fn save_pdf(work_path: String, dest_path: String) -> Result<(), String> {
+    // «Proteger» se aplica al documento abierto y viaja con Guardar, que es
+    // lo que hace Acrobat: si hay protección puesta, el fichero sale cifrado
+    if let Some(p) = seguridad::proteccion_de(&work_path) {
+        return seguridad::cifra_a(
+            &work_path,
+            &dest_path,
+            &p.user,
+            p.owner.as_deref(),
+            p.permisos,
+        );
+    }
     // en el hilo de PDFium: nadie puede estar renombrando la copia a la vez
     on_pdfium_thread(move || {
         invalidate_doc_cache();
@@ -932,6 +944,7 @@ pub fn run() {
             documento::set_metadata,
             documento::get_links,
             seguridad::encrypt_pdf,
+            seguridad::remove_encryption,
             seguridad::flatten_pdf,
             seguridad::redact_area,
             exportar::export_pages_png,

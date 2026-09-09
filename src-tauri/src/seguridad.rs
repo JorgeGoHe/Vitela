@@ -108,25 +108,170 @@ fn cifra_objeto(obj: &mut Object, fek: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-/// Protege el PDF con contraseña (AES-256, R6) y lo escribe en `dest_path`.
-/// Si no se da contraseña de propietario se reutiliza la de usuario.
+/// Lo que el diálogo de protección deja marcado; los tres van marcados por
+/// defecto, como en Acrobat.
+#[derive(serde::Deserialize, Clone, Copy, Debug)]
+pub struct Permisos {
+    #[serde(default = "si")]
+    pub imprimir: bool,
+    #[serde(default = "si")]
+    pub copiar: bool,
+    #[serde(default = "si")]
+    pub editar: bool,
+}
+
+fn si() -> bool {
+    true
+}
+
+impl Default for Permisos {
+    fn default() -> Self {
+        Permisos {
+            imprimir: true,
+            copiar: true,
+            editar: true,
+        }
+    }
+}
+
+/// Máscara `/P` del spec (Tabla 22), con los bits numerados desde 1:
+/// 3 (4) imprimir · 4 (8) modificar el contenido · 5 (16) copiar ·
+/// 6 (32) comentar y rellenar · 9 (256) rellenar formularios ·
+/// 10 (512) extraer para accesibilidad · 11 (1024) montar el documento ·
+/// 12 (2048) imprimir en alta calidad. Los bits 1 y 2 van a 0 y todos los
+/// reservados (7, 8 y 13–32) a 1: eso es el `-4` de «todo permitido».
+///
+/// La accesibilidad (bit 10) se deja siempre puesta, como hace Acrobat: un
+/// lector de pantalla no es «copiar el texto».
+pub(crate) fn mascara_p(permisos: &Permisos) -> i64 {
+    let mut p: u32 = 0xFFFF_FFFC;
+    if !permisos.imprimir {
+        p &= !(4 | 2048);
+    }
+    if !permisos.copiar {
+        p &= !16;
+    }
+    if !permisos.editar {
+        p &= !(8 | 32 | 256 | 1024);
+    }
+    p as i32 as i64
+}
+
+/// Protección pendiente de un documento abierto: la que el usuario ha
+/// puesto con «Proteger» y que `save_pdf` aplicará al guardar.
+#[derive(Clone)]
+pub(crate) struct Proteccion {
+    pub user: String,
+    pub owner: Option<String>,
+    pub permisos: Permisos,
+}
+
+static PROTECCIONES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, Proteccion>>,
+> = std::sync::LazyLock::new(Default::default);
+
+fn protecciones() -> std::sync::MutexGuard<'static, std::collections::HashMap<String, Proteccion>> {
+    PROTECCIONES.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn anota_proteccion(
+    work_path: &str,
+    user: String,
+    owner: Option<String>,
+    permisos: Permisos,
+) {
+    protecciones().insert(
+        work_path.to_string(),
+        Proteccion {
+            user,
+            owner,
+            permisos,
+        },
+    );
+}
+
+/// La protección puesta al documento abierto, si la hay. La consulta
+/// `save_pdf`: guardar un documento protegido lo guarda protegido.
+pub(crate) fn proteccion_de(work_path: &str) -> Option<Proteccion> {
+    protecciones().get(work_path).cloned()
+}
+
+/// Olvida la protección de una copia de trabajo que se cierra.
+pub(crate) fn olvida_proteccion(work_path: &str) {
+    protecciones().remove(work_path);
+}
+
+/// Quita la protección del documento abierto: ni se guardará cifrado ni
+/// pedirá contraseña al abrirlo. Es la acción explícita «Quitar la
+/// contraseña…», que la UI solo ofrece si el documento tenía una.
+///
+/// La copia de trabajo de un PDF protegido ya está en claro (la descifra
+/// `open_pdf`), así que aquí solo hay que olvidar la protección puesta y
+/// barrer cualquier `/Encrypt` que quedara en el fichero.
+#[tauri::command(async)]
+pub fn remove_encryption(work_path: String) -> Result<(), String> {
+    olvida_proteccion(&work_path);
+    on_pdfium_thread(move || {
+        invalidate_doc_cache();
+        let mut doc = LoDoc::load(&work_path).map_err(|e| {
+            crate::mensaje_llano(format!("No se ha podido leer el documento: {e}"))
+        })?;
+        if doc.trailer.get(b"Encrypt").is_err() {
+            return Ok(());
+        }
+        doc.trailer.remove(b"Encrypt");
+        let tmp = format!("{work_path}.tmp");
+        doc.save(&tmp)
+            .map_err(|e| crate::mensaje_llano(format!("No se ha podido guardar: {e}")))?;
+        std::fs::rename(&tmp, &work_path).map_err(crate::mensaje_llano)
+    })
+}
+
+/// Protege el PDF con contraseña (AES-256, R6). Con `dest_path` escribe ahí
+/// una copia protegida y no toca el documento abierto; sin él, la
+/// protección queda puesta al documento abierto y viaja con Guardar, que es
+/// lo que hace Acrobat.
+///
+/// Por qué no se cifra la copia de trabajo en el sitio: quedaría ilegible
+/// para el resto de comandos (PDFium pediría la contraseña en cada render)
+/// y el documento en pantalla dejaría de funcionar. La protección se
+/// registra y `save_pdf` la aplica al guardar.
 #[tauri::command(async)]
 pub fn encrypt_pdf(
     work_path: String,
-    dest_path: String,
+    dest_path: Option<String>,
     user_password: String,
     owner_password: Option<String>,
+    permisos: Option<Permisos>,
 ) -> Result<(), String> {
     if user_password.is_empty() {
         return Err("La contraseña no puede estar vacía".into());
     }
-    let mut user = user_password.into_bytes();
+    let permisos = permisos.unwrap_or_default();
+    let Some(dest_path) = dest_path else {
+        anota_proteccion(&work_path, user_password, owner_password, permisos);
+        return Ok(());
+    };
+    cifra_a(&work_path, &dest_path, &user_password, owner_password.as_deref(), permisos)
+}
+
+/// Escribe en `dest_path` una copia cifrada de `origen`.
+pub(crate) fn cifra_a(
+    origen: &str,
+    dest_path: &str,
+    user_password: &str,
+    owner_password: Option<&str>,
+    permisos: Permisos,
+) -> Result<(), String> {
+    let mut user = user_password.as_bytes().to_vec();
     user.truncate(127);
     let mut owner = owner_password
         .filter(|p| !p.is_empty())
-        .map(String::into_bytes)
+        .map(|p| p.as_bytes().to_vec())
         .unwrap_or_else(|| user.clone());
     owner.truncate(127);
+    let work_path = origen.to_string();
+    let dest_path = dest_path.to_string();
 
     // lee la copia de trabajo: en el hilo de PDFium y con el caché
     // invalidado, para no competir con una mutación concurrente
@@ -152,8 +297,8 @@ pub fn encrypt_pdf(
         o.extend_from_slice(&oks);
         let oe = aes256_cbc_iv0_nopad(&hash_2b(&owner, &oks, &u), &fek);
 
-        // permisos: todo permitido (P = -4), metadatos cifrados
-        let p: i64 = -4;
+        // permisos del diálogo, metadatos cifrados
+        let p: i64 = mascara_p(&permisos);
         let mut perms_block = [0u8; 16];
         perms_block[0..4].copy_from_slice(&(p as i32).to_le_bytes());
         perms_block[4..8].copy_from_slice(&[0xFF; 4]);
@@ -834,8 +979,9 @@ mod tests {
         crea_pdf(&["Contenido secreto"], &pdf);
         encrypt_pdf(
             pdf.to_string_lossy().to_string(),
-            out.to_string_lossy().to_string(),
+            Some(out.to_string_lossy().to_string()),
             "clave123".into(),
+            None,
             None,
         )
         .expect("cifrar");
@@ -873,8 +1019,9 @@ mod tests {
         crea_pdf(&["Privado"], &pdf);
         encrypt_pdf(
             pdf.to_string_lossy().to_string(),
-            out.to_string_lossy().to_string(),
+            Some(out.to_string_lossy().to_string()),
             "abc".into(),
+            None,
             None,
         )
         .expect("cifrar");
@@ -892,6 +1039,117 @@ mod tests {
         let texto = crate::busqueda::get_page_text(info.work_path.clone(), 0).expect("texto");
         assert!(!texto.chars.is_empty());
         crate::close_document(info.work_path).expect("cerrar");
+    }
+
+    /// `/P` del fichero cifrado, tal como lo lee cualquier visor.
+    fn permisos_de(path: &str) -> i64 {
+        let doc = LoDoc::load(path).expect("cargar cifrado");
+        let enc = match doc.trailer.get(b"Encrypt").expect("/Encrypt") {
+            Object::Reference(rid) => doc.get_object(*rid).unwrap().as_dict().unwrap().clone(),
+            Object::Dictionary(d) => d.clone(),
+            otro => panic!("/Encrypt inesperado: {otro:?}"),
+        };
+        enc.get(b"P").and_then(|o| o.as_i64()).expect("/P")
+    }
+
+    /// La contraseña de permisos tiene que fijar los bits de `/P` de verdad:
+    /// el diálogo no puede prometer lo que el fichero no dice.
+    #[test]
+    fn los_permisos_llegan_a_la_mascara_p() {
+        let dir = std::env::temp_dir();
+        let pdf = dir.join("seguridad-permisos-src.pdf");
+        let out = dir.join("seguridad-permisos-out.pdf");
+        crea_pdf(&["Con permisos"], &pdf);
+
+        // los tres marcados: todo permitido, que es el -4 de siempre
+        assert_eq!(mascara_p(&Permisos::default()), -4);
+
+        encrypt_pdf(
+            pdf.to_string_lossy().to_string(),
+            Some(out.to_string_lossy().to_string()),
+            "clave123".into(),
+            Some("permisos456".into()),
+            Some(Permisos {
+                imprimir: false,
+                copiar: true,
+                editar: true,
+            }),
+        )
+        .expect("cifrar sin imprimir");
+
+        let p = permisos_de(&out.to_string_lossy());
+        let bit = |n: u32| p & (1 << (n - 1)) != 0;
+        assert!(!bit(3), "imprimir debe quedar prohibido: {p}");
+        assert!(!bit(12), "y la impresión en alta calidad con él");
+        assert!(bit(5), "copiar sigue permitido");
+        assert!(bit(6), "comentar sigue permitido");
+        assert!(bit(4), "editar sigue permitido");
+        assert!(bit(7) && bit(8), "los bits reservados van a 1");
+        assert!(bit(13) && bit(32), "y los de arriba también");
+
+        // sin copiar: solo cae el bit 5; la accesibilidad (10) se queda
+        let sin_copiar = mascara_p(&Permisos {
+            imprimir: true,
+            copiar: false,
+            editar: true,
+        });
+        assert!(sin_copiar & 16 == 0 && sin_copiar & 4 != 0 && sin_copiar & 512 != 0);
+        // sin editar: contenido, comentarios, formularios y montaje
+        let sin_editar = mascara_p(&Permisos {
+            imprimir: true,
+            copiar: true,
+            editar: false,
+        });
+        assert_eq!(sin_editar & (8 | 32 | 256 | 1024), 0);
+
+        for f in [&pdf, &out] {
+            std::fs::remove_file(f).ok();
+        }
+    }
+
+    /// «Proteger» sin destino se aplica al documento abierto: ⌘S lo guarda
+    /// cifrado, el documento en pantalla sigue funcionando (si se cifrara la
+    /// copia de trabajo, PDFium pediría la contraseña en cada render) y
+    /// «Quitar la contraseña…» lo devuelve a claro.
+    #[test]
+    fn proteger_el_documento_abierto_viaja_con_guardar() {
+        let dir = std::env::temp_dir();
+        let pdf = dir.join("seguridad-proteger-abierto.pdf");
+        let guardado = dir.join("seguridad-proteger-abierto-guardado.pdf");
+        crea_pdf(&["Documento abierto"], &pdf);
+        let info = crate::open_pdf(pdf.to_string_lossy().to_string(), None).expect("abrir");
+        let work = info.work_path.clone();
+
+        encrypt_pdf(work.clone(), None, "clave123".into(), None, None).expect("proteger");
+
+        // el documento en pantalla sigue siendo usable
+        assert!(!crate::busqueda::get_page_text(work.clone(), 0)
+            .expect("texto tras proteger")
+            .chars
+            .is_empty());
+
+        crate::save_pdf(work.clone(), guardado.to_string_lossy().to_string()).expect("guardar");
+        assert_eq!(
+            crate::open_pdf(guardado.to_string_lossy().to_string(), None).unwrap_err(),
+            "PASSWORD_REQUIRED",
+            "lo guardado tiene que pedir la contraseña"
+        );
+        let protegido =
+            crate::open_pdf(guardado.to_string_lossy().to_string(), Some("clave123".into()))
+                .expect("abrir con contraseña");
+        crate::close_document(protegido.work_path).expect("cerrar");
+
+        // quitar la contraseña: lo guardado ya abre sin ella
+        remove_encryption(work.clone()).expect("quitar la contraseña");
+        crate::save_pdf(work.clone(), guardado.to_string_lossy().to_string()).expect("reguardar");
+        let claro = crate::open_pdf(guardado.to_string_lossy().to_string(), None)
+            .expect("abrir sin contraseña");
+        crate::close_document(claro.work_path).expect("cerrar");
+
+        crate::close_document(work).expect("cerrar la copia");
+        for f in [&pdf, &guardado] {
+            std::fs::remove_file(f).ok();
+        }
     }
 
     #[test]
