@@ -585,6 +585,22 @@ impl Geo {
         Geo { rot: 0, ..*self }
     }
 
+    /// Los ejes de la página VISTA expresados en coordenadas PDF: hacia
+    /// dónde va «a la derecha» y hacia dónde «hacia abajo» de lo que el
+    /// usuario ve. Con `/Rotate 90`, por ejemplo, la derecha de la pantalla
+    /// es el `+y` del papel.
+    ///
+    /// Lo necesitan los comandos que crean objetos de página (texto e
+    /// imágenes): además de colocarlos donde se pulsa, hay que girarlos al
+    /// revés que la página para que se lean derechos, igual que hace
+    /// `add_stamp`.
+    pub(crate) fn ejes(&self) -> ((f32, f32), (f32, f32)) {
+        let o = self.ui_a_pdf(0.0, 0.0);
+        let d = self.ui_a_pdf(1.0, 0.0);
+        let a = self.ui_a_pdf(0.0, 1.0);
+        ((d.0 - o.0, d.1 - o.1), (a.0 - o.0, a.1 - o.1))
+    }
+
     /// Tamaño de la página SIN rotar (el del espacio propio).
     pub(crate) fn ancho(&self) -> f32 {
         self.w

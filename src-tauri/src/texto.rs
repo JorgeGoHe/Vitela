@@ -296,7 +296,13 @@ pub fn add_text_block(
         };
         let font = fuente_por_nombre(&mut doc, &familia);
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let page_h = page.height().value;
+        // el punto llega en el espacio PROPIO de la página; los ejes de la
+        // vista dicen hacia dónde se lee, para que en una página girada el
+        // texto salga derecho y no tumbado (como hace add_stamp)
+        let vista = crate::Geo::de_pagina(&page);
+        let rot = vista.rot;
+        let (_derecha, abajo) = vista.ejes();
+        let ancla = vista.propia().ui_a_pdf(x, y);
         let line_h = font_size * 1.2;
         for (i, linea) in text.lines().enumerate() {
             if linea.trim().is_empty() {
@@ -304,11 +310,19 @@ pub fn add_text_block(
             }
             let mut obj = PdfPageTextObject::new(&doc, linea, font, PdfPoints::new(font_size))
                 .map_err(|e| e.to_string())?;
+            if rot != 0 {
+                obj.rotate_counter_clockwise_degrees(rot as f32)
+                    .map_err(|e| e.to_string())?;
+            }
             // el clic marca la parte superior de la primera línea; el objeto
-            // se coloca por su baseline aproximada
-            let baseline = page_h - y - font_size - line_h * i as f32;
-            obj.translate(PdfPoints::new(x), PdfPoints::new(baseline))
-                .map_err(|e| e.to_string())?;
+            // se coloca por su baseline aproximada, bajando en el sentido en
+            // el que baja la vista
+            let bajada = font_size + line_h * i as f32;
+            obj.translate(
+                PdfPoints::new(ancla.0 + abajo.0 * bajada),
+                PdfPoints::new(ancla.1 + abajo.1 * bajada),
+            )
+            .map_err(|e| e.to_string())?;
             page.objects_mut()
                 .add_text_object(obj)
                 .map_err(|e| e.to_string())?;
@@ -519,4 +533,107 @@ mod tests {
 
         std::fs::remove_file(&tmp).ok();
     }
+
+    /// Acrobat escribe el texto derecho tal como se ve la página y donde se
+    /// pulsa, también si está girada. Vitela lo colocaba con
+    /// `page.height()` (ya rotada) y sin girar el objeto: el texto salía
+    /// tumbado y a 246 pt del clic.
+    #[test]
+    fn el_texto_nuevo_sale_derecho_y_donde_se_pulsa_en_una_pagina_girada() {
+        for veces in 1..4u8 {
+            let grados = veces as u32 * 90;
+            let pdf = std::env::temp_dir().join(format!("texto-girada-{veces}-test.pdf"));
+            crea_pdf(&["Fondo"], &pdf);
+            let work = pdf.to_string_lossy().into_owned();
+            for _ in 0..veces {
+                crate::paginas::rotate_page(work.clone(), 0).expect("girar");
+            }
+            let s = &crate::get_page_sizes(work.clone()).expect("tamaños")[0];
+            // clic en el centro de la página VISTA, convertido como hace la UI
+            let (vx, vy) = (s.width / 2.0, s.height / 2.0);
+            let (px, py) = match s.rotation {
+                90 => (vy, s.width - vx),
+                180 => (s.width - vx, s.height - vy),
+                270 => (s.height - vy, vx),
+                _ => (vx, vy),
+            };
+            add_text_block(work.clone(), 0, px, py, "NUEVO".into(), 24.0, None)
+                .expect("añadir texto");
+
+            let bloques = get_text_blocks(work.clone(), 0).expect("bloques");
+            let nuevo = bloques
+                .iter()
+                .find(|b| b.text.contains("NUEVO"))
+                .expect("el bloque nuevo");
+            // la caja vuelve en el espacio propio: se pasa a la vista como
+            // hace `rectAVista` en la UI y tiene que caer donde se pulsó
+            let (bx, by, bw, bh) = match s.rotation {
+                90 => (s.width - (nuevo.y + nuevo.h), nuevo.x, nuevo.h, nuevo.w),
+                180 => (
+                    s.width - (nuevo.x + nuevo.w),
+                    s.height - (nuevo.y + nuevo.h),
+                    nuevo.w,
+                    nuevo.h,
+                ),
+                270 => (nuevo.y, s.height - (nuevo.x + nuevo.w), nuevo.h, nuevo.w),
+                _ => (nuevo.x, nuevo.y, nuevo.w, nuevo.h),
+            };
+            assert!(
+                (bx - vx).abs() < 10.0 && (by - vy).abs() < 10.0,
+                "con /Rotate {grados} el texto se ve en ({bx:.1},{by:.1}) y se pulsó en ({vx:.1},{vy:.1})"
+            );
+            // y se lee derecho: en la vista es más ancho que alto
+            assert!(
+                bw > bh * 1.5,
+                "con /Rotate {grados} el texto sale tumbado: {bw:.1}x{bh:.1} en la vista"
+            );
+            std::fs::remove_file(&pdf).ok();
+        }
+    }
+
+    /// Lo mismo con una imagen: en una página girada tiene que salir
+    /// derecha y con su esquina superior izquierda donde se pulsó.
+    #[test]
+    fn la_imagen_nueva_sale_derecha_en_una_pagina_girada() {
+        let pdf = std::env::temp_dir().join("texto-imagen-girada-test.pdf");
+        let png = std::env::temp_dir().join("texto-imagen-girada-test.png");
+        crea_pdf(&["Fondo"], &pdf);
+        image::RgbaImage::from_pixel(120, 40, image::Rgba([200, 30, 30, 255]))
+            .save(&png)
+            .expect("crear png");
+        let work = pdf.to_string_lossy().into_owned();
+        crate::paginas::rotate_page(work.clone(), 0).expect("girar");
+        let s = &crate::get_page_sizes(work.clone()).expect("tamaños")[0];
+        assert_eq!(s.rotation, 90);
+        let (vx, vy) = (100.0f32, 150.0f32);
+        let (px, py) = (vy, s.width - vx);
+
+        crate::imagenes::add_image(
+            work.clone(),
+            0,
+            png.to_string_lossy().into_owned(),
+            px,
+            py,
+        )
+        .expect("insertar imagen");
+
+        let img = &crate::imagenes::get_images(work.clone(), 0).expect("imágenes")[0];
+        // 120x40 px a 72 dpi son 120x40 pt en la VISTA: en el espacio propio
+        // de una página con /Rotate 90 eso es 40 de ancho por 120 de alto
+        assert!(
+            (img.w - 40.0).abs() < 2.0 && (img.h - 120.0).abs() < 2.0,
+            "la imagen sale tumbada: {:.1}x{:.1} en el espacio propio",
+            img.w,
+            img.h
+        );
+        assert!(
+            (img.x - px).abs() < 2.0 && (img.y - (py - 120.0)).abs() < 2.0,
+            "la imagen queda en ({:.1},{:.1}) y se pidió el ancla en ({px:.1},{py:.1})",
+            img.x,
+            img.y
+        );
+        std::fs::remove_file(&pdf).ok();
+        std::fs::remove_file(&png).ok();
+    }
+
 }

@@ -107,8 +107,10 @@ pub fn add_image(
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let page_w = page.width().value;
-        let page_h = page.height().value;
+        let vista = crate::Geo::de_pagina(&page);
+        let rot = vista.rot;
+        // el tamaño se limita al de la página TAL COMO SE VE
+        let (page_w, page_h) = (page.width().value, page.height().value);
         let mut w = img.width() as f32;
         let mut h = img.height() as f32;
         let max_w = page_w * 0.6;
@@ -125,8 +127,36 @@ pub fn add_image(
         let mut obj =
             PdfPageImageObject::new_with_size(&doc, &img, PdfPoints::new(w), PdfPoints::new(h))
                 .map_err(|e| e.to_string())?;
-        obj.translate(PdfPoints::new(x), PdfPoints::new(page_h - y - h))
-            .map_err(|e| e.to_string())?;
+        // girar al revés que la página: si no, en una página con /Rotate la
+        // imagen sale tumbada
+        if rot != 0 {
+            obj.rotate_counter_clockwise_degrees(rot as f32)
+                .map_err(|e| e.to_string())?;
+        }
+        // el punto llega en el espacio propio y es la esquina superior
+        // izquierda de lo que se ve: la caja en coordenadas PDF sale de
+        // recorrer los ejes de la vista
+        let ancla = vista.propia().ui_a_pdf(x, y);
+        let (derecha, abajo) = vista.ejes();
+        let esquinas = [
+            ancla,
+            (ancla.0 + derecha.0 * w, ancla.1 + derecha.1 * w),
+            (ancla.0 + abajo.0 * h, ancla.1 + abajo.1 * h),
+            (
+                ancla.0 + derecha.0 * w + abajo.0 * h,
+                ancla.1 + derecha.1 * w + abajo.1 * h,
+            ),
+        ];
+        let (izq, abajo_pdf) = (
+            esquinas.iter().map(|c| c.0).fold(f32::MAX, f32::min),
+            esquinas.iter().map(|c| c.1).fold(f32::MAX, f32::min),
+        );
+        let b = obj.bounds().map_err(|e| e.to_string())?;
+        obj.translate(
+            PdfPoints::new(izq - b.left().value),
+            PdfPoints::new(abajo_pdf - b.bottom().value),
+        )
+        .map_err(|e| e.to_string())?;
         page.objects_mut()
             .add_image_object(obj)
             .map_err(|e| e.to_string())?;
@@ -158,7 +188,12 @@ pub fn transform_image(
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let page_h = page.height().value;
+        // los bounds que manda la UI vienen en el espacio propio de la
+        // página, así que la altura para voltear la `y` es la propia, no la
+        // que devuelve `page.height()` (esa ya lleva el /Rotate aplicado)
+        let destino = crate::Geo::de_pagina(&page)
+            .propia()
+            .ui_rect_a_pdf(&crate::Rect { x, y, w, h });
         let mut obj = page
             .objects_mut()
             .get(object_index as usize)
@@ -169,12 +204,17 @@ pub fn transform_image(
         let b = obj.bounds().map_err(|e| e.to_string())?;
         let old_w = b.right().value - b.left().value;
         let old_h = b.top().value - b.bottom().value;
+        let (nueva_w, nueva_h) = (
+            destino.right().value - destino.left().value,
+            destino.top().value - destino.bottom().value,
+        );
         if old_w > 0.0 && old_h > 0.0 {
-            obj.scale(w / old_w, h / old_h).map_err(|e| e.to_string())?;
+            obj.scale(nueva_w / old_w, nueva_h / old_h)
+                .map_err(|e| e.to_string())?;
         }
         let b2 = obj.bounds().map_err(|e| e.to_string())?;
-        let dx = x - b2.left().value;
-        let dy = (page_h - y - h) - b2.bottom().value;
+        let dx = destino.left().value - b2.left().value;
+        let dy = destino.bottom().value - b2.bottom().value;
         obj.translate(PdfPoints::new(dx), PdfPoints::new(dy))
             .map_err(|e| e.to_string())?;
         drop(obj);
