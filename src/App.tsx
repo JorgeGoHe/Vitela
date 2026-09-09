@@ -177,10 +177,6 @@ function App() {
   async function openPath(path: string, password?: string) {
     try {
       setError(null);
-      setThumbs([]);
-      setPageSizes([]);
-      busqueda.limpiar(true);
-      setModified(false);
       const anterior = workPath;
       const info = await invoke<{
         page_count: number;
@@ -189,6 +185,12 @@ function App() {
       }>("open_pdf", { path, password: password ?? null });
       // la copia de trabajo del documento anterior ya no sirve: borrarla
       if (anterior) invoke("close_document", { workPath: anterior }).catch(() => {});
+      // solo ahora se retira el documento anterior: si la apertura falla
+      // (no es un PDF, contraseña cancelada) tiene que seguir intacto
+      setThumbs([]);
+      setPageSizes([]);
+      busqueda.limpiar(true);
+      setModified(false);
       setPwdDraft(null);
       setHadPassword(info.had_password);
       setDocPassword(info.had_password ? (password ?? null) : null);
