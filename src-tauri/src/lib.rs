@@ -165,6 +165,8 @@ fn borra_copia(work_path: &str) {
 fn close_document(work_path: String) -> Result<(), String> {
     on_pdfium_thread(move || {
         borra_copia(&work_path);
+        // sin documento, el menú vuelve a atenuar lo que no aplica
+        menu::refleja_documento(false);
         Ok(())
     })
 }
@@ -427,6 +429,9 @@ fn open_pdf(path: String, password: Option<String>) -> Result<DocumentInfo, Stri
             })?;
         }
         copias_abiertas().insert(work_path.clone());
+        // el menú deja de estar atenuado en cuanto hay documento (la UI
+        // llama además a `set_menu_state`, que es el contrato con ella)
+        menu::refleja_documento(true);
         Ok(DocumentInfo {
             page_count,
             work_path,
@@ -984,6 +989,7 @@ pub fn run() {
                 barre_huerfanos(&std::env::temp_dir(), std::time::Duration::from_secs(24 * 3600));
             });
             // menú nativo: espejo del menú «Acciones», sin documento abierto
+            menu::registra_app(app.handle());
             if let Err(e) = menu::instala(app.handle(), false) {
                 eprintln!("no se ha podido montar el menú del sistema: {e}");
             }
