@@ -686,6 +686,7 @@ mod anotaciones2;
 mod busqueda;
 mod documento;
 mod exportar;
+mod comentarios;
 mod confianza;
 mod firma;
 mod firmas_visuales;
@@ -1047,6 +1048,9 @@ pub fn run() {
             anotaciones::set_annotation_contents,
             anotaciones::set_annotation_color,
             anotaciones::get_document_annotations,
+            comentarios::reply_annotation,
+            comentarios::set_annotation_state,
+            comentarios::export_comments,
             formularios::get_form_fields,
             formularios::set_form_text,
             formularios::set_form_checked,

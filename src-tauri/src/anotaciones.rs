@@ -126,7 +126,7 @@ pub fn add_note(
                     .map_err(|e| e.to_string())?;
                 annot.set("Name", lopdf::Object::Name(b"Comment".to_vec()));
             }
-            anade_popup(doc, page_index, id)
+            anade_popup_de(doc, page_index, id)
         })
     }))
 }
@@ -294,7 +294,7 @@ pub(crate) fn repon_popups(doc: &mut lopdf::Document) -> Result<(), String> {
             })
             .collect();
         for id in notas {
-            anade_popup(doc, page_index, id)?;
+            anade_popup_de(doc, page_index, id)?;
         }
     }
     Ok(())
@@ -310,7 +310,7 @@ pub(crate) fn repon_popups_en(path: &str) -> Result<(), String> {
 /// derecha del icono: es lo que abren Acrobat y Vista Previa al pulsarlo.
 /// El popup no es un comentario — `get_annotations` no lo lista — y se
 /// borra con su nota.
-fn anade_popup(
+pub(crate) fn anade_popup_de(
     doc: &mut lopdf::Document,
     page_index: u16,
     padre: lopdf::ObjectId,
@@ -768,6 +768,14 @@ pub struct AnnotationInfo {
     pub author: String,
     /// Fecha de modificación (`/M`) en ISO 8601; vacía si no la lleva.
     pub modified: String,
+    /// Si es una **respuesta**, el índice del comentario del que cuelga
+    /// (`/IRT`), para que el panel la anide. `None` si no lo es.
+    pub in_reply_to: Option<u16>,
+    /// Estado de revisión del comentario (`Accepted`, `Rejected`,
+    /// `Cancelled`, `Completed`), vacío si no tiene. Vive en una anotación
+    /// hija —donde lo escribe Acrobat— y se sube aquí para que la UI no
+    /// tenga que saberlo (ver `comentarios.rs`).
+    pub state: String,
 }
 
 /// Lo que se lee con lopdf de cada anotación de la página: el color (que
@@ -777,6 +785,14 @@ pub struct DatosAnnot {
     pub color: Option<[u8; 4]>,
     pub author: String,
     pub modified: String,
+    /// Índice del comentario del que cuelga (`/IRT`), si cuelga de alguno.
+    pub in_reply_to: Option<u16>,
+    /// Estado de revisión, ya subido desde la anotación hija que lo lleva.
+    pub state: String,
+    /// **No es un comentario**: es la anotación hija que guarda el estado
+    /// (`/RT /StateModel`). Se lee para sacar el `/State` y se descarta,
+    /// como el `/Popup` de una nota.
+    pub es_estado: bool,
 }
 
 /// Lista las anotaciones de una página (bounds en coords de UI). La UI las
@@ -861,13 +877,15 @@ fn lee_annots(
             color: None,
             author: String::new(),
             modified: String::new(),
+            in_reply_to: None,
+            state: String::new(),
         });
     }
     Ok(out)
 }
 
 /// Completa con lo que solo sabe lopdf: color, autor y fecha.
-fn aplica_datos(path: &str, page_index: u16, out: &mut [AnnotationInfo]) {
+fn aplica_datos(path: &str, page_index: u16, out: &mut Vec<AnnotationInfo>) {
     let Some(datos) = datos_annots_lopdf(path, page_index) else {
         return;
     };
@@ -876,8 +894,18 @@ fn aplica_datos(path: &str, page_index: u16, out: &mut [AnnotationInfo]) {
             a.color = d.color;
             a.author.clone_from(&d.author);
             a.modified.clone_from(&d.modified);
+            a.in_reply_to = d.in_reply_to;
+            a.state.clone_from(&d.state);
         }
     }
+    // las hijas que solo llevan el estado no son comentarios: su /State ya
+    // ha subido al comentario del que cuelgan
+    out.retain(|a| {
+        !datos
+            .get(a.index as usize)
+            .map(|d| d.es_estado)
+            .unwrap_or(false)
+    });
 }
 
 /// Una anotación con la página en la que está, para el panel de
@@ -944,34 +972,65 @@ pub(crate) fn lista_annots(doc: &lopdf::Document, page_index: u16) -> Option<Vec
 pub fn datos_annots(doc: &lopdf::Document, page_index: u16) -> Option<Vec<DatosAnnot>> {
     use lopdf::Object;
     let annots = lista_annots(doc, page_index)?;
-    Some(
+    // dónde está cada anotación dentro de /Annots, para traducir el /IRT
+    // (que es una referencia) al índice que maneja la UI
+    let posicion = |id: lopdf::ObjectId| -> Option<u16> {
         annots
             .iter()
-            .map(|a| {
-                let dict = match a {
-                    Object::Reference(rid) => {
-                        match doc.get_object(*rid).ok().and_then(|o| o.as_dict().ok()) {
-                            Some(d) => d,
-                            None => return DatosAnnot::default(),
-                        }
+            .position(|o| matches!(o, Object::Reference(r) if *r == id))
+            .map(|i| i as u16)
+    };
+    let mut datos: Vec<DatosAnnot> = annots
+        .iter()
+        .map(|a| {
+            let dict = match a {
+                Object::Reference(rid) => {
+                    match doc.get_object(*rid).ok().and_then(|o| o.as_dict().ok()) {
+                        Some(d) => d,
+                        None => return DatosAnnot::default(),
                     }
-                    Object::Dictionary(d) => d,
-                    _ => return DatosAnnot::default(),
-                };
-                DatosAnnot {
-                    color: color_annot(dict),
-                    author: dict
-                        .get(b"T")
-                        .map(texto_de_cadena_pdf)
-                        .unwrap_or_default(),
-                    modified: dict
-                        .get(b"M")
-                        .map(|o| fecha_pdf_a_iso(&texto_de_cadena_pdf(o)))
-                        .unwrap_or_default(),
                 }
-            })
-            .collect(),
-    )
+                Object::Dictionary(d) => d,
+                _ => return DatosAnnot::default(),
+            };
+            let tipo_respuesta = dict
+                .get(b"RT")
+                .and_then(|o| o.as_name())
+                .map(|n| n.to_vec())
+                .unwrap_or_default();
+            DatosAnnot {
+                color: color_annot(dict),
+                author: dict
+                    .get(b"T")
+                    .map(texto_de_cadena_pdf)
+                    .unwrap_or_default(),
+                modified: dict
+                    .get(b"M")
+                    .map(|o| fecha_pdf_a_iso(&texto_de_cadena_pdf(o)))
+                    .unwrap_or_default(),
+                in_reply_to: dict
+                    .get(b"IRT")
+                    .and_then(|o| o.as_reference())
+                    .ok()
+                    .and_then(posicion),
+                state: dict.get(b"State").map(texto_de_cadena_pdf).unwrap_or_default(),
+                es_estado: tipo_respuesta == b"StateModel",
+            }
+        })
+        .collect();
+    // el estado vive en una hija: se sube al comentario del que cuelga,
+    // que es donde lo espera la UI (y donde lo enseña Acrobat)
+    let estados: Vec<(u16, String)> = datos
+        .iter()
+        .filter(|d| d.es_estado && !d.state.is_empty())
+        .filter_map(|d| d.in_reply_to.map(|p| (p, d.state.clone())))
+        .collect();
+    for (padre, estado) in estados {
+        if let Some(d) = datos.get_mut(padre as usize) {
+            d.state = estado;
+        }
+    }
+    Some(datos)
 }
 
 /// Color de una anotación a partir de `/C` (+ `/CA` como alfa).
@@ -1030,6 +1089,39 @@ fn indice_popup(path: &str, page_index: u16, annot_index: usize) -> Option<usize
     .flatten()
 }
 
+/// Los índices de las anotaciones que cuelgan de esa (`/IRT`): sus
+/// respuestas y su estado de revisión. Un solo nivel: una respuesta a una
+/// respuesta cuelga de la respuesta, y esa se va con ella.
+fn hijas_de(path: &str, page_index: u16, annot_index: usize) -> Vec<usize> {
+    use lopdf::Object;
+    with_lopdf(path, |doc| {
+        let Some(lista) = lista_annots(doc, page_index) else {
+            return Ok(Vec::new());
+        };
+        let Some(Object::Reference(padre)) = lista.get(annot_index) else {
+            return Ok(Vec::new());
+        };
+        let mut hijas: Vec<usize> = Vec::new();
+        let mut pendientes = vec![*padre];
+        while let Some(actual) = pendientes.pop() {
+            for (i, o) in lista.iter().enumerate() {
+                let Object::Reference(id) = o else { continue };
+                let Ok(d) = doc.get_object(*id).and_then(|x| x.as_dict()) else {
+                    continue;
+                };
+                if d.get(b"IRT").and_then(|x| x.as_reference()).ok() == Some(actual)
+                    && !hijas.contains(&i)
+                {
+                    hijas.push(i);
+                    pendientes.push(*id);
+                }
+            }
+        }
+        Ok(hijas)
+    })
+    .unwrap_or_default()
+}
+
 /// Elimina la anotación con el índice dado (y su ventana emergente, si la
 /// tiene: en Acrobat el post-it se va entero).
 #[tauri::command(async)]
@@ -1038,6 +1130,14 @@ pub fn remove_annotation(work_path: String, page_index: u16, annot_index: u16) -
         let mut indices = vec![annot_index as usize];
         if let Some(p) = indice_popup(&work_path, page_index, annot_index as usize) {
             indices.push(p);
+        }
+        // el hilo entero: borrar solo la pregunta dejaría las respuestas y
+        // el estado colgando de un objeto que ya no está
+        for hija in hijas_de(&work_path, page_index, annot_index as usize) {
+            indices.push(hija);
+            if let Some(p) = indice_popup(&work_path, page_index, hija) {
+                indices.push(p);
+            }
         }
         // de mayor a menor: borrar no invalida los índices que quedan
         indices.sort_unstable();
