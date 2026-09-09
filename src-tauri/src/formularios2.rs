@@ -93,7 +93,7 @@ fn rotacion(doc: &LoDoc, page_id: ObjectId) -> u16 {
 
 /// Geometría de la página para convertir las coordenadas de la UI, con su
 /// rotación: sin ella, en una página girada el campo o el enlace caen fuera.
-fn geo_pagina(doc: &LoDoc, page_id: ObjectId) -> Result<crate::Geo, String> {
+pub(crate) fn geo_pagina(doc: &LoDoc, page_id: ObjectId) -> Result<crate::Geo, String> {
     let mb = media_box(doc, page_id)?;
     Ok(crate::Geo::nueva(&mb, rotacion(doc, page_id)))
 }

@@ -941,9 +941,62 @@ pub fn remove_annotation(work_path: String, page_index: u16, annot_index: u16) -
     }))
 }
 
+/// Reescribe el `/AP` de un cuadro de texto con lo que diga ahora su
+/// `/Contents`, su `/DA` y su `/BS`. Sin esto, corregir el texto cambiaría
+/// el dato y no lo que se ve. Para el resto de tipos no hay nada que hacer:
+/// ni las notas ni las marcas sacan su apariencia del texto.
+fn regenera_freetext(doc: &mut lopdf::Document, id: lopdf::ObjectId) -> Result<(), String> {
+    use lopdf::Object;
+    let annot = doc
+        .get_object(id)
+        .and_then(|o| o.as_dict())
+        .map_err(|e| e.to_string())?
+        .clone();
+    if annot.get(b"Subtype").and_then(|o| o.as_name()).unwrap_or_default() != b"FreeText" {
+        return Ok(());
+    }
+    let rect: Vec<f32> = annot
+        .get(b"Rect")
+        .and_then(|o| o.as_array())
+        .map_err(|e| e.to_string())?
+        .iter()
+        .filter_map(numero)
+        .collect();
+    if rect.len() != 4 {
+        return Ok(());
+    }
+    let (w, h) = ((rect[2] - rect[0]).abs(), (rect[3] - rect[1]).abs());
+    let da = annot
+        .get(b"DA")
+        .map(texto_de_cadena_pdf)
+        .unwrap_or_default();
+    let (size, color) = crate::anotaciones2::lee_da(&da);
+    let border = annot
+        .get(b"BS")
+        .and_then(|o| o.as_dict())
+        .ok()
+        .and_then(|d| d.get(b"W").ok())
+        .and_then(numero)
+        .map(|w| w > 0.0)
+        .unwrap_or(true);
+    let texto = annot
+        .get(b"Contents")
+        .map(texto_de_cadena_pdf)
+        .unwrap_or_default();
+    let ap_id =
+        crate::anotaciones2::apariencia_freetext(doc, w, h, &texto, size, color, border);
+    let mut ap = lopdf::Dictionary::new();
+    ap.set("N", Object::Reference(ap_id));
+    doc.get_object_mut(id)
+        .and_then(|o| o.as_dict_mut())
+        .map_err(|e| e.to_string())?
+        .set("AP", Object::Dictionary(ap));
+    Ok(())
+}
+
 /// Cambia el texto de un comentario ya creado y refresca su fecha (en
-/// Acrobat, doble clic sobre el post-it y a escribir). No hace falta
-/// regenerar apariencia: las marcas de texto no la sacan del texto.
+/// Acrobat, doble clic sobre el post-it y a escribir). Los cuadros de texto
+/// vuelven a dibujar su apariencia con el texto nuevo.
 #[tauri::command(async)]
 pub fn set_annotation_contents(
     work_path: String,
@@ -966,7 +1019,7 @@ pub fn set_annotation_contents(
             annot.set("T", crate::documento::cadena_pdf(&autor));
         }
         annot.set("M", lopdf::Object::string_literal(fecha));
-        Ok(())
+        regenera_freetext(doc, id)
     })
 }
 
@@ -1024,6 +1077,29 @@ pub fn set_annotation_color(
             };
             if let Some(estilo) = estilo {
                 escribe_apariencia_marca(doc, page_index, i, estilo)?;
+            }
+            if subtipo.as_slice() == b"FreeText" {
+                // el color del cuadro vive en su /DA, no solo en /C
+                let da = doc
+                    .get_object(id)
+                    .and_then(|o| o.as_dict())
+                    .and_then(|d| d.get(b"DA"))
+                    .map(texto_de_cadena_pdf)
+                    .unwrap_or_default();
+                let (size, _) = crate::anotaciones2::lee_da(&da);
+                doc.get_object_mut(id)
+                    .and_then(|o| o.as_dict_mut())
+                    .map_err(|e| e.to_string())?
+                    .set(
+                        "DA",
+                        lopdf::Object::string_literal(format!(
+                            "/Helv {size:.2} Tf {:.4} {:.4} {:.4} rg",
+                            color[0] as f32 / 255.0,
+                            color[1] as f32 / 255.0,
+                            color[2] as f32 / 255.0
+                        )),
+                    );
+                regenera_freetext(doc, id)?;
             }
             Ok(())
         })

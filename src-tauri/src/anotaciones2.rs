@@ -313,6 +313,208 @@ pub fn add_stamp(
     }))
 }
 
+/// Texto para un stream de contenido en WinAnsi (≈ latin-1, así que los
+/// acentos del español entran), escapando `\`, `(` y `)`.
+fn winansi(texto: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(texto.len());
+    for c in texto.chars() {
+        match c {
+            '\\' | '(' | ')' => {
+                out.push(b'\\');
+                out.push(c as u8);
+            }
+            c if (c as u32) < 0x20 => out.push(b' '),
+            c if (c as u32) <= 0xFF => out.push(c as u8),
+            _ => out.push(b'?'),
+        }
+    }
+    out
+}
+
+/// Apariencia (`/AP /N`) de un cuadro de texto: el borde opcional y las
+/// líneas del texto en Helvetica, dibujadas en local (`/BBox 0 0 w h`).
+/// La comparten la creación y la reescritura del texto: sin regenerarla,
+/// corregir el cuadro cambiaría el `/Contents` y no lo que se ve.
+pub(crate) fn apariencia_freetext(
+    doc: &mut lopdf::Document,
+    w: f32,
+    h: f32,
+    texto: &str,
+    size: f32,
+    color: [f32; 3],
+    border: bool,
+) -> lopdf::ObjectId {
+    use lopdf::{Dictionary, Object, Stream};
+    let [r, g, b] = color;
+    let mut ops = Vec::new();
+    if border {
+        ops.extend_from_slice(
+            format!(
+                "q {r:.4} {g:.4} {b:.4} RG 1 w 0.5 0.5 {:.2} {:.2} re S Q\n",
+                w - 1.0,
+                h - 1.0
+            )
+            .as_bytes(),
+        );
+    }
+    let pad = (size * 0.35).max(2.0);
+    let interlineado = size * 1.2;
+    ops.extend_from_slice(
+        format!(
+            "BT /Helv {size:.2} Tf {interlineado:.2} TL {r:.4} {g:.4} {b:.4} rg {pad:.2} {:.2} Td\n",
+            h - pad - size * 0.85
+        )
+        .as_bytes(),
+    );
+    for (n, linea) in texto.split('\n').enumerate() {
+        if n > 0 {
+            ops.extend_from_slice(b"T* ");
+        }
+        ops.push(b'(');
+        ops.extend_from_slice(&winansi(linea));
+        ops.extend_from_slice(b") Tj\n");
+    }
+    ops.extend_from_slice(b"ET\n");
+
+    let helv = crate::seguridad::fuente_helvetica(doc);
+    let mut fuentes = Dictionary::new();
+    fuentes.set("Helv", Object::Reference(helv));
+    let mut recursos = Dictionary::new();
+    recursos.set("Font", Object::Dictionary(fuentes));
+    let mut forma = Dictionary::new();
+    forma.set("Type", Object::Name(b"XObject".to_vec()));
+    forma.set("Subtype", Object::Name(b"Form".to_vec()));
+    forma.set("FormType", 1i64);
+    forma.set(
+        "BBox",
+        Object::Array(vec![0.into(), 0.into(), w.into(), h.into()]),
+    );
+    forma.set("Resources", Object::Dictionary(recursos));
+    doc.add_object(Stream::new(forma, ops))
+}
+
+/// Tamaño de fuente y color de un `/DA` (`/Helv 12 Tf 1 0 0 rg`).
+pub(crate) fn lee_da(da: &str) -> (f32, [f32; 3]) {
+    let piezas: Vec<&str> = da.split_whitespace().collect();
+    let mut size = 12.0;
+    let mut color = [0.0, 0.0, 0.0];
+    for (i, p) in piezas.iter().enumerate() {
+        match *p {
+            "Tf" if i >= 1 => {
+                if let Ok(v) = piezas[i - 1].parse::<f32>() {
+                    if v > 0.0 {
+                        size = v;
+                    }
+                }
+            }
+            "rg" if i >= 3 => {
+                let v: Vec<f32> = piezas[i - 3..i]
+                    .iter()
+                    .filter_map(|n| n.parse::<f32>().ok())
+                    .collect();
+                if v.len() == 3 {
+                    color = [v[0], v[1], v[2]];
+                }
+            }
+            "g" if i >= 1 => {
+                if let Ok(v) = piezas[i - 1].parse::<f32>() {
+                    color = [v, v, v];
+                }
+            }
+            _ => {}
+        }
+    }
+    (size, color)
+}
+
+/// Cuadro de texto: el comentario que Acrobat llama así, escrito ENCIMA del
+/// documento sin tocar su contenido (a diferencia de «Añadir texto», que
+/// reescribe el content stream). Se arrastra un rectángulo, se escribe
+/// dentro y queda una caja con borde opcional, sin relleno, que se mueve,
+/// se redimensiona, se borra y sale en la lista de comentarios.
+///
+/// Se construye entero con lopdf: `/Subtype /FreeText`, `/DA`, `/Contents`,
+/// `/C` y un `/AP` propio —PDFium no escribe la apariencia de las
+/// anotaciones de marcado, y sin `/AP` la caja no existe fuera de Vitela.
+// la firma es el contrato con la UI: un argumento por propiedad del cuadro
+#[allow(clippy::too_many_arguments)]
+#[tauri::command(async)]
+pub fn add_free_text(
+    work_path: String,
+    page_index: u16,
+    rect: Rect,
+    text: String,
+    font_size: f32,
+    color: [u8; 4],
+    border: bool,
+    author: Option<String>,
+) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Err("El cuadro de texto está vacío".into());
+    }
+    if rect.w < 8.0 || rect.h < 8.0 {
+        return Err("El cuadro de texto es demasiado pequeño".into());
+    }
+    let size = font_size.clamp(6.0, 96.0);
+    let autor = crate::anotaciones::autor_o_sistema(author);
+    let fecha = crate::anotaciones::fecha_pdf_ahora();
+    crate::cirugia(&work_path, move |doc| {
+        use lopdf::{Dictionary, Object};
+        let page_id = *doc
+            .get_pages()
+            .get(&(page_index as u32 + 1))
+            .ok_or("Página fuera de rango")?;
+        let geo = crate::formularios2::geo_pagina(doc, page_id)?;
+        let caja = geo.ui_rect_a_pdf(&rect);
+        // la caja se dibuja en local (BBox 0 0 w h) y el visor la coloca
+        let (w, h) = (
+            caja.right().value - caja.left().value,
+            caja.top().value - caja.bottom().value,
+        );
+        let (r, g, b) = (
+            color[0] as f32 / 255.0,
+            color[1] as f32 / 255.0,
+            color[2] as f32 / 255.0,
+        );
+
+        let ap_id = apariencia_freetext(doc, w, h, &text, size, [r, g, b], border);
+
+        let mut annot = Dictionary::new();
+        annot.set("Type", Object::Name(b"Annot".to_vec()));
+        annot.set("Subtype", Object::Name(b"FreeText".to_vec()));
+        annot.set(
+            "Rect",
+            Object::Array(vec![
+                caja.left().value.into(),
+                caja.bottom().value.into(),
+                caja.right().value.into(),
+                caja.top().value.into(),
+            ]),
+        );
+        annot.set(
+            "DA",
+            Object::string_literal(format!("/Helv {size:.2} Tf {r:.4} {g:.4} {b:.4} rg")),
+        );
+        annot.set("Contents", crate::documento::cadena_pdf(&text));
+        annot.set(
+            "C",
+            Object::Array(vec![r.into(), g.into(), b.into()]),
+        );
+        annot.set("F", 4i64); // Print
+        annot.set("T", crate::documento::cadena_pdf(&autor));
+        annot.set("M", Object::string_literal(fecha));
+        let mut bs = Dictionary::new();
+        bs.set("W", Object::Integer(if border { 1 } else { 0 }));
+        bs.set("S", Object::Name(b"S".to_vec()));
+        annot.set("BS", Object::Dictionary(bs));
+        let mut ap = Dictionary::new();
+        ap.set("N", Object::Reference(ap_id));
+        annot.set("AP", Object::Dictionary(ap));
+        let annot_id = doc.add_object(annot);
+        crate::formularios2::anade_a_annots(doc, page_id, annot_id)
+    })
+}
+
 /// Mueve y/o reescala una anotación con apariencia embebida (Stamp o Ink):
 /// transforma los objetos de dentro para que ocupen el rect nuevo (coords de
 /// UI) y actualiza los bounds. Para el resto de tipos solo hay borrado.
@@ -515,6 +717,107 @@ mod tests {
 
         let sizes = crate::get_page_sizes(work.clone()).expect("tamaños");
         assert_eq!(sizes[0].rotation, 90, "get_page_sizes debe dar la rotación");
+        std::fs::remove_file(&pdf).ok();
+    }
+
+    /// El cuadro de texto de Acrobat: comentario encima del documento, con
+    /// su borde y su texto, que sale en la lista de comentarios y se puede
+    /// editar, mover y borrar como cualquier otro.
+    #[test]
+    fn cuadro_de_texto_con_apariencia_y_texto() {
+        let pdf = std::env::temp_dir().join("anotaciones2-freetext-test.pdf");
+        crea_pdf(&["Página"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+        let caja = Rect { x: 120.0, y: 300.0, w: 220.0, h: 60.0 };
+        add_free_text(
+            work.clone(),
+            0,
+            caja.clone(),
+            "Primera línea\nsegunda con acentós".into(),
+            12.0,
+            [200, 0, 0, 255],
+            true,
+            Some("Jorge".into()),
+        )
+        .expect("cuadro de texto");
+
+        // sale en la lista de comentarios, con su texto
+        let a = &crate::anotaciones::get_annotations(work.clone(), 0).expect("listar")[0];
+        assert_eq!(a.kind, "FreeText");
+        assert_eq!(a.contents, "Primera línea\nsegunda con acentós");
+        assert_eq!(a.author, "Jorge");
+        assert!((a.x - 120.0).abs() < 1.0 && (a.y - 300.0).abs() < 1.0);
+        assert_eq!(a.color, Some([200, 0, 0, 255]));
+
+        // el fichero lleva /AP y /DA: sin ellos la caja no existe fuera
+        let doc = lopdf::Document::load(&work).expect("cargar");
+        let page_id = *doc.get_pages().get(&1).expect("página 1");
+        let rid = doc
+            .get_object(page_id)
+            .and_then(|o| o.as_dict())
+            .and_then(|d| d.get(b"Annots"))
+            .and_then(|o| o.as_array())
+            .expect("Annots")[0]
+            .as_reference()
+            .expect("referencia");
+        let annot = doc.get_object(rid).and_then(|o| o.as_dict()).expect("annot");
+        assert_eq!(
+            annot.get(b"Subtype").and_then(|o| o.as_name()).unwrap_or_default(),
+            b"FreeText"
+        );
+        assert!(annot.get(b"DA").is_ok(), "el cuadro necesita /DA");
+        let ap = annot
+            .get(b"AP")
+            .and_then(|o| o.as_dict())
+            .and_then(|d| d.get(b"N"))
+            .and_then(|o| o.as_reference())
+            .expect("/AP /N");
+        assert!(
+            !doc.get_object(ap).and_then(|o| o.as_stream()).expect("stream").content.is_empty(),
+            "la apariencia va vacía"
+        );
+
+        // y hay tinta dentro del rect
+        assert!(
+            hay_tinta(&work, caja.x + 4.0, caja.y + 4.0),
+            "el borde del cuadro no se ve en el render"
+        );
+        assert!(
+            hay_tinta(&work, caja.x + 12.0, caja.y + 14.0),
+            "el texto del cuadro no se ve en el render"
+        );
+
+        // corregir el texto reescribe la apariencia: si no, cambiaría el
+        // dato y no lo que se ve
+        crate::anotaciones::set_annotation_contents(work.clone(), 0, 0, "Corto".into(), None)
+            .expect("corregir");
+        let doc = lopdf::Document::load(&work).expect("recargar");
+        let page_id = *doc.get_pages().get(&1).expect("página 1");
+        let rid = doc
+            .get_object(page_id)
+            .and_then(|o| o.as_dict())
+            .and_then(|d| d.get(b"Annots"))
+            .and_then(|o| o.as_array())
+            .expect("Annots")[0]
+            .as_reference()
+            .expect("referencia");
+        let ap = doc
+            .get_object(rid)
+            .and_then(|o| o.as_dict())
+            .and_then(|d| d.get(b"AP"))
+            .and_then(|o| o.as_dict())
+            .and_then(|d| d.get(b"N"))
+            .and_then(|o| o.as_reference())
+            .expect("/AP /N");
+        let contenido = String::from_utf8_lossy(
+            &doc.get_object(ap).and_then(|o| o.as_stream()).expect("stream").content,
+        )
+        .into_owned();
+        assert!(contenido.contains("(Corto)"), "la apariencia no se rehízo: {contenido}");
+        assert!(
+            !contenido.contains("Primera"),
+            "la apariencia conserva el texto viejo: {contenido}"
+        );
         std::fs::remove_file(&pdf).ok();
     }
 

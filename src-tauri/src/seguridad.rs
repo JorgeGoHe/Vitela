@@ -342,7 +342,7 @@ fn tamano_da(da: &str) -> f32 {
 }
 
 /// Referencia a la Helvetica de /DR del AcroForm (o una nueva si no hay).
-fn fuente_helvetica(doc: &mut LoDoc) -> ObjectId {
+pub(crate) fn fuente_helvetica(doc: &mut LoDoc) -> ObjectId {
     let existente = acroform(doc).and_then(|form| {
         let dr = dict_de(doc, form.get(b"DR").ok()?)?;
         let fuentes = dict_de(doc, dr.get(b"Font").ok()?)?;

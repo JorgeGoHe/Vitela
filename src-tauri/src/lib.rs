@@ -906,6 +906,7 @@ pub fn run() {
             anotaciones2::add_markup,
             anotaciones2::add_shape,
             anotaciones2::add_stamp,
+            anotaciones2::add_free_text,
             anotaciones2::transform_annotation,
             paginas2::add_blank_page,
             paginas2::duplicate_page,
