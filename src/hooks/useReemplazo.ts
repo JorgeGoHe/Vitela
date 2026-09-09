@@ -100,7 +100,7 @@ export function useReemplazo(ctx: {
           );
           return;
         }
-        const hechos = await replaceText(workPath, lote);
+        const { hechas: hechos, saltadas } = await replaceText(workPath, lote);
         afterMutation(pageCount);
         if (hechos === 0) {
           onNotice(
@@ -110,7 +110,7 @@ export function useReemplazo(ctx: {
         }
         // el recuento es honesto: si el backend se ha saltado bloques que no
         // sabía reescribir, se dice, en vez de cantar un éxito redondo
-        const saltados = lote.length - hechos;
+        const saltados = saltadas;
         onNotice(
           `${plural(hechos, "bloque de texto reemplazado", "bloques de texto reemplazados")}${
             saltados > 0

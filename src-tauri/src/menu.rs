@@ -535,14 +535,8 @@ mod tests {
     /// mitades se separan en silencio: el `?.()` de JavaScript se traga el
     /// id que no existe y la entrada de menú no hace nada.
     ///
-    /// **`#[ignore]` mientras la UI del ciclo 4 no esté integrada**: el
-    /// backend y la UI se desarrollan en ramas distintas y en `src/` sigue
-    /// la lista vieja (`extraer`, `ampliar`, `nocturno`…). En cuanto las dos
-    /// mitades estén en la misma rama, se quita el `#[ignore]` y el test
-    /// pasa a correr en CI, que es el sitio donde tiene que fallar si
-    /// alguien vuelve a separar las listas. Se comprueba a mano con
-    /// `cargo test -- --ignored`.
-    #[ignore = "hasta que la UI del ciclo 4 enrute la lista de menu::estructura()"]
+    /// Corre en CI: es el sitio donde tiene que fallar si alguien vuelve a
+    /// separar las dos listas.
     #[test]
     fn los_ids_del_menu_estan_todos_en_la_ui() {
         let fuentes = fuentes_de_la_ui();

@@ -136,10 +136,12 @@ export type Reemplazo = {
  *  mutación, así que un ⌘Z lo devuelve de una vez. Devuelve cuántos bloques
  *  ha cambiado; los que no se pueden reescribir se saltan sin romper el
  *  resto. */
+export type ResultadoReemplazo = { hechas: number; saltadas: number };
+
 export function replaceText(
   workPath: string,
   matches: Reemplazo[],
-): Promise<number> {
+): Promise<ResultadoReemplazo> {
   return invoke("replace_text", { workPath, matches });
 }
 
