@@ -37,6 +37,7 @@ import {
   removeRecent,
   renderPageSrc,
   touchRecent,
+  uiLista,
   type AnotacionDoc,
   type HeaderFooter,
   type Reciente,
@@ -447,6 +448,17 @@ function App() {
 
   useEffect(() => onAbrirFichero((path) => abrirRef.current(path)), []);
 
+  // Arranque con fichero: en cuanto la UI ya escucha, pregunta si había una
+  // ruta esperando (doble clic en el Finder con la app cerrada). Después el
+  // camino normal es el evento `abrir-fichero`.
+  useEffect(() => {
+    uiLista()
+      .then((path) => {
+        if (path) abrirRef.current(path);
+      })
+      .catch(() => {});
+  }, []);
+
   useEffect(
     () =>
       onArrastreFicheros({
@@ -683,7 +695,8 @@ function App() {
     if (mode === "select") return;
     function onKey(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
-      if (document.querySelector(".modal-backdrop")) return;
+      // con un modal o un menú abiertos, la tecla es suya
+      if (document.querySelector(".modal-backdrop, .menu-backdrop")) return;
       // con coincidencias pintadas el primer Esc es para la búsqueda
       if (hayCoincidenciasRef.current) return;
       const tag = (e.target as HTMLElement)?.tagName;

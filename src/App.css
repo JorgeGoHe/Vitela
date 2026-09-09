@@ -609,6 +609,15 @@ textarea {
   justify-content: center;
   padding: 4px 6px;
   font-variant-numeric: tabular-nums;
+  /* el número se puede teclear: se dice con el cursor de texto y un
+     subrayado de campo, sin esperar a que alguien pase el ratón y lea el
+     tooltip */
+  cursor: text;
+  border-bottom: 1px dotted color-mix(in srgb, var(--fg-muted) 55%, transparent);
+}
+
+.nav-pill .pill-boton:hover {
+  border-bottom-color: var(--accent);
 }
 
 .nav-pill .pill-input {

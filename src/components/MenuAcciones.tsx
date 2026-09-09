@@ -132,6 +132,11 @@ export default function MenuAcciones({
       const i = items.indexOf(document.activeElement as HTMLButtonElement);
       const delta = e.key === "ArrowDown" ? 1 : -1;
       items[(i + delta + items.length) % items.length].focus();
+    } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      // un menú desplegado se traga las teclas: sin esto se pasaba de
+      // página por debajo del menú
+      e.preventDefault();
+      e.stopPropagation();
     } else if (e.key === "Home") {
       e.preventDefault();
       items[0].focus();

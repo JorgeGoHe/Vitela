@@ -50,6 +50,14 @@ export type Reciente = {
   opened_at: string | number;
 };
 
+/** Ruta con la que arrancó la app (doble clic en el Finder con Vitela
+ *  cerrada, o argumento de la línea de órdenes). La UI la pide al montar,
+ *  cuando ya escucha `abrir-fichero`: los eventos de Tauri no se encolan,
+ *  así que el arranque en frío no puede depender de ellos. */
+export function uiLista(): Promise<string | null> {
+  return invoke("ui_lista");
+}
+
 export function listRecent(): Promise<Reciente[]> {
   return invoke("list_recent");
 }

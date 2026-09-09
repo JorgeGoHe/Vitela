@@ -29,6 +29,7 @@ export function useSeleccionTexto(ctx: {
   esActual: boolean;
   claimSel: (page: number | null) => void;
   onError: (e: unknown) => void;
+  onNotice: (texto: string) => void;
 }) {
   const {
     workPath,
@@ -42,6 +43,7 @@ export function useSeleccionTexto(ctx: {
     esActual,
     claimSel,
     onError,
+    onNotice,
   } = ctx;
   const [pageText, setPageText] = useState<PageText | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -143,7 +145,10 @@ export function useSeleccionTexto(ctx: {
       .map((c) => c.ch)
       .join("");
     copyToClipboard(text);
-  }, [selection, pageText]);
+    // el portapapeles no se ve: la banda de avisos ya está montada y acusar
+    // recibo cuesta una línea
+    onNotice("Texto copiado");
+  }, [selection, pageText, onNotice]);
 
   // Copiar selección con ⌘C / Ctrl+C
   useEffect(() => {

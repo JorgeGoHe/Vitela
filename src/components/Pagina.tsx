@@ -208,6 +208,7 @@ function Pagina({
     esActual,
     claimSel,
     onError,
+    onNotice,
   });
   const anotaciones = useAnotaciones({
     workPath,
