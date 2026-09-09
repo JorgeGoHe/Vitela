@@ -54,6 +54,12 @@ export type AnnotationInfo = {
   modified: string;
   rects: Rect[];
   color: [number, number, number, number] | null;
+  /** Índice de la anotación a la que responde (`/IRT`), o `null` si es un
+   *  comentario de primer nivel. Es lo que deja anidar el hilo. */
+  in_reply_to: number | null;
+  /** Estado de revisión (`/State`): "Accepted", "Rejected", "Cancelled",
+   *  "Completed" o vacío. */
+  state: string;
 };
 export type FormFieldInfo = {
   annot_index: number;
@@ -194,6 +200,20 @@ export const KIND_ICONS: Record<string, string> = {
 
 /** «todos» o el plural de un tipo (`KIND_PLURALS`). */
 export type FiltroComentarios = string;
+
+/** Los cuatro estados de revisión, con su nombre en español. El valor es el
+ *  que se escribe en el PDF; la etiqueta, la que lee el usuario. */
+export const ESTADOS_COMENTARIO: [string, string][] = [
+  ["Accepted", "Aceptado"],
+  ["Rejected", "Rechazado"],
+  ["Cancelled", "Cancelado"],
+  ["Completed", "Completado"],
+];
+
+/** «Aceptado» a partir de «Accepted»; vacío si no hay estado. */
+export function nombreEstado(state: string): string {
+  return ESTADOS_COMENTARIO.find(([v]) => v === state)?.[1] ?? "";
+}
 
 /** Lee la sintaxis de rango de Acrobat («1-3, 8») y devuelve los índices
  *  desde 0, ordenados y sin repetidos. Lo que se sale del documento se

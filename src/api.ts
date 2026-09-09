@@ -304,6 +304,60 @@ export async function renderPageSrc(
  *  más la página en la que está. */
 export type AnotacionDoc = AnnotationInfo & { page_index: number };
 
+/** Los cuatro estados de revisión de Acrobat, con el nombre que se escribe
+ *  en el PDF (`/State` con `/StateModel /Review`): así los ve también quien
+ *  abra el documento en Acrobat, que es toda la gracia. `""` es sin estado. */
+export type EstadoComentario =
+  | ""
+  | "Accepted"
+  | "Rejected"
+  | "Cancelled"
+  | "Completed";
+
+/** Responde a un comentario: crea una anotación con `/IRT` apuntando a la
+ *  original, que es como se guarda un hilo. Devuelve el índice de la
+ *  respuesta en `/Annots` de su página. */
+export function replyAnnotation(
+  workPath: string,
+  pageIndex: number,
+  annotIndex: number,
+  text: string,
+  author?: string | null,
+): Promise<number> {
+  return invoke("reply_annotation", {
+    workPath,
+    pageIndex,
+    annotIndex,
+    text,
+    author: author ?? null,
+  });
+}
+
+/** Pone (o quita, con `""`) el estado de revisión de un comentario. */
+export function setAnnotationState(
+  workPath: string,
+  pageIndex: number,
+  annotIndex: number,
+  state: EstadoComentario,
+): Promise<void> {
+  return invoke("set_annotation_state", {
+    workPath,
+    pageIndex,
+    annotIndex,
+    state,
+  });
+}
+
+/** Saca la lista de comentarios a un fichero para leerla fuera: el
+ *  «Resumen de comentarios» de Acrobat. */
+export function exportComments(
+  path: string,
+  destPath: string,
+  formato: "txt",
+): Promise<void> {
+  return invoke("export_comments", { path, destPath, formato });
+}
+
 /** Todos los comentarios del documento en una sola pasada (una llamada por
  *  página serían 300 viajes por el canal del hilo de PDFium). */
 export function getDocumentAnnotations(path: string): Promise<AnotacionDoc[]> {

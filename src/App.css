@@ -1733,6 +1733,73 @@ textarea {
   color: var(--fg-muted);
 }
 
+/* un hilo: el comentario, sus acciones y sus respuestas indentadas */
+.com-hilo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.com-row.com-respuesta {
+  margin-left: 14px;
+  border-left: 1px solid var(--border);
+  border-radius: 0 6px 6px 0;
+}
+
+.com-acciones {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px 4px 6px;
+}
+
+.com-estado {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  padding: 2px 4px;
+}
+
+.com-responder {
+  font-size: 11px;
+  padding: 2px 6px;
+}
+
+/* el estado, en el propio comentario: no hay panel de propiedades aparte */
+.com-estado-etiqueta {
+  align-self: flex-start;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+.com-borrador {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 6px 6px 20px;
+}
+
+.com-borrador textarea {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 5px 6px;
+  min-height: 52px;
+  resize: vertical;
+  outline: none;
+}
+
+.com-borrador textarea:focus {
+  border-color: var(--accent);
+}
+
 .com-cuerpo {
   flex: 1;
   min-width: 0;

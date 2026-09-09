@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useRef } from "react";
-import type { AnotacionDoc } from "../api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { AnotacionDoc, EstadoComentario } from "../api";
 import {
+  ESTADOS_COMENTARIO,
   fechaAnotacion,
   firmaAnotacion,
   KIND_ICONS,
   KIND_PLURALS,
   MOD,
+  nombreEstado,
   plural,
   type FiltroComentarios,
 } from "../tipos";
@@ -24,10 +26,14 @@ export default function PanelComentarios({
   setFiltro,
   filtroAutor,
   setFiltroAutor,
+  filtroEstado,
+  setFiltroEstado,
   seleccionada,
   focoPedido,
   onSelect,
   onDelete,
+  onReply,
+  onState,
 }: {
   comentarios: AnotacionDoc[];
   filtro: FiltroComentarios;
@@ -35,13 +41,21 @@ export default function PanelComentarios({
   /** «todos» o el autor exacto: la otra mitad del filtro que pedía C2. */
   filtroAutor: string;
   setFiltroAutor: (a: string) => void;
+  /** «todos», «sin» o uno de los cuatro estados de revisión. */
+  filtroEstado: string;
+  setFiltroEstado: (e: string) => void;
   /** Comentario seleccionado ahora mismo, si está en esta lista. */
   seleccionada: { page: number; index: number } | null;
   /** Sube cada vez que el atajo del panel pide el foco de la lista. */
   focoPedido: number;
   onSelect: (c: AnotacionDoc) => void;
   onDelete: (c: AnotacionDoc) => void;
+  onReply: (c: AnotacionDoc, texto: string) => void;
+  onState: (c: AnotacionDoc, estado: EstadoComentario) => void;
 }) {
+  // el comentario al que se está respondiendo, y el borrador de la respuesta
+  const [respondiendo, setRespondiendo] = useState<string | null>(null);
+  const [borrador, setBorrador] = useState("");
   // los tipos que hay de verdad en el documento: un filtro con opciones
   // vacías no ayuda a nadie
   const tipos = useMemo(() => {
@@ -75,13 +89,32 @@ export default function PanelComentarios({
     }
   }, [filtroAutor, autores, setFiltroAutor]);
 
-  const lista = comentarios.filter(
+  // las respuestas no son filas sueltas: cuelgan de su comentario, y por eso
+  // ni se filtran ni se cuentan aparte
+  const respuestas = useMemo(() => {
+    const m = new Map<string, AnotacionDoc[]>();
+    for (const c of comentarios) {
+      if (c.in_reply_to === null || c.in_reply_to === undefined) continue;
+      const clave = `${c.page_index}-${c.in_reply_to}`;
+      m.set(clave, [...(m.get(clave) ?? []), c]);
+    }
+    return m;
+  }, [comentarios]);
+
+  const raiz = comentarios.filter(
+    (c) => c.in_reply_to === null || c.in_reply_to === undefined,
+  );
+
+  const lista = raiz.filter(
     (c) =>
       (filtro === "todos" || (KIND_PLURALS[c.kind] ?? c.kind) === filtro) &&
       (filtroAutor === "todos" ||
-        (c.author || "Sin autor") === filtroAutor),
+        (c.author || "Sin autor") === filtroAutor) &&
+      (filtroEstado === "todos" ||
+        (filtroEstado === "sin" ? !c.state : c.state === filtroEstado)),
   );
-  const filtrando = filtro !== "todos" || filtroAutor !== "todos";
+  const filtrando =
+    filtro !== "todos" || filtroAutor !== "todos" || filtroEstado !== "todos";
 
   const panelRef = useRef<HTMLDivElement | null>(null);
   // posición a la que hay que devolver el foco cuando la lista se rehaga
@@ -114,7 +147,7 @@ export default function PanelComentarios({
     volverARef.current = null;
     const f = Array.from(el.querySelectorAll<HTMLElement>(".com-row"));
     (f.length === 0 ? el : f[Math.min(pos, f.length - 1)]).focus();
-  }, [comentarios, filtro, filtroAutor]);
+  }, [comentarios, filtro, filtroAutor, filtroEstado]);
 
   const hayElegida = lista.some(
     (c) => seleccionada?.page === c.page_index && seleccionada.index === c.index,
@@ -146,6 +179,61 @@ export default function PanelComentarios({
     }
   }
 
+  /** Una fila de la lista, la misma para un comentario y para una respuesta
+   *  (que solo va indentada): el mismo teclado y el mismo roving tabindex. */
+  function fila(c: AnotacionDoc, primera: boolean, esRespuesta: boolean) {
+    const elegida =
+      seleccionada?.page === c.page_index && seleccionada.index === c.index;
+    const fecha = fechaAnotacion(c.modified);
+    const firma = firmaAnotacion(c.author, c.modified);
+    const estado = nombreEstado(c.state ?? "");
+    return (
+      <div
+        key={`${c.page_index}-${c.index}`}
+        className={`com-row${elegida ? " on" : ""}${esRespuesta ? " com-respuesta" : ""}`}
+        role="option"
+        aria-selected={elegida}
+        data-elegida={elegida ? "1" : "0"}
+        // sin nada elegido, la primera fila es la que recibe el Tab: con
+        // `-1` en todas la lista no se alcanzaba con el teclado
+        tabIndex={elegida || (!hayElegida && primera) ? 0 : -1}
+        title={[firma, c.contents].filter(Boolean).join("\n") || undefined}
+        onClick={() => onSelect(c)}
+        onKeyDown={(e) => onKeyDown(e, c)}
+      >
+        <Icon
+          name={esRespuesta ? "forward" : (KIND_ICONS[c.kind] ?? "note")}
+          size={13}
+        />
+        <span className="com-cuerpo">
+          {/* autor, fecha y página en una fila que envuelve: en el sidebar
+              de 200 px la hora era lo primero que se perdía */}
+          <span className="com-firma dato">
+            <span className="com-autor">{c.author || "Sin autor"}</span>
+            {fecha && <span className="com-fecha">{fecha}</span>}
+            <span className="com-pagina">pág. {c.page_index + 1}</span>
+          </span>
+          <span className="com-texto">
+            {c.contents || KIND_PLURALS[c.kind] || c.kind}
+          </span>
+          {estado && <span className="com-estado-etiqueta">{estado}</span>}
+        </span>
+        <button
+          className="com-borrar"
+          tabIndex={-1}
+          title={`Eliminar el comentario (${MOD}Z lo devuelve)`}
+          aria-label="Eliminar el comentario"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(c);
+          }}
+        >
+          <Icon name="close" size={12} />
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
       className="com-panel"
@@ -158,13 +246,14 @@ export default function PanelComentarios({
         e.stopPropagation();
         setFiltro("todos");
         setFiltroAutor("todos");
+        setFiltroEstado("todos");
       }}
     >
       {comentarios.length > 0 && (
         <span className="com-total dato">
           {filtrando
-            ? `${lista.length} de ${plural(comentarios.length, "comentario", "comentarios")}`
-            : plural(comentarios.length, "comentario", "comentarios")}
+            ? `${lista.length} de ${plural(raiz.length, "comentario", "comentarios")}`
+            : plural(raiz.length, "comentario", "comentarios")}
         </span>
       )}
       {comentarios.length > 0 && (
@@ -197,6 +286,22 @@ export default function PanelComentarios({
           ))}
         </select>
       )}
+      {comentarios.length > 0 && (
+        <select
+          className="size-select com-filtro"
+          aria-label="Filtrar los comentarios por estado"
+          value={filtroEstado}
+          onChange={(e) => setFiltroEstado(e.target.value)}
+        >
+          <option value="todos">Todos los estados</option>
+          <option value="sin">Sin estado</option>
+          {ESTADOS_COMENTARIO.map(([v, etiqueta]) => (
+            <option key={v} value={v}>
+              {etiqueta}
+            </option>
+          ))}
+        </select>
+      )}
       {comentarios.length === 0 && (
         <p className="sign-empty">Todavía no hay comentarios.</p>
       )}
@@ -212,50 +317,83 @@ export default function PanelComentarios({
       )}
       <div role="listbox" aria-label="Comentarios del documento">
         {lista.map((c, i) => {
-          const elegida =
-            seleccionada?.page === c.page_index &&
-            seleccionada.index === c.index;
-          const fecha = fechaAnotacion(c.modified);
-          const firma = firmaAnotacion(c.author, c.modified);
+          const clave = `${c.page_index}-${c.index}`;
+          const hijas = respuestas.get(clave) ?? [];
           return (
-            <div
-              key={`${c.page_index}-${c.index}`}
-              className={`com-row${elegida ? " on" : ""}`}
-              role="option"
-              aria-selected={elegida}
-              data-elegida={elegida ? "1" : "0"}
-              // sin nada elegido, la primera fila es la que recibe el Tab:
-              // con `-1` en todas la lista no se alcanzaba con el teclado
-              tabIndex={elegida || (!hayElegida && i === 0) ? 0 : -1}
-              title={[firma, c.contents].filter(Boolean).join("\n") || undefined}
-              onClick={() => onSelect(c)}
-              onKeyDown={(e) => onKeyDown(e, c)}
-            >
-              <Icon name={KIND_ICONS[c.kind] ?? "note"} size={13} />
-              <span className="com-cuerpo">
-                {/* autor, fecha y página en una fila que envuelve: en el
-                    sidebar de 200 px la hora era lo primero que se perdía */}
-                <span className="com-firma dato">
-                  <span className="com-autor">{c.author || "Sin autor"}</span>
-                  {fecha && <span className="com-fecha">{fecha}</span>}
-                  <span className="com-pagina">pág. {c.page_index + 1}</span>
-                </span>
-                <span className="com-texto">
-                  {c.contents || KIND_PLURALS[c.kind] || c.kind}
-                </span>
-              </span>
-              <button
-                className="com-borrar"
-                tabIndex={-1}
-                title={`Eliminar el comentario (${MOD}Z lo devuelve)`}
-                aria-label="Eliminar el comentario"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDelete(c);
-                }}
-              >
-                <Icon name="close" size={12} />
-              </button>
+            <div key={clave} className="com-hilo">
+              {fila(c, i === 0, false)}
+              {/* el estado se ve y se cambia EN el propio comentario, no en
+                  un panel de propiedades aparte */}
+              <div className="com-acciones">
+                <select
+                  className="size-select com-estado"
+                  aria-label={`Estado del comentario de la página ${c.page_index + 1}`}
+                  value={c.state || ""}
+                  onChange={(e) =>
+                    onState(c, e.target.value as EstadoComentario)
+                  }
+                >
+                  <option value="">Sin estado</option>
+                  {ESTADOS_COMENTARIO.map(([v, etiqueta]) => (
+                    <option key={v} value={v}>
+                      {etiqueta}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="btn com-responder"
+                  onClick={() => {
+                    setRespondiendo(respondiendo === clave ? null : clave);
+                    setBorrador("");
+                  }}
+                >
+                  Responder
+                </button>
+              </div>
+              {hijas.map((h) => fila(h, false, true))}
+              {respondiendo === clave && (
+                <div className="com-borrador">
+                  <textarea
+                    autoFocus
+                    placeholder={`Tu respuesta… (${MOD}Enter la añade, Esc cancela)`}
+                    value={borrador}
+                    onChange={(e) => setBorrador(e.target.value)}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === "Escape") {
+                        setRespondiendo(null);
+                        return;
+                      }
+                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                        e.preventDefault();
+                        if (!borrador.trim()) return;
+                        onReply(c, borrador.trim());
+                        setRespondiendo(null);
+                        setBorrador("");
+                      }
+                    }}
+                  />
+                  <div className="card-actions">
+                    <button
+                      className="btn"
+                      onClick={() => setRespondiendo(null)}
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      className="btn btn-primary"
+                      disabled={!borrador.trim()}
+                      onClick={() => {
+                        onReply(c, borrador.trim());
+                        setRespondiendo(null);
+                        setBorrador("");
+                      }}
+                    >
+                      Responder
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           );
         })}

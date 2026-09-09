@@ -76,6 +76,10 @@ import {
   exportPagesPng,
   exportText,
   exportDocx,
+  exportComments,
+  replyAnnotation,
+  setAnnotationState,
+  type EstadoComentario,
   flattenPdf,
   getMetadata,
   removeEncryption,
@@ -115,6 +119,8 @@ import {
   parseRango,
   paginasImprimibles,
   plural,
+  autorComentarios,
+  nombreEstado,
   tamanoFichero,
   type FiltroComentarios,
   type Mode,
@@ -338,6 +344,7 @@ function App() {
   const [filtroComentarios, setFiltroComentarios] =
     useState<FiltroComentarios>("todos");
   const [filtroAutor, setFiltroAutor] = useState("todos");
+  const [filtroEstado, setFiltroEstado] = useState("todos");
   // páginas marcadas en el panel para actuar en lote
   const [paginasSel, setPaginasSel] = useState<Set<number>>(new Set());
   const [extraerOpen, setExtraerOpen] = useState(false);
@@ -1099,6 +1106,68 @@ function App() {
       setAnnotSel(null);
       afterAnnotate(c.page_index);
       setNotice(`Comentario eliminado · ${MOD}Z para deshacer`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  /** Responder a un comentario: un hilo `/IRT`, como Acrobat, para que la
+   *  conversación se lea también allí. */
+  async function responderComentario(c: AnotacionDoc, texto: string) {
+    if (!workPath) return;
+    try {
+      await replyAnnotation(
+        workPath,
+        c.page_index,
+        c.index,
+        texto,
+        autorComentarios(),
+      );
+      afterAnnotate(c.page_index);
+      setNotice(`Respuesta añadida · ${MOD}Z para deshacer`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  /** Estado de revisión del comentario (Aceptado, Rechazado, Cancelado,
+   *  Completado o ninguno), guardado en el PDF como lo guarda Acrobat. */
+  async function estadoComentario(c: AnotacionDoc, estado: EstadoComentario) {
+    if (!workPath) return;
+    try {
+      await setAnnotationState(workPath, c.page_index, c.index, estado);
+      afterAnnotate(c.page_index);
+      setNotice(
+        estado
+          ? `Comentario marcado como «${nombreEstado(estado)}» · ${MOD}Z para deshacer`
+          : `Estado quitado · ${MOD}Z para deshacer`,
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  /** «Exportar comentarios…»: el resumen de Acrobat, en texto llano. */
+  async function exportarComentarios() {
+    if (!workPath) return;
+    if (comentarios.length === 0) {
+      setNotice("Este documento no tiene comentarios que exportar");
+      return;
+    }
+    const dest = await save({
+      filters: [{ name: "Texto", extensions: ["txt"] }],
+      defaultPath: (originalPath ?? "documento.pdf").replace(
+        /\.pdf$/i,
+        "-comentarios.txt",
+      ),
+      title: "Exportar comentarios",
+    });
+    if (!dest) return;
+    try {
+      await exportComments(workPath, dest, "txt");
+      setNotice(
+        `${plural(comentarios.length, "comentario exportado", "comentarios exportados")} a ${dest}`,
+      );
     } catch (e) {
       setError(String(e));
     }
@@ -3002,6 +3071,7 @@ function App() {
                 abrirExportar={() => setExportOpen(true)}
                 exportPlainText={exportPlainText}
                 exportarWord={() => setWordAsk(true)}
+                exportarComentarios={exportarComentarios}
                 abrirComprimir={() => setCompressOpen(true)}
               />
             </>
@@ -3609,10 +3679,14 @@ function App() {
                 setFiltro={setFiltroComentarios}
                 filtroAutor={filtroAutor}
                 setFiltroAutor={setFiltroAutor}
+                filtroEstado={filtroEstado}
+                setFiltroEstado={setFiltroEstado}
                 seleccionada={annotSel}
                 focoPedido={focoComentarios}
                 onSelect={irAComentario}
                 onDelete={borrarComentario}
+                onReply={responderComentario}
+                onState={estadoComentario}
               />
             )}
             {sidebarTab === "marcadores" && (
