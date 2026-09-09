@@ -6,7 +6,13 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { busyCount, invoke, subscribeBusy } from "./ipc";
+import {
+  busyCount,
+  invoke,
+  onAbrirFichero,
+  onArrastreFicheros,
+  subscribeBusy,
+} from "./ipc";
 import { useHistorial } from "./hooks/useHistorial";
 import { useRenderCache } from "./hooks/useRenderCache";
 import { useMiniaturas } from "./hooks/useMiniaturas";
@@ -22,8 +28,12 @@ import {
   addWatermark,
   duplicatePage,
   insertPdfAt,
+  listRecent,
+  removeRecent,
   renderPageSrc,
+  touchRecent,
   type HeaderFooter,
+  type Reciente,
 } from "./api";
 import {
   compressPdf,
@@ -158,6 +168,10 @@ function App() {
   const [compressQuality, setCompressQuality] = useState(75);
   const [compressDpi, setCompressDpi] = useState(150);
   const [notice, setNotice] = useState<string | null>(null);
+  const [recientes, setRecientes] = useState<Reciente[]>([]);
+  // ficheros soltados de golpe: abrir el primero o unirlos
+  const [dropAsk, setDropAsk] = useState<string[] | null>(null);
+  const [arrastrando, setArrastrando] = useState(false);
   const [noticeSaliendo, setNoticeSaliendo] = useState(false);
   const [outline, setOutlineState] = useState<OutlineNode[]>([]);
   const [propsDraft, setPropsDraft] = useState<Metadata | null>(null);
@@ -180,7 +194,12 @@ function App() {
   const herramienta = useHerramienta(activeSig);
   const tool = herramienta.tool;
 
-  async function openPath(path: string, password?: string) {
+  /** Abre un PDF en la copia de trabajo; devuelve su `work_path` o null
+   *  si no se ha podido abrir. */
+  async function openPath(
+    path: string,
+    password?: string,
+  ): Promise<string | null> {
     try {
       setError(null);
       const anterior = workPath;
@@ -212,6 +231,11 @@ function App() {
       setDocVersion((v) => v + 1);
       viewerRef.current?.scrollTo({ top: 0 });
       scrollAnchorRef.current = null;
+      // la lista de recientes la lleva la UI: open_pdf no la toca
+      touchRecent(path)
+        .then(refrescarRecientes)
+        .catch(() => {});
+      return info.work_path;
     } catch (e) {
       if (String(e) === "PASSWORD_REQUIRED") {
         setPwdDraft({ path, password: "" });
@@ -219,8 +243,95 @@ function App() {
       } else {
         setError(String(e));
       }
+      return null;
     }
   }
+
+  const refrescarRecientes = useCallback(() => {
+    listRecent()
+      .then(setRecientes)
+      .catch(() => setRecientes([]));
+  }, []);
+
+  useEffect(() => {
+    refrescarRecientes();
+  }, [refrescarRecientes]);
+
+  /** Abre un fichero comprobando antes los cambios sin guardar. */
+  function abrirComprobando(path: string) {
+    conCambiosGuardados(() => {
+      openPath(path);
+    });
+  }
+
+  function quitarReciente(path: string) {
+    removeRecent(path)
+      .then(refrescarRecientes)
+      .catch((e) => setError(String(e)));
+  }
+
+  /** Ficheros soltados sobre la ventana: uno se abre, varios preguntan. */
+  function soltarFicheros(paths: string[]) {
+    const pdfs = paths.filter((p) => /\.pdf$/i.test(p));
+    if (pdfs.length === 0) {
+      setError(
+        "Eso no se puede abrir: Vitela solo abre ficheros PDF (.pdf)",
+      );
+      return;
+    }
+    if (pdfs.length === 1) {
+      abrirComprobando(pdfs[0]);
+      return;
+    }
+    setDropAsk(pdfs);
+  }
+
+  /** Abre el primero de los soltados y le añade el resto al final. */
+  async function abrirYUnir(pdfs: string[]) {
+    setDropAsk(null);
+    conCambiosGuardados(async () => {
+      const work = await openPath(pdfs[0]);
+      if (!work) return;
+      try {
+        let count = 0;
+        for (const otro of pdfs.slice(1)) {
+          count = await invoke<number>("merge_pdf", {
+            workPath: work,
+            otherPath: otro,
+          });
+        }
+        // un solo paso de deshacer para toda la unión
+        if (pdfs.length > 2) await historial.agrupar(pdfs.length - 1);
+        afterMutation(count);
+        setNotice(
+          `${pdfs.length} PDF unidos en uno; usa Guardar como para conservarlo`,
+        );
+      } catch (e) {
+        setError(String(e));
+      }
+    });
+  }
+
+  // Fichero abierto desde el Finder o pasado como argumento al arrancar
+  const abrirRef = useRef<(path: string) => void>(() => {});
+  abrirRef.current = abrirComprobando;
+  const soltarRef = useRef<(paths: string[]) => void>(() => {});
+  soltarRef.current = soltarFicheros;
+
+  useEffect(() => onAbrirFichero((path) => abrirRef.current(path)), []);
+
+  useEffect(
+    () =>
+      onArrastreFicheros({
+        onEntra: () => setArrastrando(true),
+        onSale: () => setArrastrando(false),
+        onSuelta: (paths) => {
+          setArrastrando(false);
+          soltarRef.current(paths);
+        },
+      }),
+    [],
+  );
 
   /** Ejecuta `continuar` directamente si no hay cambios; si los hay,
    *  pregunta antes (Guardar / Descartar / Cancelar). */
@@ -1244,6 +1355,8 @@ function App() {
                 <span className="btn-etiqueta">Guardar</span>
               </button>
               <MenuAcciones
+                recientes={recientes}
+                abrirReciente={abrirComprobando}
                 abierto={menuOpen}
                 onToggle={() => setMenuOpen((o) => !o)}
                 onCerrar={() => setMenuOpen(false)}
@@ -1439,6 +1552,29 @@ function App() {
           onClose={() => resolverSaveAsk(null)}
         />
       )}
+      {dropAsk && (
+        <DialogoConfirmar
+          titulo={`Has soltado ${dropAsk.length} PDF`}
+          cuerpo={
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              Puedes abrir solo el primero ({dropAsk[0].split(/[\\/]/).pop()})
+              o unirlos todos en un documento nuevo, en el orden en que los
+              has soltado.
+            </p>
+          }
+          textoConfirmar="Unirlos en uno"
+          secundario={{
+            texto: "Abrir el primero",
+            onClick: () => {
+              const primero = dropAsk[0];
+              setDropAsk(null);
+              abrirComprobando(primero);
+            },
+          }}
+          onConfirm={() => abrirYUnir(dropAsk)}
+          onClose={() => setDropAsk(null)}
+        />
+      )}
       {linkAsk && (
         <DialogoConfirmar
           titulo="Abrir enlace externo"
@@ -1571,7 +1707,11 @@ function App() {
         )}
 
         <div className="viewer-wrap">
-          <main className="viewer" ref={viewerRef} onScroll={onViewerScroll}>
+          <main
+            className={`viewer${arrastrando ? " arrastrando" : ""}`}
+            ref={viewerRef}
+            onScroll={onViewerScroll}
+          >
             {!workPath && (
               <div className="placeholder">
                 <p className="voz">Nada abierto todavía. El papel espera.</p>
@@ -1579,6 +1719,38 @@ function App() {
                   <Icon name="open" size={14} />
                   Abrir PDF
                 </button>
+                <p className="placeholder-pista">
+                  Arrastra un PDF aquí o pulsa Abrir
+                </p>
+                {recientes.length > 0 && (
+                  <div className="recientes">
+                    <span className="card-label">Recientes</span>
+                    {recientes.map((r) => (
+                      <div
+                        key={r.path}
+                        className={`reciente${r.exists ? "" : " no-esta"}`}
+                      >
+                        <button
+                          className="reciente-abrir"
+                          title={r.exists ? r.path : `Ya no está en ${r.path}`}
+                          disabled={!r.exists}
+                          onClick={() => abrirComprobando(r.path)}
+                        >
+                          <span className="reciente-nombre">{r.name}</span>
+                          <span className="reciente-dir">{r.dir}</span>
+                        </button>
+                        {!r.exists && (
+                          <button
+                            className="btn"
+                            onClick={() => quitarReciente(r.path)}
+                          >
+                            Quitar
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
             {workPath &&

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import type { Reciente } from "../api";
 import { MOD } from "../tipos";
 import Icon from "./Icon";
 
@@ -34,6 +35,8 @@ function Entrada({
  *  recorre con ↑/↓, se activa con Enter y Esc lo cierra devolviendo el foco
  *  al botón. */
 export default function MenuAcciones({
+  recientes,
+  abrirReciente,
   abierto,
   onToggle,
   onCerrar,
@@ -58,6 +61,9 @@ export default function MenuAcciones({
   exportPlainText,
   abrirComprimir,
 }: {
+  /** Últimos ficheros abiertos, la misma lista que el estado vacío. */
+  recientes: Reciente[];
+  abrirReciente: (path: string) => void;
   abierto: boolean;
   onToggle: () => void;
   onCerrar: () => void;
@@ -89,7 +95,9 @@ export default function MenuAcciones({
   // al abrir con teclado o ratón, el foco entra en la primera entrada
   useEffect(() => {
     if (!abierto) return;
-    menuRef.current?.querySelector("button")?.focus();
+    menuRef.current?.querySelector<HTMLButtonElement>(
+      "button:not([disabled])",
+    )?.focus();
   }, [abierto]);
 
   function cerrarYVolver() {
@@ -107,7 +115,9 @@ export default function MenuAcciones({
 
   function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
     const items = Array.from(
-      menuRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+      menuRef.current?.querySelectorAll<HTMLButtonElement>(
+        "button:not([disabled])",
+      ) ?? [],
     );
     if (items.length === 0) return;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -153,6 +163,24 @@ export default function MenuAcciones({
             ref={menuRef}
             onKeyDown={onKeyDown}
           >
+            {recientes.length > 0 && (
+              <>
+                <div className="menu-titulo">Abrir reciente</div>
+                {recientes.map((r) => (
+                  <button
+                    key={r.path}
+                    className="btn"
+                    role="menuitem"
+                    title={r.exists ? r.path : `Ya no está en ${r.path}`}
+                    disabled={!r.exists}
+                    onClick={ejecutar(() => abrirReciente(r.path))}
+                  >
+                    <Icon name="doc" size={14} />
+                    <span className="menu-texto">{r.name}</span>
+                  </button>
+                ))}
+              </>
+            )}
             <div className="menu-titulo">Archivo</div>
             <Entrada
               icon="save"

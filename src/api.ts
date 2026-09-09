@@ -38,6 +38,31 @@ export function searchPdf(
   return invoke("search_pdf", { path, query, matchCase, wholeWord });
 }
 
+/** Fichero abierto hace poco (la lista vive en el backend, máx. 8). */
+export type Reciente = {
+  path: string;
+  name: string;
+  /** Carpeta que lo contiene, para distinguir dos ficheros con el mismo nombre. */
+  dir: string;
+  /** Falso si ya no está en esa ruta (movido o borrado). */
+  exists: boolean;
+  /** Momento de la última apertura (lo escribe el backend). */
+  opened_at: string | number;
+};
+
+export function listRecent(): Promise<Reciente[]> {
+  return invoke("list_recent");
+}
+
+/** Sube un fichero al principio de la lista (la UI lo llama tras abrir). */
+export function touchRecent(path: string): Promise<void> {
+  return invoke("touch_recent", { path });
+}
+
+export function removeRecent(path: string): Promise<void> {
+  return invoke("remove_recent", { path });
+}
+
 export type Rgba = [number, number, number, number];
 
 /** Marca de texto sobre rects: resaltar, subrayar o tachar. */

@@ -4,6 +4,7 @@
  * HTTP de desarrollo (src-tauri/src/puente_dev.rs) en el puerto 1422.
  */
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 export const hayTauri = "__TAURI_INTERNALS__" in window;
 
@@ -28,6 +29,45 @@ export function busyCount(): number {
 function cambia(delta: number) {
   enVuelo += delta;
   oyentes.forEach((cb) => cb());
+}
+
+/**
+ * Fichero que llega de fuera: doble clic en el Finder o el Explorador y
+ * argumento de arranque (el backend emite `abrir-fichero`). En el navegador
+ * de QA no hay eventos de Tauri: no hace nada.
+ */
+export function onAbrirFichero(cb: (path: string) => void): () => void {
+  if (!hayTauri) return () => {};
+  const pendiente = listen<{ path: string }>("abrir-fichero", (e) =>
+    cb(e.payload.path),
+  );
+  return () => {
+    pendiente.then((quitar) => quitar()).catch(() => {});
+  };
+}
+
+/**
+ * Arrastrar y soltar ficheros sobre la ventana. Va por los eventos nativos
+ * de Tauri porque el `drop` de HTML5 no trae la ruta del fichero: en el
+ * navegador de QA el gesto no existe.
+ */
+export function onArrastreFicheros(h: {
+  onEntra: () => void;
+  onSale: () => void;
+  onSuelta: (paths: string[]) => void;
+}): () => void {
+  if (!hayTauri) return () => {};
+  const pendientes = [
+    listen("tauri://drag-enter", () => h.onEntra()),
+    listen("tauri://drag-leave", () => h.onSale()),
+    listen<{ paths: string[] }>("tauri://drag-drop", (e) => {
+      h.onSale();
+      h.onSuelta(e.payload?.paths ?? []);
+    }),
+  ];
+  return () => {
+    for (const p of pendientes) p.then((quitar) => quitar()).catch(() => {});
+  };
 }
 
 export async function invoke<T>(
