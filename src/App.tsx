@@ -355,18 +355,19 @@ function App() {
     }
   }
 
-  // Esc sale de los modos de área (recorte, redacción, campo y enlace);
-  // las páginas limpian sus borradores al cambiar el modo
+  // Esc vuelve a Seleccionar desde cualquier herramienta, como en Acrobat;
+  // las páginas limpian sus borradores al cambiar el modo. Con un diálogo
+  // abierto lo consume el modal, y dentro de un campo manda el borrador que
+  // se esté escribiendo (nota, texto nuevo, marcador): el primer Esc lo
+  // cancela y el segundo, ya fuera del campo, sale de la herramienta.
   useEffect(() => {
-    if (
-      mode !== "crop" &&
-      mode !== "redact" &&
-      mode !== "form-new" &&
-      mode !== "link-new"
-    )
-      return;
+    if (mode === "select") return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setMode("select");
+      if (e.key !== "Escape") return;
+      if (document.querySelector(".modal-backdrop")) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      setMode("select");
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
