@@ -528,6 +528,67 @@ fn save_pdf(work_path: String, dest_path: String) -> Result<(), String> {
     })
 }
 
+/// Nombre del evento con el que el backend le pide a la UI que abra un
+/// documento: doble clic en el Finder/Explorador, `open -a Vitela x.pdf`,
+/// o el PDF pasado como argumento al arrancar. Carga `{ "path": "…" }`.
+const EVENTO_ABRIR: &str = "abrir-fichero";
+
+/// PDF que llegó antes de que la UI estuviera escuchando (arranque en frío).
+static ABRIR_PENDIENTE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Primer `.pdf` existente de los argumentos de arranque. En Windows y
+/// Linux el doble clic llega así; en macOS llega por `RunEvent::Opened`.
+/// Se ignora el argv[0] (el propio binario) y cualquier opción.
+fn pdf_de_argv<I: IntoIterator<Item = String>>(args: I) -> Option<String> {
+    args.into_iter()
+        .skip(1)
+        .filter(|a| !a.starts_with('-'))
+        .find(|a| {
+            a.to_lowercase().ends_with(".pdf") && std::path::Path::new(a).is_file()
+        })
+}
+
+/// Ruta local de una URL de `RunEvent::Opened` (macOS manda `file://…`).
+#[cfg(target_os = "macos")]
+fn ruta_de_url(url: &tauri::Url) -> Option<String> {
+    if url.scheme() == "file" {
+        url.to_file_path()
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
+    } else {
+        None
+    }
+}
+
+/// Pide a la UI que abra `path`. Si la ventana todavía no ha cargado, se
+/// guarda y se manda en cuanto la página esté lista: los eventos de Tauri
+/// no se encolan, y el `listen` de la UI tarda un instante en registrarse.
+#[cfg(target_os = "macos")]
+fn pide_abrir(app: &tauri::AppHandle, path: String) {
+    use tauri::{Emitter, Manager};
+    if app.webview_windows().is_empty() {
+        *ABRIR_PENDIENTE.lock().unwrap_or_else(|e| e.into_inner()) = Some(path);
+        return;
+    }
+    let _ = app.emit(EVENTO_ABRIR, serde_json::json!({ "path": path }));
+}
+
+/// Manda el PDF pendiente cuando la página ya ha cargado. El margen es
+/// para dar tiempo al `listen` de la UI, que se registra por IPC.
+fn manda_pendiente(app: &tauri::AppHandle) {
+    let pendiente = ABRIR_PENDIENTE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
+    let Some(path) = pendiente else { return };
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        use tauri::Emitter;
+        let _ = app.emit(EVENTO_ABRIR, serde_json::json!({ "path": path }));
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -549,7 +610,15 @@ pub fn run() {
             std::thread::spawn(|| {
                 barre_huerfanos(&std::env::temp_dir(), std::time::Duration::from_secs(24 * 3600));
             });
+            // PDF pasado como argumento (doble clic en Windows y Linux)
+            if let Some(path) = pdf_de_argv(std::env::args()) {
+                *ABRIR_PENDIENTE.lock().unwrap_or_else(|e| e.into_inner()) = Some(path);
+            }
             Ok(())
+        })
+        .on_page_load(|window, _| {
+            use tauri::Manager;
+            manda_pendiente(window.app_handle());
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -626,10 +695,17 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
-        .run(|_app, event| {
-            if let tauri::RunEvent::Exit = event {
-                borra_copias_abiertas();
+        .run(|_app, event| match event {
+            tauri::RunEvent::Exit => borra_copias_abiertas(),
+            // macOS: doble clic en el Finder o `open -a Vitela x.pdf`,
+            // tanto con la app cerrada como ya abierta
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Opened { urls } => {
+                if let Some(path) = urls.iter().find_map(ruta_de_url) {
+                    pide_abrir(_app, path);
+                }
             }
+            _ => {}
         });
 }
 
@@ -650,6 +726,28 @@ pub(crate) mod tests {
                 .map(|p| p.text().map(|t| t.all()).unwrap_or_default())
                 .collect()
         })
+    }
+
+    #[test]
+    fn pdf_de_argv_ignora_el_binario_y_las_opciones() {
+        let pdf = std::env::temp_dir().join("editor_pdf_test_argv.pdf");
+        crea_pdf(&["Hola"], &pdf);
+        let ruta = pdf.to_string_lossy().into_owned();
+
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            pdf_de_argv(args(&["/Applications/Vitela.app/…/Vitela", &ruta])),
+            Some(ruta.clone())
+        );
+        // el argv[0] nunca cuenta, aunque acabe en .pdf
+        assert_eq!(pdf_de_argv(args(&[&ruta])), None);
+        // ni las opciones ni los ficheros que no están
+        assert_eq!(
+            pdf_de_argv(args(&["Vitela", "--flag", "/tmp/no-existe.pdf"])),
+            None
+        );
+        assert_eq!(pdf_de_argv(args(&["Vitela"])), None);
+        std::fs::remove_file(&pdf).ok();
     }
 
     #[test]

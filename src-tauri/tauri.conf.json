@@ -27,6 +27,15 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "fileAssociations": [
+      {
+        "ext": ["pdf"],
+        "name": "PDF",
+        "description": "Documento PDF",
+        "role": "Editor",
+        "mimeType": "application/pdf"
+      }
+    ],
     "resources": {
       "lib": "lib"
     },
