@@ -6,10 +6,18 @@ import {
   type MouseEvent,
 } from "react";
 import { invoke } from "../../ipc";
-import { addMarkup, addShape, addStamp, transformAnnotation } from "../../api";
+import {
+  addMarkup,
+  addShape,
+  addStamp,
+  setAnnotationColor,
+  setAnnotationContents,
+  transformAnnotation,
+} from "../../api";
 import {
   autorComentarios,
   hexToRgba,
+  MOD,
   mergeLineRects,
   type AnnotationInfo,
   type Mode,
@@ -41,6 +49,7 @@ export function useAnotaciones(ctx: {
   seleccion: Pick<SeleccionTexto, "selection" | "pageText" | "setSelection">;
   onAnnotated: (page: number) => void;
   onError: (e: unknown) => void;
+  onNotice: (texto: string) => void;
   onModeChange: (m: Mode) => void;
 }) {
   const {
@@ -58,10 +67,17 @@ export function useAnotaciones(ctx: {
     seleccion,
     onAnnotated,
     onError,
+    onNotice,
     onModeChange,
   } = ctx;
   const [annots, setAnnots] = useState<AnnotationInfo[]>([]);
   const [notePopover, setNotePopover] = useState<AnnotationInfo | null>(null);
+  // texto que se está corrigiendo en el popover, atado al comentario al que
+  // pertenece: si se elige otro, la edición anterior deja de aplicarse sola
+  const [noteEdit, setNoteEdit] = useState<{
+    index: number;
+    text: string;
+  } | null>(null);
   const [noteDraft, setNoteDraft] = useState<{
     x: number;
     y: number;
@@ -97,6 +113,7 @@ export function useAnotaciones(ctx: {
     strokeLiveRef.current = [];
     setNoteDraft(null);
     setNotePopover(null);
+    setNoteEdit(null);
     setShapeDraft(null);
     shapeStartRef.current = null;
     shapeLiveRef.current = null;
@@ -264,6 +281,58 @@ export function useAnotaciones(ctx: {
     }
   }
 
+  /** Guarda el texto corregido de un comentario (⌘Enter, «Guardar» o un
+   *  clic fuera, que es como confirma Acrobat). */
+  const guardarContenido = useCallback(
+    async (annot: AnnotationInfo, texto: string) => {
+      setNoteEdit(null);
+      if (!workPath || texto === annot.contents) return;
+      try {
+        await setAnnotationContents({
+          workPath,
+          pageIndex: index,
+          annotIndex: annot.index,
+          contents: texto,
+          author: autorComentarios(),
+        });
+        onAnnotated(index);
+      } catch (e) {
+        onError(e);
+      }
+    },
+    [workPath, index, onAnnotated, onError],
+  );
+
+  /** Recolorea un comentario al instante, sin «Aceptar» (Acrobat). Un solo
+   *  comando, así que ⌘Z lo devuelve de una vez. */
+  const cambiarColor = useCallback(
+    async (annot: AnnotationInfo, hex: string) => {
+      if (!workPath) return;
+      try {
+        await setAnnotationColor({
+          workPath,
+          pageIndex: index,
+          annotIndex: annot.index,
+          // el resaltado va traslúcido para no tapar el texto que marca
+          color: hexToRgba(hex, annot.kind === "Highlight" ? 140 : 255),
+        });
+        onAnnotated(index);
+      } catch (e) {
+        onError(e);
+      }
+    },
+    [workPath, index, onAnnotated, onError],
+  );
+
+  /** Cierra el popover confirmando antes lo que se estuviera escribiendo. */
+  const cerrarPopover = useCallback(() => {
+    if (notePopover && noteEdit?.index === notePopover.index) {
+      guardarContenido(notePopover, noteEdit.text);
+    }
+    setNoteEdit(null);
+    setNotePopover(null);
+  }, [notePopover, noteEdit, guardarContenido]);
+
   const deleteAnnotation = useCallback(
     async (annot: AnnotationInfo) => {
       if (!workPath) return;
@@ -273,13 +342,17 @@ export function useAnotaciones(ctx: {
           pageIndex: index,
           annotIndex: annot.index,
         });
+        setNoteEdit(null);
         setNotePopover(null);
         onAnnotated(index);
+        // sin confirmación: borrar un comentario es rutinario y ⌘Z lo
+        // devuelve, pero el aviso lo dice para que nadie se quede con la duda
+        onNotice(`Comentario eliminado · ${MOD}Z para deshacer`);
       } catch (e) {
         onError(e);
       }
     },
-    [workPath, index, onAnnotated, onError],
+    [workPath, index, onAnnotated, onError, onNotice],
   );
 
   // Supr o Retroceso borran el comentario seleccionado, como en Acrobat
@@ -316,7 +389,7 @@ export function useAnotaciones(ctx: {
   }
 
   function startAnnotAction(
-    e: MouseEvent<HTMLDivElement>,
+    e: MouseEvent<HTMLElement>,
     a: AnnotationInfo,
     kind: "move" | "resize",
     handle: ResizeHandle = "se",
@@ -334,7 +407,7 @@ export function useAnotaciones(ctx: {
       orig: a,
       moved: false,
     };
-    setNotePopover(null);
+    cerrarPopover();
     const d = { index: a.index, x: a.x, y: a.y, w: a.w, h: a.h };
     annotLiveRef.current = d;
     setAnnotDraft(d);
@@ -364,6 +437,11 @@ export function useAnotaciones(ctx: {
     annots,
     notePopover,
     setNotePopover,
+    noteEdit,
+    setNoteEdit,
+    guardarContenido,
+    cambiarColor,
+    cerrarPopover,
     noteDraft,
     setNoteDraft,
     strokePts,

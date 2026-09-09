@@ -76,6 +76,7 @@ type Props = {
   onPageMutated: (page: number) => void;
   onDocMutated: (newCount: number, nextPage?: number) => void;
   onError: (e: unknown) => void;
+  onNotice: (texto: string) => void;
   onModeChange: (m: Mode) => void;
   onLinkGoto: (page: number) => void;
   onLinkUri: (uri: string) => void;
@@ -105,6 +106,7 @@ function Pagina({
   onPageMutated,
   onDocMutated,
   onError,
+  onNotice,
   onModeChange,
   onLinkGoto,
   onLinkUri,
@@ -205,6 +207,7 @@ function Pagina({
     seleccion,
     onAnnotated,
     onError,
+    onNotice,
     onModeChange,
   });
   const areas = useAreas({
@@ -348,7 +351,8 @@ function Pagina({
     seleccion.downPosRef.current = { x: e.clientX, y: e.clientY };
     seleccion.setDragging(true);
     seleccion.setSelection(null);
-    anotaciones.setNotePopover(null);
+    // un clic fuera confirma lo que se estuviera escribiendo en el popover
+    anotaciones.cerrarPopover();
   }
 
   function onMouseMove(e: React.MouseEvent<HTMLDivElement>) {

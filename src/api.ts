@@ -130,6 +130,30 @@ export async function renderPageSrc(
   );
 }
 
+/** Reescribe el texto de un comentario ya creado; el backend refresca `/M`
+ *  (y `/T` si llega `author`). */
+export function setAnnotationContents(args: {
+  workPath: string;
+  pageIndex: number;
+  annotIndex: number;
+  contents: string;
+  author?: string | null;
+}): Promise<void> {
+  return invoke("set_annotation_contents", { author: null, ...args });
+}
+
+/** Cambia el color de un comentario; en las marcas de texto el backend
+ *  reescribe además la apariencia guardada para que el PDF exportado no
+ *  siga con el color viejo. */
+export function setAnnotationColor(args: {
+  workPath: string;
+  pageIndex: number;
+  annotIndex: number;
+  color: Rgba;
+}): Promise<void> {
+  return invoke("set_annotation_color", { ...args });
+}
+
 /** Mueve/reescala una anotación con apariencia embebida (sello o dibujo). */
 export function transformAnnotation(args: {
   workPath: string;

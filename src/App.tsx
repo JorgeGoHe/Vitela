@@ -1317,6 +1317,10 @@ function App() {
   }
 
   const mostrarError = useCallback((e: unknown) => setError(String(e)), []);
+  const mostrarAviso = useCallback(
+    (texto: string) => setNotice(texto),
+    [setNotice],
+  );
   const onLinkUri = useCallback((uri: string) => {
     if (!esquemaPermitido(uri)) {
       const e = esquemaDe(uri);
@@ -1755,6 +1759,12 @@ function App() {
           onClose={() => setLinkAsk(null)}
         />
       )}
+      {mode === "note" && (
+        <div className="sign-hint">
+          Haz clic donde quieras la nota · Enter salta de línea, {MOD}Enter la
+          guarda · Esc cancela
+        </div>
+      )}
       {mode === "redact" && (
         <div className="sign-hint">
           Arrastra sobre el área a censurar: el contenido se ELIMINA de verdad
@@ -1943,6 +1953,7 @@ function App() {
                   onPageMutated={afterPageMutation}
                   onDocMutated={afterMutation}
                   onError={mostrarError}
+                  onNotice={mostrarAviso}
                   onModeChange={setMode}
                   onLinkGoto={gotoPage}
                   onLinkUri={onLinkUri}

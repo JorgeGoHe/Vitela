@@ -4,11 +4,28 @@
  * quedan debajo de enlaces y campos; los iconos de nota, popovers y las
  * previsualizaciones de trazo/forma (`CapaAnotaciones`) encima.
  */
-import { firmaAnotacion, KIND_LABELS, type Mode } from "../../tipos";
+import {
+  ANNOT_COLORS,
+  firmaAnotacion,
+  KIND_LABELS,
+  MOD,
+  NOMBRE_COLOR,
+  type AnnotationInfo,
+  type Mode,
+} from "../../tipos";
 import { clampCardLeft } from "../../hooks/pagina/geometria";
 import type { Anotaciones } from "../../hooks/pagina/useAnotaciones";
 import Icon from "../Icon";
 import type { ToolProps } from "../Pagina";
+
+/** Color de la anotación en hexadecimal, para marcar el chip activo. */
+function hexDeAnotacion(a: AnnotationInfo): string | null {
+  if (!a.color) return null;
+  return `#${a.color
+    .slice(0, 3)
+    .map((n) => n.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
 
 /** Marcas de texto: las que se pueden seleccionar con un clic. */
 const MARCAS = ["Highlight", "Underline", "Strikeout", "StrikeOut"];
@@ -153,39 +170,54 @@ export default function CapaAnotaciones({
 }: Props) {
   const {
     annots,
+    annotDraft,
     notePopover,
     setNotePopover,
+    noteEdit,
+    setNoteEdit,
+    guardarContenido,
+    cambiarColor,
+    cerrarPopover,
     noteDraft,
     setNoteDraft,
     strokePts,
     shapeDraft,
     submitNote,
     deleteAnnotation,
+    startAnnotAction,
   } = anotaciones;
+  const editando =
+    notePopover && noteEdit?.index === notePopover.index ? noteEdit : null;
   return (
     <>
       {annots
         .filter((a) => a.kind === "Text")
-        .map((a) => (
-          <button
-            key={`n${a.index}`}
-            className="note-icon"
-            style={{
-              left: a.x * scale,
-              top: a.y * scale,
-              width: Math.max(18, a.w * scale),
-              height: Math.max(18, a.h * scale),
-            }}
-            title={a.contents}
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              setNotePopover((p) => (p?.index === a.index ? null : a));
-            }}
-          >
-            <Icon name="note" size={12} />
-          </button>
-        ))}
+        .map((a) => {
+          // el icono es su propia zona de arrastre (el mismo gesto de sellos
+          // y dibujos, sin tiradores: una nota no se redimensiona en Acrobat)
+          const d = annotDraft?.index === a.index ? annotDraft : a;
+          return (
+            <button
+              key={`n${a.index}`}
+              className="note-icon"
+              style={{
+                left: d.x * scale,
+                top: d.y * scale,
+                width: Math.max(18, d.w * scale),
+                height: Math.max(18, d.h * scale),
+              }}
+              title={`${a.contents}\n\nArrastrar para mover · doble clic para editar`}
+              onMouseDown={(e) => startAnnotAction(e, a, "move")}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                setNotePopover(a);
+                setNoteEdit({ index: a.index, text: a.contents });
+              }}
+            >
+              <Icon name="note" size={12} />
+            </button>
+          );
+        })}
       {notePopover && (
         <div
           className="card"
@@ -195,16 +227,67 @@ export default function CapaAnotaciones({
           }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <p>
-            {notePopover.contents ||
-              KIND_LABELS[notePopover.kind] ||
-              notePopover.kind}
-          </p>
+          {editando ? (
+            <textarea
+              autoFocus
+              aria-label="Texto del comentario"
+              placeholder={`Escribe el comentario · Enter salta de línea, ${MOD}Enter guarda`}
+              value={editando.text}
+              onFocus={(e) => {
+                // cursor al final, como al abrir un post-it en Acrobat
+                const n = e.currentTarget.value.length;
+                e.currentTarget.setSelectionRange(n, n);
+              }}
+              onChange={(e) =>
+                setNoteEdit({ index: editando.index, text: e.target.value })
+              }
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  guardarContenido(notePopover, editando.text);
+                } else if (e.key === "Escape") {
+                  // cancela y deja el texto que hubiera antes
+                  e.stopPropagation();
+                  setNoteEdit(null);
+                }
+              }}
+            />
+          ) : (
+            <p
+              title="Doble clic para editar"
+              onDoubleClick={() =>
+                setNoteEdit({
+                  index: notePopover.index,
+                  text: notePopover.contents,
+                })
+              }
+            >
+              {notePopover.contents ||
+                KIND_LABELS[notePopover.kind] ||
+                notePopover.kind}
+            </p>
+          )}
           {firmaAnotacion(notePopover.author, notePopover.modified) && (
             <p className="annot-firma dato">
               {firmaAnotacion(notePopover.author, notePopover.modified)}
             </p>
           )}
+          <div className="swatches" role="group" aria-label="Color del comentario">
+            {ANNOT_COLORS.map((c) => {
+              const actual = hexDeAnotacion(notePopover) === c;
+              return (
+                <button
+                  key={c}
+                  className={`swatch${actual ? " on" : ""}`}
+                  style={{ background: c }}
+                  title={NOMBRE_COLOR[c] ?? c}
+                  aria-label={NOMBRE_COLOR[c] ?? c}
+                  aria-pressed={actual}
+                  onClick={() => cambiarColor(notePopover, c)}
+                />
+              );
+            })}
+          </div>
           <div className="card-actions">
             <button
               className="btn btn-danger"
@@ -213,9 +296,36 @@ export default function CapaAnotaciones({
               <Icon name="trash" size={13} />
               Eliminar
             </button>
-            <button className="btn" onClick={() => setNotePopover(null)}>
-              Cerrar
-            </button>
+            {editando ? (
+              <>
+                <button className="btn" onClick={() => setNoteEdit(null)}>
+                  Cancelar
+                </button>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => guardarContenido(notePopover, editando.text)}
+                >
+                  Guardar
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  className="btn"
+                  onClick={() =>
+                    setNoteEdit({
+                      index: notePopover.index,
+                      text: notePopover.contents,
+                    })
+                  }
+                >
+                  Editar
+                </button>
+                <button className="btn" onClick={cerrarPopover}>
+                  Cerrar
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -230,17 +340,20 @@ export default function CapaAnotaciones({
         >
           <textarea
             autoFocus
-            placeholder="Escribe la nota y pulsa Enter…"
+            aria-label="Texto de la nota"
+            placeholder={`Escribe la nota · Enter salta de línea, ${MOD}Enter la guarda`}
             value={noteDraft.text}
             onChange={(e) =>
               setNoteDraft({ ...noteDraft, text: e.target.value })
             }
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
                 submitNote();
+              } else if (e.key === "Escape") {
+                e.stopPropagation();
+                setNoteDraft(null);
               }
-              if (e.key === "Escape") setNoteDraft(null);
             }}
           />
         </div>
