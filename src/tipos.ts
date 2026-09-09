@@ -78,6 +78,10 @@ export type TextBlock = {
   h: number;
   font_size: number;
   font_family: string;
+  /** Color del relleno del texto, tal como está en el content stream. Es lo
+   *  que deja pintar del color real el swatch «A» («el que ya tenga») en vez
+   *  de una letra gris con un tooltip. */
+  color: Rgba;
 };
 export type ImageInfo = {
   object_index: number;
@@ -94,6 +98,16 @@ export type ImgAction = {
   startX: number;
   startY: number;
   orig: ImageInfo;
+  moved: boolean;
+};
+/** Lo mismo para un bloque de texto: se coloca y se estira con el gesto que
+ *  el usuario ya conoce de las imágenes y los sellos. */
+export type TxtAction = {
+  kind: "move" | "resize";
+  handle?: ResizeHandle;
+  startX: number;
+  startY: number;
+  orig: TextBlock;
   moved: boolean;
 };
 export type Mode =
@@ -239,6 +253,13 @@ export function tamanoFichero(bytes: number): string {
 export function hexToRgba(hex: string, alpha = 255): Rgba {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255, alpha];
+}
+
+/** El camino de vuelta, para pintar en la UI un color que llega del PDF. */
+export function rgbaToHex(c: Rgba | null | undefined): string | null {
+  if (!c) return null;
+  const dos = (n: number) => Math.max(0, Math.min(255, n)).toString(16).padStart(2, "0");
+  return `#${dos(c[0])}${dos(c[1])}${dos(c[2])}`;
 }
 
 /** Une cajas de caracteres consecutivos en rectángulos por línea. */

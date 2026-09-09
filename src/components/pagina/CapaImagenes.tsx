@@ -1,6 +1,8 @@
-/** Modo imagen: parche del arrastre, cajas de imagen con tiradores y popover. */
-import type { Mode } from "../../tipos";
-import { clampCardLeft } from "../../hooks/pagina/geometria";
+/** Modo imagen: parche del arrastre, cajas de imagen con tiradores,
+ *  popover y la capa de recorte. */
+import type { MouseEvent } from "react";
+import type { Mode, Rect } from "../../tipos";
+import { cardTop, clampCardLeft } from "../../hooks/pagina/geometria";
 import type { Imagenes } from "../../hooks/pagina/useImagenes";
 import Icon from "../Icon";
 
@@ -9,6 +11,7 @@ type Props = {
   imagenes: Imagenes;
   scale: number;
   displayWidth: number;
+  displayHeight: number;
 };
 
 export default function CapaImagenes({
@@ -16,6 +19,7 @@ export default function CapaImagenes({
   imagenes,
   scale,
   displayWidth,
+  displayHeight,
 }: Props) {
   const {
     images,
@@ -27,9 +31,28 @@ export default function CapaImagenes({
     replaceImagePick,
     orientaImagen,
     ordenaImagen,
+    cropOf,
+    setCropOf,
+    cropRect,
+    setCropRect,
+    recortaImagen,
     deleteImage,
     startImgAction,
   } = imagenes;
+
+  /** El rectángulo que se dibuja encima de la imagen al recortar, en puntos
+   *  de página: la capa se coloca sobre la caja de la imagen, así que el
+   *  origen del gesto es esa esquina. */
+  function puntoDeCorte(e: MouseEvent<HTMLDivElement>): Rect | null {
+    if (!cropOf) return null;
+    const caja = e.currentTarget.getBoundingClientRect();
+    return {
+      x: cropOf.x + (e.clientX - caja.left) / scale,
+      y: cropOf.y + (e.clientY - caja.top) / scale,
+      w: 0,
+      h: 0,
+    };
+  }
   return (
     <>
       {mode === "image" && imgPatch && (
@@ -83,12 +106,66 @@ export default function CapaImagenes({
             </div>
           );
         })}
+      {mode === "image" && cropOf && (
+        <div
+          className="crop-capa"
+          style={{
+            left: cropOf.x * scale,
+            top: cropOf.y * scale,
+            width: cropOf.w * scale,
+            height: cropOf.h * scale,
+          }}
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            if (e.button !== 0) return;
+            setCropRect(puntoDeCorte(e));
+          }}
+          onMouseMove={(e) => {
+            if (!cropRect || !(e.buttons & 1)) return;
+            e.stopPropagation();
+            const p = puntoDeCorte(e);
+            if (!p) return;
+            setCropRect({
+              x: Math.min(cropRect.x, p.x),
+              y: Math.min(cropRect.y, p.y),
+              w: Math.abs(p.x - cropRect.x),
+              h: Math.abs(p.y - cropRect.y),
+            });
+          }}
+          onMouseUp={(e) => {
+            e.stopPropagation();
+            if (cropRect && cropRect.w > 4 && cropRect.h > 4)
+              recortaImagen(cropOf, cropRect);
+            else {
+              setCropOf(null);
+              setCropRect(null);
+            }
+          }}
+        >
+          {cropRect && (
+            <div
+              className="crop-marco"
+              style={{
+                left: (cropRect.x - cropOf.x) * scale,
+                top: (cropRect.y - cropOf.y) * scale,
+                width: cropRect.w * scale,
+                height: cropRect.h * scale,
+              }}
+            />
+          )}
+        </div>
+      )}
       {imagePopover && (
         <div
           className="card"
           style={{
             left: clampCardLeft(imagePopover.x * scale, displayWidth),
-            top: (imagePopover.y + imagePopover.h) * scale + 6,
+            top: cardTop(
+              imagePopover.y * scale,
+              (imagePopover.y + imagePopover.h) * scale,
+              displayHeight,
+              150,
+            ),
           }}
           onMouseDown={(e) => e.stopPropagation()}
         >
@@ -145,6 +222,18 @@ export default function CapaImagenes({
             </button>
           </div>
           <div className="card-actions">
+            <button
+              className="btn"
+              title="Arrastra sobre la imagen la parte que quieres conservar"
+              onClick={() => {
+                setCropOf(imagePopover);
+                setCropRect(null);
+                setImagePopover(null);
+              }}
+            >
+              <Icon name="crop" size={13} />
+              Recortar
+            </button>
             <button
               className="btn"
               onClick={() => replaceImagePick(imagePopover)}

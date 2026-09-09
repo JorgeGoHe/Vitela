@@ -3541,7 +3541,12 @@ function App() {
         freeTextBorder={herramienta.freeTextBorder}
         setFreeTextBorder={herramienta.setFreeTextBorder}
         textColor={herramienta.textColor}
+        textColorBloque={herramienta.textColorBloque}
         textAlign={herramienta.textAlign}
+        textLineHeight={herramienta.textLineHeight}
+        setTextLineHeight={herramienta.setTextLineHeight}
+        textCharSpacing={herramienta.textCharSpacing}
+        setTextCharSpacing={herramienta.setTextCharSpacing}
         setTextAlign={herramienta.setTextAlign}
         fillMark={herramienta.fillMark}
         setFillMark={herramienta.setFillMark}

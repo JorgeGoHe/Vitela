@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
 import { invoke } from "../../ipc";
 import { open } from "../../dialogos";
-import { getImageData, reorderImage, transformImage } from "../../api";
+import { cropImage, getImageData, reorderImage, transformImage } from "../../api";
 import type { ImageInfo, ImgAction, Mode, PageSize, Rect, ResizeHandle } from "../../tipos";
 import { puntoAPagina, puntoEnCapa, rectAPagina, rectAVista } from "./geometria";
 
@@ -50,6 +50,11 @@ export function useImagenes(ctx: {
   // parche que tapa la copia original (quemada en el bitmap) durante un
   // arrastre de imagen; se limpia cuando llega el bitmap actualizado
   const [imgPatch, setImgPatch] = useState<{ rect: Rect; color: string } | null>(null);
+  // «Recortar»: la imagen señalada y el rectángulo que se está dibujando
+  // encima. El gesto vive en su propia capa, no en los despachadores de la
+  // página: mientras se recorta no se mueve ni se redimensiona nada
+  const [cropOf, setCropOf] = useState<ImageInfo | null>(null);
+  const [cropRect, setCropRect] = useState<Rect | null>(null);
 
   // Al cambiar de modo: fuera borradores y estado transitorio
   useEffect(() => {
@@ -58,7 +63,22 @@ export function useImagenes(ctx: {
     imgLiveRef.current = null;
     imgActionRef.current = null;
     setImgPatch(null);
+    setCropOf(null);
+    setCropRect(null);
   }, [mode]);
+
+  // Esc sale del recorte sin tocar nada, como de cualquier otra herramienta
+  useEffect(() => {
+    if (!cropOf) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      setCropOf(null);
+      setCropRect(null);
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [cropOf]);
 
   // Imágenes de la página (solo en modo imagen). Se precarga también su
   // contenido para que al arrastrar se mueva la imagen, no solo el recuadro.
@@ -267,6 +287,20 @@ export function useImagenes(ctx: {
     }
   }
 
+  /** Recorta la imagen al rectángulo dibujado encima (en el espacio de la
+   *  vista; se convierte al de la página antes de mandarlo). */
+  async function recortaImagen(im: ImageInfo, r: Rect) {
+    if (!workPath) return;
+    setCropOf(null);
+    setCropRect(null);
+    try {
+      await cropImage(workPath, index, im.object_index, rectAPagina(r, size));
+      onPageMutated(index);
+    } catch (e) {
+      onError(e);
+    }
+  }
+
   async function deleteImage(im: ImageInfo) {
     if (!workPath) return;
     try {
@@ -325,6 +359,11 @@ export function useImagenes(ctx: {
     replaceImagePick,
     orientaImagen,
     ordenaImagen,
+    cropOf,
+    setCropOf,
+    cropRect,
+    setCropRect,
+    recortaImagen,
     deleteImage,
     startImgAction,
   };

@@ -164,3 +164,18 @@ export function puntoEnCapa(
 export function clampCardLeft(left: number, displayWidth: number, w = 260) {
   return Math.max(0, Math.min(left, displayWidth - w));
 }
+
+/** Dónde va una tarjeta flotante: debajo de lo seleccionado y, si ahí no
+ *  cabe, volcada hacia arriba. En la última línea de la página había que
+ *  hacer scroll para llegar al botón de guardar. `alto` es una estimación
+ *  del alto de la tarjeta: solo decide de qué lado se pone. */
+export function cardTop(
+  top: number,
+  bottom: number,
+  displayHeight: number,
+  alto = 160,
+) {
+  const debajo = bottom + 6;
+  if (!displayHeight || debajo + alto <= displayHeight) return debajo;
+  return Math.max(0, top - 6 - alto);
+}

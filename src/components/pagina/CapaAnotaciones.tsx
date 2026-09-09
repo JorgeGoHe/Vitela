@@ -15,7 +15,7 @@ import {
   type AnnotationInfo,
   type Mode,
 } from "../../tipos";
-import { clampCardLeft } from "../../hooks/pagina/geometria";
+import { cardTop, clampCardLeft } from "../../hooks/pagina/geometria";
 import type { Anotaciones } from "../../hooks/pagina/useAnotaciones";
 import Icon from "../Icon";
 import type { ToolProps } from "../Pagina";
@@ -169,6 +169,7 @@ type Props = {
   anotaciones: Anotaciones;
   scale: number;
   displayWidth: number;
+  displayHeight: number;
   tool: ToolProps;
   /** Quitar una marca de redacción por su `annot_index`: va por
    *  `unmark_redaction`, que comprueba que la anotación es una marca y
@@ -181,6 +182,7 @@ export default function CapaAnotaciones({
   anotaciones,
   scale,
   displayWidth,
+  displayHeight,
   tool,
   onQuitarMarca,
 }: Props) {
@@ -245,7 +247,12 @@ export default function CapaAnotaciones({
           className="card"
           style={{
             left: clampCardLeft(notePopover.x * scale, displayWidth),
-            top: (notePopover.y + notePopover.h) * scale + 6,
+            top: cardTop(
+              notePopover.y * scale,
+              (notePopover.y + notePopover.h) * scale,
+              displayHeight,
+              180,
+            ),
           }}
           onMouseDown={(e) => e.stopPropagation()}
         >
@@ -280,7 +287,12 @@ export default function CapaAnotaciones({
           className="card"
           style={{
             left: clampCardLeft(notePopover.x * scale, displayWidth),
-            top: (notePopover.y + notePopover.h) * scale + 6,
+            top: cardTop(
+              notePopover.y * scale,
+              (notePopover.y + notePopover.h) * scale,
+              displayHeight,
+              180,
+            ),
           }}
           onMouseDown={(e) => e.stopPropagation()}
         >

@@ -1,23 +1,36 @@
-/** Modo edición: bloques de texto clicables y tarjetas de texto nuevo / edición. */
+/** Modo edición: bloques de texto que se colocan y se estiran, y tarjetas
+ *  de texto nuevo / edición. */
 import { FONT_CHOICES, type Mode } from "../../tipos";
-import { clampCardLeft } from "../../hooks/pagina/geometria";
+import { cardTop, clampCardLeft } from "../../hooks/pagina/geometria";
 import type { Texto } from "../../hooks/pagina/useTexto";
 import Icon from "../Icon";
+
+/** Los ocho tiradores, los mismos que ya tienen los sellos y las imágenes. */
+const TIRADORES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"] as const;
 
 type Props = {
   mode: Mode;
   texto: Texto;
   scale: number;
   displayWidth: number;
+  displayHeight: number;
 };
 
-export default function CapaTexto({ mode, texto, scale, displayWidth }: Props) {
+export default function CapaTexto({
+  mode,
+  texto,
+  scale,
+  displayWidth,
+  displayHeight,
+}: Props) {
   const {
     textBlocks,
     blockDraft,
     setBlockDraft,
     newTextDraft,
     setNewTextDraft,
+    txtDraft,
+    startTxtAction,
     submitNewText,
     submitBlockDraft,
     deleteBlock,
@@ -25,29 +38,48 @@ export default function CapaTexto({ mode, texto, scale, displayWidth }: Props) {
   return (
     <>
       {mode === "edit" &&
-        textBlocks.map((b) => (
-          <div
-            key={`b${b.object_index}`}
-            className="text-block"
-            style={{
-              left: b.x * scale,
-              top: b.y * scale,
-              width: b.w * scale,
-              height: b.h * scale,
-            }}
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              setBlockDraft({ block: b, text: b.text });
-            }}
-          />
-        ))}
+        textBlocks.map((t) => {
+          const arrastrando =
+            txtDraft !== null && txtDraft.object_index === t.object_index;
+          const b = arrastrando ? txtDraft : t;
+          const senalado =
+            arrastrando ||
+            blockDraft?.block.object_index === t.object_index;
+          return (
+            <div
+              key={`b${t.object_index}`}
+              className={`text-block${senalado ? " on" : ""}`}
+              style={{
+                left: b.x * scale,
+                top: b.y * scale,
+                width: b.w * scale,
+                height: b.h * scale,
+              }}
+              onMouseDown={(e) => startTxtAction(e, t, "move")}
+            >
+              {senalado &&
+                TIRADORES.map((hd) => (
+                  <div
+                    key={hd}
+                    className={`image-handle h-${hd}`}
+                    title="Estirar el bloque (Shift: libre en esquinas)"
+                    onMouseDown={(e) => startTxtAction(e, t, "resize", hd)}
+                  />
+                ))}
+            </div>
+          );
+        })}
       {newTextDraft && (
         <div
           className="card"
           style={{
             left: clampCardLeft(newTextDraft.x * scale, displayWidth, 288),
-            top: newTextDraft.y * scale,
+            top: cardTop(
+              newTextDraft.y * scale,
+              newTextDraft.y * scale,
+              displayHeight,
+              210,
+            ),
             width: 280,
           }}
           onMouseDown={(e) => e.stopPropagation()}
@@ -121,7 +153,14 @@ export default function CapaTexto({ mode, texto, scale, displayWidth }: Props) {
           className="card"
           style={{
             left: clampCardLeft(blockDraft.block.x * scale, displayWidth),
-            top: (blockDraft.block.y + blockDraft.block.h) * scale + 6,
+            // en la última línea de la página la tarjeta se vuelca hacia
+            // arriba: si no, había que hacer scroll para llegar a «Guardar»
+            top: cardTop(
+              blockDraft.block.y * scale,
+              (blockDraft.block.y + blockDraft.block.h) * scale,
+              displayHeight,
+              190,
+            ),
             width: Math.max(260, blockDraft.block.w * scale),
           }}
           onMouseDown={(e) => e.stopPropagation()}

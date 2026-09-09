@@ -1,9 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { invoke } from "../../ipc";
-import { addTextBlock, editTextBlock } from "../../api";
-import { hexToRgba, type Mode, type PageSize, type TextBlock } from "../../tipos";
+import {
+  addTextBlock,
+  editTextBlock,
+  moveTextBlock,
+  resizeTextBlock,
+} from "../../api";
+import {
+  hexToRgba,
+  rgbaToHex,
+  type Mode,
+  type PageSize,
+  type ResizeHandle,
+  type TextBlock,
+  type TxtAction,
+} from "../../tipos";
 import type { ToolProps } from "../../components/Pagina";
-import { puntoAPagina, puntoAVista } from "./geometria";
+import { puntoAPagina, puntoAVista, puntoEnCapa, rectAPagina } from "./geometria";
 
 /**
  * Edición real de texto (modo edit): los bloques de la página, la tarjeta
@@ -16,7 +29,9 @@ export function useTexto(ctx: {
   docVersion: number;
   pageVersion: number;
   mode: Mode;
+  scale: number;
   size: PageSize;
+  viewRotation: number;
   tool: ToolProps;
   onPageMutated: (page: number) => void;
   onError: (e: unknown) => void;
@@ -28,7 +43,9 @@ export function useTexto(ctx: {
     docVersion,
     pageVersion,
     mode,
+    scale,
     size,
+    viewRotation,
     tool,
     onPageMutated,
     onError,
@@ -38,6 +55,8 @@ export function useTexto(ctx: {
   const formato = {
     color: tool.textColor ? hexToRgba(tool.textColor) : null,
     align: tool.textAlign,
+    lineHeight: tool.textLineHeight,
+    charSpacing: tool.textCharSpacing,
   };
   const [textBlocks, setTextBlocks] = useState<TextBlock[]>([]);
   const [blockDraft, setBlockDraft] = useState<{
@@ -51,12 +70,27 @@ export function useTexto(ctx: {
     size: number;
     font: string;
   } | null>(null);
+  // colocar y estirar el bloque, con el mismo gesto (y el mismo espejo en un
+  // ref) que las imágenes y los sellos: en un arrastre de un solo frame el
+  // estado de React va por detrás al llegar el mouseup
+  const [txtDraft, setTxtDraft] = useState<TextBlock | null>(null);
+  const txtLiveRef = useRef<TextBlock | null>(null);
+  const txtActionRef = useRef<TxtAction | null>(null);
 
   // Al cambiar de modo: fuera borradores
   useEffect(() => {
     setBlockDraft(null);
     setNewTextDraft(null);
+    setTxtDraft(null);
+    txtLiveRef.current = null;
+    txtActionRef.current = null;
   }, [mode]);
+
+  // el swatch «el que ya tenga» se pinta del color del bloque señalado
+  const avisaColor = tool.onTextBlockPicked;
+  useEffect(() => {
+    avisaColor(blockDraft ? rgbaToHex(blockDraft.block.color) : null);
+  }, [blockDraft, avisaColor]);
 
   // Bloques de texto (solo en modo edición)
   useEffect(() => {
@@ -64,6 +98,8 @@ export function useTexto(ctx: {
     // la tarjeta de edición guarda un object_index que deja de valer si el
     // documento cambia por debajo (deshacer, rehacer)
     setBlockDraft(null);
+    setTxtDraft(null);
+    txtLiveRef.current = null;
     if (!workPath || !visible || mode !== "edit") {
       setTextBlocks([]);
       return;
@@ -85,6 +121,48 @@ export function useTexto(ctx: {
       cancelled = true;
     };
   }, [workPath, index, visible, docVersion, mode, pageVersion, size, onError]);
+
+  /** Empieza a mover o a estirar el bloque señalado. */
+  function startTxtAction(
+    e: MouseEvent<HTMLDivElement>,
+    b: TextBlock,
+    kind: TxtAction["kind"],
+    handle: ResizeHandle = "se",
+  ) {
+    e.stopPropagation();
+    if (e.button !== 0) return;
+    const p = puntoEnCapa(e, scale, viewRotation);
+    txtActionRef.current = {
+      kind,
+      handle,
+      startX: p.x,
+      startY: p.y,
+      orig: b,
+      moved: false,
+    };
+    txtLiveRef.current = b;
+    setTxtDraft(b);
+  }
+
+  /** Guarda la caja nueva del bloque: mover y estirar son dos comandos,
+   *  porque en el PDF son dos cosas distintas (la matriz y el cuerpo de la
+   *  fuente). Si el gesto ha hecho las dos, se mandan las dos. */
+  async function commitTextBlock(orig: TextBlock, b: TextBlock) {
+    if (!workPath) return;
+    const pr = rectAPagina(b, size);
+    const or = rectAPagina(orig, size);
+    try {
+      if (Math.abs(pr.w - or.w) > 0.5 || Math.abs(pr.h - or.h) > 0.5)
+        await resizeTextBlock(workPath, index, orig.object_index, pr.w, pr.h);
+      if (Math.abs(pr.x - or.x) > 0.5 || Math.abs(pr.y - or.y) > 0.5)
+        await moveTextBlock(workPath, index, orig.object_index, pr.x, pr.y);
+      onPageMutated(index);
+    } catch (e) {
+      setTxtDraft(null);
+      txtLiveRef.current = null;
+      onError(e);
+    }
+  }
 
   async function submitNewText() {
     if (!workPath || !newTextDraft) return;
@@ -149,6 +227,12 @@ export function useTexto(ctx: {
     setBlockDraft,
     newTextDraft,
     setNewTextDraft,
+    txtDraft,
+    setTxtDraft,
+    txtLiveRef,
+    txtActionRef,
+    startTxtAction,
+    commitTextBlock,
     submitNewText,
     submitBlockDraft,
     deleteBlock,

@@ -57,6 +57,13 @@ export type ToolProps = {
   /** Color del texto del documento; `null` = el que ya tenga. */
   textColor: string | null;
   textAlign: Alineacion | null;
+  /** Interlineado y espaciado entre caracteres (`TL` y `Tc`); `null` = los
+   *  que traiga el documento. */
+  textLineHeight: number | null;
+  textCharSpacing: number | null;
+  /** Avisa a la fila contextual del color real del bloque seleccionado, que
+   *  es lo que pinta el swatch «el que ya tenga». */
+  onTextBlockPicked: (color: string | null) => void;
   /** Marca de «rellenar y firmar» armada, si la hay. */
   fillMark: MarcaRellenar | null;
   fillColor: string;
@@ -194,7 +201,9 @@ function Pagina({
     docVersion,
     pageVersion,
     mode,
+    scale,
     size,
+    viewRotation,
     tool,
     onPageMutated,
     onError,
@@ -484,6 +493,20 @@ function Pagina({
       imagenes.setImgDraft(d);
       return;
     }
+    if (mode === "edit" && texto.txtActionRef.current) {
+      const a = texto.txtActionRef.current;
+      const { x, y } = pagePoint(e, scale, viewRotation);
+      const dx = x - a.startX;
+      const dy = y - a.startY;
+      if (Math.abs(dx) + Math.abs(dy) > 1) a.moved = true;
+      const d =
+        a.kind === "move"
+          ? { ...a.orig, x: a.orig.x + dx, y: a.orig.y + dy }
+          : { ...a.orig, ...resizeRect(a.orig, a.handle ?? "se", dx, dy, e.shiftKey) };
+      texto.txtLiveRef.current = d;
+      texto.setTxtDraft(d);
+      return;
+    }
     if (mode === "draw") {
       if (anotaciones.strokeLiveRef.current.length === 0) return;
       const { x, y } = pagePoint(e, scale, viewRotation);
@@ -723,6 +746,21 @@ function Pagina({
       }
       return;
     }
+    if (mode === "edit" && texto.txtActionRef.current) {
+      const a = texto.txtActionRef.current;
+      texto.txtActionRef.current = null;
+      const draft = texto.txtLiveRef.current ?? texto.txtDraft;
+      texto.txtLiveRef.current = null;
+      if (!a.moved) {
+        // clic simple: la tarjeta de edición, como siempre
+        texto.setTxtDraft(null);
+        texto.setBlockDraft({ block: a.orig, text: a.orig.text });
+      } else if (draft) {
+        texto.setBlockDraft(null);
+        texto.commitTextBlock(a.orig, draft);
+      }
+      return;
+    }
     if (mode === "draw" && anotaciones.strokeLiveRef.current.length > 0) anotaciones.finishStroke();
   }
 
@@ -784,12 +822,14 @@ function Pagina({
             texto={texto}
             scale={scale}
             displayWidth={displayWidth}
+            displayHeight={altoHoja}
           />
           <CapaImagenes
             mode={mode}
             imagenes={imagenes}
             scale={scale}
             displayWidth={displayWidth}
+            displayHeight={altoHoja}
           />
           <CapaEnlaces
             mode={mode}
@@ -810,6 +850,7 @@ function Pagina({
             anotaciones={anotaciones}
             scale={scale}
             displayWidth={displayWidth}
+            displayHeight={altoHoja}
             tool={tool}
             onQuitarMarca={(annotIndex) => quitarMarca(index, annotIndex)}
           />

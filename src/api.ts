@@ -56,7 +56,9 @@ export function getTextBlocks(
  *  un operador del PDF. */
 export type Alineacion = "izq" | "centro" | "der";
 
-/** Texto nuevo en un punto de la página (contenido, no anotación). */
+/** Texto nuevo en un punto de la página (contenido, no anotación).
+ *  `lineHeight` y `charSpacing` son los operadores `TL` y `Tc`; sin ellos,
+ *  los de siempre. */
 export function addTextBlock(args: {
   workPath: string;
   pageIndex: number;
@@ -67,11 +69,15 @@ export function addTextBlock(args: {
   font?: string | null;
   color?: Rgba | null;
   align?: Alineacion | null;
+  lineHeight?: number | null;
+  charSpacing?: number | null;
 }): Promise<void> {
   return invoke("add_text_block", {
     font: null,
     color: null,
     align: null,
+    lineHeight: null,
+    charSpacing: null,
     ...args,
   });
 }
@@ -85,8 +91,52 @@ export function editTextBlock(args: {
   newText: string;
   color?: Rgba | null;
   align?: Alineacion | null;
+  lineHeight?: number | null;
+  charSpacing?: number | null;
 }): Promise<void> {
-  return invoke("edit_text_block", { color: null, align: null, ...args });
+  return invoke("edit_text_block", {
+    color: null,
+    align: null,
+    lineHeight: null,
+    charSpacing: null,
+    ...args,
+  });
+}
+
+/** Coloca un bloque de texto en otro punto de la página (su matriz), como
+ *  `transform_image` hace con una imagen. Coordenadas en el espacio propio
+ *  de la página. */
+export function moveTextBlock(
+  workPath: string,
+  pageIndex: number,
+  objectIndex: number,
+  x: number,
+  y: number,
+): Promise<void> {
+  return invoke("move_text_block", { workPath, pageIndex, objectIndex, x, y });
+}
+
+/** Estira un bloque de texto: escala el tamaño de fuente, no deforma los
+ *  glifos. Coordenadas en el espacio propio de la página. */
+export function resizeTextBlock(
+  workPath: string,
+  pageIndex: number,
+  objectIndex: number,
+  w: number,
+  h: number,
+): Promise<void> {
+  return invoke("resize_text_block", { workPath, pageIndex, objectIndex, w, h });
+}
+
+/** Recorta una imagen al rectángulo pedido (en el espacio propio de la
+ *  página), recreando el objeto con el bitmap recortado. */
+export function cropImage(
+  workPath: string,
+  pageIndex: number,
+  objectIndex: number,
+  rect: { x: number; y: number; w: number; h: number },
+): Promise<void> {
+  return invoke("crop_image", { workPath, pageIndex, objectIndex, rect });
 }
 
 /** Mueve, redimensiona, gira y voltea un objeto de imagen. `rotate` va en

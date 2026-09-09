@@ -12,6 +12,22 @@ import Icon from "./Icon";
 
 const SHAPE_COLORS = ANNOT_COLORS;
 
+/** Interlineado: los cuatro de un procesador de textos (operador `TL`). */
+const INTERLINEADOS: [number, string][] = [
+  [1, "Sencillo"],
+  [1.15, "1,15"],
+  [1.5, "1,5"],
+  [2, "Doble"],
+];
+
+/** Espaciado entre caracteres en puntos (operador `Tc`). */
+const ESPACIADOS: [number, string][] = [
+  [0, "Sin espaciado"],
+  [0.5, "0,5 pt"],
+  [1, "1 pt"],
+  [2, "2 pt"],
+];
+
 /** Los tres botones de alineación, con la etiqueta que entiende el backend. */
 const ALINEACIONES: [Alineacion, string, string][] = [
   ["izq", "Izq.", "Alinear a la izquierda"],
@@ -56,8 +72,13 @@ export default function OpcionesHerramienta({
   freeTextBorder,
   setFreeTextBorder,
   textColor,
+  textColorBloque,
   textAlign,
   setTextAlign,
+  textLineHeight,
+  setTextLineHeight,
+  textCharSpacing,
+  setTextCharSpacing,
   fillMark,
   setFillMark,
   fillColor,
@@ -96,8 +117,14 @@ export default function OpcionesHerramienta({
   setFreeTextBorder: (b: boolean) => void;
   /** Color del texto del documento; `null` = el que ya tenga. */
   textColor: string | null;
+  /** El color real del bloque señalado, para pintar «el que ya tenga». */
+  textColorBloque: string | null;
   textAlign: Alineacion | null;
   setTextAlign: (a: Alineacion | null) => void;
+  textLineHeight: number | null;
+  setTextLineHeight: (v: number | null) => void;
+  textCharSpacing: number | null;
+  setTextCharSpacing: (v: number | null) => void;
   fillMark: MarcaRellenar | null;
   setFillMark: (m: MarcaRellenar | null) => void;
   fillColor: string;
@@ -173,9 +200,19 @@ export default function OpcionesHerramienta({
               necesita. «Como está» es el defecto: editar un párrafo no debe
               recolorearlo sin querer */}
           <div className="swatches" role="group" aria-label="Color del texto">
+            {/* con un bloque señalado la letra va de su color real, como la
+                barra de propiedades de Acrobat: «el que ya tenga» deja de ser
+                una letra gris con un tooltip */}
             <button
               className={`swatch swatch-auto${textColor === null ? " on" : ""}`}
-              title="El color que ya tenga"
+              style={
+                textColorBloque ? { color: textColorBloque } : undefined
+              }
+              title={
+                textColorBloque
+                  ? "El color que ya tenga (el del texto señalado)"
+                  : "El color que ya tenga"
+              }
               aria-label="El color que ya tenga"
               aria-pressed={textColor === null}
               onClick={() => cambiaColorAccion("texto", "")}
@@ -208,6 +245,40 @@ export default function OpcionesHerramienta({
               </button>
             ))}
           </div>
+          {/* interlineado y espaciado: los de la barra de formato de un
+              procesador de textos, y los que Acrobat pone en la misma fila */}
+          <select
+            className="size-select"
+            title="Interlineado"
+            aria-label="Interlineado"
+            value={textLineHeight ?? ""}
+            onChange={(e) =>
+              setTextLineHeight(e.target.value ? Number(e.target.value) : null)
+            }
+          >
+            <option value="">Interlineado del documento</option>
+            {INTERLINEADOS.map(([v, etiqueta]) => (
+              <option key={v} value={v}>
+                {etiqueta}
+              </option>
+            ))}
+          </select>
+          <select
+            className="size-select"
+            title="Espaciado entre caracteres"
+            aria-label="Espaciado entre caracteres"
+            value={textCharSpacing ?? ""}
+            onChange={(e) =>
+              setTextCharSpacing(e.target.value ? Number(e.target.value) : null)
+            }
+          >
+            <option value="">Espaciado del documento</option>
+            {ESPACIADOS.map(([v, etiqueta]) => (
+              <option key={v} value={v}>
+                {etiqueta}
+              </option>
+            ))}
+          </select>
           <span className="opt-hint">
             Clic en un texto del PDF para corregirlo · clic en una zona libre
             para escribir uno nuevo

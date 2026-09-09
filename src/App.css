@@ -1064,6 +1064,17 @@ textarea {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
+/* el bloque señalado se coloca y se estira con los mismos ocho tiradores
+   que los sellos y las imágenes: el gesto ya se conoce */
+.text-block {
+  cursor: move;
+}
+
+.text-block.on {
+  outline: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
 /* ---------- tarjetas flotantes ---------- */
 
 .card {
@@ -2230,6 +2241,22 @@ textarea {
 .image-box:hover {
   outline: 2px dashed var(--accent);
   background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+/* capa de recorte: solo mientras se recorta una imagen, encima de su caja */
+.crop-capa {
+  position: absolute;
+  z-index: 25;
+  cursor: crosshair;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  outline: 2px solid var(--accent);
+}
+
+.crop-marco {
+  position: absolute;
+  border: 1px solid var(--card-bg);
+  outline: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--card-bg) 25%, transparent);
 }
 
 .image-handle {

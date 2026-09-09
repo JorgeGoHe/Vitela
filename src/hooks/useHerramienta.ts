@@ -43,6 +43,13 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
   // «como esté»: editar un párrafo no debe recolorearlo sin querer
   const [textColor, setTextColor] = useState<string | null>(null);
   const [textAlign, setTextAlign] = useState<Alineacion | null>(null);
+  // interlineado y espaciado entre caracteres (`TL` y `Tc`), los de la barra
+  // de formato de Acrobat. `null` es «el del documento»
+  const [textLineHeight, setTextLineHeight] = useState<number | null>(null);
+  const [textCharSpacing, setTextCharSpacing] = useState<number | null>(null);
+  // el color real del bloque que está seleccionado: es lo que pinta el
+  // swatch «A» («el que ya tenga»), que hasta ahora era una letra gris
+  const [textColorBloque, setTextColorBloque] = useState<string | null>(null);
   // marca de «rellenar y firmar» armada, si la hay
   const [fillMark, setFillMark] = useState<MarcaRellenar | null>(null);
   const [fillColor, setFillColor] = useState(
@@ -101,6 +108,9 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
       freeTextBorder,
       textColor,
       textAlign,
+      textLineHeight,
+      textCharSpacing,
+      onTextBlockPicked: setTextColorBloque,
       fillMark,
       fillColor,
       activeSig,
@@ -123,6 +133,8 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
       freeTextBorder,
       textColor,
       textAlign,
+      textLineHeight,
+      textCharSpacing,
       fillMark,
       fillColor,
       activeSig,
@@ -154,6 +166,11 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
     setTextColor,
     textAlign,
     setTextAlign,
+    textLineHeight,
+    setTextLineHeight,
+    textCharSpacing,
+    setTextCharSpacing,
+    textColorBloque,
     fillMark,
     setFillMark,
     fillColor,
