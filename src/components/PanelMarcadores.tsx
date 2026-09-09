@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { OutlineNode } from "../api";
+import Icon from "./Icon";
 
 type Path = number[];
 
@@ -93,14 +94,14 @@ export default function PanelMarcadores({
                 aria-label={`Renombrar «${n.title}»`}
                 onClick={() => setEditing({ path, text: n.title })}
               >
-                ✎
+                <Icon name="pen" size={12} />
               </button>
               <button
                 title="Eliminar marcador"
                 aria-label={`Eliminar el marcador «${n.title}»`}
                 onClick={() => onChange(actualiza(outline, path, () => null))}
               >
-                ✕
+                <Icon name="close" size={12} />
               </button>
             </span>
           )}
@@ -129,7 +130,8 @@ export default function PanelMarcadores({
           ])
         }
       >
-        ＋ Marcador en esta página
+        <Icon name="plus" size={12} />
+        Marcador en esta página
       </button>
     </div>
   );

@@ -1,4 +1,5 @@
 import type { FirmaGuardada } from "../api";
+import Icon from "./Icon";
 
 /**
  * Popover con la biblioteca de firmas: elegir una para estamparla, subir
@@ -54,7 +55,7 @@ export default function PanelFirmas({
                     aria-label={`Borrar la firma «${f.name}»`}
                     onClick={() => onDelete(f.id)}
                   >
-                    ✕
+                    <Icon name="close" size={12} />
                   </button>
                 </div>
               </div>

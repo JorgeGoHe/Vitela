@@ -1,5 +1,6 @@
 import { ANNOT_COLORS, NOMBRE_COLOR, type Mode, type ShapeKind } from "../tipos";
 import { STAMP_PRESETS } from "../hooks/useHerramienta";
+import Icon from "./Icon";
 
 const SHAPE_COLORS = ANNOT_COLORS;
 
@@ -73,6 +74,7 @@ export default function OpcionesHerramienta({
                 value={drawColor}
                 onChange={(e) => cambiaColorAccion("dibujo", e.target.value)}
               />
+              <Icon name="plus" size={10} />
             </label>
           </div>
           <select
@@ -132,6 +134,7 @@ export default function OpcionesHerramienta({
                 value={shapeColor}
                 onChange={(e) => cambiaColorAccion("forma", e.target.value)}
               />
+              <Icon name="plus" size={10} />
             </label>
           </div>
           <label
@@ -211,6 +214,7 @@ export default function OpcionesHerramienta({
                 value={stampColor}
                 onChange={(e) => cambiaColorAccion("sello", e.target.value)}
               />
+              <Icon name="plus" size={10} />
             </label>
           </div>
           <span

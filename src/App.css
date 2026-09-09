@@ -888,6 +888,8 @@ textarea {
 }
 
 .bm-actions button {
+  display: inline-flex;
+  align-items: center;
   background: none;
   border: none;
   color: var(--fg-muted);
@@ -1090,19 +1092,12 @@ textarea {
   border-color: var(--accent);
 }
 
-/* damero para ver la transparencia de las firmas, siempre sobre blanco
-   (los trazos oscuros se perderían sobre el fondo del tema oscuro) */
+/* la firma es tinta sobre papel: superficie plana y clara en los dos temas
+   (sobre el fondo nocturno los trazos oscuros se perderían), como la página
+   del PDF; el borde va en el tono lápiz para verse sobre ese papel */
 .sign-thumb,
 .firma-canvas {
-  background:
-    conic-gradient(
-        rgba(0, 0, 0, 0.07) 90deg,
-        transparent 90deg 180deg,
-        rgba(0, 0, 0, 0.07) 180deg 270deg,
-        transparent 270deg
-      )
-      0 0 / 14px 14px,
-    #ffffff;
+  background: #fcfbf7;
 }
 
 .sign-panel {
@@ -1145,7 +1140,7 @@ textarea {
 .sign-thumb {
   width: 100%;
   height: 68px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--fg-muted);
   border-radius: 6px;
   cursor: pointer;
   display: flex;
@@ -1195,7 +1190,7 @@ textarea {
 }
 
 .firma-canvas {
-  border: 1px dashed var(--border);
+  border: 1px dashed var(--fg-muted);
   border-radius: 6px;
   cursor: crosshair;
 }
@@ -1449,24 +1444,27 @@ textarea {
   }
 }
 
-/* chip de color personalizado (selector RGB nativo) */
+/* chip de color personalizado (selector RGB nativo): superficie plana con
+   el signo «+» dentro, no una rueda de color */
 .swatch-custom {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background:
-    conic-gradient(#c0392b, #f5c400, #2ea043, #2743c0, #c0392b);
+  background: var(--card-bg);
+  border: 1px solid var(--fg-muted);
+  color: var(--fg-muted);
   position: relative;
   overflow: hidden;
 }
 
-.swatch-custom::after {
-  content: "+";
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
+.swatch-custom svg {
   pointer-events: none;
+}
+
+/* seleccionado: el aro de .swatch.on no se ve sobre la superficie plana */
+.swatch-custom.on {
+  border-width: 2px;
+  color: var(--fg);
 }
 
 .swatch-custom input[type="color"] {

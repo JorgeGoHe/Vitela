@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { cargaColores, guardaColor } from "../tipos";
+import Icon from "./Icon";
 
 const COLORS = ["#c0392b", "#6f6a5c", "#2743c0", "#2ea043"];
 
@@ -97,6 +98,7 @@ export default function DialogoMarcaAgua({
                   guardaColor("marcaAgua", e.target.value);
                 }}
               />
+              <Icon name="plus" size={10} />
             </label>
           </div>
         </div>

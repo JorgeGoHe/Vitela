@@ -58,6 +58,7 @@ export default function TarjetaSeleccion({
             value={tool.markupPending ?? "#888888"}
             onChange={(e) => tool.onMarkupPending(e.target.value)}
           />
+          <Icon name="plus" size={10} />
         </label>
       </div>
       <button

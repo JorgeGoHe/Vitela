@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { cargaColores, guardaColor } from "../tipos";
+import Icon from "./Icon";
 
 const CANVAS_W = 560;
 const CANVAS_H = 220;
@@ -196,6 +197,7 @@ export default function DibujarFirma({
                   guardaColor("firmaTrazo", e.target.value);
                 }}
               />
+              <Icon name="plus" size={10} />
             </label>
           </div>
           <button className="btn" disabled={empty} onClick={clear}>
