@@ -82,6 +82,8 @@ function App() {
   const [pageCount, setPageCount] = useState(0);
   const [pageSizes, setPageSizes] = useState<PageSize[]>([]);
   const [pageIndex, setPageIndex] = useState(0);
+  // la píldora de navegación pasa a campo mientras se teclea una página
+  const [pageDraft, setPageDraft] = useState<string | null>(null);
   const [zoom, setZoom] = useState<number | "ajuste">("ajuste");
   const [viewerW, setViewerW] = useState<number | null>(null);
   const viewerRef = useRef<HTMLElement | null>(null);
@@ -408,6 +410,9 @@ function App() {
         if (e.shiftKey) {
           if (pageCount > 0) saveFileAs();
         } else if (modified) saveFile();
+      } else if (mod && e.shiftKey && (e.key === "n" || e.key === "N") && pageCount > 0) {
+        e.preventDefault();
+        setPageDraft(String(pageIndex + 1));
       } else if (mod && e.key === "p" && pageCount > 0) {
         e.preventDefault();
         printDocument();
@@ -471,6 +476,14 @@ function App() {
     },
     [pageCount],
   );
+
+  /** Salta a la página escrita en la píldora; fuera de rango, gotoPage la
+   *  recorta en silencio. */
+  function irAPaginaEscrita() {
+    const n = Number.parseInt(pageDraft ?? "", 10);
+    setPageDraft(null);
+    if (!Number.isNaN(n)) gotoPage(n - 1);
+  }
 
   const busqueda = useBusqueda({
     workPath,
@@ -1559,9 +1572,33 @@ function App() {
               >
                 <Icon name="chevLeft" size={14} />
               </button>
-              <span>
-                {pageIndex + 1} / {pageCount}
-              </span>
+              {pageDraft === null ? (
+                <button
+                  className="btn pill-boton"
+                  title={`Ir a la página (⇧${MOD}N)`}
+                  aria-label="Ir a la página"
+                  onClick={() => setPageDraft(String(pageIndex + 1))}
+                >
+                  {pageIndex + 1} / {pageCount}
+                </button>
+              ) : (
+                <input
+                  className="pill-input"
+                  inputMode="numeric"
+                  autoFocus
+                  aria-label={`Ir a la página (1 a ${pageCount})`}
+                  value={pageDraft}
+                  onFocus={(e) => e.currentTarget.select()}
+                  onChange={(e) =>
+                    setPageDraft(e.target.value.replace(/[^0-9]/g, ""))
+                  }
+                  onBlur={() => setPageDraft(null)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") irAPaginaEscrita();
+                    else if (e.key === "Escape") setPageDraft(null);
+                  }}
+                />
+              )}
               <button
                 className="btn btn-icon"
                 title="Página siguiente"

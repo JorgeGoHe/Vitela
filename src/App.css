@@ -506,6 +506,32 @@ textarea {
   border-radius: 4px;
 }
 
+/* la página y el zoom se pueden teclear: mismo aspecto de dato de imprenta
+   como texto, como botón y como campo */
+.nav-pill .pill-boton {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg);
+  min-width: 44px;
+  justify-content: center;
+  padding: 4px 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.nav-pill .pill-input {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 3px 4px;
+  width: 56px;
+  text-align: center;
+  outline: none;
+  font-variant-numeric: tabular-nums;
+}
+
 .placeholder .voz {
   font-family: var(--font-voz);
   font-style: italic;
