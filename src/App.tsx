@@ -1583,8 +1583,14 @@ function App() {
     raiz.dataset.lienzo = prefs.lienzo;
   }, [prefs.tema, prefs.lienzo]);
 
+  // el cajón de resultados va plegado: quien solo quiere buscar no paga nada
+  const [cajonBusqueda, setCajonBusqueda] = useState(false);
+
   const busqueda = useBusqueda({
     workPath,
+    // la pasada de contexto (frase y bloque de cada coincidencia) solo se
+    // paga cuando el cajón está desplegado, que es donde se usa
+    contexto: cajonBusqueda,
     // los saltos entre coincidencias también se apilan: ⌥← vuelve a donde
     // se estaba leyendo antes de buscar
     gotoPage: saltarA,
@@ -1592,8 +1598,6 @@ function App() {
   });
   const limpiarBusqueda = busqueda.limpiar;
   hayCoincidenciasRef.current = busqueda.matches.length > 0;
-  // el cajón de resultados va plegado: quien solo quiere buscar no paga nada
-  const [cajonBusqueda, setCajonBusqueda] = useState(false);
 
   // Seguimiento del scroll: la página cuyo centro queda más cerca del centro
   // del visor es la "actual" (píldora y sidebar), sin provocar scroll.
@@ -1725,11 +1729,9 @@ function App() {
   const reemplazo = useReemplazo({
     workPath,
     query: busqueda.lastQuery,
-    matchCase: busqueda.opciones.matchCase,
     matches: busqueda.matches,
     matchIdx: busqueda.matchIdx,
     pageCount,
-    activo: cajonBusqueda,
     onNotice: setNotice,
     onError: mostrarError,
     afterMutation,

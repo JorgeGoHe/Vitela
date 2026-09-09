@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { searchPdf } from "../api";
 import {
   cargaOpcionesBusqueda,
@@ -15,6 +15,10 @@ import type { PageMatch } from "../components/Pagina";
  */
 export function useBusqueda(opts: {
   workPath: string | null;
+  /** Se va a usar la lista de resultados (el cajón está abierto), así que
+   *  la búsqueda pide `context`: la frase de alrededor y el bloque de cada
+   *  coincidencia. Con el cajón plegado esa pasada extra no se paga. */
+  contexto: boolean;
   gotoPage: (i: number) => void;
   onError: (e: unknown) => void;
 }) {
@@ -28,33 +32,64 @@ export function useBusqueda(opts: {
     cargaOpcionesBusqueda,
   );
 
+  // si la última búsqueda se pidió con contexto: sin él las coincidencias
+  // no traen ni la frase de alrededor ni el bloque, y el cajón las necesita
+  const [conContexto, setConContexto] = useState(false);
+
   /** Descarta los resultados; con `conQuery` vacía también el campo. */
   const limpiar = useCallback((conQuery = false) => {
     setMatches([]);
     setSearched(false);
     setLastQuery("");
+    setConContexto(false);
     if (conQuery) setQuery("");
   }, []);
 
-  async function runSearch(con?: OpcionesBusqueda) {
-    const { workPath, gotoPage, onError } = opts;
-    const o = con ?? opciones;
+  /** El cuerpo de la búsqueda. Con `mantener` no se salta a la primera
+   *  coincidencia ni se reinicia el recorrido: es la repetición silenciosa
+   *  que hace falta al desplegar el cajón, no una búsqueda nueva. */
+  async function ejecuta(o: OpcionesBusqueda, mantener: boolean) {
+    const { workPath, contexto, gotoPage, onError } = opts;
     if (!workPath) return;
     if (!query.trim()) {
       limpiar();
       return;
     }
     try {
-      const res = await searchPdf(workPath, query, o.matchCase, o.wholeWord);
+      const res = await searchPdf(
+        workPath,
+        query,
+        o.matchCase,
+        o.wholeWord,
+        contexto,
+      );
       setMatches(res);
-      setMatchIdx(0);
       setSearched(true);
       setLastQuery(query);
-      if (res.length > 0) gotoPage(res[0].page_index);
+      setConContexto(contexto);
+      if (!mantener) {
+        setMatchIdx(0);
+        if (res.length > 0) gotoPage(res[0].page_index);
+      }
     } catch (e) {
       onError(e);
     }
   }
+
+  async function runSearch(con?: OpcionesBusqueda) {
+    await ejecuta(con ?? opciones, false);
+  }
+
+  // Al desplegar el cajón sobre una búsqueda que se hizo sin contexto se
+  // repite una vez, ya con él: es el único momento en que hace falta, y sin
+  // mover al usuario de donde estaba leyendo.
+  const repetir = useRef(() => {});
+  useEffect(() => {
+    repetir.current = () => void ejecuta(opciones, true);
+  });
+  useEffect(() => {
+    if (opts.contexto && searched && !conContexto) repetir.current();
+  }, [opts.contexto, searched, conContexto]);
 
   /** Cambia una opción y, si ya había resultados, repite la búsqueda. */
   function cambiaOpcion(clave: keyof OpcionesBusqueda) {

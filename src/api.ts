@@ -29,14 +29,17 @@ export function deleteStoredSignature(id: string): Promise<void> {
 
 /** Busca en todo el documento. `matchCase` y `wholeWord` son las dos
  *  opciones de la búsqueda de Acrobat; por defecto van apagadas. Con
- *  `context` cada coincidencia trae además la frase de alrededor, que es lo
- *  que hace legible la lista de resultados. */
+ *  `context` cada coincidencia trae además la frase de alrededor y el
+ *  bloque de texto en el que cae, que es lo que hacen falta para la lista
+ *  del cajón y para reemplazar. **No tiene defecto a propósito**: esa
+ *  pasada extra recorre los objetos de todas las páginas, así que se pide
+ *  solo cuando se va a usar. */
 export function searchPdf(
   path: string,
   query: string,
   matchCase: boolean,
   wholeWord: boolean,
-  context = true,
+  context: boolean,
 ): Promise<SearchMatch[]> {
   return invoke("search_pdf", { path, query, matchCase, wholeWord, context });
 }

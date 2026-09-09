@@ -32,6 +32,12 @@ export type SearchMatch = {
    *  solo llega si la búsqueda se pidió con `context`. */
   before?: string;
   after?: string;
+  /** `object_index` del bloque de texto en el que cae la coincidencia, tal
+   *  como lo sitúa el backend (el más pequeño de los que la contienen).
+   *  Llega con `context` y es lo que necesita `replace_text`: la UI no lo
+   *  vuelve a calcular, que era el mismo criterio escrito dos veces y con
+   *  dos resultados posibles. */
+  block_index?: number;
 };
 export type Selection = { start: number; end: number };
 export type AnnotationInfo = {
