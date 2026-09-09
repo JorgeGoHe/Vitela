@@ -40,6 +40,8 @@ import {
   extractEachPage,
   extractPages,
   getDocumentAnnotations,
+  autosaveState,
+  borraSesion,
   listRecent,
   listRedactions,
   applyRedactions,
@@ -49,6 +51,7 @@ import {
   sanitizePdf,
   unmarkRedaction,
   rotatePages,
+  recoverSession,
   removeRecent,
   renderPageSrc,
   setMenuState,
@@ -62,6 +65,7 @@ import {
   type HeaderFooter,
   type Redaccion,
   type RedactReport,
+  type Sesion,
   type SanitizeReport,
   type Reciente,
 } from "./api";
@@ -436,6 +440,9 @@ function App() {
   const [outline, setOutlineState] = useState<OutlineNode[]>([]);
   const [propsDraft, setPropsDraft] = useState<Metadata | null>(null);
   const [prefsAbiertas, setPrefsAbiertas] = useState(false);
+  // sesión que quedó a medias en un cierre inesperado: una banda de una línea,
+  // no un modal, que es como Vitela cuenta todo lo demás
+  const [sesionRota, setSesionRota] = useState<Sesion | null>(null);
   // «Ayuda ▸ Atajos de teclado»: el único sitio donde están todos escritos
   const [atajosAbiertos, setAtajosAbiertos] = useState(false);
   const {
@@ -462,6 +469,10 @@ function App() {
   async function openPath(
     path: string,
     password?: string,
+    /** Ruta que se considera «el fichero»: al recuperar una sesión se abre
+     *  la copia de trabajo pero el original sigue siendo el de verdad, para
+     *  que ⌘S no escriba en el temporal. */
+    original?: string | null,
   ): Promise<string | null> {
     try {
       // los avisos son del documento que se deja atrás: no deben sobrevivir
@@ -508,7 +519,7 @@ function App() {
       setFirmasDoc([]);
       setBandaFirmas(false);
       setNombreProvisional(null);
-      setOriginalPath(path);
+      setOriginalPath(original !== undefined ? original : path);
       setWorkPath(info.work_path);
       setPageCount(info.page_count);
       setPageIndex(0);
@@ -524,10 +535,13 @@ function App() {
       // el menú nativo se monta una sola vez, en el arranque y sin documento:
       // sin este aviso sus entradas se quedan atenuadas para siempre
       setMenuState(true).catch(() => {});
-      // la lista de recientes la lleva la UI: open_pdf no la toca
-      touchRecent(path)
-        .then(refrescarRecientes)
-        .catch(() => {});
+      // la lista de recientes la lleva la UI: open_pdf no la toca. Una copia
+      // de trabajo recuperada no es un reciente: no es un fichero del usuario
+      if (original === undefined) {
+        touchRecent(path)
+          .then(refrescarRecientes)
+          .catch(() => {});
+      }
       return info.work_path;
     } catch (e) {
       if (String(e) === "PASSWORD_REQUIRED") {
@@ -581,6 +595,44 @@ function App() {
   useEffect(() => {
     if (!workPath) refrescarRecientes();
   }, [workPath, refrescarRecientes]);
+
+  /** Al arrancar: si quedó una sesión sin guardar, se ofrece recuperarla.
+   *  La copia de trabajo ya estaba en temp; lo que faltaba era el apunte. */
+  useEffect(() => {
+    recoverSession()
+      .then((s) => {
+        if (s?.modificado) setSesionRota(s);
+      })
+      .catch(() => {});
+  }, []);
+
+  /** Abre la copia de trabajo que quedó, conservando su fichero original:
+   *  ⌘S escribe donde el usuario espera y no en el temporal. */
+  function recuperarSesion(s: Sesion) {
+    setSesionRota(null);
+    conCambiosGuardados(async () => {
+      const work = await openPath(s.work_path, undefined, s.original_path);
+      if (!work) {
+        setError("La copia con los cambios ya no está: no se ha podido recuperar");
+        return;
+      }
+      if (!s.original_path) setNombreProvisional("Documento recuperado");
+      setModified(true);
+      setNotice(
+        s.original_path
+          ? `Recuperados los cambios sin guardar de ${s.original_path}`
+          : "Recuperado el documento sin guardar",
+      );
+    });
+  }
+
+  /** Descartar: se borra la copia y el apunte, y se dice. */
+  function descartarSesion(s: Sesion) {
+    setSesionRota(null);
+    invoke("close_document", { workPath: s.work_path }).catch(() => {});
+    borraSesion().catch(() => {});
+    setNotice("Descartados los cambios sin guardar de la sesión anterior");
+  }
 
   /** Abre un fichero comprobando antes los cambios sin guardar. */
   function abrirComprobando(path: string) {
@@ -781,6 +833,7 @@ function App() {
     evictAll();
     setDocVersion((v) => v + 1);
     setMenuState(false).catch(() => {});
+    borraSesion().catch(() => {});
     invoke("close_document", { workPath: anterior }).catch((e) => setError(String(e)));
   }
 
@@ -1630,6 +1683,16 @@ function App() {
     gotoPage(pageIndex);
   }, [modoPagina, pageIndex, gotoPage]);
 
+  // Apunte de sesión: no en cada tecla, sino diez segundos después del
+  // último cambio. Silencioso —ni insignias ni avisos—, como en Acrobat
+  useEffect(() => {
+    if (!workPath || !modified) return;
+    const t = setTimeout(() => {
+      autosaveState(workPath, originalPath).catch(() => {});
+    }, 10000);
+    return () => clearTimeout(t);
+  }, [workPath, originalPath, modified, docVersion, annotVersion]);
+
   /** Tras anotar: invalidar el render de esa página sin recargar todo. */
   const afterAnnotate = useCallback(
     (page: number) => {
@@ -2359,6 +2422,8 @@ function App() {
       setOriginalPath(dest);
       setNombreProvisional(null);
       setModified(false);
+      // guardado: ya no hay nada que recuperar
+      borraSesion().catch(() => {});
       setNotice(`Guardado en ${dest}`);
       return true;
     } catch (e) {
@@ -2675,6 +2740,7 @@ function App() {
   const bandas =
     (error ? 1 : 0) +
     (bandaFirmas && firmasDoc.length > 0 ? 1 : 0) +
+    (sesionRota ? 1 : 0) +
     (notice ? 1 : 0);
 
   return (
@@ -2912,6 +2978,26 @@ function App() {
             onClick={() => setBandaFirmas(false)}
           >
             <Icon name="close" size={13} />
+          </button>
+        </div>
+      )}
+      {sesionRota && (
+        <div className="banner-recuperar">
+          <p>
+            Tenías cambios sin guardar en{" "}
+            <span className="dato">
+              {sesionRota.original_path?.split(/[\\/]/).pop() ??
+                "un documento sin fichero"}
+            </span>
+          </p>
+          <button
+            className="btn btn-primary"
+            onClick={() => recuperarSesion(sesionRota)}
+          >
+            Recuperar
+          </button>
+          <button className="btn" onClick={() => descartarSesion(sesionRota)}>
+            Descartar
           </button>
         </div>
       )}

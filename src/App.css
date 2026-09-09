@@ -1256,6 +1256,26 @@ textarea {
   color: var(--fg);
 }
 
+/* la sesión que quedó a medias: una línea con sus dos salidas, no un modal.
+   Se queda hasta que el usuario decide, que para eso es su trabajo */
+.banner-recuperar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: color-mix(in srgb, var(--exito) 14%, transparent);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+}
+
+.banner-recuperar p {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* los avisos de éxito se desvanecen solos (motion corto de DESIGN.md) */
 .banner-notice.saliendo {
   opacity: 0;

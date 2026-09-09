@@ -771,6 +771,39 @@ export function pdfInfo(path: string): Promise<PdfInfo> {
   return invoke("pdf_info", { path });
 }
 
+/* ---- recuperación tras un cierre inesperado ---- */
+
+/** El apunte de que había un documento abierto sin guardar. La copia de
+ *  trabajo ya vive en temp y ya sobrevive al cierre: lo único que faltaba
+ *  era el apunte de que existía y no se guardó. */
+export type Sesion = {
+  /** El fichero de verdad, o null si el documento no tenía ruta. */
+  original_path: string | null;
+  work_path: string;
+  modificado: boolean;
+  /** Cuándo se tomó el apunte, en ISO 8601. */
+  cuando: string;
+};
+
+/** Apunta la sesión viva. La UI lo llama con un respiro de 10 s tras cada
+ *  cambio: es un apunte, no un guardado, y no debe ir en cada tecla. */
+export function autosaveState(
+  workPath: string,
+  originalPath: string | null,
+): Promise<void> {
+  return invoke("autosave_state", { workPath, originalPath });
+}
+
+/** Borra el apunte: se cierra limpiamente, o el usuario descarta. */
+export function borraSesion(): Promise<void> {
+  return invoke("borra_sesion");
+}
+
+/** La sesión que quedó a medias, si la hubo. */
+export function recoverSession(): Promise<Sesion | null> {
+  return invoke("recover_session");
+}
+
 /* ---- menú nativo ---- */
 
 /** Avisa al backend de si hay documento abierto para que atenúe las
