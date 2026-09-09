@@ -52,7 +52,7 @@ pub fn credenciales_p12(p12_bytes: &[u8], password: &str) -> Result<Credenciales
         if detalle.contains("MAC") {
             "Contraseña del .p12 incorrecta".to_string()
         } else {
-            format!("No se pudo abrir el .p12 (¿contraseña incorrecta?): {detalle}")
+            format!("No se ha podido abrir el .p12 (¿contraseña incorrecta?): {detalle}")
         }
     })?;
     let (_alias, chain) = store
@@ -117,7 +117,7 @@ pub fn sign(
     cred: &Credenciales,
     reason: Option<String>,
 ) -> Result<(), String> {
-    let mut doc = LoDoc::load(src_path).map_err(|e| format!("No se pudo leer el PDF: {e}"))?;
+    let mut doc = LoDoc::load(src_path).map_err(|e| format!("No se ha podido leer el PDF: {e}"))?;
     let page_id = *doc.get_pages().get(&1).ok_or("El PDF no tiene páginas")?;
 
     // diccionario de firma con huecos para ByteRange y Contents
@@ -224,7 +224,7 @@ pub fn sign(
     // serializar y localizar el hueco de /Contents
     let mut out = Vec::new();
     doc.save_to(&mut out)
-        .map_err(|e| format!("No se pudo serializar: {e}"))?;
+        .map_err(|e| format!("No se ha podido serializar: {e}"))?;
     let marker: Vec<u8> = {
         let mut v = vec![b'<'];
         v.extend(std::iter::repeat_n(b'0', SIG_LEN * 2));
@@ -270,5 +270,5 @@ pub fn sign(
     let hex: String = der.iter().map(|byte| format!("{byte:02X}")).collect();
     out[contents_start + 1..contents_start + 1 + hex.len()].copy_from_slice(hex.as_bytes());
 
-    std::fs::write(dest_path, &out).map_err(|e| format!("No se pudo escribir: {e}"))
+    std::fs::write(dest_path, &out).map_err(|e| format!("No se ha podido escribir: {e}"))
 }

@@ -46,7 +46,7 @@ pub fn export_pages_png(
                     img
                 };
                 img.save_with_format(&dest, fmt)
-                    .map_err(|e| format!("No se pudo escribir {}: {e}", dest.display()))?;
+                    .map_err(|e| format!("No se ha podido escribir {}: {e}", dest.display()))?;
                 out.push(dest.to_string_lossy().into_owned());
             }
             Ok(out)
@@ -68,7 +68,7 @@ pub fn export_text(path: String, dest_path: String) -> Result<(), String> {
                 }
                 out.push_str(&page.text().map(|t| t.all()).unwrap_or_default());
             }
-            std::fs::write(&dest_path, out).map_err(|e| format!("No se pudo escribir: {e}"))
+            std::fs::write(&dest_path, out).map_err(|e| format!("No se ha podido escribir: {e}"))
         })
     })
 }

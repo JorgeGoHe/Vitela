@@ -132,8 +132,9 @@ pub fn encrypt_pdf(
     // invalidado, para no competir con una mutación concurrente
     on_pdfium_thread(move || {
         invalidate_doc_cache();
-        let mut doc =
-            LoDoc::load(&work_path).map_err(|e| format!("No se pudo leer el PDF: {e}"))?;
+        let mut doc = LoDoc::load(&work_path).map_err(|e| {
+            crate::mensaje_llano(format!("No se ha podido leer el documento: {e}"))
+        })?;
 
         // clave de cifrado del fichero y entradas del diccionario Encrypt
         let fek = aleatorio::<32>()?;
@@ -211,7 +212,7 @@ pub fn encrypt_pdf(
         }
 
         doc.save(&dest_path)
-            .map_err(|e| format!("No se pudo guardar: {e}"))?;
+            .map_err(|e| format!("No se ha podido guardar: {e}"))?;
         Ok(())
     })
 }
@@ -247,7 +248,7 @@ pub(crate) fn guarda_descifrado(
     let bindings = pdfium()?.bindings();
     let doc = bindings.FPDF_LoadDocument(src_path, Some(password));
     if doc.is_null() {
-        return Err("No se pudo abrir el PDF cifrado".into());
+        return Err("No se ha podido abrir el PDF con esa contraseña".into());
     }
     let mut escritor = Box::new(EscritorEnMemoria {
         inner: FPDF_FILEWRITE {
@@ -263,10 +264,11 @@ pub(crate) fn guarda_descifrado(
     );
     bindings.FPDF_CloseDocument(doc);
     if !bindings.is_true(ok) {
-        return Err("No se pudo guardar la copia descifrada".into());
+        return Err("No se ha podido preparar el documento sin contraseña".into());
     }
-    std::fs::write(dest_path, &escritor.buf)
-        .map_err(|e| format!("No se pudo escribir la copia: {e}"))
+    std::fs::write(dest_path, &escritor.buf).map_err(|e| {
+        crate::mensaje_llano(format!("No se ha podido preparar el documento: {e}"))
+    })
 }
 
 
@@ -506,7 +508,7 @@ fn estado_casilla(doc: &LoDoc, widget: &Dictionary) -> Option<String> {
 /// marcarlas y el aplanado no encuentra ese estado).
 fn prepara_para_aplanar(work_path: &str) -> Result<(), String> {
     let mut doc =
-        LoDoc::load(work_path).map_err(|e| format!("No se pudo leer el PDF: {e}"))?;
+        LoDoc::load(work_path).map_err(|e| format!("No se ha podido leer el PDF: {e}"))?;
     let da_form = acroform(&doc)
         .and_then(|f| match f.get(b"DA") {
             Ok(Object::String(b, _)) => Some(texto_pdf(b)),
@@ -564,7 +566,7 @@ fn prepara_para_aplanar(work_path: &str) -> Result<(), String> {
     }
     let tmp = format!("{work_path}.tmp");
     doc.save(&tmp)
-        .map_err(|e| format!("No se pudo guardar: {e}"))?;
+        .map_err(|e| format!("No se ha podido guardar: {e}"))?;
     std::fs::rename(&tmp, work_path).map_err(|e| e.to_string())
 }
 

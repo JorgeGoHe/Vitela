@@ -37,7 +37,7 @@ pub fn stamp_signature(
             .decode(png_base64.trim())
             .map_err(|e| format!("Imagen base64 inválida: {e}"))?;
         let img = image::load_from_memory(&bytes)
-            .map_err(|e| format!("No se pudo leer la imagen: {e}"))?;
+            .map_err(|e| format!("No se ha podido leer la imagen: {e}"))?;
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -91,7 +91,9 @@ fn dir_de_firmas() -> Result<std::path::PathBuf, String> {
         .get()
         .ok_or("Directorio de datos no inicializado")?
         .join("firmas");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        crate::mensaje_llano(format!("No se ha podido crear {}: {e}", dir.display()))
+    })?;
     Ok(dir)
 }
 
@@ -111,12 +113,14 @@ pub(crate) fn guardar_firma_en(
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let id = format!("{nanos}");
-    std::fs::write(dir.join(format!("{id}.png")), &bytes)
-        .map_err(|e| format!("No se pudo guardar la firma: {e}"))?;
+    std::fs::write(dir.join(format!("{id}.png")), &bytes).map_err(|e| {
+        crate::mensaje_llano(format!("No se ha podido guardar la firma: {e}"))
+    })?;
     let limpio = name.trim();
     let limpio = if limpio.is_empty() { "Firma" } else { limpio };
-    std::fs::write(dir.join(format!("{id}.txt")), limpio)
-        .map_err(|e| format!("No se pudo guardar el nombre: {e}"))?;
+    std::fs::write(dir.join(format!("{id}.txt")), limpio).map_err(|e| {
+        crate::mensaje_llano(format!("No se ha podido guardar el nombre: {e}"))
+    })?;
     Ok(FirmaGuardada {
         id,
         name: limpio.to_string(),
@@ -154,10 +158,13 @@ pub(crate) fn listar_firmas_en(dir: &std::path::Path) -> Result<Vec<FirmaGuardad
 /// a PNG para conservar la transparencia con un formato único.
 #[tauri::command(async)]
 pub fn import_signature_file(image_path: String) -> Result<FirmaGuardada, String> {
-    let img = image::open(&image_path).map_err(|e| format!("No se pudo leer la imagen: {e}"))?;
+    let img = image::open(&image_path).map_err(|e| {
+        crate::mensaje_llano(format!("No se ha podido leer la imagen: {e}"))
+    })?;
     let mut buf = std::io::Cursor::new(Vec::new());
-    img.write_to(&mut buf, image::ImageFormat::Png)
-        .map_err(|e| format!("No se pudo convertir la imagen: {e}"))?;
+    img.write_to(&mut buf, image::ImageFormat::Png).map_err(|e| {
+        crate::mensaje_llano(format!("No se ha podido convertir la imagen a PNG: {e}"))
+    })?;
     let png_base64 = base64::engine::general_purpose::STANDARD.encode(buf.into_inner());
     let name = std::path::Path::new(&image_path)
         .file_stem()
@@ -186,8 +193,9 @@ pub fn delete_stored_signature(id: String) -> Result<(), String> {
         return Err("Id de firma inválido".into());
     }
     let dir = dir_de_firmas()?;
-    std::fs::remove_file(dir.join(format!("{id}.png")))
-        .map_err(|e| format!("No se pudo borrar la firma: {e}"))?;
+    std::fs::remove_file(dir.join(format!("{id}.png"))).map_err(|e| {
+        crate::mensaje_llano(format!("No se ha podido borrar la firma: {e}"))
+    })?;
     let _ = std::fs::remove_file(dir.join(format!("{id}.txt")));
     Ok(())
 }

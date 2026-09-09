@@ -20,8 +20,11 @@ pub fn get_image_data(path: String, page_index: u16, object_index: u32) -> Resul
         // copia aparte, de solo lectura, que se descarta al salir.
         let doc = pdfium()?
             .load_pdf_from_file(&path, None)
-            .map_err(|e| e.to_string())?;
-        let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            .map_err(crate::mensaje_llano)?;
+        let page = doc
+            .pages()
+            .get(page_index)
+            .map_err(crate::mensaje_llano)?;
         let obj = page
             .objects()
             .get(object_index as usize)
@@ -32,7 +35,7 @@ pub fn get_image_data(path: String, page_index: u16, object_index: u32) -> Resul
             .map_err(|e| e.to_string())?;
         let mut buf = std::io::Cursor::new(Vec::new());
         img.write_to(&mut buf, image::ImageFormat::Png)
-            .map_err(|e| format!("No se pudo codificar la imagen: {e}"))?;
+            .map_err(|e| format!("No se ha podido codificar la imagen: {e}"))?;
         Ok(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
     })
 }
@@ -87,7 +90,7 @@ pub fn add_image(
 ) -> Result<(), String> {
     mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let img =
-            image::open(&image_path).map_err(|e| format!("No se pudo leer la imagen: {e}"))?;
+            image::open(&image_path).map_err(|e| format!("No se ha podido leer la imagen: {e}"))?;
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -181,7 +184,7 @@ pub fn replace_image(
 ) -> Result<(), String> {
     mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let img =
-            image::open(&image_path).map_err(|e| format!("No se pudo leer la imagen: {e}"))?;
+            image::open(&image_path).map_err(|e| format!("No se ha podido leer la imagen: {e}"))?;
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)

@@ -10,7 +10,7 @@
 //! comandos. Regla: TODO comando que escriba `work_path` envuelve su cuerpo
 //! en [`mutacion`].
 
-use crate::{invalidate_doc_cache, on_pdfium_thread, with_doc};
+use crate::{invalidate_doc_cache, mensaje_llano, on_pdfium_thread, with_doc};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -91,7 +91,7 @@ fn empuja(work_path: &str) -> Result<(), String> {
             let snap = ruta_instantanea(&work_path, h.seq);
             h.seq += 1;
             std::fs::copy(&work_path, &snap)
-                .map_err(|e| format!("No se pudo guardar el paso de deshacer: {e}"))?;
+                .map_err(|e| format!("No se ha podido guardar el paso de deshacer: {e}"))?;
             for viejo in h.rehacer.drain(..) {
                 let _ = std::fs::remove_file(viejo);
             }
@@ -137,7 +137,8 @@ pub(crate) fn mutacion<R>(
         }
         Err(e) => {
             descarta_ultimo(&work_path);
-            Err(e)
+            // único sitio donde se traduce el error de una mutación
+            Err(mensaje_llano(e))
         }
     }
 }
@@ -170,7 +171,7 @@ fn intercambia(work_path: &str, hacia_atras: bool) -> Result<HistoryState, Strin
         con(work_path, |h| {
             if hacia_atras { h.deshacer.push(origen) } else { h.rehacer.push(origen) }
         });
-        return Err(format!("No se pudo restaurar el documento: {e}"));
+        return Err(format!("No se ha podido restaurar el documento: {e}"));
     }
     con(work_path, |h| {
         if hacia_atras { h.rehacer.push(actual) } else { h.deshacer.push(actual) }
@@ -181,19 +182,19 @@ fn intercambia(work_path: &str, hacia_atras: bool) -> Result<HistoryState, Strin
 /// Deshace la última mutación. Devuelve el estado del historial.
 #[tauri::command(async)]
 pub fn undo(work_path: String) -> Result<HistoryState, String> {
-    on_pdfium_thread(move || intercambia(&work_path, true))
+    on_pdfium_thread(move || intercambia(&work_path, true)).map_err(mensaje_llano)
 }
 
 /// Rehace la última mutación deshecha.
 #[tauri::command(async)]
 pub fn redo(work_path: String) -> Result<HistoryState, String> {
-    on_pdfium_thread(move || intercambia(&work_path, false))
+    on_pdfium_thread(move || intercambia(&work_path, false)).map_err(mensaje_llano)
 }
 
 /// Pasos disponibles en cada dirección.
 #[tauri::command(async)]
 pub fn history_state(work_path: String) -> Result<HistoryState, String> {
-    on_pdfium_thread(move || estado(&work_path))
+    on_pdfium_thread(move || estado(&work_path)).map_err(mensaje_llano)
 }
 
 /// Funde los últimos `steps` pasos en uno solo (para que una acción de la UI

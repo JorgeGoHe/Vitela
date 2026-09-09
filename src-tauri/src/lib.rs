@@ -77,7 +77,7 @@ pub(crate) fn pdfium() -> Result<&'static Pdfium, String> {
             Some(b) => b,
             None => Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./lib/"))
                 .or_else(|_| Pdfium::bind_to_system_library())
-                .map_err(|e| format!("No se pudo cargar libpdfium: {e}"))?,
+                .map_err(|e| format!("No se ha podido cargar libpdfium: {e}"))?,
         };
         let leaked: &'static Pdfium = Box::leak(Box::new(Pdfium::new(bindings)));
         *slot = Some(leaked);
@@ -98,10 +98,10 @@ pub(crate) fn with_doc<R>(
         if stale {
             let doc = pdfium()?
                 .load_pdf_from_file(path, None)
-                .map_err(|e| e.to_string())?;
+                .map_err(mensaje_llano)?;
             *cache = Some((path.to_string(), doc));
         }
-        f(&cache.as_ref().unwrap().1)
+        f(&cache.as_ref().unwrap().1).map_err(mensaje_llano)
     })
 }
 
@@ -116,10 +116,10 @@ pub(crate) fn with_lopdf<R>(
         let stale = !matches!(cache.as_ref(), Some((p, _)) if p == path);
         if stale {
             let doc = lopdf::Document::load(path)
-                .map_err(|e| format!("No se pudo leer el PDF: {e}"))?;
+                .map_err(|e| mensaje_llano(format!("No se ha podido leer el PDF: {e}")))?;
             *cache = Some((path.to_string(), doc));
         }
-        f(&cache.as_ref().unwrap().1)
+        f(&cache.as_ref().unwrap().1).map_err(mensaje_llano)
     })
 }
 
@@ -234,10 +234,10 @@ fn work_copy_path(original: &str) -> std::path::PathBuf {
 /// otro handle del mismo fichero) y solo entonces renombrar.
 pub(crate) fn save_and_close(doc: PdfDocument<'static>, path: &str) -> Result<(), String> {
     let tmp = format!("{path}.tmp");
-    doc.save_to_file(&tmp).map_err(|e| e.to_string())?;
+    doc.save_to_file(&tmp).map_err(mensaje_llano)?;
     drop(doc);
     invalidate_doc_cache();
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    std::fs::rename(&tmp, path).map_err(mensaje_llano)
 }
 
 /// Cirugía con lopdf sobre la copia de trabajo: carga el PDF, ejecuta `f`
@@ -265,15 +265,15 @@ pub(crate) fn cirugia_en_hilo(
 ) -> Result<(), String> {
     invalidate_doc_cache();
     let mut doc = lopdf::Document::load(work_path)
-        .map_err(|e| format!("No se pudo leer el PDF: {e}"))?;
+        .map_err(|e| mensaje_llano(format!("No se ha podido leer el PDF: {e}")))?;
     if doc.is_encrypted() {
         return Err("El documento está cifrado: quita la contraseña antes".into());
     }
     f(&mut doc)?;
     let tmp = format!("{work_path}.tmp");
     doc.save(&tmp)
-        .map_err(|e| format!("No se pudo guardar: {e}"))?;
-    std::fs::rename(&tmp, work_path).map_err(|e| e.to_string())
+        .map_err(|e| mensaje_llano(format!("No se ha podido guardar el documento: {e}")))?;
+    std::fs::rename(&tmp, work_path).map_err(mensaje_llano)
 }
 
 /// Abre un PDF creando una copia de trabajo en temp. Todas las mutaciones
@@ -281,6 +281,86 @@ pub(crate) fn cirugia_en_hilo(
 /// está cifrado hace falta `password`: la copia de trabajo se guarda ya
 /// descifrada para que el resto de comandos no tengan que saber nada. El
 /// error "PASSWORD_REQUIRED" indica a la UI que pida contraseña.
+/// Traduce a lenguaje llano el error que va a ver el usuario.
+///
+/// Los errores de las librerías salen en jerga y en inglés: el `Display`
+/// de `PdfiumError` es el `Debug` de Rust (`PdfiumLibraryInternalError(\n
+/// FormatError,\n)`) y el de `std::io::Error` acaba en `(os error 2)`.
+/// Nada de eso le dice a nadie qué ha pasado ni qué hacer. Esta función es
+/// el único sitio donde se traduce, y está en los embudos por los que pasa
+/// todo comando (`mutacion`, `with_doc`, `with_lopdf`) más los pocos que
+/// no pasan por ninguno.
+///
+/// Los mensajes que ya escribimos nosotros se conservan tal cual; si
+/// llevan pegada la causa en inglés, se les cambia solo esa cola.
+pub(crate) fn mensaje_llano(e: impl std::fmt::Display) -> String {
+    let bruto = e.to_string();
+    // el Debug multilínea de PdfiumError en una sola línea
+    let plano = bruto.split_whitespace().collect::<Vec<_>>().join(" ");
+    let Some(causa) = causa_llana(&plano) else {
+        return plano;
+    };
+    match contexto_de(&plano) {
+        Some(ctx) => format!("{ctx}: {causa}"),
+        None => {
+            let mut c = causa.chars();
+            match c.next() {
+                Some(primera) => primera.to_uppercase().collect::<String>() + c.as_str(),
+                None => plano,
+            }
+        }
+    }
+}
+
+/// La parte en español que ya habíamos escrito nosotros, antes de la causa
+/// («No se ha podido escribir /tmp/x.png: No such file…»). Se descarta si trae
+/// pinta de jerga o no empieza como una frase.
+fn contexto_de(s: &str) -> Option<&str> {
+    let (ctx, _) = s.split_once(": ")?;
+    if ctx.is_empty() || ctx.contains(['(', '{', '"', ',']) || !ctx.starts_with(char::is_uppercase)
+    {
+        return None;
+    }
+    Some(ctx)
+}
+
+/// Causa reconocida, en minúscula y con la salida para el usuario. `None`
+/// si el mensaje no contiene jerga y se puede dejar como está.
+fn causa_llana(s: &str) -> Option<&'static str> {
+    let tiene = |aguja: &str| s.contains(aguja);
+    if tiene("PageIndexOutOfBounds") || tiene("PageIndexOutOfRange") {
+        return Some("esa página ya no está en el documento; ciérralo y vuelve a abrirlo");
+    }
+    if tiene("PasswordError") {
+        return Some("la contraseña no es correcta");
+    }
+    if tiene("SecurityError") {
+        return Some("el PDF no permite abrirse con esta contraseña");
+    }
+    if tiene("FormatError") {
+        return Some("el PDF parece dañado; prueba con otra copia del documento");
+    }
+    if tiene("NotFound") || tiene("No such file or directory") {
+        return Some("no se encuentra el fichero; puede que se haya movido o borrado");
+    }
+    if tiene("PermissionDenied") || tiene("Permission denied") {
+        return Some("no hay permiso para escribir ahí; elige otra carpeta");
+    }
+    if tiene("No space left") || tiene("os error 28") {
+        return Some("no queda espacio en el disco");
+    }
+    if tiene("FileError") {
+        return Some("no se ha podido abrir el fichero; comprueba que sigue donde estaba");
+    }
+    if tiene("os error") || tiene("IoError") {
+        return Some("el sistema no ha dejado terminar la operación; inténtalo de nuevo");
+    }
+    if tiene("PdfiumLibraryInternalError") || tiene("PdfiumError") {
+        return Some("el PDF no ha admitido este cambio; guárdalo, ciérralo y vuelve a abrirlo");
+    }
+    None
+}
+
 /// Traduce el error de PDFium al abrir (su `Display` es el `Debug` de Rust,
 /// que no le sirve de nada al usuario).
 fn mensaje_apertura(e: &PdfiumError) -> String {
@@ -288,17 +368,17 @@ fn mensaje_apertura(e: &PdfiumError) -> String {
         PdfiumError::IoError(io) if io.kind() == std::io::ErrorKind::NotFound => {
             "No se encuentra el fichero".into()
         }
-        PdfiumError::IoError(io) => format!("No se pudo leer el fichero: {io}"),
+        PdfiumError::IoError(io) => format!("No se ha podido leer el fichero: {io}"),
         PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::FormatError) => {
             "El fichero no es un PDF válido o está dañado".into()
         }
         PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::FileError) => {
-            "No se pudo abrir el fichero".into()
+            "No se ha podido abrir el fichero".into()
         }
         PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::SecurityError) => {
             "El PDF no permite abrirse con esta contraseña".into()
         }
-        otro => format!("No se pudo abrir el PDF: {otro}"),
+        otro => format!("No se ha podido abrir el PDF: {otro}"),
     }
 }
 
@@ -327,8 +407,9 @@ fn open_pdf(path: String, password: Option<String>) -> Result<DocumentInfo, Stri
             )?;
         } else {
             drop(doc);
-            std::fs::copy(&path, &work_path)
-                .map_err(|e| format!("No se pudo crear la copia de trabajo: {e}"))?;
+            std::fs::copy(&path, &work_path).map_err(|e| {
+                mensaje_llano(format!("No se ha podido preparar el documento: {e}"))
+            })?;
         }
         copias_abiertas().insert(work_path.clone());
         Ok(DocumentInfo {
@@ -450,9 +531,9 @@ fn sign_pdf(
     reason: Option<String>,
 ) -> Result<(), String> {
     let cert_pem = std::fs::read_to_string(&cert_pem_path)
-        .map_err(|e| format!("No se pudo leer el certificado: {e}"))?;
+        .map_err(|e| mensaje_llano(format!("No se ha podido leer el certificado: {e}")))?;
     let key_pem = std::fs::read_to_string(&key_pem_path)
-        .map_err(|e| format!("No se pudo leer la clave: {e}"))?;
+        .map_err(|e| mensaje_llano(format!("No se ha podido leer la clave: {e}")))?;
     let cred = firma::credenciales_pem(&cert_pem, &key_pem)?;
     firmar_en_hilo(work_path, dest_path, cred, reason)
 }
@@ -467,7 +548,7 @@ fn firmar_en_hilo(
 ) -> Result<(), String> {
     on_pdfium_thread(move || {
         invalidate_doc_cache();
-        firma::sign(&work_path, &dest_path, &cred, reason)
+        firma::sign(&work_path, &dest_path, &cred, reason).map_err(mensaje_llano)
     })
 }
 
@@ -480,7 +561,8 @@ fn sign_pdf_p12(
     password: String,
     reason: Option<String>,
 ) -> Result<(), String> {
-    let bytes = std::fs::read(&p12_path).map_err(|e| format!("No se pudo leer el .p12: {e}"))?;
+    let bytes = std::fs::read(&p12_path)
+        .map_err(|e| mensaje_llano(format!("No se ha podido leer el .p12: {e}")))?;
     let cred = firma::credenciales_p12(&bytes, &password)?;
     firmar_en_hilo(work_path, dest_path, cred, reason)
 }
@@ -524,7 +606,7 @@ fn save_pdf(work_path: String, dest_path: String) -> Result<(), String> {
         invalidate_doc_cache();
         std::fs::copy(&work_path, &dest_path)
             .map(|_| ())
-            .map_err(|e| format!("No se pudo guardar: {e}"))
+            .map_err(|e| mensaje_llano(format!("No se ha podido guardar en {dest_path}: {e}")))
     })
 }
 
@@ -726,6 +808,96 @@ pub(crate) mod tests {
                 .map(|p| p.text().map(|t| t.all()).unwrap_or_default())
                 .collect()
         })
+    }
+
+    #[test]
+    fn mensaje_llano_traduce_la_jerga_y_respeta_lo_nuestro() {
+        // el Display de PdfiumError es el Debug de Rust, multilínea
+        let e = mensaje_llano("PdfiumLibraryInternalError(\n    FormatError,\n)");
+        assert_eq!(e, "El PDF parece dañado; prueba con otra copia del documento");
+        assert_eq!(
+            mensaje_llano("PageIndexOutOfBounds"),
+            "Esa página ya no está en el documento; ciérralo y vuelve a abrirlo"
+        );
+        // el contexto que escribimos nosotros se conserva; la cola, no
+        assert_eq!(
+            mensaje_llano("No se ha podido escribir /tmp/x.png: No such file or directory (os error 2)"),
+            "No se ha podido escribir /tmp/x.png: no se encuentra el fichero; puede que se haya movido o borrado"
+        );
+        // un mensaje ya llano pasa igual (idempotente)
+        let llano = "El área de recorte es demasiado pequeña";
+        assert_eq!(mensaje_llano(llano), llano);
+        assert_eq!(mensaje_llano(mensaje_llano(llano)), llano);
+    }
+
+    /// Ningún error que llegue a la UI puede llevar jerga de Rust, de
+    /// PDFium ni del sistema: quien lo lee no sabe qué es un content stream.
+    #[test]
+    fn los_errores_que_ve_el_usuario_no_llevan_jerga() {
+        let danado = std::env::temp_dir().join("editor_pdf_test_errores_danado.pdf");
+        std::fs::write(&danado, b"esto no es un PDF").expect("escribir");
+        let d = danado.to_string_lossy().into_owned();
+        let bueno = std::env::temp_dir().join("editor_pdf_test_errores_ok.pdf");
+        crea_pdf(&["Hola"], &bueno);
+        let b = bueno.to_string_lossy().into_owned();
+
+        let casos: Vec<(&str, String)> = vec![
+            ("abrir un fichero dañado", open_pdf(d.clone(), None).unwrap_err()),
+            ("renderizar un fichero dañado", render_page_b64(d.clone(), 0, 100).unwrap_err()),
+            (
+                "listar anotaciones de un fichero dañado",
+                anotaciones::get_annotations(d.clone(), 0).unwrap_err(),
+            ),
+            ("borrar una página que no existe", paginas::delete_page(b.clone(), 9).unwrap_err()),
+            ("girar una página que no existe", paginas::rotate_page(b.clone(), 9).unwrap_err()),
+            ("renderizar una página que no existe", render_page_b64(b.clone(), 9, 100).unwrap_err()),
+            (
+                "extraer a una carpeta que no existe",
+                paginas::extract_pages(b.clone(), vec![0], "/nope/x.pdf".into()).unwrap_err(),
+            ),
+            (
+                "unir con un PDF que no está",
+                paginas::merge_pdf(b.clone(), "/tmp/no-existe-jamas.pdf".into()).unwrap_err(),
+            ),
+            (
+                "guardar en una carpeta que no existe",
+                save_pdf(b.clone(), "/nope/x.pdf".into()).unwrap_err(),
+            ),
+            (
+                "exportar texto a una carpeta que no existe",
+                exportar::export_text(b.clone(), "/nope/x.txt".into()).unwrap_err(),
+            ),
+            (
+                "firmar con un certificado que no está",
+                sign_pdf(b.clone(), "/tmp/f.pdf".into(), "/tmp/nope.pem".into(), "/tmp/nope.pem".into(), None)
+                    .unwrap_err(),
+            ),
+        ];
+
+        let jerga = [
+            "PdfiumLibraryInternalError",
+            "PdfiumError",
+            "PageIndexOutOfBounds",
+            "IoError",
+            "os error",
+            "No such file",
+            "Permission denied",
+            "Os {",
+        ];
+        for (que, e) in &casos {
+            for j in jerga {
+                assert!(!e.contains(j), "al {que} sale jerga ({j}): {e}");
+            }
+            assert!(!e.contains('\n'), "al {que} el mensaje va en varias líneas: {e}");
+            assert!(
+                e.starts_with(char::is_uppercase),
+                "al {que} el mensaje no empieza como una frase: {e}"
+            );
+            assert!(e.len() > 20, "al {que} el mensaje no explica nada: {e}");
+        }
+
+        std::fs::remove_file(&danado).ok();
+        std::fs::remove_file(&bueno).ok();
     }
 
     #[test]
