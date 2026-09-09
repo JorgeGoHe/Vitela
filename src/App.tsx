@@ -11,6 +11,7 @@ import {
   invoke,
   onAbrirFichero,
   onArrastreFicheros,
+  onCerrarSolicitado,
   subscribeBusy,
 } from "./ipc";
 import { useHistorial } from "./hooks/useHistorial";
@@ -180,6 +181,8 @@ function App() {
   // ficheros soltados de golpe: abrir el primero o unirlos
   const [dropAsk, setDropAsk] = useState<string[] | null>(null);
   const [arrastrando, setArrastrando] = useState(false);
+  // el usuario ha intentado cerrar la ventana con cambios sin guardar
+  const [cerrarAsk, setCerrarAsk] = useState(false);
   const [noticeSaliendo, setNoticeSaliendo] = useState(false);
   const [outline, setOutlineState] = useState<OutlineNode[]>([]);
   const [propsDraft, setPropsDraft] = useState<Metadata | null>(null);
@@ -320,6 +323,27 @@ function App() {
       }
     });
   }
+
+  /** Deja que la ventana se cierre de verdad (el backend frenó el cierre). */
+  function confirmarCierre() {
+    invoke("confirmar_cierre").catch((e) => setError(String(e)));
+  }
+
+  /** Guarda y, solo si el guardado ha ido bien, cierra. */
+  async function guardarYSalir() {
+    const ok = await (originalPath ? saveFile() : saveFileAs());
+    if (!ok) return;
+    setCerrarAsk(false);
+    confirmarCierre();
+  }
+
+  const cerrarRef = useRef<() => void>(() => {});
+  cerrarRef.current = () => {
+    if (modified) setCerrarAsk(true);
+    else confirmarCierre();
+  };
+
+  useEffect(() => onCerrarSolicitado(() => cerrarRef.current()), []);
 
   // Fichero abierto desde el Finder o pasado como argumento al arrancar
   const abrirRef = useRef<(path: string) => void>(() => {});
@@ -1533,6 +1557,27 @@ function App() {
           textoConfirmar="Fijar"
           onConfirm={applyFlatten}
           onClose={() => setFlattenAsk(false)}
+        />
+      )}
+      {cerrarAsk && (
+        <DialogoConfirmar
+          titulo="Guardar los cambios"
+          cuerpo={
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              ¿Quieres guardar los cambios en {fileName ?? "el documento"}{" "}
+              antes de salir? Si no los guardas se pierden.
+            </p>
+          }
+          textoConfirmar="Guardar y salir"
+          secundario={{
+            texto: "Salir sin guardar",
+            onClick: () => {
+              setCerrarAsk(false);
+              confirmarCierre();
+            },
+          }}
+          onConfirm={guardarYSalir}
+          onClose={() => setCerrarAsk(false)}
         />
       )}
       {unsavedAsk && (

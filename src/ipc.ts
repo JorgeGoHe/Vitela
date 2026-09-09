@@ -46,6 +46,28 @@ export function onAbrirFichero(cb: (path: string) => void): () => void {
   };
 }
 
+/** Ventana de la app en el navegador de QA: no hay evento de cierre, se
+ *  dispara a mano con `window.__vitelaCerrar()`. */
+type VentanaQa = Window & { __vitelaCerrar?: () => void };
+
+/**
+ * El usuario intenta cerrar la ventana o salir de la app: el backend frena
+ * el cierre y emite `cerrar-solicitado`; cuando la UI decide que se puede
+ * cerrar llama al comando `confirmar_cierre`.
+ */
+export function onCerrarSolicitado(cb: () => void): () => void {
+  if (!hayTauri) {
+    (window as VentanaQa).__vitelaCerrar = cb;
+    return () => {
+      delete (window as VentanaQa).__vitelaCerrar;
+    };
+  }
+  const pendiente = listen("cerrar-solicitado", () => cb());
+  return () => {
+    pendiente.then((quitar) => quitar()).catch(() => {});
+  };
+}
+
 /**
  * Arrastrar y soltar ficheros sobre la ventana. Va por los eventos nativos
  * de Tauri porque el `drop` de HTML5 no trae la ruta del fichero: en el
