@@ -455,10 +455,15 @@ export type RedactReport = { textos: number; imagenes: number };
  *  en el PDF como anotación y se puede revisar, quitar y guardar. */
 export type Redaccion = {
   page_index: number;
+  /** Índice de la anotación DENTRO de `/Annots` de su página: el mismo que
+   *  entienden `unmark_redaction`, `transform_annotation` y
+   *  `remove_annotation`. No es un ordinal entre las marcas: en una página
+   *  con un resaltado delante, los dos números dejan de coincidir. */
+  annot_index: number;
   rect: { x: number; y: number; w: number; h: number };
 };
 
-/** Marca una zona; devuelve el índice de la marca en su página. */
+/** Marca una zona; devuelve el `annot_index` de la marca en su página. */
 export function markRedaction(
   workPath: string,
   pageIndex: number,
@@ -471,12 +476,13 @@ export function listRedactions(workPath: string): Promise<Redaccion[]> {
   return invoke("list_redactions", { workPath });
 }
 
+/** Quita una marca por su `annot_index` (el que trae `list_redactions`). */
 export function unmarkRedaction(
   workPath: string,
   pageIndex: number,
-  markIndex: number,
+  annotIndex: number,
 ): Promise<void> {
-  return invoke("unmark_redaction", { workPath, pageIndex, markIndex });
+  return invoke("unmark_redaction", { workPath, pageIndex, annotIndex });
 }
 
 /** Aplica todas las marcas en una sola mutación; con `dryRun` solo cuenta

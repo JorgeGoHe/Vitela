@@ -96,9 +96,9 @@ type Props = {
    *  propio de la página: lo resuelve App, que abre el diálogo. */
   onFirmaRect: (page: number, rect: Rect) => void;
   /** Zonas marcadas para censurar que caen en esta página. */
-  marcas: { markIndex: number; rect: Rect }[];
+  marcas: { annotIndex: number; rect: Rect }[];
   /** Quita una marca de esta página (la lista la lleva App). */
-  quitarMarca: (page: number, markIndex: number) => void;
+  quitarMarca: (page: number, annotIndex: number) => void;
   /** La lista de marcas ha cambiado: que App la relea. */
   onMarcasCambian: () => void;
   /** Suben cuando la fila contextual pide «Añadir texto» o «Insertar
@@ -793,6 +793,7 @@ function Pagina({
             scale={scale}
             displayWidth={displayWidth}
             tool={tool}
+            onQuitarMarca={(annotIndex) => quitarMarca(index, annotIndex)}
           />
           <CapaAreas
             mode={mode}
@@ -802,7 +803,7 @@ function Pagina({
             activeSig={activeSig}
             onModeChange={onModeChange}
             marcas={marcas}
-            onQuitarMarca={(markIndex) => quitarMarca(index, markIndex)}
+            onQuitarMarca={(annotIndex) => quitarMarca(index, annotIndex)}
           />
           {matches?.map((g) =>
             g.rects.map((r, j) => (

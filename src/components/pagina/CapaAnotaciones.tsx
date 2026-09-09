@@ -119,11 +119,17 @@ export function MarcasAnotaciones({
               />
             )),
           )}
+      {/* Las marcas de redacción (`Square`) entran aquí con todo lo demás: el
+          contrato decía «se selecciona, se mueve y se borra como cualquier
+          otra anotación» y en modo Seleccionar eran inertes. */}
       {mode === "select" &&
         annots
           .filter(
             (a) =>
-              a.kind === "Ink" || a.kind === "Stamp" || a.kind === "FreeText",
+              a.kind === "Ink" ||
+              a.kind === "Stamp" ||
+              a.kind === "FreeText" ||
+              a.kind === "Square",
           )
           .map((a) => {
             const d =
@@ -164,6 +170,10 @@ type Props = {
   scale: number;
   displayWidth: number;
   tool: ToolProps;
+  /** Quitar una marca de redacción por su `annot_index`: va por
+   *  `unmark_redaction`, que comprueba que la anotación es una marca y
+   *  refresca la lista del documento. */
+  onQuitarMarca: (annotIndex: number) => void;
 };
 
 export default function CapaAnotaciones({
@@ -172,6 +182,7 @@ export default function CapaAnotaciones({
   scale,
   displayWidth,
   tool,
+  onQuitarMarca,
 }: Props) {
   const {
     annots,
@@ -226,7 +237,45 @@ export default function CapaAnotaciones({
             </button>
           );
         })}
-      {notePopover && (
+      {/* Una marca de redacción no es un comentario: ni color, ni texto que
+          corregir. Lo único que se puede hacer con ella es quitarla, y
+          conviene recordar que todavía no ha borrado nada. */}
+      {notePopover && notePopover.kind === "Square" && (
+        <div
+          className="card"
+          style={{
+            left: clampCardLeft(notePopover.x * scale, displayWidth),
+            top: (notePopover.y + notePopover.h) * scale + 6,
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <p>
+            Zona marcada para censurar. Arrástrala para ajustarla; no se borra
+            nada hasta que pulses «Aplicar redacción».
+          </p>
+          {firmaAnotacion(notePopover.author, notePopover.modified) && (
+            <p className="annot-firma dato">
+              {firmaAnotacion(notePopover.author, notePopover.modified)}
+            </p>
+          )}
+          <div className="card-actions">
+            <button
+              className="btn btn-danger"
+              onClick={() => {
+                setNotePopover(null);
+                onQuitarMarca(notePopover.index);
+              }}
+            >
+              <Icon name="trash" size={13} />
+              Quitar la marca
+            </button>
+            <button className="btn" onClick={cerrarPopover}>
+              Cerrar
+            </button>
+          </div>
+        </div>
+      )}
+      {notePopover && notePopover.kind !== "Square" && (
         <div
           className="card"
           style={{

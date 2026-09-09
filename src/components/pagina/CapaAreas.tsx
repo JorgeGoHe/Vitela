@@ -11,9 +11,10 @@ type Props = {
   displayWidth: number;
   activeSig: { png: string; ratio: number } | null;
   onModeChange: (m: Mode) => void;
-  /** Zonas marcadas para censurar en esta página. */
-  marcas: { markIndex: number; rect: Rect }[];
-  onQuitarMarca: (markIndex: number) => void;
+  /** Zonas marcadas para censurar en esta página, con el `annot_index` que
+   *  entiende el backend (no un ordinal entre las marcas). */
+  marcas: { annotIndex: number; rect: Rect }[];
+  onQuitarMarca: (annotIndex: number) => void;
 };
 
 export default function CapaAreas({
@@ -86,11 +87,11 @@ export default function CapaAreas({
       {mode === "redact" &&
         marcas.map((m) => (
           <div
-            key={m.markIndex}
+            key={m.annotIndex}
             className="redact-marca"
             tabIndex={0}
             role="button"
-            aria-label={`Zona marcada para censurar; Supr la quita`}
+            aria-label="Zona marcada para censurar; Supr la quita"
             title="Zona marcada. Se censura al aplicar; Supr la quita"
             style={{
               left: m.rect.x * scale,
@@ -103,7 +104,7 @@ export default function CapaAreas({
               if (e.key === "Delete" || e.key === "Backspace") {
                 e.preventDefault();
                 e.stopPropagation();
-                onQuitarMarca(m.markIndex);
+                onQuitarMarca(m.annotIndex);
               }
             }}
           >
@@ -113,7 +114,7 @@ export default function CapaAreas({
               aria-label="Quitar esta marca"
               onClick={(e) => {
                 e.stopPropagation();
-                onQuitarMarca(m.markIndex);
+                onQuitarMarca(m.annotIndex);
               }}
             >
               <Icon name="close" size={11} />

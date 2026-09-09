@@ -816,22 +816,14 @@ function App() {
     refrescarMarcas();
   }, [refrescarMarcas, docVersion]);
 
-  /** El índice que entiende `unmark_redaction` es la posición de la marca
-   *  DENTRO de su página; `list_redactions` las devuelve en ese orden. */
-  const marcasIndexadas = useMemo(() => {
-    const cuenta = new Map<number, number>();
-    return marcasRedact.map((m) => {
-      const n = cuenta.get(m.page_index) ?? 0;
-      cuenta.set(m.page_index, n + 1);
-      return { ...m, markIndex: n };
-    });
-  }, [marcasRedact]);
-
-  /** Quita una marca (no toca el contenido: solo la propuesta). */
-  async function quitarMarca(page: number, markIndex: number) {
+  /** Quita una marca por su `annot_index`, que es el que trae
+   *  `list_redactions` y el único que entiende el backend: un ordinal entre
+   *  las marcas de la página apunta a otra anotación en cuanto hay un
+   *  resaltado o un campo delante. */
+  async function quitarMarca(page: number, annotIndex: number) {
     if (!workPath) return;
     try {
-      await unmarkRedaction(workPath, page, markIndex);
+      await unmarkRedaction(workPath, page, annotIndex);
       refrescarMarcas();
       afterPageMutation(page);
     } catch (e) {
@@ -841,15 +833,16 @@ function App() {
 
   /** Quita todas las marcas de golpe, en un solo paso de deshacer. */
   async function quitarTodasLasMarcas() {
-    if (!workPath || marcasIndexadas.length === 0) return;
-    // de mayor a menor: quitar una corre los índices de las siguientes
-    const orden = [...marcasIndexadas].sort(
-      (a, b) => b.page_index - a.page_index || b.markIndex - a.markIndex,
+    if (!workPath || marcasRedact.length === 0) return;
+    // de mayor a menor: quitar una anotación corre los índices de las que
+    // van detrás en el mismo `/Annots`
+    const orden = [...marcasRedact].sort(
+      (a, b) => b.page_index - a.page_index || b.annot_index - a.annot_index,
     );
     try {
       let hechas = 0;
       for (const m of orden) {
-        await unmarkRedaction(workPath, m.page_index, m.markIndex);
+        await unmarkRedaction(workPath, m.page_index, m.annot_index);
         hechas++;
       }
       if (hechas > 1) await historial.agrupar(hechas);
@@ -3382,9 +3375,9 @@ function App() {
                   onLinkUri={onLinkUri}
                   onSigStamped={onSigStamped}
                   onFirmaRect={recibeFirmaRect}
-                  marcas={marcasIndexadas
+                  marcas={marcasRedact
                     .filter((m) => m.page_index === i)
-                    .map((m) => ({ markIndex: m.markIndex, rect: m.rect }))}
+                    .map((m) => ({ annotIndex: m.annot_index, rect: m.rect }))}
                   quitarMarca={quitarMarca}
                   onMarcasCambian={refrescarMarcas}
                   pedirTextoNuevo={pedirTextoNuevo}
