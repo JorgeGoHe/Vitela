@@ -46,6 +46,7 @@ import {
   rotatePages,
   removeRecent,
   renderPageSrc,
+  setMenuState,
   signPdf,
   signPdfP12,
   touchRecent,
@@ -76,6 +77,7 @@ import {
 } from "./api";
 import {
   ATAJO_COMENTARIOS,
+  ES_MAC,
   ATAJO_MARCADORES,
   ATAJO_PANEL,
   cargaPreferencias,
@@ -130,6 +132,7 @@ import DialogoImprimir from "./components/DialogoImprimir";
 import DialogoReemplazar from "./components/DialogoReemplazar";
 import DialogoDividir from "./components/DialogoDividir";
 import DialogoCombinar from "./components/DialogoCombinar";
+import DialogoAtajos from "./components/DialogoAtajos";
 import "./App.css";
 
 const BASE_WIDTH = 900;
@@ -137,6 +140,26 @@ const BASE_WIDTH = 900;
 function recortaZoom(z: number): number {
   return Math.min(4, Math.max(0.5, Math.round(z * 100) / 100));
 }
+/**
+ * Reenvía a la app una pulsación que el menú nativo se ha quedado. En macOS
+ * una entrada con acelerador consume la tecla antes de que llegue al
+ * webview, así que ⌘C y ⌘A dejarían de funcionar en la app empaquetada: el
+ * evento sintético los devuelve al mismo camino de siempre (la selección de
+ * la página que se está leyendo, o el panel de páginas si tiene el foco), en
+ * vez de abrir un segundo camino que pueda separarse del primero.
+ */
+function reenviaTecla(key: string) {
+  window.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key,
+      metaKey: ES_MAC,
+      ctrlKey: !ES_MAC,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+}
+
 /** Separación vertical entre páginas y padding superior del visor (px). */
 const PAGE_GAP = 24;
 const VIEWER_PAD_TOP = 28;
@@ -367,6 +390,8 @@ function App() {
   const [outline, setOutlineState] = useState<OutlineNode[]>([]);
   const [propsDraft, setPropsDraft] = useState<Metadata | null>(null);
   const [prefsAbiertas, setPrefsAbiertas] = useState(false);
+  // «Ayuda ▸ Atajos de teclado»: el único sitio donde están todos escritos
+  const [atajosAbiertos, setAtajosAbiertos] = useState(false);
   const {
     firmas,
     activeSig,
@@ -442,6 +467,9 @@ function App() {
       setDocVersion((v) => v + 1);
       viewerRef.current?.scrollTo({ top: 0 });
       scrollAnchorRef.current = null;
+      // el menú nativo se monta una sola vez, en el arranque y sin documento:
+      // sin este aviso sus entradas se quedan atenuadas para siempre
+      setMenuState(true).catch(() => {});
       // la lista de recientes la lleva la UI: open_pdf no la toca
       touchRecent(path)
         .then(refrescarRecientes)
@@ -513,6 +541,15 @@ function App() {
       refrescarRecientes();
       setError(`Ya no está en ${path}; lo he quitado de recientes`);
     });
+  }
+
+  /** «Archivo ▸ Abrir reciente…» del menú nativo: la lista vive en el menú
+   *  «Acciones» cuando hay documento y en el estado vacío cuando no, así que
+   *  en vez de un tercer sitio se enseña el que toque. En los dos casos se
+   *  revalida antes: lo que se pinta tiene que ser lo que hay en el disco. */
+  function abrirRecientes() {
+    refrescarRecientes();
+    if (pageCount > 0) setMenuOpen(true);
   }
 
   function quitarReciente(path: string) {
@@ -680,6 +717,7 @@ function App() {
     setBandaFirmas(false);
     evictAll();
     setDocVersion((v) => v + 1);
+    setMenuState(false).catch(() => {});
     invoke("close_document", { workPath: anterior }).catch((e) => setError(String(e)));
   }
 
@@ -2290,11 +2328,18 @@ function App() {
    * Menú nativo de la barra del sistema: es el ESPEJO del menú «Acciones»,
    * no un segundo sitio con cosas distintas. Cada id hace exactamente lo
    * mismo que su botón; los que no aplican los deshabilita el backend, que
-   * es quien pinta el menú. Copiar, cortar y pegar son entradas nativas de
-   * Tauri y no llegan por aquí.
+   * es quien pinta el menú.
+   *
+   * Los ids son los de `menu::estructura()` (`src-tauri/src/menu.rs`) y son
+   * UNA sola lista: no hay sinónimos ni entradas que sobren, y un test de
+   * Rust cruza las dos mitades. Ojo con Copiar y Seleccionar todo: sus
+   * entradas llevan acelerador, así que en macOS el sistema se queda con ⌘C
+   * y ⌘A antes que el webview y sin estos handlers dejarían de funcionar.
    */
   const accionesMenu: Record<string, () => void> = {
+    /* Archivo */
     abrir: openFile,
+    "abrir-reciente": abrirRecientes,
     guardar: () => {
       if (modified) guardar();
     },
@@ -2302,58 +2347,79 @@ function App() {
       if (pageCount > 0) saveFileAs();
     },
     "cerrar-documento": closeDocument,
-    imprimir: printDocument,
     "anadir-pdf": addPdf,
-    extraer: () => setExtraerOpen(true),
-    reemplazar: () => setReemplazarOpen(true),
-    dividir: () => setDividirOpen(true),
-    combinar: () => setCombinarOpen(true),
     "insertar-pdf": insertPdfHere,
+    "combinar-ficheros": () => setCombinarOpen(true),
+    "reemplazar-paginas": () => setReemplazarOpen(true),
+    "extraer-paginas": () => setExtraerOpen(true),
+    "dividir-documento": () => setDividirOpen(true),
+    imprimir: printDocument,
+    /* Editar */
     deshacer: () => {
       if (historial.puedeDeshacer) historial.deshacer();
     },
     rehacer: () => {
       if (historial.puedeRehacer) historial.rehacer();
     },
+    copiar: () => reenviaTecla("c"),
+    "seleccionar-todo": () => reenviaTecla("a"),
     buscar: () =>
       (document.querySelector(".search input") as HTMLInputElement)?.focus(),
+    "buscar-siguiente": () => busqueda.gotoMatch(1),
+    "buscar-anterior": () => busqueda.gotoMatch(-1),
     preferencias: () => setPrefsAbiertas(true),
+    /* Ver */
+    "zoom-mas": () => setZoom(recortaZoom(Math.round((zoomNum + 0.25) * 4) / 4)),
+    "zoom-menos": () =>
+      setZoom(recortaZoom(Math.round((zoomNum - 0.25) * 4) / 4)),
     "zoom-pagina": () => setZoom("pagina"),
-    "zoom-ancho": () => setZoom("ajuste"),
     "zoom-100": () => setZoom(1),
-    ampliar: () => setZoom(recortaZoom(Math.round((zoomNum + 0.25) * 4) / 4)),
-    reducir: () => setZoom(recortaZoom(Math.round((zoomNum - 0.25) * 4) / 4)),
+    "zoom-ancho": () => setZoom("ajuste"),
+    "pagina-una": () => cambiaVista({ modoPagina: "una" }),
+    "pagina-continua": () => cambiaVista({ modoPagina: "continuo" }),
+    "pagina-dos": () => cambiaVista({ modoPagina: "dos" }),
+    "pagina-dos-continua": () => cambiaVista({ modoPagina: "dos-continuo" }),
     "girar-vista-derecha": () => setViewRotation((r) => (r + 90) % 360),
     "girar-vista-izquierda": () => setViewRotation((r) => (r + 270) % 360),
-    "pantalla-completa": () => cambiaPantallaCompleta(!pantallaCompleta),
-    nocturno: () => aplicaPrefs({ ...prefs, nocturno: !prefs.nocturno }),
     "panel-lateral": () => setSidebarVisible((v) => !v),
-    "pagina-una": () => cambiaVista({ modoPagina: "una" }),
-    "pagina-continuo": () => cambiaVista({ modoPagina: "continuo" }),
-    "pagina-dos": () => cambiaVista({ modoPagina: "dos" }),
-    "pagina-dos-continuo": () => cambiaVista({ modoPagina: "dos-continuo" }),
-    "vista-atras": atrasVista,
-    "vista-adelante": adelanteVista,
-    recortar: () => setMode("crop"),
-    "marca-agua": () => setWmOpen(true),
-    encabezado: () => setHfOpen(true),
-    "quitar-marca-agua": () => askRemoveMarginal("watermark"),
+    "pantalla-completa": () => cambiaPantallaCompleta(!pantallaCompleta),
+    "modo-nocturno": () => aplicaPrefs({ ...prefs, nocturno: !prefs.nocturno }),
+    /* Documento */
+    "organizar-paginas": () => abrirPestana("paginas"),
+    "recortar-pagina": () => {
+      selectMode("select");
+      setMode("crop");
+    },
+    "marca-de-agua": () => setWmOpen(true),
+    "encabezado-pie": () => setHfOpen(true),
+    "quitar-marca-de-agua": () => askRemoveMarginal("watermark"),
     "quitar-encabezados": () => askRemoveMarginal("header"),
-    propiedades: openProperties,
+    "anadir-campo": () => {
+      selectMode("select");
+      setMode("form-new");
+    },
+    "anadir-enlace": () => {
+      selectMode("select");
+      setMode("link-new");
+    },
+    firmar: empezarFirma,
     proteger: () =>
       setProtectDraft({ user: "", owner: "", ...TODO_PERMITIDO }),
     "quitar-proteccion": () => {
       if (protegido || protPendiente) setQuitarProtAsk(true);
     },
-    firmar: empezarFirma,
     aplanar: () => setFlattenAsk(true),
-    redactar: () => setMode("redact"),
-    sanear: pedirSanear,
-    "campo-nuevo": () => setMode("form-new"),
-    "enlace-nuevo": () => setMode("link-new"),
+    redactar: () => {
+      selectMode("select");
+      setMode("redact");
+    },
+    sanitizar: pedirSanear,
+    propiedades: openProperties,
     "exportar-imagenes": () => setExportOpen(true),
     "exportar-texto": exportPlainText,
     comprimir: () => setCompressOpen(true),
+    /* Ayuda */
+    atajos: () => setAtajosAbiertos(true),
   };
   // el listener se registra una vez y lee las acciones vivas por referencia
   const accionesMenuRef = useRef(accionesMenu);
@@ -2740,6 +2806,9 @@ function App() {
           onCambio={aplicaPrefs}
           onClose={() => setPrefsAbiertas(false)}
         />
+      )}
+      {atajosAbiertos && (
+        <DialogoAtajos onClose={() => setAtajosAbiertos(false)} />
       )}
       {propsDraft && (
         <DialogoPropiedades

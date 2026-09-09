@@ -680,3 +680,13 @@ export function squashHistory(
 ): Promise<HistoryState> {
   return invoke("squash_history", { workPath, steps });
 }
+
+/* ---- menú nativo ---- */
+
+/** Avisa al backend de si hay documento abierto para que atenúe las
+ *  entradas del menú nativo que no aplican (en Acrobat se atenúan, no
+ *  desaparecen). La UI lo llama al abrir y al cerrar documento: el menú se
+ *  monta una sola vez en el arranque y sin esto se queda atenuado siempre. */
+export function setMenuState(hasDocument: boolean): Promise<void> {
+  return invoke("set_menu_state", { hasDocument });
+}

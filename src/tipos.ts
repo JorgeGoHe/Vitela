@@ -4,19 +4,16 @@
  */
 import type { Rgba } from "./api";
 
+/** La app corre en macOS: cambia el modificador de los atajos y cómo se
+ *  escriben. Un solo sitio para la pregunta, que se hace en varios. */
+export const ES_MAC = navigator.platform.startsWith("Mac");
 /** Tecla modificadora en los tooltips y los menús («⌘» en Mac, «Ctrl+»). */
-export const MOD = navigator.platform.startsWith("Mac") ? "⌘" : "Ctrl+";
+export const MOD = ES_MAC ? "⌘" : "Ctrl+";
 /** Atajo del panel lateral, escrito como lo escribe cada plataforma. */
-export const ATAJO_PANEL = navigator.platform.startsWith("Mac")
-  ? "⌥⌘1"
-  : "Ctrl+Alt+1";
+export const ATAJO_PANEL = ES_MAC ? "⌥⌘1" : "Ctrl+Alt+1";
 /** Atajos de las otras dos pestañas del panel (abren Y llevan el foco). */
-export const ATAJO_MARCADORES = navigator.platform.startsWith("Mac")
-  ? "⌥⌘2"
-  : "Ctrl+Alt+2";
-export const ATAJO_COMENTARIOS = navigator.platform.startsWith("Mac")
-  ? "⌥⌘3"
-  : "Ctrl+Alt+3";
+export const ATAJO_MARCADORES = ES_MAC ? "⌥⌘2" : "Ctrl+Alt+2";
+export const ATAJO_COMENTARIOS = ES_MAC ? "⌥⌘3" : "Ctrl+Alt+3";
 
 export type CharBox = { ch: string; x: number; y: number; w: number; h: number };
 export type PageText = { width: number; height: number; chars: CharBox[] };

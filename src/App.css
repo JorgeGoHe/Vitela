@@ -1187,6 +1187,32 @@ textarea {
   width: min(430px, calc(100vw - 32px));
 }
 
+/* la lista de atajos necesita dos columnas: la tecla y qué hace */
+.modal.modal-atajos {
+  width: min(460px, calc(100vw - 32px));
+}
+
+.atajos-grupo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.atajos-fila {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+/* la tecla es un dato de imprenta, no interfaz (DESIGN.md) */
+.atajos-tecla {
+  color: var(--fg-muted);
+  min-width: 96px;
+  flex-shrink: 0;
+  text-align: right;
+  white-space: nowrap;
+}
+
 .sidebar-tabs {
   display: flex;
   /* con un documento firmado son cuatro: caben en dos líneas antes que
