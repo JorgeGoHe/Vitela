@@ -12,21 +12,28 @@ use pdfium_render::prelude::*;
 #[tauri::command(async)]
 pub fn get_image_data(path: String, page_index: u16, object_index: u32) -> Result<String, String> {
     on_pdfium_thread(move || {
-        with_doc(&path, |doc| {
-            let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-            let obj = page
-                .objects()
-                .get(object_index as usize)
-                .map_err(|e| e.to_string())?;
-            let img_obj = obj.as_image_object().ok_or("No es una imagen")?;
-            let img = img_obj
-                .get_processed_image(doc)
-                .map_err(|e| e.to_string())?;
-            let mut buf = std::io::Cursor::new(Vec::new());
-            img.write_to(&mut buf, image::ImageFormat::Png)
-                .map_err(|e| format!("No se pudo codificar la imagen: {e}"))?;
-            Ok(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
-        })
+        // Ojo: aquí NO se puede usar `with_doc`. Para devolver el bitmap al
+        // tamaño de la metadata, `get_processed_image` transforma el objeto
+        // de imagen y no lo deja como estaba, así que sobre el documento
+        // cacheado falsearía los bounds del render, las miniaturas, la
+        // exportación y `get_images` hasta la siguiente mutación. Se abre una
+        // copia aparte, de solo lectura, que se descarta al salir.
+        let doc = pdfium()?
+            .load_pdf_from_file(&path, None)
+            .map_err(|e| e.to_string())?;
+        let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+        let obj = page
+            .objects()
+            .get(object_index as usize)
+            .map_err(|e| e.to_string())?;
+        let img_obj = obj.as_image_object().ok_or("No es una imagen")?;
+        let img = img_obj
+            .get_processed_image(&doc)
+            .map_err(|e| e.to_string())?;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut buf, image::ImageFormat::Png)
+            .map_err(|e| format!("No se pudo codificar la imagen: {e}"))?;
+        Ok(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
     })
 }
 
@@ -374,5 +381,62 @@ mod tests {
         for f in [&tmp, &png, &png2] {
             std::fs::remove_file(f).ok();
         }
+    }
+
+    #[test]
+    fn la_vista_previa_no_mueve_la_imagen() {
+        let pdf = std::env::temp_dir().join("imagenes-preview-test.pdf");
+        crea_pdf(&["Página con imagen"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+
+        // PNG 200x120 azul: en puntos no mide lo mismo que en píxeles tras
+        // redimensionarlo, que es cuando pdfium-render reescala el objeto
+        let png = std::env::temp_dir().join("imagenes-preview-test.png");
+        let mut img = image::RgbaImage::new(200, 120);
+        for (_, _, p) in img.enumerate_pixels_mut() {
+            *p = image::Rgba([30, 80, 200, 255]);
+        }
+        img.save(&png).expect("guardar png");
+        add_image(
+            work.clone(),
+            0,
+            png.to_string_lossy().to_string(),
+            100.0,
+            300.0,
+        )
+        .expect("insertar imagen");
+        let idx = get_images(work.clone(), 0)
+            .expect("listar imágenes")
+            .last()
+            .expect("una imagen")
+            .object_index;
+        transform_image(work.clone(), 0, idx, 150.0, 350.0, 100.0, 60.0).expect("redimensionar");
+
+        let bounds = |v: &[ImageInfo]| -> Vec<(u32, i32, i32, i32, i32)> {
+            v.iter()
+                .map(|i| {
+                    (
+                        i.object_index,
+                        i.x.round() as i32,
+                        i.y.round() as i32,
+                        i.w.round() as i32,
+                        i.h.round() as i32,
+                    )
+                })
+                .collect()
+        };
+        let antes = bounds(&get_images(work.clone(), 0).expect("bounds antes"));
+        let render_antes = crate::render_page_png(work.clone(), 0, 400).expect("render antes");
+
+        get_image_data(work.clone(), 0, idx).expect("vista previa");
+
+        let despues = bounds(&get_images(work.clone(), 0).expect("bounds después"));
+        let render_despues = crate::render_page_png(work.clone(), 0, 400).expect("render después");
+        assert_eq!(antes, despues, "la vista previa movió la imagen");
+        assert!(
+            render_antes == render_despues,
+            "la vista previa cambió el render de la página"
+        );
+        std::fs::remove_file(&png).ok();
     }
 }
