@@ -73,8 +73,10 @@
   --font-voz: "Fraunces", serif;
 }
 
+/* «El del sistema»: manda `prefers-color-scheme` salvo que se haya
+   elegido claro a mano (data-tema en el <html>, lo pone App) */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-tema="claro"]) {
     /* lámpara de escritorio: la misma mesa, de noche (cálido, jamás azul-pizarra) */
     --bg-chrome: #171511;
     --bg-viewer: #232b26; /* la alfombrilla apagada */
@@ -93,6 +95,44 @@
     --shadow-page: 0 2px 3px rgba(0, 0, 0, 0.6);
     --shadow-pop: 0 4px 6px rgba(0, 0, 0, 0.55);
     --marca-esquina: rgba(237, 233, 221, 0.2);
+  }
+}
+
+/* La misma paleta cuando el tema oscuro se elige a mano */
+:root[data-tema="oscuro"] {
+  /* lámpara de escritorio: la misma mesa, de noche (cálido, jamás azul-pizarra) */
+  --bg-chrome: #171511;
+  --bg-viewer: #232b26; /* la alfombrilla apagada */
+  --bg-sidebar: #1c1a15;
+  --fg: #ede9dd;
+  --fg-muted: #97907c;
+  --border: rgba(237, 233, 221, 0.16);
+  --accent: #8e9ef5; /* la misma tinta, diluida */
+  --danger: #e06a55;
+  --exito: #8fc79a;
+  --card-bg: #201e18;
+  --card-translucent: rgba(32, 30, 24, 0.92);
+  --btn-hover: rgba(237, 233, 221, 0.08);
+  --btn-active: rgba(237, 233, 221, 0.14);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-page: 0 2px 3px rgba(0, 0, 0, 0.6);
+  --shadow-pop: 0 4px 6px rgba(0, 0, 0, 0.55);
+  --marca-esquina: rgba(237, 233, 221, 0.2);
+}
+
+/* Color del lienzo (DESIGN.md dejó prevista la salida a gris cálido) */
+:root[data-lienzo="gris"] {
+  --bg-viewer: #6f6a5c;
+}
+
+:root[data-lienzo="gris"][data-tema="oscuro"],
+:root[data-tema="oscuro"][data-lienzo="gris"] {
+  --bg-viewer: #26231d;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-lienzo="gris"]:not([data-tema="claro"]) {
+    --bg-viewer: #26231d;
   }
 }
 

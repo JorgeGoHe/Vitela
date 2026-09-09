@@ -354,13 +354,33 @@ export function altoCuadro(lineas: number, fontSize: number): number {
 
 const CLAVE_PREFS = "editorPdf.preferencias";
 
+/** Tema de la app: el del sistema, o el que se elija a mano. */
+export type Tema = "automatico" | "claro" | "oscuro";
+/** Con qué zoom se abre un documento. «ultimo» conserva el que haya. */
+export type ZoomInicial = "pagina" | "ancho" | "100" | "ultimo";
+/** El fondo donde flota el documento (DESIGN.md dejó prevista la salida). */
+export type Lienzo = "verde" | "gris";
+
 export type Preferencias = {
   autor: string;
   /** Modo nocturno del documento: solo cambia lo que se ve en pantalla. */
   nocturno: boolean;
+  tema: Tema;
+  zoomInicial: ZoomInicial;
+  lienzo: Lienzo;
 };
 
-const PREFS_POR_DEFECTO: Preferencias = { autor: "", nocturno: false };
+const PREFS_POR_DEFECTO: Preferencias = {
+  autor: "",
+  nocturno: false,
+  tema: "automatico",
+  zoomInicial: "ancho",
+  lienzo: "verde",
+};
+
+const TEMAS: Tema[] = ["automatico", "claro", "oscuro"];
+const ZOOMS: ZoomInicial[] = ["pagina", "ancho", "100", "ultimo"];
+const LIENZOS: Lienzo[] = ["verde", "gris"];
 
 export function cargaPreferencias(): Preferencias {
   try {
@@ -368,6 +388,9 @@ export function cargaPreferencias(): Preferencias {
     return {
       autor: typeof g.autor === "string" ? g.autor : "",
       nocturno: !!g.nocturno,
+      tema: TEMAS.includes(g.tema) ? g.tema : "automatico",
+      zoomInicial: ZOOMS.includes(g.zoomInicial) ? g.zoomInicial : "ancho",
+      lienzo: LIENZOS.includes(g.lienzo) ? g.lienzo : "verde",
     };
   } catch {
     return { ...PREFS_POR_DEFECTO };

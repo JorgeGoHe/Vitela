@@ -13,6 +13,7 @@ import {
   onAbrirFichero,
   onArrastreFicheros,
   onCerrarSolicitado,
+  onMenuAccion,
   ponerPantallaCompleta,
   subscribeBusy,
 } from "./ipc";
@@ -356,7 +357,7 @@ function App() {
   const [noticeSaliendo, setNoticeSaliendo] = useState(false);
   const [outline, setOutlineState] = useState<OutlineNode[]>([]);
   const [propsDraft, setPropsDraft] = useState<Metadata | null>(null);
-  const [prefsDraft, setPrefsDraft] = useState<Preferencias | null>(null);
+  const [prefsAbiertas, setPrefsAbiertas] = useState(false);
   const {
     firmas,
     activeSig,
@@ -425,6 +426,10 @@ function App() {
       setWorkPath(info.work_path);
       setPageCount(info.page_count);
       setPageIndex(0);
+      // «Zoom al abrir» de las preferencias; «el último» no toca nada
+      if (prefs.zoomInicial === "pagina") setZoom("pagina");
+      else if (prefs.zoomInicial === "ancho") setZoom("ajuste");
+      else if (prefs.zoomInicial === "100") setZoom(1);
       setDocVersion((v) => v + 1);
       viewerRef.current?.scrollTo({ top: 0 });
       scrollAnchorRef.current = null;
@@ -1054,7 +1059,7 @@ function App() {
         } else if (modified) guardar();
       } else if (mod && e.key === ",") {
         e.preventDefault();
-        setPrefsDraft(prefs);
+        setPrefsAbiertas(true);
       } else if (
         mod &&
         e.altKey &&
@@ -1351,11 +1356,20 @@ function App() {
     guardaVista(siguiente);
   }
 
-  /** Guarda y aplica al instante una preferencia (el modo nocturno). */
-  function aplicaPrefs(p: Preferencias) {
+  /** Guarda y aplica al instante una preferencia. */
+  const aplicaPrefs = useCallback((p: Preferencias) => {
     guardaPreferencias(p);
     setPrefs(p);
-  }
+  }, []);
+
+  // tema y color del lienzo: atributos en el <html>, que es donde el CSS
+  // los espera (con «automático» no se pone nada y manda el sistema)
+  useEffect(() => {
+    const raiz = document.documentElement;
+    if (prefs.tema === "automatico") delete raiz.dataset.tema;
+    else raiz.dataset.tema = prefs.tema;
+    raiz.dataset.lienzo = prefs.lienzo;
+  }, [prefs.tema, prefs.lienzo]);
 
   const busqueda = useBusqueda({
     workPath,
@@ -2177,6 +2191,83 @@ function App() {
     }
   }
 
+  /**
+   * Menú nativo de la barra del sistema: es el ESPEJO del menú «Acciones»,
+   * no un segundo sitio con cosas distintas. Cada id hace exactamente lo
+   * mismo que su botón; los que no aplican los deshabilita el backend, que
+   * es quien pinta el menú. Copiar, cortar y pegar son entradas nativas de
+   * Tauri y no llegan por aquí.
+   */
+  const accionesMenu: Record<string, () => void> = {
+    abrir: openFile,
+    guardar: () => {
+      if (modified) guardar();
+    },
+    "guardar-como": () => {
+      if (pageCount > 0) saveFileAs();
+    },
+    "cerrar-documento": closeDocument,
+    imprimir: printDocument,
+    "anadir-pdf": addPdf,
+    extraer: () => setExtraerOpen(true),
+    "insertar-pdf": insertPdfHere,
+    deshacer: () => {
+      if (historial.puedeDeshacer) historial.deshacer();
+    },
+    rehacer: () => {
+      if (historial.puedeRehacer) historial.rehacer();
+    },
+    buscar: () =>
+      (document.querySelector(".search input") as HTMLInputElement)?.focus(),
+    preferencias: () => setPrefsAbiertas(true),
+    "zoom-pagina": () => setZoom("pagina"),
+    "zoom-ancho": () => setZoom("ajuste"),
+    "zoom-100": () => setZoom(1),
+    ampliar: () => setZoom(recortaZoom(Math.round((zoomNum + 0.25) * 4) / 4)),
+    reducir: () => setZoom(recortaZoom(Math.round((zoomNum - 0.25) * 4) / 4)),
+    "girar-vista-derecha": () => setViewRotation((r) => (r + 90) % 360),
+    "girar-vista-izquierda": () => setViewRotation((r) => (r + 270) % 360),
+    "pantalla-completa": () => cambiaPantallaCompleta(!pantallaCompleta),
+    nocturno: () => aplicaPrefs({ ...prefs, nocturno: !prefs.nocturno }),
+    "panel-lateral": () => setSidebarVisible((v) => !v),
+    "pagina-una": () => cambiaVista({ modoPagina: "una" }),
+    "pagina-continuo": () => cambiaVista({ modoPagina: "continuo" }),
+    "pagina-dos": () => cambiaVista({ modoPagina: "dos" }),
+    "pagina-dos-continuo": () => cambiaVista({ modoPagina: "dos-continuo" }),
+    "vista-atras": atrasVista,
+    "vista-adelante": adelanteVista,
+    recortar: () => setMode("crop"),
+    "marca-agua": () => setWmOpen(true),
+    encabezado: () => setHfOpen(true),
+    "quitar-marca-agua": () => askRemoveMarginal("watermark"),
+    "quitar-encabezados": () => askRemoveMarginal("header"),
+    propiedades: openProperties,
+    proteger: () =>
+      setProtectDraft({ user: "", owner: "", ...TODO_PERMITIDO }),
+    "quitar-proteccion": () => {
+      if (protegido || protPendiente) setQuitarProtAsk(true);
+    },
+    firmar: empezarFirma,
+    aplanar: () => setFlattenAsk(true),
+    redactar: () => setMode("redact"),
+    sanear: pedirSanear,
+    "campo-nuevo": () => setMode("form-new"),
+    "enlace-nuevo": () => setMode("link-new"),
+    "exportar-imagenes": () => setExportOpen(true),
+    "exportar-texto": exportPlainText,
+    comprimir: () => setCompressOpen(true),
+  };
+  // el listener se registra una vez y lee las acciones vivas por referencia
+  const accionesMenuRef = useRef(accionesMenu);
+  accionesMenuRef.current = accionesMenu;
+  useEffect(
+    () =>
+      onMenuAccion((id) => {
+        accionesMenuRef.current[id]?.();
+      }),
+    [],
+  );
+
   const mostrarError = useCallback((e: unknown) => setError(String(e)), []);
   const mostrarAviso = useCallback(
     (texto: string) => setNotice(texto),
@@ -2448,7 +2539,7 @@ function App() {
                   setMode("link-new");
                 }}
                 printDocument={printDocument}
-                abrirPreferencias={() => setPrefsDraft(prefs)}
+                abrirPreferencias={() => setPrefsAbiertas(true)}
                 abrirExportar={() => setExportOpen(true)}
                 exportPlainText={exportPlainText}
                 abrirComprimir={() => setCompressOpen(true)}
@@ -2542,11 +2633,11 @@ function App() {
           onClose={() => setHfOpen(false)}
         />
       )}
-      {prefsDraft && (
+      {prefsAbiertas && (
         <DialogoPreferencias
-          initial={prefsDraft}
-          onGuardar={aplicaPrefs}
-          onClose={() => setPrefsDraft(null)}
+          prefs={prefs}
+          onCambio={aplicaPrefs}
+          onClose={() => setPrefsAbiertas(false)}
         />
       )}
       {propsDraft && (

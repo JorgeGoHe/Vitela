@@ -93,6 +93,30 @@ export function onArrastreFicheros(h: {
   };
 }
 
+/** Ventana de la app en el navegador de QA: sin menú nativo, las entradas
+ *  se disparan a mano con `window.__vitelaMenu("guardar")`. */
+type VentanaMenu = Window & { __vitelaMenu?: (id: string) => void };
+
+/**
+ * Entrada elegida en el menú nativo de la barra del sistema. El backend
+ * emite `menu-accion` con `{ id }`; los ids son los del listado de
+ * CLAUDE.md y hacen exactamente lo mismo que su botón de la app.
+ */
+export function onMenuAccion(cb: (id: string) => void): () => void {
+  if (!hayTauri) {
+    (window as VentanaMenu).__vitelaMenu = cb;
+    return () => {
+      delete (window as VentanaMenu).__vitelaMenu;
+    };
+  }
+  const pendiente = listen<{ id: string }>("menu-accion", (e) =>
+    cb(e.payload.id),
+  );
+  return () => {
+    pendiente.then((quitar) => quitar()).catch(() => {});
+  };
+}
+
 /**
  * Pantalla completa de la ventana (⌘L). En el navegador de QA no hay
  * ventana que agrandar: la app esconde igual su chrome, que es lo que se
