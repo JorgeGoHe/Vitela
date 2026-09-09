@@ -208,6 +208,16 @@ export function formateaRango(indices: number[]): string {
   return trozos.join(", ");
 }
 
+/** Los índices que pide un bloque «Páginas: todas / 1-3, 8», o `null` para
+ *  «todas», que es lo que el backend entiende por «sin rango». */
+export function indicesDeRango(
+  todas: boolean,
+  rango: string,
+  pageCount: number,
+): number[] | null {
+  return todas ? null : parseRango(rango, pageCount);
+}
+
 /** «1 página» / «4 páginas»: la forma correcta, no «4 página(s)». */
 export function plural(n: number, singular: string, plural: string): string {
   return `${n} ${n === 1 ? singular : plural}`;

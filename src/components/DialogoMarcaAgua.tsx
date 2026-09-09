@@ -1,7 +1,13 @@
-import { useState } from "react";
-import { cargaColores, guardaColor } from "../tipos";
+import { useRef, useState } from "react";
+import {
+  cargaColores,
+  guardaColor,
+  indicesDeRango,
+  type PageSize,
+} from "../tipos";
 import Icon from "./Icon";
 import { useModal } from "../hooks/useModal";
+import RangoPaginas from "./RangoPaginas";
 
 const COLORS = ["#c0392b", "#6f6a5c", "#2743c0", "#2ea043"];
 
@@ -9,39 +15,111 @@ export type PosicionMarca = "nw" | "n" | "ne" | "w" | "c" | "e" | "sw" | "s" | "
 
 const POSICIONES: PosicionMarca[] = ["nw", "n", "ne", "w", "c", "e", "sw", "s", "se"];
 
-/** Diálogo de marca de agua: texto diagonal u horizontal en todas las páginas. */
+/** Los tres ángulos que ofrece Acrobat, con el suyo por defecto en medio. */
+const GIROS: [number, string][] = [
+  [0, "Horizontal"],
+  [45, "En diagonal"],
+  [90, "Vertical"],
+];
+
+/** Ancho en píxeles de la vista previa. */
+const PREVIA = 190;
+
+export type MarcaAguaOpts = {
+  text: string;
+  fontSize: number;
+  color: string;
+  opacity: number;
+  rotation: number;
+  position: PosicionMarca;
+  /** Índices de página, o null para todas. */
+  pageIndices: number[] | null;
+  /** PNG en base64 cuando la marca es una imagen; si no, null. */
+  imagePng: string | null;
+};
+
+/**
+ * Marca de agua: texto o imagen, con rango de páginas y **vista previa en
+ * vivo** sobre la página actual. Sin la previa, poner una marca de agua bien
+ * eran tres o cinco ciclos de aplicar, mirar y deshacer.
+ */
 export default function DialogoMarcaAgua({
+  pageCount,
+  paginaActual,
+  previaSrc,
+  previaSize,
   onApply,
   onClose,
 }: {
-  onApply: (opts: {
-    text: string;
-    fontSize: number;
-    color: string;
-    opacity: number;
-    diagonal: boolean;
-    position: PosicionMarca;
-  }) => void;
+  pageCount: number;
+  /** Página que se enseña en la previa (la que está leyendo el usuario). */
+  paginaActual: number;
+  /** Miniatura ya renderizada de esa página, si la hay. */
+  previaSrc: string | null;
+  previaSize: PageSize | undefined;
+  onApply: (opts: MarcaAguaOpts) => void;
   onClose: () => void;
 }) {
+  const [tipo, setTipo] = useState<"texto" | "imagen">("texto");
   const [text, setText] = useState("BORRADOR");
   const [fontSize, setFontSize] = useState(64);
   const [color, setColor] = useState(() => cargaColores().marcaAgua ?? COLORS[1]);
-  const [opacity, setOpacity] = useState(35);
-  const [diagonal, setDiagonal] = useState(true);
+  // el 30 % de Acrobat es el defecto sensato: se lee debajo
+  const [opacity, setOpacity] = useState(30);
+  const [rotation, setRotation] = useState(45);
   const [position, setPosition] = useState<PosicionMarca>("c");
+  const [todas, setTodas] = useState(true);
+  const [rango, setRango] = useState("");
+  const [imagen, setImagen] = useState<{ nombre: string; png: string } | null>(
+    null,
+  );
+  const ficheroRef = useRef<HTMLInputElement | null>(null);
+
+  const indices = indicesDeRango(todas, rango, pageCount);
+  const listo =
+    (tipo === "texto" ? !!text.trim() : !!imagen) &&
+    (todas || (indices?.length ?? 0) > 0);
 
   function aplicar() {
-    if (!text.trim()) return;
-    onApply({ text, fontSize, color, opacity, diagonal, position });
+    if (!listo) return;
+    onApply({
+      text,
+      fontSize,
+      color,
+      opacity,
+      rotation,
+      position,
+      pageIndices: indices,
+      imagePng: tipo === "imagen" ? (imagen?.png ?? null) : null,
+    });
+  }
+
+  /** La imagen se lee en el navegador y no por el diálogo nativo: la previa
+   *  necesita los bytes de todas formas, y así se enseña al instante. */
+  function eligeImagen(f: File | undefined) {
+    if (!f) return;
+    const lector = new FileReader();
+    lector.onload = () => {
+      const r = String(lector.result);
+      setImagen({ nombre: f.name, png: r.slice(r.indexOf(",") + 1) });
+    };
+    lector.readAsDataURL(f);
   }
 
   const { ref, onKeyDown } = useModal({ onClose, onConfirm: aplicar });
 
+  // la previa mide en puntos de la página y se dibuja a escala
+  const escala = previaSize ? PREVIA / previaSize.width : 0;
+  const altoPrevia = previaSize ? previaSize.height * escala : 0;
+  // la celda del grid 3×3 en la que cae la marca
+  const ix = POSICIONES.indexOf(position);
+  const fila = Math.floor(ix / 3);
+  const columna = ix % 3;
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
-        className="modal"
+        className="modal modal-hf"
         role="dialog"
         aria-modal="true"
         aria-label="Marca de agua"
@@ -51,43 +129,101 @@ export default function DialogoMarcaAgua({
         tabIndex={-1}
       >
         <h3>Marca de agua</h3>
-        <input
-          type="text"
-          placeholder="Texto de la marca de agua"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-        />
         <div className="card-row">
-          <select
-            className="size-select"
-            title="Tamaño"
-            value={fontSize}
-            onChange={(e) => setFontSize(Number(e.target.value))}
-          >
-            {[36, 48, 64, 80, 100].map((s) => (
-              <option key={s} value={s}>
-                {s} pt
-              </option>
-            ))}
-          </select>
+          <label className="opt-check">
+            <input
+              type="radio"
+              name="tipo-marca"
+              checked={tipo === "texto"}
+              onChange={() => setTipo("texto")}
+            />
+            Texto
+          </label>
+          <label className="opt-check">
+            <input
+              type="radio"
+              name="tipo-marca"
+              checked={tipo === "imagen"}
+              onChange={() => setTipo("imagen")}
+            />
+            Imagen
+          </label>
+        </div>
+        {tipo === "texto" ? (
+          <input
+            type="text"
+            placeholder="Texto de la marca de agua"
+            aria-label="Texto de la marca de agua"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+          />
+        ) : (
+          <div className="card-row">
+            <button className="btn" onClick={() => ficheroRef.current?.click()}>
+              <Icon name="image" size={14} />
+              {imagen ? "Cambiar la imagen…" : "Elegir imagen…"}
+            </button>
+            {imagen && <span className="dato opt-hint">{imagen.nombre}</span>}
+            <input
+              ref={ficheroRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              hidden
+              onChange={(e) => eligeImagen(e.target.files?.[0])}
+            />
+          </div>
+        )}
+        <div className="card-row">
+          {tipo === "texto" && (
+            <select
+              className="size-select"
+              title="Tamaño"
+              aria-label="Tamaño del texto"
+              value={fontSize}
+              onChange={(e) => setFontSize(Number(e.target.value))}
+            >
+              {[36, 48, 64, 80, 100].map((s) => (
+                <option key={s} value={s}>
+                  {s} pt
+                </option>
+              ))}
+            </select>
+          )}
           <select
             className="size-select"
             title="Opacidad"
+            aria-label="Opacidad"
             value={opacity}
             onChange={(e) => setOpacity(Number(e.target.value))}
           >
-            {[15, 25, 35, 50, 75].map((o) => (
+            {[15, 25, 30, 50, 75].map((o) => (
               <option key={o} value={o}>
                 {o} %
               </option>
             ))}
           </select>
+          <select
+            className="size-select"
+            title="Giro"
+            aria-label="Giro de la marca"
+            value={rotation}
+            onChange={(e) => setRotation(Number(e.target.value))}
+          >
+            {GIROS.map(([g, etiqueta]) => (
+              <option key={g} value={g}>
+                {etiqueta}
+              </option>
+            ))}
+          </select>
+        </div>
+        {tipo === "texto" && (
           <div className="swatches">
             {COLORS.map((c) => (
               <button
                 key={c}
                 className={`swatch${color === c ? " on" : ""}`}
                 style={{ background: c }}
+                aria-label={`Color ${c}`}
                 onClick={() => {
                   setColor(c);
                   guardaColor("marcaAgua", c);
@@ -111,39 +247,64 @@ export default function DialogoMarcaAgua({
               <Icon name="plus" size={10} />
             </label>
           </div>
-        </div>
-        <div className="card-row">
+        )}
+        <div className="card-row previa-fila">
           <div className="pos-grid" title="Posición en la página">
             {POSICIONES.map((p) => (
               <button
                 key={p}
                 className={`pos-cell${position === p ? " on" : ""}`}
                 aria-label={`Posición ${p}`}
+                aria-pressed={position === p}
                 onClick={() => setPosition(p)}
               />
             ))}
           </div>
-          <label className="opt-check">
-            <input
-              type="checkbox"
-              checked={diagonal}
-              onChange={(e) => setDiagonal(e.target.checked)}
-            />
-            En diagonal
-          </label>
+          {previaSrc && previaSize && (
+            <div
+              className="previa-pagina"
+              style={{ width: PREVIA, height: altoPrevia }}
+            >
+              <img src={previaSrc} alt={`Página ${paginaActual + 1}`} />
+              <div
+                className="previa-marca"
+                style={{
+                  left: `${columna * 33.33}%`,
+                  top: `${fila * 33.33}%`,
+                  opacity: opacity / 100,
+                  transform: `rotate(${-rotation}deg)`,
+                }}
+              >
+                {tipo === "imagen" && imagen ? (
+                  <img
+                    src={`data:image/png;base64,${imagen.png}`}
+                    alt=""
+                    className="previa-marca-img"
+                  />
+                ) : (
+                  <span style={{ color, fontSize: fontSize * escala }}>
+                    {text || "BORRADOR"}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
         </div>
-        <p className="modal-file">
-          Se añade a todas las páginas como contenido del documento.
+        <RangoPaginas
+          pageCount={pageCount}
+          todas={todas}
+          setTodas={setTodas}
+          rango={rango}
+          setRango={setRango}
+        />
+        <p className="modal-file" style={{ whiteSpace: "normal" }}>
+          Se añade como contenido del documento; la previa es aproximada.
         </p>
         <div className="card-actions">
           <button className="btn" onClick={onClose}>
             Cancelar
           </button>
-          <button
-            className="btn btn-primary"
-            disabled={!text.trim()}
-            onClick={aplicar}
-          >
+          <button className="btn btn-primary" disabled={!listo} onClick={aplicar}>
             Aplicar
           </button>
         </div>

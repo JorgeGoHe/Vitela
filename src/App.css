@@ -1303,6 +1303,90 @@ textarea {
   }
 }
 
+/* ---------- vista previa de los diálogos de marginales ---------- */
+
+/* la página actual en pequeño con la marca dibujada encima por la propia UI:
+   nada de un render por cada tecla */
+.previa-pagina {
+  position: relative;
+  flex-shrink: 0;
+  background: #fff;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.previa-centrada {
+  align-self: center;
+}
+
+.previa-pagina > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.previa-fila {
+  align-items: flex-start;
+  gap: 12px;
+}
+
+/* la marca ocupa su celda del grid 3×3 y gira sobre su centro */
+.previa-marca {
+  position: absolute;
+  width: 33.34%;
+  height: 33.34%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.previa-marca-img {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.previa-banda {
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  color: #1d1c18;
+  pointer-events: none;
+}
+
+.previa-banda > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.previa-banda > span:nth-child(2) {
+  text-align: center;
+}
+
+.previa-banda > span:nth-child(3) {
+  text-align: right;
+}
+
+.previa-header {
+  top: 3%;
+}
+
+.previa-footer {
+  bottom: 3%;
+}
+
+/* el campo del rango no debe empujar al contador fuera de la fila */
+.rango-fila {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 /* .modal se define más abajo con la misma especificidad: el doble selector
    garantiza que el ancho extra de este modal gane siempre */
 .modal.modal-hf {

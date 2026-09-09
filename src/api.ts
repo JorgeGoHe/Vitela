@@ -341,8 +341,20 @@ export function addWatermark(args: {
   diagonal: boolean;
   /** Celda de un grid 3×3 ("nw".."se"); sin ella, centro. */
   position?: string;
+  /** Índices de página; sin ellos (null), todas, como antes. */
+  pageIndices?: number[] | null;
+  /** PNG en base64 cuando la marca es una imagen; sin él, el texto. */
+  imagePng?: string | null;
+  /** Opacidad de 0 a 1; 0,3 es la de Acrobat. */
+  opacity?: number;
+  /** Giro en grados; 45 es la diagonal de siempre. */
+  rotation?: number;
 }): Promise<void> {
-  return invoke("add_watermark", { ...args });
+  return invoke("add_watermark", {
+    pageIndices: null,
+    imagePng: null,
+    ...args,
+  });
 }
 
 /** Elimina el texto marginal añadido (marca de agua o encabezados/pies). */
@@ -372,9 +384,12 @@ export function addHeaderFooter(
   workPath: string,
   zonas: HeaderFooter,
   fontSize: number,
+  /** Índices de página; sin ellos (null), todas, como antes. */
+  pageIndices: number[] | null = null,
 ): Promise<void> {
   return invoke("add_header_footer", {
     workPath,
+    pageIndices,
     headerLeft: zonas.headerLeft || null,
     headerCenter: zonas.headerCenter || null,
     headerRight: zonas.headerRight || null,

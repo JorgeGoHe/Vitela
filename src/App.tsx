@@ -123,7 +123,9 @@ import PanelFirmas from "./components/PanelFirmas";
 import PanelFirmasDoc from "./components/PanelFirmasDoc";
 import DialogoFirmar from "./components/DialogoFirmar";
 import DibujarFirma from "./components/DibujarFirma";
-import DialogoMarcaAgua from "./components/DialogoMarcaAgua";
+import DialogoMarcaAgua, {
+  type MarcaAguaOpts,
+} from "./components/DialogoMarcaAgua";
 import DialogoEncabezado from "./components/DialogoEncabezado";
 import PanelMarcadores from "./components/PanelMarcadores";
 import PanelComentarios from "./components/PanelComentarios";
@@ -1744,37 +1746,46 @@ function App() {
     }
   }
 
-  async function applyWatermark(opts: {
-    text: string;
-    fontSize: number;
-    color: string;
-    opacity: number;
-    diagonal: boolean;
-    position: string;
-  }) {
+  async function applyWatermark(opts: MarcaAguaOpts) {
     if (!workPath) return;
     try {
       await addWatermark({
         workPath,
         text: opts.text,
         fontSize: opts.fontSize,
-        color: hexToRgba(opts.color, Math.round((opts.opacity / 100) * 255)),
-        diagonal: opts.diagonal,
+        // la opacidad va en su propio parámetro; el color se manda opaco para
+        // no aplicarla dos veces
+        color: hexToRgba(opts.color),
+        opacity: opts.opacity / 100,
+        rotation: opts.rotation,
+        diagonal: opts.rotation === 45,
         position: opts.position,
+        pageIndices: opts.pageIndices,
+        imagePng: opts.imagePng,
       });
       setWmOpen(false);
       afterMutation(pageCount);
+      setNotice(
+        `Marca de agua añadida en ${plural(opts.pageIndices?.length ?? pageCount, "página", "páginas")} · ${MOD}Z para deshacer`,
+      );
     } catch (e) {
       setError(String(e));
     }
   }
 
-  async function applyHeaderFooter(zonas: HeaderFooter, fontSize: number) {
+  async function applyHeaderFooter(
+    zonas: HeaderFooter,
+    fontSize: number,
+    pageIndices: number[] | null,
+  ) {
     if (!workPath) return;
     try {
-      await addHeaderFooter(workPath, zonas, fontSize);
+      await addHeaderFooter(workPath, zonas, fontSize, pageIndices);
       setHfOpen(false);
       afterMutation(pageCount);
+      setNotice(
+        `Encabezado y pie añadidos en ${plural(pageIndices?.length ?? pageCount, "página", "páginas")} · ${MOD}Z para deshacer`,
+      );
     } catch (e) {
       setError(String(e));
     }
@@ -2870,10 +2881,21 @@ function App() {
         />
       )}
       {wmOpen && (
-        <DialogoMarcaAgua onApply={applyWatermark} onClose={() => setWmOpen(false)} />
+        <DialogoMarcaAgua
+          pageCount={pageCount}
+          paginaActual={pageIndex}
+          previaSrc={thumbs[pageIndex] ?? null}
+          previaSize={pageSizes[pageIndex]}
+          onApply={applyWatermark}
+          onClose={() => setWmOpen(false)}
+        />
       )}
       {hfOpen && (
         <DialogoEncabezado
+          pageCount={pageCount}
+          paginaActual={pageIndex}
+          previaSrc={thumbs[pageIndex] ?? null}
+          previaSize={pageSizes[pageIndex]}
           onApply={applyHeaderFooter}
           onClose={() => setHfOpen(false)}
         />
