@@ -58,6 +58,8 @@ import {
   type OutlineNode,
 } from "./api";
 import {
+  ATAJO_COMENTARIOS,
+  ATAJO_MARCADORES,
   ATAJO_PANEL,
   cargaPreferencias,
   cargaResaltarCampos,
@@ -195,6 +197,9 @@ function App() {
   const [sidebarTab, setSidebarTab] = useState<
     "paginas" | "marcadores" | "comentarios"
   >("paginas");
+  // el atajo de una pestaña la abre Y le lleva el foco: subir el contador es
+  // la señal para el panel (un booleano no distinguiría dos peticiones)
+  const [focoComentarios, setFocoComentarios] = useState(0);
   const [comentarios, setComentarios] = useState<AnotacionDoc[]>([]);
   const [filtroComentarios, setFiltroComentarios] =
     useState<FiltroComentarios>("todos");
@@ -634,6 +639,14 @@ function App() {
     };
   }, [workPath, docVersion, annotVersion]);
 
+  /** Abre una pestaña del panel lateral y le lleva el foco: con el teclado
+   *  se llega a la lista sin pasar por el ratón. */
+  function abrirPestana(tab: "paginas" | "marcadores" | "comentarios") {
+    setSidebarVisible(true);
+    setSidebarTab(tab);
+    if (tab === "comentarios") setFocoComentarios((n) => n + 1);
+  }
+
   /** Clic en una fila del panel: a su página y con su popover abierto. */
   function irAComentario(c: AnotacionDoc) {
     gotoPage(c.page_index);
@@ -772,6 +785,22 @@ function App() {
       ) {
         e.preventDefault();
         setSidebarVisible((v) => !v);
+      } else if (
+        mod &&
+        e.altKey &&
+        (e.key === "2" || e.code === "Digit2") &&
+        pageCount > 0
+      ) {
+        e.preventDefault();
+        abrirPestana("marcadores");
+      } else if (
+        mod &&
+        e.altKey &&
+        (e.key === "3" || e.code === "Digit3") &&
+        pageCount > 0
+      ) {
+        e.preventDefault();
+        abrirPestana("comentarios");
       } else if (mod && e.key === "0" && pageCount > 0) {
         // los tres ajustes de Acrobat: ⌘0 página entera, ⌘1 tamaño real,
         // ⌘2 ajustar al ancho
@@ -2294,21 +2323,24 @@ function App() {
               <button
                 className={`btn${sidebarTab === "paginas" ? " on" : ""}`}
                 title="Páginas"
+                aria-pressed={sidebarTab === "paginas"}
                 onClick={() => setSidebarTab("paginas")}
               >
                 Páginas
               </button>
               <button
                 className={`btn${sidebarTab === "marcadores" ? " on" : ""}`}
-                title="Marcadores"
-                onClick={() => setSidebarTab("marcadores")}
+                title={`Marcadores (${ATAJO_MARCADORES})`}
+                aria-pressed={sidebarTab === "marcadores"}
+                onClick={() => abrirPestana("marcadores")}
               >
                 Marcadores
               </button>
               <button
                 className={`btn${sidebarTab === "comentarios" ? " on" : ""}`}
-                title="Comentarios"
-                onClick={() => setSidebarTab("comentarios")}
+                title={`Comentarios (${ATAJO_COMENTARIOS})`}
+                aria-pressed={sidebarTab === "comentarios"}
+                onClick={() => abrirPestana("comentarios")}
               >
                 Comentarios
               </button>
@@ -2319,6 +2351,7 @@ function App() {
                 filtro={filtroComentarios}
                 setFiltro={setFiltroComentarios}
                 seleccionada={annotSel}
+                focoPedido={focoComentarios}
                 onSelect={irAComentario}
                 onDelete={borrarComentario}
               />

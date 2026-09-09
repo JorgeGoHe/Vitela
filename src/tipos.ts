@@ -10,6 +10,13 @@ export const MOD = navigator.platform.startsWith("Mac") ? "⌘" : "Ctrl+";
 export const ATAJO_PANEL = navigator.platform.startsWith("Mac")
   ? "⌥⌘1"
   : "Ctrl+Alt+1";
+/** Atajos de las otras dos pestañas del panel (abren Y llevan el foco). */
+export const ATAJO_MARCADORES = navigator.platform.startsWith("Mac")
+  ? "⌥⌘2"
+  : "Ctrl+Alt+2";
+export const ATAJO_COMENTARIOS = navigator.platform.startsWith("Mac")
+  ? "⌥⌘3"
+  : "Ctrl+Alt+3";
 
 export type CharBox = { ch: string; x: number; y: number; w: number; h: number };
 export type PageText = { width: number; height: number; chars: CharBox[] };

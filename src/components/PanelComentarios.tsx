@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { AnotacionDoc } from "../api";
 import {
   firmaAnotacion,
@@ -12,13 +12,16 @@ import Icon from "./Icon";
 /**
  * Pestaña «Comentarios» del sidebar: todos los comentarios del documento en
  * una sola lista, ordenados por página. Clic (o Enter) lleva a la página y
- * selecciona el comentario; ↑/↓ recorren la lista.
+ * selecciona el comentario; ↑/↓ recorren la lista y Supr borra el que tenga
+ * el foco. Se entra con Tab desde el resto de la app o con su atajo, que
+ * pide el foco subiendo `focoPedido`.
  */
 export default function PanelComentarios({
   comentarios,
   filtro,
   setFiltro,
   seleccionada,
+  focoPedido,
   onSelect,
   onDelete,
 }: {
@@ -27,6 +30,8 @@ export default function PanelComentarios({
   setFiltro: (f: FiltroComentarios) => void;
   /** Comentario seleccionado ahora mismo, si está en esta lista. */
   seleccionada: { page: number; index: number } | null;
+  /** Sube cada vez que el atajo del panel pide el foco de la lista. */
+  focoPedido: number;
   onSelect: (c: AnotacionDoc) => void;
   onDelete: (c: AnotacionDoc) => void;
 }) {
@@ -46,26 +51,71 @@ export default function PanelComentarios({
       ? comentarios
       : comentarios.filter((c) => (KIND_PLURALS[c.kind] ?? c.kind) === filtro);
 
-  /** ↑/↓ mueven el foco por la lista; Enter y Espacio activan la fila. */
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  // posición a la que hay que devolver el foco cuando la lista se rehaga
+  // tras borrar con el teclado (los índices de anotación se corren, así que
+  // las filas son otras y el navegador pierde el foco)
+  const volverARef = useRef<number | null>(null);
+
+  /** Las filas de la lista, en orden de pantalla. */
+  const filas = () =>
+    Array.from(
+      panelRef.current?.querySelectorAll<HTMLElement>(".com-row") ?? [],
+    );
+
+  // el atajo del panel (⌥⌘3) trae el foco a la fila elegida, o a la primera.
+  // Solo cuando se pide: la lista se rehace con cada anotación nueva y no
+  // debe robar el foco de donde esté el usuario
+  useEffect(() => {
+    const el = panelRef.current;
+    if (focoPedido === 0 || !el) return;
+    const f = Array.from(el.querySelectorAll<HTMLElement>(".com-row"));
+    (f.find((n) => n.dataset.elegida === "1") ?? f[0] ?? el).focus();
+  }, [focoPedido]);
+
+  // tras borrar con Supr el foco se queda en la lista, en el sitio del que
+  // se fue (como en Acrobat), no en el principio de la página
+  useEffect(() => {
+    const el = panelRef.current;
+    const pos = volverARef.current;
+    if (pos === null || !el) return;
+    volverARef.current = null;
+    const f = Array.from(el.querySelectorAll<HTMLElement>(".com-row"));
+    (f.length === 0 ? el : f[Math.min(pos, f.length - 1)]).focus();
+  }, [comentarios, filtro]);
+
+  const hayElegida = lista.some(
+    (c) => seleccionada?.page === c.page_index && seleccionada.index === c.index,
+  );
+
+  /** ↑/↓ mueven el foco por la lista; Enter y Espacio activan la fila;
+   *  Supr y Retroceso la borran. */
   function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>, c: AnotacionDoc) {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      const filas = Array.from(
-        e.currentTarget.parentElement?.querySelectorAll<HTMLElement>(
-          ".com-row",
-        ) ?? [],
-      );
-      const i = filas.indexOf(e.currentTarget);
+      const f = filas();
+      const i = f.indexOf(e.currentTarget);
       const delta = e.key === "ArrowDown" ? 1 : -1;
-      filas[Math.max(0, Math.min(i + delta, filas.length - 1))]?.focus();
+      f[Math.max(0, Math.min(i + delta, f.length - 1))]?.focus();
+    } else if (e.key === "Home" || e.key === "End") {
+      e.preventDefault();
+      const f = filas();
+      (e.key === "Home" ? f[0] : f[f.length - 1])?.focus();
     } else if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       onSelect(c);
+    } else if (e.key === "Delete" || e.key === "Backspace") {
+      // la tecla es de la lista: si sigue, la app borraría además la
+      // anotación seleccionada en la página
+      e.preventDefault();
+      e.stopPropagation();
+      volverARef.current = filas().indexOf(e.currentTarget);
+      onDelete(c);
     }
   }
 
   return (
-    <div className="com-panel">
+    <div className="com-panel" ref={panelRef} tabIndex={-1}>
       <span className="com-total dato">
         {comentarios.length === 1
           ? "1 comentario"
@@ -92,8 +142,13 @@ export default function PanelComentarios({
       {comentarios.length > 0 && lista.length === 0 && (
         <p className="sign-empty">Ningún comentario de ese tipo.</p>
       )}
+      {lista.length > 0 && (
+        <p className="opt-hint com-pista">
+          ↑ ↓ recorren · Enter va · Supr borra
+        </p>
+      )}
       <div role="listbox" aria-label="Comentarios del documento">
-        {lista.map((c) => {
+        {lista.map((c, i) => {
           const elegida =
             seleccionada?.page === c.page_index &&
             seleccionada.index === c.index;
@@ -104,7 +159,10 @@ export default function PanelComentarios({
               className={`com-row${elegida ? " on" : ""}`}
               role="option"
               aria-selected={elegida}
-              tabIndex={elegida ? 0 : -1}
+              data-elegida={elegida ? "1" : "0"}
+              // sin nada elegido, la primera fila es la que recibe el Tab:
+              // con `-1` en todas la lista no se alcanzaba con el teclado
+              tabIndex={elegida || (!hayElegida && i === 0) ? 0 : -1}
               title={c.contents || undefined}
               onClick={() => onSelect(c)}
               onKeyDown={(e) => onKeyDown(e, c)}
@@ -121,6 +179,7 @@ export default function PanelComentarios({
               </span>
               <button
                 className="com-borrar"
+                tabIndex={-1}
                 title={`Eliminar el comentario (${MOD}Z lo devuelve)`}
                 aria-label="Eliminar el comentario"
                 onClick={(e) => {

@@ -1146,6 +1146,16 @@ textarea {
   width: 100%;
 }
 
+/* las teclas de la lista, escritas donde se usan */
+.com-pista {
+  padding: 0 2px;
+}
+
+.com-panel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .com-row {
   display: flex;
   align-items: flex-start;
