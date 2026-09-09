@@ -44,7 +44,7 @@ fn media_box(doc: &LoDoc, page_id: ObjectId) -> Result<[f32; 4], String> {
 }
 
 /// Añade una anotación al array Annots de la página (directo o referencia).
-fn anade_a_annots(doc: &mut LoDoc, page_id: ObjectId, annot_id: ObjectId) -> Result<(), String> {
+pub(crate) fn anade_a_annots(doc: &mut LoDoc, page_id: ObjectId, annot_id: ObjectId) -> Result<(), String> {
     let annots_ref = {
         let page = doc
             .get_object(page_id)

@@ -184,8 +184,73 @@ pub fn add_note(
             .map_err(|e| e.to_string())?;
         drop(page);
         save_and_close(doc, &work_path)?;
-        remata_annot(&work_path, page_index, None, author)
+        remata_annot(&work_path, page_index, None, author)?;
+        // el post-it de Acrobat: icono de bocadillo y ventana emergente
+        cirugia_en_hilo(&work_path, move |doc| {
+            let i = ultima_annot(doc, page_index)?;
+            let id = annot_id(doc, page_index, i)?;
+            {
+                let annot = doc
+                    .get_object_mut(id)
+                    .and_then(|o| o.as_dict_mut())
+                    .map_err(|e| e.to_string())?;
+                annot.set("Name", lopdf::Object::Name(b"Comment".to_vec()));
+            }
+            anade_popup(doc, page_index, id)
+        })
     }))
+}
+
+/// Ventana emergente de un comentario (`/Popup` con `/Open false`), a la
+/// derecha del icono: es lo que abren Acrobat y Vista Previa al pulsarlo.
+/// El popup no es un comentario — `get_annotations` no lo lista — y se
+/// borra con su nota.
+fn anade_popup(
+    doc: &mut lopdf::Document,
+    page_index: u16,
+    padre: lopdf::ObjectId,
+) -> Result<(), String> {
+    use lopdf::{Dictionary, Object};
+    let rect: Vec<f32> = doc
+        .get_object(padre)
+        .and_then(|o| o.as_dict())
+        .and_then(|d| d.get(b"Rect"))
+        .and_then(|o| o.as_array())
+        .map_err(|e| e.to_string())?
+        .iter()
+        .filter_map(numero)
+        .collect();
+    if rect.len() != 4 {
+        return Err("La nota no tiene rectángulo".into());
+    }
+    const ANCHO: f32 = 180.0;
+    const ALTO: f32 = 100.0;
+    let mut popup = Dictionary::new();
+    popup.set("Type", Object::Name(b"Annot".to_vec()));
+    popup.set("Subtype", Object::Name(b"Popup".to_vec()));
+    popup.set(
+        "Rect",
+        Object::Array(vec![
+            rect[2].into(),
+            (rect[3] - ALTO).into(),
+            (rect[2] + ANCHO).into(),
+            rect[3].into(),
+        ]),
+    );
+    popup.set("Parent", Object::Reference(padre));
+    popup.set("Open", Object::Boolean(false));
+    popup.set("F", 28i64); // Print + NoZoom + NoRotate, como Acrobat
+    let popup_id = doc.add_object(popup);
+    let page_id = *doc
+        .get_pages()
+        .get(&(page_index as u32 + 1))
+        .ok_or("Página fuera de rango")?;
+    crate::formularios2::anade_a_annots(doc, page_id, popup_id)?;
+    doc.get_object_mut(padre)
+        .and_then(|o| o.as_dict_mut())
+        .map_err(|e| e.to_string())?
+        .set("Popup", Object::Reference(popup_id));
+    Ok(())
 }
 
 /// Estilo de la apariencia de una marca de texto.
@@ -619,6 +684,11 @@ pub fn get_annotations(path: String, page_index: u16) -> Result<Vec<AnnotationIn
                 let Ok(mut a) = annotations.get(i) else {
                     continue;
                 };
+                let kind = format!("{:?}", a.annotation_type());
+                // el /Popup de una nota no es un comentario: es su ventana
+                if kind == "Popup" {
+                    continue;
+                }
                 let Ok(b) = a.bounds() else { continue };
                 let mut rects = Vec::new();
                 {
@@ -648,7 +718,7 @@ pub fn get_annotations(path: String, page_index: u16) -> Result<Vec<AnnotationIn
                 let caja = geo.pdf_rect_a_ui(&b);
                 out.push(AnnotationInfo {
                     index: i as u16,
-                    kind: format!("{:?}", a.annotation_type()),
+                    kind,
                     x: caja.x,
                     y: caja.y,
                     w: caja.w,
@@ -689,15 +759,21 @@ pub fn datos_annots_lopdf(path: &str, page_index: u16) -> Option<Vec<DatosAnnot>
         .flatten()
 }
 
-pub fn datos_annots(doc: &lopdf::Document, page_index: u16) -> Option<Vec<DatosAnnot>> {
+/// El array `/Annots` de una página, esté por referencia o en línea.
+pub(crate) fn lista_annots(doc: &lopdf::Document, page_index: u16) -> Option<Vec<lopdf::Object>> {
     use lopdf::Object;
     let page_id = *doc.get_pages().get(&(page_index as u32 + 1))?;
     let page = doc.get_object(page_id).ok()?.as_dict().ok()?;
-    let annots = match page.get(b"Annots").ok()? {
-        Object::Reference(rid) => doc.get_object(*rid).ok()?.as_array().ok()?.clone(),
-        Object::Array(a) => a.clone(),
-        _ => return None,
-    };
+    match page.get(b"Annots").ok()? {
+        Object::Reference(rid) => Some(doc.get_object(*rid).ok()?.as_array().ok()?.clone()),
+        Object::Array(a) => Some(a.clone()),
+        _ => None,
+    }
+}
+
+pub fn datos_annots(doc: &lopdf::Document, page_index: u16) -> Option<Vec<DatosAnnot>> {
+    use lopdf::Object;
+    let annots = lista_annots(doc, page_index)?;
     Some(
         annots
             .iter()
@@ -756,26 +832,207 @@ fn color_annot(dict: &lopdf::Dictionary) -> Option<[u8; 4]> {
     }
 }
 
-/// Elimina la anotación con el índice dado.
+/// Índice del `/Popup` de una anotación dentro del `/Annots` de la página,
+/// si lo tiene: borrar la nota sin él dejaría una ventana huérfana
+/// apuntando a un objeto que ya no existe.
+fn indice_popup(path: &str, page_index: u16, annot_index: usize) -> Option<usize> {
+    use lopdf::Object;
+    with_lopdf(path, |doc| {
+        let Some(lista) = lista_annots(doc, page_index) else {
+            return Ok(None);
+        };
+        let Some(Object::Reference(annot_ref)) = lista.get(annot_index) else {
+            return Ok(None);
+        };
+        let popup = doc
+            .get_object(*annot_ref)
+            .and_then(|o| o.as_dict())
+            .and_then(|d| d.get(b"Popup"))
+            .and_then(|o| o.as_reference())
+            .ok();
+        Ok(popup.and_then(|p| {
+            lista
+                .iter()
+                .position(|o| matches!(o, Object::Reference(r) if *r == p))
+        }))
+    })
+    .ok()
+    .flatten()
+}
+
+/// Elimina la anotación con el índice dado (y su ventana emergente, si la
+/// tiene: en Acrobat el post-it se va entero).
 #[tauri::command(async)]
 pub fn remove_annotation(work_path: String, page_index: u16, annot_index: u16) -> Result<(), String> {
     mutacion(work_path, |work_path| on_pdfium_thread(move || {
+        let mut indices = vec![annot_index as usize];
+        if let Some(p) = indice_popup(&work_path, page_index, annot_index as usize) {
+            indices.push(p);
+        }
+        // de mayor a menor: borrar no invalida los índices que quedan
+        indices.sort_unstable();
+        indices.dedup();
+        indices.reverse();
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
         let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let annotations = page.annotations_mut();
-        let annot = annotations
-            .get(annot_index as usize)
-            .map_err(|e| e.to_string())?;
-        annotations
-            .delete_annotation(annot)
-            .map_err(|e| e.to_string())?;
+        for i in indices {
+            let annotations = page.annotations_mut();
+            let annot = annotations.get(i).map_err(|e| e.to_string())?;
+            annotations
+                .delete_annotation(annot)
+                .map_err(|e| e.to_string())?;
+        }
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
     }))
+}
+
+/// Cambia el texto de un comentario ya creado y refresca su fecha (en
+/// Acrobat, doble clic sobre el post-it y a escribir). No hace falta
+/// regenerar apariencia: las marcas de texto no la sacan del texto.
+#[tauri::command(async)]
+pub fn set_annotation_contents(
+    work_path: String,
+    page_index: u16,
+    annot_index: u16,
+    contents: String,
+    author: Option<String>,
+) -> Result<(), String> {
+    let explicito = author.is_some();
+    let autor = autor_o_sistema(author);
+    let fecha = fecha_pdf_ahora();
+    crate::cirugia(&work_path, move |doc| {
+        let id = annot_id(doc, page_index, annot_index as usize)?;
+        let annot = doc
+            .get_object_mut(id)
+            .and_then(|o| o.as_dict_mut())
+            .map_err(|e| e.to_string())?;
+        annot.set("Contents", crate::documento::cadena_pdf(&contents));
+        if explicito || !annot.has(b"T") {
+            annot.set("T", crate::documento::cadena_pdf(&autor));
+        }
+        annot.set("M", lopdf::Object::string_literal(fecha));
+        Ok(())
+    })
+}
+
+/// Cambia el color de una anotación, al instante y sin «Aceptar», como las
+/// propiedades de comentario de Acrobat.
+///
+/// Son dos pases: el dibujo que llevan dentro los trazos, las formas y los
+/// sellos se recolorea con PDFium (si no, cambiar el color no se vería), y
+/// el `/C` —que es de donde lo lee la UI— se escribe con lopdf. Las marcas
+/// de texto además regeneran su `/AP`: sin eso el PDF exportado seguiría
+/// amarillo fuera de Vitela.
+#[tauri::command(async)]
+pub fn set_annotation_color(
+    work_path: String,
+    page_index: u16,
+    annot_index: u16,
+    color: [u8; 4],
+) -> Result<(), String> {
+    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
+        recolorea_objetos(&work_path, page_index, annot_index, color)?;
+        let fecha = fecha_pdf_ahora();
+        cirugia_en_hilo(&work_path, move |doc| {
+            let i = annot_index as usize;
+            let id = annot_id(doc, page_index, i)?;
+            let subtipo = doc
+                .get_object(id)
+                .and_then(|o| o.as_dict())
+                .and_then(|d| d.get(b"Subtype"))
+                .and_then(|o| o.as_name())
+                .map(|n| n.to_vec())
+                .unwrap_or_default();
+            {
+                let annot = doc
+                    .get_object_mut(id)
+                    .and_then(|o| o.as_dict_mut())
+                    .map_err(|e| e.to_string())?;
+                annot.set(
+                    "C",
+                    lopdf::Object::Array(vec![
+                        (color[0] as f32 / 255.0).into(),
+                        (color[1] as f32 / 255.0).into(),
+                        (color[2] as f32 / 255.0).into(),
+                    ]),
+                );
+                if color[3] < 255 {
+                    annot.set("CA", lopdf::Object::Real(color[3] as f32 / 255.0));
+                }
+                annot.set("M", lopdf::Object::string_literal(fecha));
+            }
+            let estilo = match subtipo.as_slice() {
+                b"Highlight" => Some(EstiloMarca::Resaltado),
+                b"Underline" => Some(EstiloMarca::Subrayado),
+                b"StrikeOut" => Some(EstiloMarca::Tachado),
+                _ => None,
+            };
+            if let Some(estilo) = estilo {
+                escribe_apariencia_marca(doc, page_index, i, estilo)?;
+            }
+            Ok(())
+        })
+    }))
+}
+
+/// Recolorea el dibujo que llevan dentro las anotaciones con apariencia
+/// embebida (Ink y Stamp: trazos, formas y sellos). Las demás no tienen
+/// nada que recolorear y se dejan como están.
+fn recolorea_objetos(
+    work_path: &str,
+    page_index: u16,
+    annot_index: u16,
+    color: [u8; 4],
+) -> Result<(), String> {
+    let pdfium = pdfium()?;
+    let doc = pdfium
+        .load_pdf_from_file(work_path, None)
+        .map_err(|e| e.to_string())?;
+    let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+    let c = PdfColor::new(color[0], color[1], color[2], color[3]);
+    let mut tocado = false;
+    {
+        let mut annot = page
+            .annotations_mut()
+            .get(annot_index as usize)
+            .map_err(|e| e.to_string())?;
+        let objects = match (
+            annot.as_stamp_annotation_mut().is_some(),
+            annot.as_ink_annotation_mut().is_some(),
+        ) {
+            (true, _) => Some(annot.as_stamp_annotation_mut().unwrap().objects_mut()),
+            (_, true) => Some(annot.as_ink_annotation_mut().unwrap().objects_mut()),
+            _ => None,
+        };
+        if let Some(objects) = objects {
+            for i in 0..objects.len() {
+                let Ok(mut obj) = objects.get(i) else { continue };
+                if obj.as_text_object().is_some() {
+                    let _ = obj.set_fill_color(c);
+                } else {
+                    let _ = obj.set_stroke_color(c);
+                    // solo se recolorea el relleno si lo había
+                    if obj.fill_color().map(|f| f.alpha() > 0).unwrap_or(false) {
+                        let _ = obj.set_fill_color(c);
+                    }
+                }
+                tocado = true;
+            }
+        }
+    }
+    drop(page);
+    if tocado {
+        save_and_close(doc, work_path)
+    } else {
+        drop(doc);
+        crate::invalidate_doc_cache();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1001,6 +1258,33 @@ mod tests_apariencia {
                 && zona.as_bytes()[6] == b'\''
                 && zona[1..3].chars().all(|c| c.is_ascii_digit())
                 && zona[4..6].chars().all(|c| c.is_ascii_digit()))
+    }
+
+    /// Envejece el `/M` de una anotación: el reloj no avanza dentro de un
+    /// test y la fecha va en segundos.
+    fn envejece(work: &str, i: usize) {
+        crate::cirugia(work, move |doc| {
+            let id = annot_id(doc, 0, i)?;
+            let annot = doc
+                .get_object_mut(id)
+                .and_then(|o| o.as_dict_mut())
+                .map_err(|e| e.to_string())?;
+            annot.set("M", lopdf::Object::string_literal("D:20200101000000+00'00'"));
+            Ok(())
+        })
+        .expect("envejecer la fecha");
+    }
+
+    /// El `/Annots` de la primera página tal como está en el fichero.
+    fn annots_guardadas(work: &str) -> Vec<lopdf::Object> {
+        let doc = lopdf::Document::load(work).expect("cargar con lopdf");
+        let page_id = *doc.get_pages().get(&1).expect("página 1");
+        doc.get_object(page_id)
+            .and_then(|o| o.as_dict())
+            .and_then(|d| d.get(b"Annots"))
+            .and_then(|o| o.as_array())
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn caja(y: f32) -> Rect {
@@ -1267,6 +1551,100 @@ mod tests_apariencia {
         );
         let annots = get_annotations(work, 0).expect("listar");
         assert_eq!(annots[0].author, "Jorge", "mover no debe tocar el autor");
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// Corregir el texto de un comentario ya creado (doble clic en Acrobat):
+    /// el texto nuevo llega a `get_annotations` y la fecha se refresca.
+    #[test]
+    fn editar_el_texto_de_un_comentario() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_editar_nota.pdf");
+        crea_pdf(&["Hola"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        add_note(work.clone(), 0, 200.0, 100.0, "Primera".into(), Some("Jorge".into()))
+            .expect("nota");
+        envejece(&work, 0);
+
+        set_annotation_contents(
+            work.clone(),
+            0,
+            0,
+            "Corregida\nen dos líneas".into(),
+            None,
+        )
+        .expect("corregir");
+
+        let a = &get_annotations(work.clone(), 0).expect("listar")[0];
+        assert_eq!(a.contents, "Corregida\nen dos líneas");
+        assert_eq!(a.author, "Jorge", "corregir no cambia el autor");
+        let m = fecha_guardada(&work, 0);
+        assert!(
+            m.starts_with(&format!("D:{}", chrono::Local::now().format("%Y"))),
+            "corregir debe refrescar /M, sigue en {m}"
+        );
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// Cambiar el color de un resaltado tiene que reescribir su `/AP`: sin
+    /// eso el PDF exportado seguiría amarillo fuera de Vitela.
+    #[test]
+    fn recolorear_un_resaltado_reescribe_su_apariencia() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_recolorear.pdf");
+        crea_pdf(&["Hola"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        add_highlight(work.clone(), 0, vec![caja(300.0)], None).expect("resaltar");
+
+        set_annotation_color(work.clone(), 0, 0, [90, 200, 250, 255]).expect("recolorear");
+
+        let [r, g, b, _] = pixel(&render_page_png(work.clone(), 0, 300).expect("render"), 300, 300.0, 310.0);
+        assert!(
+            b > 200 && r < 160,
+            "el resaltado sigue sin ser azul: rgb({r},{g},{b})"
+        );
+        assert!(tiene_ap_con_stream(&work, 0), "el resaltado debe conservar /AP");
+        let a = &get_annotations(work, 0).expect("listar")[0];
+        assert_eq!(a.color, Some([90, 200, 250, 255]));
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// La nota es un post-it de verdad: icono de bocadillo (`/Name /Comment`)
+    /// y ventana emergente (`/Popup` con `/Open false`), que es lo que
+    /// enseñan Acrobat y Vista Previa. El popup no es un comentario: no sale
+    /// en la lista, y se va con la nota al borrarla.
+    #[test]
+    fn la_nota_lleva_icono_y_popup() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_popup.pdf");
+        crea_pdf(&["Hola"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        add_note(work.clone(), 0, 200.0, 100.0, "Una nota".into(), None).expect("nota");
+
+        let nota = annot_guardada(&work, 0);
+        assert_eq!(
+            nota.get(b"Name").and_then(|o| o.as_name()).unwrap_or_default(),
+            b"Comment"
+        );
+        assert!(nota.get(b"Popup").is_ok(), "la nota debe llevar /Popup");
+        let popup = annot_guardada(&work, 1);
+        assert_eq!(
+            popup.get(b"Subtype").and_then(|o| o.as_name()).unwrap_or_default(),
+            b"Popup"
+        );
+        assert!(
+            !popup.get(b"Open").and_then(|o| o.as_bool()).unwrap_or(true),
+            "el popup nace cerrado"
+        );
+
+        let annots = get_annotations(work.clone(), 0).expect("listar");
+        assert_eq!(annots.len(), 1, "el popup no es un comentario: {annots:?}");
+        remove_annotation(work.clone(), 0, annots[0].index).expect("borrar");
+        assert!(
+            get_annotations(work.clone(), 0).expect("listar").is_empty(),
+            "borrar la nota debe llevarse su popup"
+        );
+        assert!(
+            annots_guardadas(&work).is_empty(),
+            "el popup huérfano se queda en el fichero"
+        );
         std::fs::remove_file(&tmp).ok();
     }
 }
