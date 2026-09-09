@@ -1,6 +1,6 @@
 //! Extracción de texto con cajas de glifos y búsqueda en el documento.
 
-use crate::{on_pdfium_thread, with_doc, Rect};
+use crate::{on_pdfium_thread, with_doc, Geo, Rect};
 use pdfium_render::prelude::*;
 use serde::Serialize;
 
@@ -28,9 +28,16 @@ pub struct SearchMatch {
 
 /// Extrae los caracteres de una página con sus cajas de glifos, en puntos PDF
 /// y con origen arriba-izquierda (PDFium usa origen abajo-izquierda).
+///
+/// El espacio es el PROPIO de la página, sin la rotación aplicada: es donde
+/// están escritas de verdad las cajas de los glifos, y la UI convierte al
+/// espacio de la vista con la `rotation` de `get_page_sizes`. Por eso el
+/// volteo va con `Geo` y no con `page.height()`, que PDFium devuelve YA
+/// rotada: en una A4 con /Rotate 90 la diferencia son 246 pt y la selección
+/// caía fuera del texto.
 pub fn extract_chars(page: &PdfPage) -> Result<PageText, String> {
     let text = page.text().map_err(|e| e.to_string())?;
-    let page_h = page.height().value;
+    let geo = Geo::de_pagina(page).propia();
     let mut chars = Vec::new();
     for c in text.chars().iter() {
         let ch = c.unicode_char().unwrap_or('\u{fffd}');
@@ -38,17 +45,18 @@ pub fn extract_chars(page: &PdfPage) -> Result<PageText, String> {
             Ok(b) => b,
             Err(_) => continue,
         };
+        let caja = geo.pdf_rect_a_ui(&b);
         chars.push(CharBox {
             ch: ch.to_string(),
-            x: b.left().value,
-            y: page_h - b.top().value,
-            w: b.right().value - b.left().value,
-            h: b.top().value - b.bottom().value,
+            x: caja.x,
+            y: caja.y,
+            w: caja.w,
+            h: caja.h,
         });
     }
     Ok(PageText {
-        width: page.width().value,
-        height: page_h,
+        width: geo.ancho(),
+        height: geo.alto(),
         chars,
     })
 }
@@ -320,4 +328,106 @@ mod tests {
         assert_eq!(rects.len(), 2);
         assert_eq!(rects[0].w, 10.0);
     }
+
+    /// Girar la página no mueve nada: los objetos siguen escritos donde
+    /// estaban y solo cambia cómo se enseñan. Los cuatro comandos que LEEN
+    /// contenido (`get_page_text`, `search_pdf`, `get_text_blocks` y
+    /// `get_images`) devuelven el espacio PROPIO de la página, así que su
+    /// respuesta tiene que ser la MISMA con /Rotate 0, 90, 180 y 270: la UI
+    /// convierte al espacio de la vista con la `rotation` de
+    /// `get_page_sizes`, igual que hace al revés antes de escribir.
+    ///
+    /// Se comparaba con `page.height()`, que PDFium devuelve YA rotada
+    /// mientras que las cajas de los objetos no lo están: en una A4 girada
+    /// el volteo de la `y` salía desplazado 246 pt (AC-014) y la selección,
+    /// la búsqueda y los tiradores de las imágenes caían fuera del texto.
+    #[test]
+    fn el_contenido_se_lee_igual_en_una_pagina_rotada() {
+        let tmp = std::env::temp_dir().join("busqueda-rotada-test.pdf");
+        crea_pdf(&["Hola Mundo"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        // una imagen para que get_images tenga algo que decir
+        let png = image::RgbaImage::from_pixel(80, 40, image::Rgba([200, 30, 30, 255]));
+        let ruta_png = std::env::temp_dir().join("busqueda-rotada-test.png");
+        png.save(&ruta_png).expect("crear png");
+        crate::imagenes::add_image(
+            work.clone(),
+            0,
+            ruta_png.to_string_lossy().into_owned(),
+            120.0,
+            400.0,
+        )
+        .expect("insertar imagen");
+
+        let referencia = lo_que_se_lee(&work);
+        assert!(!referencia.is_empty(), "la página de prueba no tiene contenido");
+
+        for grados in [90u16, 180, 270] {
+            crate::paginas::rotate_page(work.clone(), 0).expect("girar");
+            let ahora = lo_que_se_lee(&work);
+            assert_eq!(
+                ahora.len(),
+                referencia.len(),
+                "con /Rotate {grados} cambió el número de cajas leídas"
+            );
+            for (i, (a, b)) in ahora.iter().zip(referencia.iter()).enumerate() {
+                assert!(
+                    (a.0 - b.0).abs() < 0.5
+                        && (a.1 - b.1).abs() < 0.5
+                        && (a.2 - b.2).abs() < 0.5
+                        && (a.3 - b.3).abs() < 0.5,
+                    "con /Rotate {grados} la caja {i} se lee en {a:?} y sin girar en {b:?}"
+                );
+            }
+        }
+
+        // y el juez de siempre: un sello puesto donde la UI ve el texto cae
+        // encima del texto. La UI convierte el rect leído al espacio de la
+        // vista, y `get_annotations` ya devuelve ese espacio.
+        let s = &crate::get_page_sizes(work.clone()).expect("tamaños")[0];
+        assert_eq!(s.rotation, 270, "el test gira la página tres veces");
+        let m = &search_pdf(work.clone(), "Mundo".into(), None, None).expect("buscar")[0].rects[0];
+        let (px, py) = (m.x + m.w / 2.0, m.y + m.h / 2.0);
+        // página propia -> vista con /Rotate 270, lo que hace `puntoAVista`
+        let (vx, vy) = (py, s.height - px);
+        crate::anotaciones2::add_stamp(
+            work.clone(),
+            0,
+            "X".into(),
+            [192, 57, 43, 255],
+            px,
+            py,
+            10.0,
+            None,
+        )
+        .expect("sello");
+        let a = &crate::anotaciones::get_annotations(work.clone(), 0).expect("listar")[0];
+        let (cx, cy) = (a.x + a.w / 2.0, a.y + a.h / 2.0);
+        assert!(
+            (cx - vx).abs() < 4.0 && (cy - vy).abs() < 4.0,
+            "el sello puesto sobre la coincidencia se ve en ({cx:.1},{cy:.1}) \
+             y la coincidencia en ({vx:.1},{vy:.1})"
+        );
+
+        std::fs::remove_file(&tmp).ok();
+        std::fs::remove_file(&ruta_png).ok();
+    }
+
+    /// Las cajas que devuelven los cuatro comandos que leen contenido.
+    fn lo_que_se_lee(work: &str) -> Vec<(f32, f32, f32, f32)> {
+        let mut out = Vec::new();
+        let t = get_page_text(work.to_string(), 0).expect("texto");
+        out.extend(t.chars.iter().map(|c| (c.x, c.y, c.w, c.h)));
+        for m in search_pdf(work.to_string(), "Mundo".into(), None, None).expect("buscar") {
+            out.extend(m.rects.iter().map(|r| (r.x, r.y, r.w, r.h)));
+        }
+        for b in crate::texto::get_text_blocks(work.to_string(), 0).expect("bloques") {
+            out.push((b.x, b.y, b.w, b.h));
+        }
+        for i in crate::imagenes::get_images(work.to_string(), 0).expect("imágenes") {
+            out.push((i.x, i.y, i.w, i.h));
+        }
+        out
+    }
+
 }

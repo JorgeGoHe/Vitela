@@ -585,6 +585,15 @@ impl Geo {
         Geo { rot: 0, ..*self }
     }
 
+    /// Tamaño de la página SIN rotar (el del espacio propio).
+    pub(crate) fn ancho(&self) -> f32 {
+        self.w
+    }
+
+    pub(crate) fn alto(&self) -> f32 {
+        self.h
+    }
+
     /// Un punto de la UI a coordenadas PDF.
     pub(crate) fn ui_a_pdf(&self, x: f32, y: f32) -> (f32, f32) {
         let (ax, ay) = match self.rot {

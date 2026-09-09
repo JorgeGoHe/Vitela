@@ -146,7 +146,9 @@ pub fn get_text_blocks(path: String, page_index: u16) -> Result<Vec<TextBlock>, 
     on_pdfium_thread(move || {
         with_doc(&path, |doc| {
             let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-            let page_h = page.height().value;
+            // espacio propio de la página: las cajas de los objetos no
+            // llevan la rotación, y `page.height()` sí (ver `Geo`)
+            let geo = crate::Geo::de_pagina(&page).propia();
             let objects = page.objects();
             let mut out = Vec::new();
             for i in 0..objects.len() {
@@ -159,13 +161,22 @@ pub fn get_text_blocks(path: String, page_index: u16) -> Result<Vec<TextBlock>, 
                     continue;
                 }
                 let Ok(b) = obj.bounds() else { continue };
+                // `bounds()` de un objeto de página son quadpoints; los
+                // giros del PDF son múltiplos de 90°, así que su caja
+                // envolvente es el rect
+                let caja = geo.pdf_rect_a_ui(&PdfRect::new(
+                    b.bottom(),
+                    b.left(),
+                    b.top(),
+                    b.right(),
+                ));
                 out.push(TextBlock {
                     object_index: i as u32,
                     text,
-                    x: b.left().value,
-                    y: page_h - b.top().value,
-                    w: b.right().value - b.left().value,
-                    h: b.top().value - b.bottom().value,
+                    x: caja.x,
+                    y: caja.y,
+                    w: caja.w,
+                    h: caja.h,
                     font_size: t.unscaled_font_size().value,
                     font_family: normaliza_familia(&t.font().family()),
                 });
