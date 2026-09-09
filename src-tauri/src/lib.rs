@@ -874,6 +874,8 @@ pub fn run() {
             paginas::move_page,
             paginas::merge_pdf,
             paginas::extract_pages,
+            paginas::delete_pages,
+            paginas::rotate_pages,
             save_pdf,
             anotaciones::add_highlight,
             anotaciones::add_stroke,
@@ -1025,7 +1027,7 @@ pub(crate) mod tests {
             ("renderizar una página que no existe", render_page_b64(b.clone(), 9, 100).unwrap_err()),
             (
                 "extraer a una carpeta que no existe",
-                paginas::extract_pages(b.clone(), vec![0], "/nope/x.pdf".into()).unwrap_err(),
+                paginas::extract_pages(b.clone(), vec![0], "/nope/x.pdf".into(), None).unwrap_err(),
             ),
             (
                 "unir con un PDF que no está",
