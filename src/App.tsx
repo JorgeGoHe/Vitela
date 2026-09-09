@@ -48,7 +48,14 @@ import {
   type Metadata,
   type OutlineNode,
 } from "./api";
-import { hexToRgba, MOD, type Mode, type PageSize } from "./tipos";
+import {
+  cargaPreferencias,
+  hexToRgba,
+  MOD,
+  type Mode,
+  type PageSize,
+  type Preferencias,
+} from "./tipos";
 import Icon from "./components/Icon";
 import Busqueda from "./components/Busqueda";
 import OpcionesHerramienta from "./components/OpcionesHerramienta";
@@ -66,6 +73,7 @@ import DialogoProteger from "./components/DialogoProteger";
 import DialogoConfirmar from "./components/DialogoConfirmar";
 import DialogoExportar from "./components/DialogoExportar";
 import DialogoComprimir from "./components/DialogoComprimir";
+import DialogoPreferencias from "./components/DialogoPreferencias";
 import "./App.css";
 
 const BASE_WIDTH = 900;
@@ -175,6 +183,7 @@ function App() {
   const [noticeSaliendo, setNoticeSaliendo] = useState(false);
   const [outline, setOutlineState] = useState<OutlineNode[]>([]);
   const [propsDraft, setPropsDraft] = useState<Metadata | null>(null);
+  const [prefsDraft, setPrefsDraft] = useState<Preferencias | null>(null);
   const {
     firmas,
     activeSig,
@@ -528,6 +537,9 @@ function App() {
         if (e.shiftKey) {
           if (pageCount > 0) saveFileAs();
         } else if (modified) saveFile();
+      } else if (mod && e.key === ",") {
+        e.preventDefault();
+        setPrefsDraft(cargaPreferencias());
       } else if (mod && e.key === "0" && pageCount > 0) {
         e.preventDefault();
         setZoom("ajuste");
@@ -1389,6 +1401,7 @@ function App() {
                   setMode("link-new");
                 }}
                 printDocument={printDocument}
+                abrirPreferencias={() => setPrefsDraft(cargaPreferencias())}
                 abrirExportar={() => setExportOpen(true)}
                 exportPlainText={exportPlainText}
                 abrirComprimir={() => setCompressOpen(true)}
@@ -1450,6 +1463,12 @@ function App() {
         <DialogoEncabezado
           onApply={applyHeaderFooter}
           onClose={() => setHfOpen(false)}
+        />
+      )}
+      {prefsDraft && (
+        <DialogoPreferencias
+          initial={prefsDraft}
+          onClose={() => setPrefsDraft(null)}
         />
       )}
       {propsDraft && (

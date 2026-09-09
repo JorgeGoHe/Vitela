@@ -50,6 +50,7 @@ export default function MenuAcciones({
   abrirEncabezado,
   askRemoveMarginal,
   openProperties,
+  abrirPreferencias,
   signPdf,
   abrirProteger,
   abrirAplanar,
@@ -78,6 +79,7 @@ export default function MenuAcciones({
   abrirEncabezado: () => void;
   askRemoveMarginal: (zona: "watermark" | "header") => void;
   openProperties: () => void;
+  abrirPreferencias: () => void;
   signPdf: () => void;
   abrirProteger: () => void;
   abrirAplanar: () => void;
@@ -199,6 +201,12 @@ export default function MenuAcciones({
               icon="merge"
               texto="Insertar PDF aquí…"
               onSelect={ejecutar(insertPdfHere)}
+            />
+            <Entrada
+              icon="sliders"
+              texto="Preferencias…"
+              atajo={`${MOD},`}
+              onSelect={ejecutar(abrirPreferencias)}
             />
             <div className="menu-titulo">Documento</div>
             <Entrada

@@ -72,6 +72,8 @@ export function addMarkup(args: {
   rects: { x: number; y: number; w: number; h: number }[];
   kind: "highlight" | "underline" | "strikeout";
   color?: Rgba;
+  /** Autor del comentario; null = el nombre de usuario del sistema. */
+  author?: string | null;
 }): Promise<void> {
   return invoke("add_markup", { color: null, ...args });
 }
@@ -88,6 +90,7 @@ export function addShape(args: {
   stroke: Rgba;
   fill?: Rgba | null;
   strokeWidth: number;
+  author?: string | null;
 }): Promise<void> {
   return invoke("add_shape", { fill: null, ...args });
 }
@@ -101,8 +104,9 @@ export function addStamp(args: {
   x: number;
   y: number;
   fontSize: number;
+  author?: string | null;
 }): Promise<void> {
-  return invoke("add_stamp", { ...args });
+  return invoke("add_stamp", { author: null, ...args });
 }
 
 /** Render de página como URL para <img>. En Tauri llega como bytes (IPC

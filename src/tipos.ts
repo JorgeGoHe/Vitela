@@ -21,6 +21,10 @@ export type AnnotationInfo = {
   w: number;
   h: number;
   contents: string;
+  /** Autor del comentario (`/T`); vacío si el PDF no lo trae. */
+  author: string;
+  /** Fecha de modificación (`/M`) en ISO 8601, o vacía. */
+  modified: string;
   rects: Rect[];
   color: [number, number, number, number] | null;
 };
@@ -162,6 +166,50 @@ export function copyToClipboard(text: string) {
     document.execCommand("copy");
     ta.remove();
   });
+}
+
+/* ---- preferencias de la app (persistidas en localStorage) ---- */
+
+const CLAVE_PREFS = "editorPdf.preferencias";
+
+export type Preferencias = { autor: string };
+
+export function cargaPreferencias(): Preferencias {
+  try {
+    const g = JSON.parse(localStorage.getItem(CLAVE_PREFS) ?? "{}");
+    return { autor: typeof g.autor === "string" ? g.autor : "" };
+  } catch {
+    return { autor: "" };
+  }
+}
+
+export function guardaPreferencias(p: Preferencias) {
+  localStorage.setItem(CLAVE_PREFS, JSON.stringify(p));
+}
+
+/** Autor que se escribe en los comentarios nuevos; null = el nombre de
+ *  usuario del sistema, que es lo que pone el backend. */
+export function autorComentarios(): string | null {
+  return cargaPreferencias().autor.trim() || null;
+}
+
+/** «Jorge · 9 sept 2026» para el popover de un comentario. */
+export function firmaAnotacion(author: string, modified: string): string {
+  const partes: string[] = [];
+  if (author) partes.push(author);
+  if (modified) {
+    const d = new Date(modified);
+    if (!Number.isNaN(d.getTime())) {
+      partes.push(
+        d.toLocaleDateString("es-ES", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        }),
+      );
+    }
+  }
+  return partes.join(" · ");
 }
 
 /* ---- opciones de búsqueda (persistidas en localStorage) ---- */

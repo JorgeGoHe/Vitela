@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { invoke } from "../../ipc";
 import { addMarkup, addShape, addStamp, transformAnnotation } from "../../api";
 import {
+  autorComentarios,
   hexToRgba,
   mergeLineRects,
   type AnnotationInfo,
@@ -144,6 +145,7 @@ export function useAnotaciones(ctx: {
         rects,
         kind,
         color: hexToRgba(colorHex, kind === "highlight" ? 140 : 255),
+        author: autorComentarios(),
       });
       tool.onMarkupUsed(kind, colorHex);
       seleccion.setSelection(null);
@@ -173,6 +175,7 @@ export function useAnotaciones(ctx: {
         stroke: hexToRgba(tool.shapeColor),
         fill: tool.shapeFill && fillable ? hexToRgba(tool.shapeColor, 70) : null,
         strokeWidth: tool.shapeWidth,
+        author: autorComentarios(),
       });
       onAnnotated(index);
     } catch (e) {
@@ -193,6 +196,7 @@ export function useAnotaciones(ctx: {
         x,
         y,
         fontSize: 22,
+        author: autorComentarios(),
       });
       onAnnotated(index);
     } catch (e) {
@@ -212,6 +216,7 @@ export function useAnotaciones(ctx: {
         x: noteDraft.x,
         y: noteDraft.y,
         text: noteDraft.text,
+        author: autorComentarios(),
       });
       setNoteDraft(null);
       onModeChange("select");
@@ -233,6 +238,7 @@ export function useAnotaciones(ctx: {
         points: pts,
         color: hexToRgba(tool.drawColor),
         width: tool.drawWidth,
+        author: autorComentarios(),
       });
       onAnnotated(index);
     } catch (e) {

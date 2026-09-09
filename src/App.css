@@ -778,6 +778,12 @@ textarea {
   word-break: break-word;
 }
 
+/* autor y fecha del comentario: datos del papel, no interfaz */
+.annot-firma {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
 .card textarea {
   width: 100%;
   min-height: 56px;

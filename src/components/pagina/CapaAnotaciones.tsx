@@ -4,7 +4,7 @@
  * quedan debajo de enlaces y campos; los iconos de nota, popovers y las
  * previsualizaciones de trazo/forma (`CapaAnotaciones`) encima.
  */
-import { KIND_LABELS, type Mode } from "../../tipos";
+import { firmaAnotacion, KIND_LABELS, type Mode } from "../../tipos";
 import { clampCardLeft } from "../../hooks/pagina/geometria";
 import type { Anotaciones } from "../../hooks/pagina/useAnotaciones";
 import Icon from "../Icon";
@@ -169,6 +169,11 @@ export default function CapaAnotaciones({
               KIND_LABELS[notePopover.kind] ||
               notePopover.kind}
           </p>
+          {firmaAnotacion(notePopover.author, notePopover.modified) && (
+            <p className="annot-firma dato">
+              {firmaAnotacion(notePopover.author, notePopover.modified)}
+            </p>
+          )}
           <div className="card-actions">
             <button
               className="btn btn-danger"
