@@ -499,7 +499,26 @@ pub struct FirmaInfo {
     /// resto de comandos que leen anotaciones. `None` si la firma es
     /// invisible.
     pub rect: Option<crate::Rect>,
+    /// El veredicto en una palabra, para que la UI no tenga que deducirlo
+    /// de dos booleanos: `"ok"` (firma comprobada y documento intacto),
+    /// `"modificado"` (comprobada y NO cuadra) y `"desconocido"` (no se ha
+    /// podido comprobar: un algoritmo que Vitela todavía no sabe leer, un
+    /// CMS ilegible o el certificado del firmante ausente). Acusar de
+    /// manipulación un documento intacto porque la firma usa ECDSA es peor
+    /// que no verificar nada, así que ese caso nunca sale en rojo.
+    pub estado: String,
+    /// Qué se ha comprobado, para la tarjeta: «RSA-2048 / SHA-256»,
+    /// «ECDSA P-256 / SHA-384». Con lo no soportado, lo que se ha
+    /// encontrado, para que se pueda contar.
+    pub algoritmo: String,
 }
+
+/// Firma comprobada y documento intacto.
+pub const ESTADO_OK: &str = "ok";
+/// Firma comprobada y el documento no cuadra con ella.
+pub const ESTADO_MODIFICADO: &str = "modificado";
+/// No se ha podido comprobar (nunca es una acusación).
+pub const ESTADO_DESCONOCIDO: &str = "desconocido";
 
 /// Comprueba las firmas del documento: por cada campo `/Sig`, si su
 /// `/ByteRange` cubre el fichero entero salvo el hueco de `/Contents`, si el
@@ -655,6 +674,9 @@ fn lee_firma(
         self_signed: false,
         page_index,
         rect,
+        // mientras no se compruebe nada, lo honesto es «no se sabe»
+        estado: ESTADO_DESCONOCIDO.to_string(),
+        algoritmo: String::new(),
     };
     let rangos: Vec<usize> = sig
         .get(b"ByteRange")
@@ -678,18 +700,30 @@ fn lee_firma(
         && hueco.first() == Some(&b'<')
         && hueco.last() == Some(&b'>');
 
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes[a..a + b]);
-    hasher.update(&bytes[c..c + d]);
-    let digest = hasher.finalize();
     if let Some(cms) = lee_cms(contents) {
-        info.digest_ok = cms.digest == digest.as_slice() && cms.firma_ok;
         info.cert_subject = cms.subject;
         info.cert_issuer = cms.issuer;
         info.not_before = cms.not_before;
         info.not_after = cms.not_after;
         info.expired = cms.expired;
         info.self_signed = cms.self_signed;
+        info.algoritmo = cms.algoritmo;
+        // el hash del /ByteRange se calcula con el algoritmo que declara la
+        // firma, no siempre SHA-256: con SHA-384 o SHA-512 el documento
+        // salía «modificado» estando intacto
+        let mismo_hash = match cms.hash {
+            Some(h) => h.digest(&[&bytes[a..a + b], &bytes[c..c + d]]) == cms.digest,
+            None => false,
+        };
+        info.digest_ok = mismo_hash && cms.firma_ok == Some(true);
+        info.estado = match (cms.hash, cms.firma_ok) {
+            // no sabemos leer el algoritmo, o no está el certificado del
+            // firmante: no se ha podido comprobar, y no se acusa
+            (None, _) | (_, None) => ESTADO_DESCONOCIDO,
+            _ if info.digest_ok => ESTADO_OK,
+            _ => ESTADO_MODIFICADO,
+        }
+        .to_string();
         if info.name.is_empty() {
             info.name = nombre_comun(&info.cert_subject);
         }
@@ -697,9 +731,74 @@ fn lee_firma(
     info
 }
 
+/// Los tres hashes de la familia SHA-2 que se usan en las firmas de PDF.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Hash {
+    Sha256,
+    Sha384,
+    Sha512,
+}
+
+impl Hash {
+    fn de_oid(oid: const_oid::ObjectIdentifier) -> Option<Hash> {
+        use const_oid::db::rfc5912::{ID_SHA_256, ID_SHA_384, ID_SHA_512};
+        match oid {
+            ID_SHA_256 => Some(Hash::Sha256),
+            ID_SHA_384 => Some(Hash::Sha384),
+            ID_SHA_512 => Some(Hash::Sha512),
+            _ => None,
+        }
+    }
+
+    fn digest(self, partes: &[&[u8]]) -> Vec<u8> {
+        use sha2::{Sha384, Sha512};
+        match self {
+            Hash::Sha256 => {
+                let mut h = Sha256::new();
+                for p in partes {
+                    h.update(p);
+                }
+                h.finalize().to_vec()
+            }
+            Hash::Sha384 => {
+                let mut h = Sha384::new();
+                for p in partes {
+                    h.update(p);
+                }
+                h.finalize().to_vec()
+            }
+            Hash::Sha512 => {
+                let mut h = Sha512::new();
+                for p in partes {
+                    h.update(p);
+                }
+                h.finalize().to_vec()
+            }
+        }
+    }
+
+    fn nombre(self) -> &'static str {
+        match self {
+            Hash::Sha256 => "SHA-256",
+            Hash::Sha384 => "SHA-384",
+            Hash::Sha512 => "SHA-512",
+        }
+    }
+}
+
 struct DatosCms {
+    /// El `messageDigest` que va firmado dentro del CMS.
     digest: Vec<u8>,
-    firma_ok: bool,
+    /// Con qué hash hay que calcular el del `/ByteRange` para compararlo.
+    /// `None` si el algoritmo no es uno de los que Vitela sabe leer.
+    hash: Option<Hash>,
+    /// `Some(true)` la firma la hizo la clave del certificado del firmante;
+    /// `Some(false)` no; `None` no se ha podido comprobar (algoritmo no
+    /// soportado o certificado del firmante ausente), que **no** es lo
+    /// mismo que `Some(false)`.
+    firma_ok: Option<bool>,
+    /// Qué se ha comprobado, en la lengua de la tarjeta del panel.
+    algoritmo: String,
     subject: String,
     issuer: String,
     not_before: String,
@@ -708,8 +807,14 @@ struct DatosCms {
     self_signed: bool,
 }
 
-/// Saca del PKCS#7 el hash firmado, el certificado y si la firma RSA de los
-/// atributos firmados la hizo la clave de ese certificado.
+/// Saca del PKCS#7 el hash firmado, el certificado **del firmante** (el que
+/// señala el `SignerIdentifier`, no el primero del bolso: en una firma
+/// cualificada viaja la cadena entera y la CA suele ir delante) y si la
+/// firma de los atributos firmados la hizo la clave de ese certificado.
+///
+/// Se aceptan RSA PKCS#1 v1.5, RSA-PSS y ECDSA P-256/P-384, con SHA-256,
+/// SHA-384 y SHA-512. Lo que no se reconoce se devuelve como «no
+/// comprobado», nunca como firma inválida.
 fn lee_cms(der_con_relleno: &[u8]) -> Option<DatosCms> {
     use der::{Encode, Reader};
     let ci: cms::content_info::ContentInfo = {
@@ -730,23 +835,25 @@ fn lee_cms(der_con_relleno: &[u8]) -> Option<DatosCms> {
     let md_der = md.values.iter().next()?.to_der().ok()?;
     // OCTET STRING: 0x04, longitud, bytes
     let digest = md_der.get(2..)?.to_vec();
+    let hash = Hash::de_oid(signer.digest_alg.oid);
 
-    let cert = sd.certificates.as_ref().and_then(|c| {
-        c.0.iter().find_map(|c| match c {
-            CertificateChoices::Certificate(cert) => Some(cert.clone()),
-            _ => None,
-        })
-    })?;
+    let (cert, era_el_del_firmante) = certificado_del_firmante(&sd, &signer.sid)?;
     let spki = cert.tbs_certificate.subject_public_key_info.to_der().ok()?;
-    let firma_ok = (|| {
-        use rsa::pkcs8::DecodePublicKey;
-        use rsa::signature::Verifier;
-        let clave = rsa::RsaPublicKey::from_public_key_der(&spki).ok()?;
-        let vk = rsa::pkcs1v15::VerifyingKey::<Sha256>::new(clave);
-        let firma = rsa::pkcs1v15::Signature::try_from(signer.signature.as_bytes()).ok()?;
-        Some(vk.verify(&attrs.to_der().ok()?, &firma).is_ok())
-    })()
-    .unwrap_or(false);
+    let datos = attrs.to_der().ok()?;
+    let (firma_ok, algoritmo) = if era_el_del_firmante {
+        comprueba_firma(
+            signer.signature_algorithm.oid,
+            &spki,
+            &datos,
+            signer.signature.as_bytes(),
+            hash,
+        )
+    } else {
+        // sin el certificado del firmante no hay nada que comprobar: el
+        // primero del bolso puede ser la CA, y verificar contra ella daría
+        // «no válida» sobre una firma buena
+        (None, "certificado del firmante ausente".to_string())
+    };
 
     let subject = cert.tbs_certificate.subject.to_string();
     let issuer = cert.tbs_certificate.issuer.to_string();
@@ -756,7 +863,9 @@ fn lee_cms(der_con_relleno: &[u8]) -> Option<DatosCms> {
     let not_after_st = cert.tbs_certificate.validity.not_after.to_system_time();
     Some(DatosCms {
         digest,
+        hash,
         firma_ok,
+        algoritmo,
         self_signed: subject == issuer,
         subject,
         issuer,
@@ -764,6 +873,166 @@ fn lee_cms(der_con_relleno: &[u8]) -> Option<DatosCms> {
         not_after: iso(&cert.tbs_certificate.validity.not_after),
         expired: std::time::SystemTime::now() > not_after_st,
     })
+}
+
+/// El certificado que señala el `SignerIdentifier` (emisor + número de
+/// serie, o el identificador de clave del sujeto). Si no está, se devuelve
+/// el primero del bolso solo para poder enseñar algo, con `false` en el
+/// segundo miembro: con ese no se verifica nada.
+fn certificado_del_firmante(
+    sd: &cms::signed_data::SignedData,
+    sid: &SignerIdentifier,
+) -> Option<(x509_cert::Certificate, bool)> {
+    let certificados: Vec<x509_cert::Certificate> = sd
+        .certificates
+        .as_ref()
+        .map(|c| {
+            c.0.iter()
+                .filter_map(|c| match c {
+                    CertificateChoices::Certificate(cert) => Some(cert.clone()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let suyo = certificados.iter().find(|cert| match sid {
+        SignerIdentifier::IssuerAndSerialNumber(ias) => {
+            cert.tbs_certificate.issuer == ias.issuer
+                && cert.tbs_certificate.serial_number == ias.serial_number
+        }
+        SignerIdentifier::SubjectKeyIdentifier(ski) => {
+            identificador_de_clave(cert).as_deref() == Some(ski.0.as_bytes())
+        }
+    });
+    match suyo {
+        Some(cert) => Some((cert.clone(), true)),
+        None => certificados.first().map(|c| (c.clone(), false)),
+    }
+}
+
+/// El `SubjectKeyIdentifier` (extensión 2.5.29.14) del certificado.
+fn identificador_de_clave(cert: &x509_cert::Certificate) -> Option<Vec<u8>> {
+    use der::Decode;
+    const SKI: const_oid::ObjectIdentifier =
+        const_oid::ObjectIdentifier::new_unwrap("2.5.29.14");
+    let ext = cert
+        .tbs_certificate
+        .extensions
+        .as_ref()?
+        .iter()
+        .find(|e| e.extn_id == SKI)?;
+    let octetos = der::asn1::OctetString::from_der(ext.extn_value.as_bytes()).ok()?;
+    Some(octetos.as_bytes().to_vec())
+}
+
+/// Comprueba la firma de los atributos firmados con la clave pública del
+/// certificado. Devuelve `None` cuando el algoritmo no está soportado —que
+/// no es lo mismo que una firma que no cuadra— y la etiqueta que la UI
+/// enseña en la tarjeta.
+fn comprueba_firma(
+    alg: const_oid::ObjectIdentifier,
+    spki: &[u8],
+    datos: &[u8],
+    firma: &[u8],
+    hash_del_digest: Option<Hash>,
+) -> (Option<bool>, String) {
+    use const_oid::db::rfc5912::{
+        ECDSA_WITH_SHA_256, ECDSA_WITH_SHA_384, ECDSA_WITH_SHA_512, ID_RSASSA_PSS,
+        RSA_ENCRYPTION, SHA_256_WITH_RSA_ENCRYPTION, SHA_384_WITH_RSA_ENCRYPTION,
+        SHA_512_WITH_RSA_ENCRYPTION,
+    };
+    // el hash lo fija el algoritmo de firma cuando lo lleva dentro; si no
+    // (rsaEncryption a secas, RSA-PSS), el del digest de los atributos
+    let hash = match alg {
+        SHA_256_WITH_RSA_ENCRYPTION | ECDSA_WITH_SHA_256 => Some(Hash::Sha256),
+        SHA_384_WITH_RSA_ENCRYPTION | ECDSA_WITH_SHA_384 => Some(Hash::Sha384),
+        SHA_512_WITH_RSA_ENCRYPTION | ECDSA_WITH_SHA_512 => Some(Hash::Sha512),
+        _ => hash_del_digest,
+    };
+    let Some(hash) = hash else {
+        return (None, format!("no reconocido ({alg})"));
+    };
+    match alg {
+        RSA_ENCRYPTION
+        | SHA_256_WITH_RSA_ENCRYPTION
+        | SHA_384_WITH_RSA_ENCRYPTION
+        | SHA_512_WITH_RSA_ENCRYPTION => {
+            let (ok, bits) = verifica_rsa(spki, datos, firma, hash, false);
+            (ok, format!("RSA-{bits} / {}", hash.nombre()))
+        }
+        ID_RSASSA_PSS => {
+            let (ok, bits) = verifica_rsa(spki, datos, firma, hash, true);
+            (ok, format!("RSA-PSS-{bits} / {}", hash.nombre()))
+        }
+        ECDSA_WITH_SHA_256 | ECDSA_WITH_SHA_384 | ECDSA_WITH_SHA_512 => {
+            let (ok, curva) = verifica_ecdsa(spki, &hash.digest(&[datos]), firma);
+            (ok, format!("ECDSA {curva} / {}", hash.nombre()))
+        }
+        _ => (None, format!("no reconocido ({alg})")),
+    }
+}
+
+/// RSA PKCS#1 v1.5 o PSS, con el hash que toque. El segundo miembro es el
+/// tamaño de la clave en bits, para la etiqueta.
+fn verifica_rsa(
+    spki: &[u8],
+    datos: &[u8],
+    firma: &[u8],
+    hash: Hash,
+    pss: bool,
+) -> (Option<bool>, usize) {
+    use rsa::pkcs8::DecodePublicKey;
+    use rsa::signature::Verifier;
+    use rsa::traits::PublicKeyParts;
+    use sha2::{Sha384, Sha512};
+    let Ok(clave) = rsa::RsaPublicKey::from_public_key_der(spki) else {
+        return (None, 0);
+    };
+    let bits = clave.n().bits();
+    macro_rules! v {
+        ($h:ty) => {
+            if pss {
+                let vk = rsa::pss::VerifyingKey::<$h>::new(clave);
+                match rsa::pss::Signature::try_from(firma) {
+                    Ok(f) => Some(vk.verify(datos, &f).is_ok()),
+                    Err(_) => Some(false),
+                }
+            } else {
+                let vk = rsa::pkcs1v15::VerifyingKey::<$h>::new(clave);
+                match rsa::pkcs1v15::Signature::try_from(firma) {
+                    Ok(f) => Some(vk.verify(datos, &f).is_ok()),
+                    Err(_) => Some(false),
+                }
+            }
+        };
+    }
+    let ok = match hash {
+        Hash::Sha256 => v!(Sha256),
+        Hash::Sha384 => v!(Sha384),
+        Hash::Sha512 => v!(Sha512),
+    };
+    (ok, bits)
+}
+
+/// ECDSA sobre P-256 o P-384 (las dos curvas de las firmas cualificadas).
+/// Se verifica contra el hash ya calculado, así que vale cualquiera de los
+/// tres SHA-2.
+fn verifica_ecdsa(spki: &[u8], prehash: &[u8], firma: &[u8]) -> (Option<bool>, &'static str) {
+    use p256::ecdsa::signature::hazmat::PrehashVerifier;
+    use p256::pkcs8::DecodePublicKey;
+    if let Ok(vk) = p256::ecdsa::VerifyingKey::from_public_key_der(spki) {
+        let ok = p256::ecdsa::Signature::from_der(firma)
+            .map(|f| vk.verify_prehash(prehash, &f).is_ok())
+            .unwrap_or(false);
+        return (Some(ok), "P-256");
+    }
+    if let Ok(vk) = p384::ecdsa::VerifyingKey::from_public_key_der(spki) {
+        let ok = p384::ecdsa::Signature::from_der(firma)
+            .map(|f| vk.verify_prehash(prehash, &f).is_ok())
+            .unwrap_or(false);
+        return (Some(ok), "P-384");
+    }
+    (None, "de curva desconocida")
 }
 
 /// El CN de un sujeto RFC 4514 («CN=Jorge,O=Vitela»); si no lo lleva, el
@@ -789,6 +1058,150 @@ mod tests {
             include_str!("../fixtures/test_key.pem"),
         )
         .expect("credenciales de prueba")
+    }
+
+    /// El certificado de la firma ECDSA de prueba (P-256), y su clave.
+    fn cert_ec() -> x509_cert::Certificate {
+        x509_cert::Certificate::from_pem(include_str!("../fixtures/test_ec_cert.pem"))
+            .expect("certificado EC de prueba")
+    }
+
+    fn clave_ec() -> p256::ecdsa::SigningKey {
+        use p256::pkcs8::DecodePrivateKey;
+        p256::ecdsa::SigningKey::from_pkcs8_pem(include_str!("../fixtures/test_ec_key.pem"))
+            .expect("clave EC de prueba")
+    }
+
+    /// Los dos rangos que firma el PDF (todo menos el hueco de /Contents) y
+    /// dónde está ese hueco. Es lo que escribe `sign`.
+    fn hueco_de_contents(bytes: &[u8]) -> (usize, usize) {
+        // el hueco es la cadena hexadecimal de tamaño fijo que reserva `sign`
+        let i = (0..bytes.len())
+            .find(|&i| {
+                bytes[i] == b'<' && bytes.get(i + SIG_LEN * 2 + 1) == Some(&b'>')
+            })
+            .expect("el hueco de /Contents");
+        (i, i + SIG_LEN * 2 + 2)
+    }
+
+    /// Sustituye el PKCS#7 de un PDF ya firmado por otro, sin mover un solo
+    /// byte: el hueco de `/Contents` tiene tamaño fijo, así que el
+    /// `/ByteRange` sigue valiendo y el documento sigue intacto. Así se
+    /// fabrica lo que en la vida real llega firmado por otra herramienta.
+    fn recose(bytes: &[u8], cms: &[u8]) -> Vec<u8> {
+        let (ini, fin) = hueco_de_contents(bytes);
+        let hex: String = cms.iter().map(|b| format!("{b:02X}")).collect();
+        let hueco = fin - ini - 2;
+        assert!(hex.len() <= hueco, "el CMS no cabe en el hueco");
+        let mut out = bytes.to_vec();
+        let relleno = format!("{hex:0<hueco$}");
+        out[ini + 1..fin - 1].copy_from_slice(relleno.as_bytes());
+        out
+    }
+
+    /// El digest del `/ByteRange` de un PDF firmado, con el hash que se
+    /// pida: lo que va dentro del CMS como `messageDigest`.
+    fn digest_del_byterange(bytes: &[u8], hash: Hash) -> Vec<u8> {
+        let (ini, fin) = hueco_de_contents(bytes);
+        hash.digest(&[&bytes[..ini], &bytes[fin..]])
+    }
+
+    /// CMS SignedData a mano, para fabricar firmas que Vitela no hace: el
+    /// algoritmo de digest, el de firma, el bolso de certificados (en el
+    /// orden que se pase) y la firma ya calculada.
+    fn cms_a_mano(
+        digest: &[u8],
+        digest_alg: const_oid::ObjectIdentifier,
+        firma_alg: const_oid::ObjectIdentifier,
+        certificados: Vec<x509_cert::Certificate>,
+        firmante: &x509_cert::Certificate,
+        firma_de: impl Fn(&[u8]) -> Vec<u8>,
+    ) -> Vec<u8> {
+        use cms::signed_data::{SignedData, SignerInfo, SignerInfos};
+        use der::asn1::{Any, OctetString, SetOfVec};
+        use der::{Decode, Tag, Tagged};
+        use x509_cert::attr::Attribute;
+
+        let alg = |oid| AlgorithmIdentifierOwned { oid, parameters: None };
+        let atributo = |oid, valor: Any| {
+            let mut valores = SetOfVec::new();
+            valores.insert(valor).expect("valor");
+            Attribute { oid, values: valores }
+        };
+        let content_type = atributo(
+            const_oid::db::rfc5911::ID_CONTENT_TYPE,
+            Any::new(Tag::ObjectIdentifier, const_oid::db::rfc5911::ID_DATA.as_bytes())
+                .expect("oid"),
+        );
+        let message_digest = atributo(
+            const_oid::db::rfc5911::ID_MESSAGE_DIGEST,
+            Any::new(Tag::OctetString, digest).expect("digest"),
+        );
+        let mut attrs = SetOfVec::new();
+        attrs.insert(content_type).expect("contentType");
+        attrs.insert(message_digest).expect("messageDigest");
+        let attrs_der = attrs.to_der().expect("atributos");
+        let firma = firma_de(&attrs_der);
+
+        let signer = SignerInfo {
+            version: cms::content_info::CmsVersion::V1,
+            sid: SignerIdentifier::IssuerAndSerialNumber(IssuerAndSerialNumber {
+                issuer: firmante.tbs_certificate.issuer.clone(),
+                serial_number: firmante.tbs_certificate.serial_number.clone(),
+            }),
+            digest_alg: alg(digest_alg),
+            signed_attrs: Some(attrs),
+            signature_algorithm: alg(firma_alg),
+            signature: OctetString::new(firma).expect("firma"),
+            unsigned_attrs: None,
+        };
+        let mut bolso = SetOfVec::new();
+        for c in certificados {
+            bolso
+                .insert(CertificateChoices::Certificate(c))
+                .expect("certificado");
+        }
+        let sd = SignedData {
+            version: cms::content_info::CmsVersion::V1,
+            digest_algorithms: {
+                let mut v = SetOfVec::new();
+                v.insert(alg(digest_alg)).expect("digest alg");
+                v
+            },
+            encap_content_info: EncapsulatedContentInfo {
+                econtent_type: const_oid::db::rfc5911::ID_DATA,
+                econtent: None,
+            },
+            certificates: Some(bolso.into()),
+            crls: None,
+            signer_infos: SignerInfos(SetOfVec::from_iter([signer]).expect("signer")),
+        };
+        let der = sd.to_der().expect("SignedData");
+        let ci = cms::content_info::ContentInfo {
+            content_type: const_oid::db::rfc5911::ID_SIGNED_DATA,
+            content: Any::from_der(&der).expect("any"),
+        };
+        let _ = ci.content.tag();
+        ci.to_der().expect("ContentInfo")
+    }
+
+    /// Un PDF firmado por Vitela, para recoserle otra firma encima.
+    fn pdf_firmado(nombre: &str) -> (std::path::PathBuf, Vec<u8>) {
+        let dir = std::env::temp_dir();
+        let src = dir.join(format!("{nombre}-src.pdf"));
+        let dest = dir.join(format!("{nombre}-firmado.pdf"));
+        crea_pdf(&["Contrato"], &src);
+        sign(
+            &src.to_string_lossy(),
+            &dest.to_string_lossy(),
+            &credenciales(),
+            None,
+            &Apariencia::default(),
+        )
+        .expect("firmar");
+        let bytes = std::fs::read(&dest).expect("leer");
+        std::fs::remove_file(&src).ok();
+        (dest, bytes)
     }
 
     /// PNG opaco de un color, en base64 (la «firma manuscrita»).
@@ -859,6 +1272,8 @@ mod tests {
         assert_eq!(firmas.len(), 1, "una firma");
         let f = &firmas[0];
         assert!(f.digest_ok, "el documento no ha cambiado desde la firma");
+        assert_eq!(f.estado, ESTADO_OK, "algoritmo: {}", f.algoritmo);
+        assert!(f.algoritmo.contains("RSA-2048 / SHA-256"), "{}", f.algoritmo);
         assert!(f.covers_whole_file, "el ByteRange cubre el fichero entero");
         assert_eq!(f.page_index, Some(1), "la firma está en la página 2");
         let r = f.rect.as_ref().expect("la firma visible trae su rect");
@@ -911,5 +1326,188 @@ mod tests {
         for p in [&src, &dest, &tocado, &invisible] {
             std::fs::remove_file(p).ok();
         }
+    }
+    /// Una firma ECDSA P-256 —lo que llevan hoy las firmas cualificadas— es
+    /// una firma buena: tiene que salir «ok», no en rojo. Vitela solo sabía
+    /// RSA/SHA-256 y daba por manipulado todo lo demás.
+    #[test]
+    fn una_firma_ecdsa_p256_se_comprueba_y_sale_bien() {
+        let (dest, bytes) = pdf_firmado("firma-ecdsa");
+        let digest = digest_del_byterange(&bytes, Hash::Sha256);
+        let cert = cert_ec();
+        let clave = clave_ec();
+        let cms = cms_a_mano(
+            &digest,
+            const_oid::db::rfc5912::ID_SHA_256,
+            const_oid::db::rfc5912::ECDSA_WITH_SHA_256,
+            vec![cert.clone()],
+            &cert,
+            |datos| {
+                use p256::ecdsa::signature::Signer;
+                let firma: p256::ecdsa::Signature = clave.sign(datos);
+                firma.to_der().as_bytes().to_vec()
+            },
+        );
+        std::fs::write(&dest, recose(&bytes, &cms)).expect("recoser");
+        let f = &verify_signatures(dest.to_string_lossy().into_owned()).expect("verificar")[0];
+        assert_eq!(f.estado, ESTADO_OK, "algoritmo: {}", f.algoritmo);
+        assert!(f.digest_ok && f.covers_whole_file);
+        assert!(f.algoritmo.contains("ECDSA P-256"), "{}", f.algoritmo);
+        assert!(f.cert_subject.contains("Ada Lovelace"), "{}", f.cert_subject);
+        std::fs::remove_file(&dest).ok();
+    }
+
+    /// Lo mismo con RSA y SHA-512: el digest del `/ByteRange` hay que
+    /// calcularlo con el hash que declara la firma, no siempre con SHA-256.
+    #[test]
+    fn una_firma_rsa_sha512_se_comprueba_con_su_propio_hash() {
+        let (dest, bytes) = pdf_firmado("firma-sha512");
+        let digest = digest_del_byterange(&bytes, Hash::Sha512);
+        let cred = credenciales();
+        let cert = cred.cert.clone();
+        let clave = cred.key.clone();
+        let cms = cms_a_mano(
+            &digest,
+            const_oid::db::rfc5912::ID_SHA_512,
+            const_oid::db::rfc5912::SHA_512_WITH_RSA_ENCRYPTION,
+            vec![cert.clone()],
+            &cert,
+            |datos| {
+                use rsa::signature::{SignatureEncoding, Signer};
+                let sk = rsa::pkcs1v15::SigningKey::<sha2::Sha512>::new(clave.clone());
+                sk.sign(datos).to_vec()
+            },
+        );
+        std::fs::write(&dest, recose(&bytes, &cms)).expect("recoser");
+        let f = &verify_signatures(dest.to_string_lossy().into_owned()).expect("verificar")[0];
+        assert_eq!(f.estado, ESTADO_OK, "algoritmo: {}", f.algoritmo);
+        assert!(f.algoritmo.contains("SHA-512"), "{}", f.algoritmo);
+
+        // y si le tocan un byte al cuerpo, entonces sí: modificado
+        let mut tocado = std::fs::read(&dest).expect("leer");
+        let i = find_subslice(&tocado, b"stream").expect("un stream") + 20;
+        tocado[i] ^= 0xFF;
+        let otro = dest.with_extension("tocado.pdf");
+        std::fs::write(&otro, &tocado).expect("escribir");
+        let f = &verify_signatures(otro.to_string_lossy().into_owned()).expect("verificar")[0];
+        assert_eq!(f.estado, ESTADO_MODIFICADO, "un byte cambiado sí es rojo");
+        std::fs::remove_file(&dest).ok();
+        std::fs::remove_file(&otro).ok();
+    }
+
+    /// El azar del sistema, para el relleno de RSA-PSS (que firma distinto
+    /// cada vez).
+    struct Entropia;
+    impl rsa::rand_core::RngCore for Entropia {
+        fn next_u32(&mut self) -> u32 {
+            let mut b = [0u8; 4];
+            self.fill_bytes(&mut b);
+            u32::from_le_bytes(b)
+        }
+        fn next_u64(&mut self) -> u64 {
+            let mut b = [0u8; 8];
+            self.fill_bytes(&mut b);
+            u64::from_le_bytes(b)
+        }
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            getrandom::getrandom(dest).expect("entropía del sistema");
+        }
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rsa::rand_core::Error> {
+            self.fill_bytes(dest);
+            Ok(())
+        }
+    }
+    impl rsa::rand_core::CryptoRng for Entropia {}
+
+    /// RSA-PSS es el otro relleno que se ve en las firmas modernas: se
+    /// comprueba igual, no se da por manipulada.
+    #[test]
+    fn una_firma_rsa_pss_se_comprueba() {
+        let (dest, bytes) = pdf_firmado("firma-pss");
+        let cred = credenciales();
+        let cert = cred.cert.clone();
+        let clave = cred.key.clone();
+        let cms = cms_a_mano(
+            &digest_del_byterange(&bytes, Hash::Sha256),
+            const_oid::db::rfc5912::ID_SHA_256,
+            const_oid::db::rfc5912::ID_RSASSA_PSS,
+            vec![cert.clone()],
+            &cert,
+            |datos| {
+                use rsa::signature::{RandomizedSigner, SignatureEncoding};
+                let sk = rsa::pss::SigningKey::<Sha256>::new(clave.clone());
+                sk.sign_with_rng(&mut Entropia, datos).to_vec()
+            },
+        );
+        std::fs::write(&dest, recose(&bytes, &cms)).expect("recoser");
+        let f = &verify_signatures(dest.to_string_lossy().into_owned()).expect("verificar")[0];
+        assert_eq!(f.estado, ESTADO_OK, "algoritmo: {}", f.algoritmo);
+        assert!(f.algoritmo.contains("RSA-PSS"), "{}", f.algoritmo);
+        std::fs::remove_file(&dest).ok();
+    }
+
+    /// Un algoritmo que Vitela no sabe leer no es una manipulación: sale
+    /// «desconocido», que la UI enseña en neutro. Un falso «el documento ha
+    /// cambiado» sobre un contrato firmado es un error caro.
+    #[test]
+    fn un_algoritmo_que_no_se_conoce_no_acusa_de_manipulacion() {
+        let (dest, bytes) = pdf_firmado("firma-rara");
+        let inventado = const_oid::ObjectIdentifier::new_unwrap("1.2.3.4.5.6.7.8");
+        let cred = credenciales();
+        let cert = cred.cert.clone();
+        let clave = cred.key.clone();
+        let cms = cms_a_mano(
+            &digest_del_byterange(&bytes, Hash::Sha256),
+            inventado,
+            inventado,
+            vec![cert.clone()],
+            &cert,
+            |datos| {
+                use rsa::signature::{SignatureEncoding, Signer};
+                let sk = rsa::pkcs1v15::SigningKey::<Sha256>::new(clave.clone());
+                sk.sign(datos).to_vec()
+            },
+        );
+        std::fs::write(&dest, recose(&bytes, &cms)).expect("recoser");
+        let f = &verify_signatures(dest.to_string_lossy().into_owned()).expect("verificar")[0];
+        assert_eq!(f.estado, ESTADO_DESCONOCIDO, "algoritmo: {}", f.algoritmo);
+        assert!(!f.digest_ok, "no se ha comprobado nada");
+        assert!(f.algoritmo.contains("no reconocido"), "{}", f.algoritmo);
+        std::fs::remove_file(&dest).ok();
+    }
+
+    /// En una firma cualificada viaja la cadena entera y la CA suele ir la
+    /// primera del bolso: el firmante es el que señala el
+    /// `SignerIdentifier`, no el primero que se encuentre. Cogiendo el
+    /// primero, la tarjeta enseñaba la autoridad en lugar de la persona y
+    /// la firma salía por inválida.
+    #[test]
+    fn el_certificado_del_firmante_no_es_el_primero_del_bolso() {
+        let (dest, bytes) = pdf_firmado("firma-cadena");
+        let cred = credenciales();
+        let cert = cred.cert.clone();
+        let clave = cred.key.clone();
+        let cms = cms_a_mano(
+            &digest_del_byterange(&bytes, Hash::Sha256),
+            const_oid::db::rfc5912::ID_SHA_256,
+            const_oid::db::rfc5912::SHA_256_WITH_RSA_ENCRYPTION,
+            // el certificado de otro (aquí el EC) va DELANTE del firmante
+            vec![cert_ec(), cert.clone()],
+            &cert,
+            |datos| {
+                use rsa::signature::{SignatureEncoding, Signer};
+                let sk = rsa::pkcs1v15::SigningKey::<Sha256>::new(clave.clone());
+                sk.sign(datos).to_vec()
+            },
+        );
+        std::fs::write(&dest, recose(&bytes, &cms)).expect("recoser");
+        let f = &verify_signatures(dest.to_string_lossy().into_owned()).expect("verificar")[0];
+        assert_eq!(f.estado, ESTADO_OK, "algoritmo: {}", f.algoritmo);
+        assert!(
+            !f.cert_subject.contains("Ada Lovelace"),
+            "la tarjeta enseña el certificado equivocado: {}",
+            f.cert_subject
+        );
+        std::fs::remove_file(&dest).ok();
     }
 }

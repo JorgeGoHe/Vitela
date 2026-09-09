@@ -391,10 +391,92 @@ fn winansi_alto(c: char) -> Option<u8> {
     })
 }
 
+/// Anchos de Helvetica (los del AFM, en milésimas de em) para el tramo
+/// imprimible de ASCII. Fuera de él: 667 para las mayúsculas acentuadas y
+/// 556 para el resto, que es lo que miden casi todas en esta fuente.
+const ANCHOS_HELVETICA: [u16; 95] = [
+    278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, // ' ' … '/'
+    556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, // '0' … '?'
+    1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778, // '@' … 'O'
+    667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, // 'P' … '_'
+    191, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, // '`' … 'o'
+    556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584, // 'p' … '~'
+];
+
+/// Ancho de un texto en Helvetica al tamaño dado, en puntos. Es la medida
+/// con la que el backend parte las líneas del cuadro de texto: la
+/// apariencia se dibuja en Helvetica, así que medir en Helvetica es medir
+/// lo que se va a ver.
+pub(crate) fn ancho_helvetica(texto: &str, size: f32) -> f32 {
+    let milesimas: u32 = texto
+        .chars()
+        .map(|c| {
+            let i = c as u32;
+            if (32..127).contains(&i) {
+                ANCHOS_HELVETICA[(i - 32) as usize] as u32
+            } else if c.is_uppercase() {
+                667
+            } else {
+                556
+            }
+        })
+        .sum();
+    milesimas as f32 * size / 1000.0
+}
+
+/// Parte el texto para que quepa en `ancho` puntos, como hace Acrobat con
+/// el cuadro de texto: se respetan los saltos escritos, se parte por
+/// espacios y, si una palabra sola no cabe, por letras. Sin esto, corregir
+/// un cuadro ya creado o estrecharlo dejaba la frase saliéndose por el
+/// borde derecho, porque el `/AP` solo partía por `\n`.
+pub(crate) fn parte_lineas(texto: &str, size: f32, ancho: f32) -> Vec<String> {
+    let ancho = ancho.max(size * 0.5);
+    let mut salida = Vec::new();
+    for parrafo in texto.split('\n') {
+        if parrafo.is_empty() {
+            salida.push(String::new());
+            continue;
+        }
+        let mut linea = String::new();
+        for palabra in parrafo.split(' ') {
+            let candidata = if linea.is_empty() {
+                palabra.to_string()
+            } else {
+                format!("{linea} {palabra}")
+            };
+            if ancho_helvetica(&candidata, size) <= ancho {
+                linea = candidata;
+                continue;
+            }
+            if !linea.is_empty() {
+                salida.push(std::mem::take(&mut linea));
+            }
+            // una palabra que no cabe entera se parte por letras
+            let mut trozo = String::new();
+            for c in palabra.chars() {
+                let mas = format!("{trozo}{c}");
+                if !trozo.is_empty() && ancho_helvetica(&mas, size) > ancho {
+                    salida.push(std::mem::take(&mut trozo));
+                    trozo.push(c);
+                } else {
+                    trozo = mas;
+                }
+            }
+            linea = trozo;
+        }
+        salida.push(linea);
+    }
+    salida
+}
+
 /// Apariencia (`/AP /N`) de un cuadro de texto: el borde opcional y las
-/// líneas del texto en Helvetica, dibujadas en local (`/BBox 0 0 w h`).
+/// líneas del texto en Helvetica, **partidas al ancho de la caja**,
+/// dibujadas en local (`/BBox 0 0 w h`).
 /// La comparten la creación y la reescritura del texto: sin regenerarla,
-/// corregir el cuadro cambiaría el `/Contents` y no lo que se ve.
+/// corregir el cuadro cambiaría el `/Contents` y no lo que se ve. Y como el
+/// reparto de líneas se hace aquí, redimensionar el cuadro (que rehace la
+/// apariencia) refluye el texto, igual que al tirar de un tirador en
+/// Acrobat.
 pub(crate) fn apariencia_freetext(
     doc: &mut lopdf::Document,
     w: f32,
@@ -426,7 +508,7 @@ pub(crate) fn apariencia_freetext(
         )
         .as_bytes(),
     );
-    for (n, linea) in texto.split('\n').enumerate() {
+    for (n, linea) in parte_lineas(texto, size, w - pad * 2.0).iter().enumerate() {
         if n > 0 {
             ops.extend_from_slice(b"T* ");
         }
@@ -700,6 +782,110 @@ mod tests {
     use super::*;
     use crate::tests::crea_pdf;
     use base64::Engine;
+
+    /// Las líneas del `/AP` de la anotación `i` de la página 0: cada `Tj`
+    /// del Form XObject es una línea dibujada.
+    fn lineas_del_ap(work: &str, i: usize) -> Vec<String> {
+        let mut doc = lopdf::Document::load(work).expect("cargar");
+        let id = crate::anotaciones::annot_id(&mut doc, 0, i).expect("annot");
+        let annot = doc.get_object(id).and_then(|o| o.as_dict()).expect("dict");
+        let ap = annot
+            .get(b"AP")
+            .and_then(|o| o.as_dict())
+            .expect("la anotación no tiene /AP");
+        let ap_id = ap.get(b"N").and_then(|o| o.as_reference()).expect("/AP /N");
+        let stream = doc
+            .get_object(ap_id)
+            .and_then(|o| o.as_stream())
+            .expect("stream");
+        let bytes = stream.decompressed_content().unwrap_or_else(|_| stream.content.clone());
+        let contenido = String::from_utf8_lossy(&bytes).into_owned();
+        contenido
+            .split(") Tj")
+            .filter(|t| t.contains('('))
+            .map(|t| t.rsplit('(').next().unwrap_or("").to_string())
+            .collect()
+    }
+
+    /// El cuadro de texto se ajusta al ancho SIEMPRE, no solo al crearlo:
+    /// en Acrobat la frase refluye al corregir el texto y al tirar de un
+    /// tirador. Aquí el `/AP` solo partía por `\n`, así que una frase larga
+    /// escrita después se salía por el borde derecho.
+    #[test]
+    fn el_cuadro_de_texto_reajusta_las_lineas_al_ancho() {
+        let tmp = std::env::temp_dir().join("anotaciones2-reflujo-test.pdf");
+        crea_pdf(&["Hola"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        let frase = "Esta es una frase larga de una sola linea que no cabe de ninguna manera en la caja";
+        add_free_text(
+            work.clone(),
+            0,
+            Rect { x: 40.0, y: 100.0, w: 220.0, h: 80.0 },
+            frase.into(),
+            12.0,
+            [0, 0, 0, 255],
+            true,
+            None,
+        )
+        .expect("cuadro de texto");
+        let al_crear = lineas_del_ap(&work, 0);
+        assert!(al_crear.len() > 1, "al crear ya se parte: {al_crear:?}");
+        for l in &al_crear {
+            assert!(
+                ancho_helvetica(l, 12.0) <= 220.0,
+                "la línea {l:?} se sale de la caja"
+            );
+        }
+
+        // corregir el texto vuelve a partirlo (antes iba crudo al /AP)
+        crate::anotaciones::set_annotation_contents(
+            work.clone(),
+            0,
+            0,
+            format!("{frase} y encima le añadimos todavía un poco más de texto"),
+            None,
+        )
+        .expect("corregir");
+        let al_corregir = lineas_del_ap(&work, 0);
+        assert!(
+            al_corregir.len() > al_crear.len(),
+            "corregir no ha reajustado: {al_corregir:?}"
+        );
+
+        // estrechar la caja parte más; ensancharla junta
+        transform_annotation(work.clone(), 0, 0, 40.0, 100.0, 120.0, 80.0).expect("estrechar");
+        let estrecho = lineas_del_ap(&work, 0);
+        assert!(
+            estrecho.len() > al_corregir.len(),
+            "estrechar no ha reajustado: {estrecho:?}"
+        );
+        for l in &estrecho {
+            assert!(
+                ancho_helvetica(l, 12.0) <= 120.0,
+                "la línea {l:?} se sale de la caja estrecha"
+            );
+        }
+        transform_annotation(work.clone(), 0, 0, 40.0, 100.0, 400.0, 80.0).expect("ensanchar");
+        let ancho = lineas_del_ap(&work, 0);
+        assert!(
+            ancho.len() < estrecho.len(),
+            "ensanchar no ha reajustado: {ancho:?}"
+        );
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// Los saltos que escribe el usuario se respetan, y una palabra que no
+    /// cabe entera se parte por letras en vez de desbordar.
+    #[test]
+    fn el_reparto_de_lineas_respeta_los_saltos_y_parte_las_palabras_largas() {
+        let lineas = parte_lineas("Uno\nDos", 12.0, 300.0);
+        assert_eq!(lineas, vec!["Uno".to_string(), "Dos".to_string()]);
+        let largas = parte_lineas("supercalifragilisticoespialidoso", 12.0, 60.0);
+        assert!(largas.len() > 2, "{largas:?}");
+        for l in &largas {
+            assert!(ancho_helvetica(l, 12.0) <= 60.0, "{l:?} desborda");
+        }
+    }
 
     fn render_rgba(path: &str) -> image::RgbaImage {
         let png_b64 = crate::render_page_b64(path.to_string(), 0, 600, None).expect("render");
