@@ -193,15 +193,40 @@ compila los instaladores a mano o al etiquetar `v*`.
 - **Estructura de la UI**: `App.tsx` conserva el ciclo de apertura, la
   geometría del visor, atajos e impresión; el resto vive en hooks
   (`src/hooks/`: `useHistorial`, `useRenderCache`, `useMiniaturas`,
-  `useBusqueda`, `useFirmas`, `useHerramienta`) y componentes
+  `useBusqueda`, `useFirmas`, `useHerramienta`, `useModal`) y componentes
   (`Busqueda`, `OpcionesHerramienta`, `MenuAcciones`, `PanelPaginas`,
-  `Dialogo*`). `Pagina.tsx` conserva el render, el observer y los tres
-  despachadores de ratón (su orden de ramas importa); cada dominio tiene su
+  `Dialogo*`). **Todo modal usa `useModal`** (Esc cierra, Enter confirma,
+  foco inicial en el primer campo o en la acción principal, trampa de
+  foco): un `Dialogo*` nuevo pone su `ref` y su `onKeyDown` en el `.modal`
+  y no vuelve a escuchar teclas por su cuenta. `Pagina.tsx` conserva el
+  render, el observer y los tres despachadores de ratón (su orden de ramas
+  importa, y el doble/triple clic se despacha en el de `mousedown` por
+  `e.detail`); cada dominio tiene su
   hook en `src/hooks/pagina/` (`useSeleccionTexto`, `useEnlaces`,
   `useTexto`, `useFormularios`, `useImagenes`, `useAnotaciones`,
   `useAreas`, más `geometria.ts` puro) y su capa en
   `src/components/pagina/`. Los hooks se llaman `use…` (lo exige
   rules-of-hooks) aunque el resto del identificador vaya en español.
+- **Eventos de ventana** (`src/ipc.ts`, todos detrás de `hayTauri` y
+  no-op en el navegador de QA): `onAbrirFichero` (evento `abrir-fichero`:
+  doble clic en el Finder o argumento de arranque), `onArrastreFicheros`
+  (`tauri://drag-enter|leave|drop`; el `drop` de HTML5 no trae la ruta del
+  fichero, así que el gesto solo existe dentro de Tauri) y
+  `onCerrarSolicitado` (evento `cerrar-solicitado`; la UI responde con el
+  comando `confirmar_cierre`, y en QA se dispara con
+  `window.__vitelaCerrar()`).
+- **Preferencias y memoria de la UI** en `localStorage` (`src/tipos.ts`):
+  colores por acción, opciones de búsqueda (`Aa` y `|ab|`) y preferencias
+  (`autor` de los comentarios, que se manda como `author` en cada comando
+  que crea una anotación).
+- **Atajos de teclado** (`App.tsx`, un solo `useEffect`; con un modal
+  abierto solo pasa Escape): ⌘O abrir · ⌘S guardar · ⇧⌘S guardar como ·
+  ⌘P imprimir · ⌘D propiedades · ⌘, preferencias · ⌘F buscar · ⌘G y ⇧⌘G
+  coincidencia siguiente/anterior · ⌘Z y ⇧⌘Z deshacer/rehacer · ⌘+ y ⌘−
+  zoom (sin Shift: ⇧⌘+/⇧⌘− quedan para girar la vista) · ⌘0 ajustar ·
+  ⌘1 al 100 % · ⇧⌘N ir a la página · ←/→ página anterior y siguiente ·
+  Esc sale de cualquier herramienta · Supr borra la anotación
+  seleccionada · ⌘A todo el texto de la página · ⌘C copiar la selección.
 - **QA como usuario real**: `src/ipc.ts` y `src/dialogos.ts` son shims — en
   Tauri delegan en la API oficial; en un navegador normal hablan con el
   puente HTTP de desarrollo (`src-tauri/src/puente_dev.rs`, puerto 1422,
