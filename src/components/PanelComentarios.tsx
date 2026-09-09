@@ -5,6 +5,7 @@ import {
   KIND_ICONS,
   KIND_PLURALS,
   MOD,
+  plural,
   type FiltroComentarios,
 } from "../tipos";
 import Icon from "./Icon";
@@ -20,6 +21,8 @@ export default function PanelComentarios({
   comentarios,
   filtro,
   setFiltro,
+  filtroAutor,
+  setFiltroAutor,
   seleccionada,
   focoPedido,
   onSelect,
@@ -28,6 +31,9 @@ export default function PanelComentarios({
   comentarios: AnotacionDoc[];
   filtro: FiltroComentarios;
   setFiltro: (f: FiltroComentarios) => void;
+  /** «todos» o el autor exacto: la otra mitad del filtro que pedía C2. */
+  filtroAutor: string;
+  setFiltroAutor: (a: string) => void;
   /** Comentario seleccionado ahora mismo, si está en esta lista. */
   seleccionada: { page: number; index: number } | null;
   /** Sube cada vez que el atajo del panel pide el foco de la lista. */
@@ -46,10 +52,20 @@ export default function PanelComentarios({
     return [...vistos.keys()].sort((a, b) => a.localeCompare(b, "es"));
   }, [comentarios]);
 
-  const lista =
-    filtro === "todos"
-      ? comentarios
-      : comentarios.filter((c) => (KIND_PLURALS[c.kind] ?? c.kind) === filtro);
+  // los autores que hay de verdad, igual que con los tipos
+  const autores = useMemo(() => {
+    const vistos = new Set<string>();
+    for (const c of comentarios) if (c.author) vistos.add(c.author);
+    return [...vistos].sort((a, b) => a.localeCompare(b, "es"));
+  }, [comentarios]);
+
+  const lista = comentarios.filter(
+    (c) =>
+      (filtro === "todos" || (KIND_PLURALS[c.kind] ?? c.kind) === filtro) &&
+      (filtroAutor === "todos" ||
+        (c.author || "Sin autor") === filtroAutor),
+  );
+  const filtrando = filtro !== "todos" || filtroAutor !== "todos";
 
   const panelRef = useRef<HTMLDivElement | null>(null);
   // posición a la que hay que devolver el foco cuando la lista se rehaga
@@ -82,7 +98,7 @@ export default function PanelComentarios({
     volverARef.current = null;
     const f = Array.from(el.querySelectorAll<HTMLElement>(".com-row"));
     (f.length === 0 ? el : f[Math.min(pos, f.length - 1)]).focus();
-  }, [comentarios, filtro]);
+  }, [comentarios, filtro, filtroAutor]);
 
   const hayElegida = lista.some(
     (c) => seleccionada?.page === c.page_index && seleccionada.index === c.index,
@@ -116,11 +132,13 @@ export default function PanelComentarios({
 
   return (
     <div className="com-panel" ref={panelRef} tabIndex={-1}>
-      <span className="com-total dato">
-        {comentarios.length === 1
-          ? "1 comentario"
-          : `${comentarios.length} comentarios`}
-      </span>
+      {comentarios.length > 0 && (
+        <span className="com-total dato">
+          {filtrando
+            ? `${lista.length} de ${plural(comentarios.length, "comentario", "comentarios")}`
+            : plural(comentarios.length, "comentario", "comentarios")}
+        </span>
+      )}
       {tipos.length > 1 && (
         <select
           className="size-select com-filtro"
@@ -136,11 +154,26 @@ export default function PanelComentarios({
           ))}
         </select>
       )}
+      {autores.length > 1 && (
+        <select
+          className="size-select com-filtro"
+          aria-label="Filtrar los comentarios por autor"
+          value={filtroAutor}
+          onChange={(e) => setFiltroAutor(e.target.value)}
+        >
+          <option value="todos">Todos los autores</option>
+          {autores.map((a) => (
+            <option key={a} value={a}>
+              {a}
+            </option>
+          ))}
+        </select>
+      )}
       {comentarios.length === 0 && (
         <p className="sign-empty">Todavía no hay comentarios.</p>
       )}
       {comentarios.length > 0 && lista.length === 0 && (
-        <p className="sign-empty">Ningún comentario de ese tipo.</p>
+        <p className="sign-empty">Ningún comentario con ese filtro.</p>
       )}
       {lista.length > 0 && (
         <p className="opt-hint com-pista">

@@ -1147,7 +1147,8 @@ textarea {
 }
 
 /* las teclas de la lista, escritas donde se usan */
-.com-pista {
+.com-pista,
+.paginas-pista {
   padding: 0 2px;
 }
 

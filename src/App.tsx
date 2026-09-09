@@ -68,6 +68,7 @@ import {
   guardaResaltarCampos,
   MOD,
   parseRango,
+  plural,
   type FiltroComentarios,
   type Mode,
   type PageSize,
@@ -206,6 +207,7 @@ function App() {
   const [comentarios, setComentarios] = useState<AnotacionDoc[]>([]);
   const [filtroComentarios, setFiltroComentarios] =
     useState<FiltroComentarios>("todos");
+  const [filtroAutor, setFiltroAutor] = useState("todos");
   // páginas marcadas en el panel para actuar en lote
   const [paginasSel, setPaginasSel] = useState<Set<number>>(new Set());
   const [extraerOpen, setExtraerOpen] = useState(false);
@@ -1424,7 +1426,9 @@ function App() {
       setExportOpen(false);
       setNotice("Exportando imágenes…", { persistente: true });
       const rutas = await exportPagesPng(workPath, dir, exportDpi, exportFmt);
-      setNotice(`${rutas.length} imagen(es) exportadas a ${dir}`);
+      setNotice(
+        `${plural(rutas.length, "imagen exportada", "imágenes exportadas")} a ${dir}`,
+      );
     } catch (e) {
       setNotice(null);
       setError(String(e));
@@ -1464,7 +1468,7 @@ function App() {
       setNotice(
         r.imagenes === 0
           ? "No había imágenes que comprimir."
-          : `${r.imagenes} imagen(es) recomprimidas: ${tam(r.antes)} → ${tam(r.despues)}`,
+          : `${plural(r.imagenes, "imagen recomprimida", "imágenes recomprimidas")}: ${tam(r.antes)} → ${tam(r.despues)}`,
       );
       afterMutation(pageCount);
     } catch (e) {
@@ -1530,7 +1534,7 @@ function App() {
           setPaginasSel(new Set());
           afterMutation(count);
         }
-        setNotice(`${idx.length} PDF escritos en ${dir}`);
+        setNotice(`${plural(idx.length, "PDF escrito", "PDF escritos")} en ${dir}`);
         return;
       }
       const dest = await save({
@@ -1552,7 +1556,9 @@ function App() {
         setPaginasSel(new Set());
         afterMutation(pageCount - idx.length);
       }
-      setNotice(`${idx.length} página(s) extraídas a ${dest}`);
+      setNotice(
+        `${plural(idx.length, "página extraída", "páginas extraídas")} a ${dest}`,
+      );
     } catch (e) {
       setError(String(e));
     }
@@ -2108,7 +2114,7 @@ function App() {
           }
           cuerpo={
             <p className="modal-file" style={{ whiteSpace: "normal" }}>
-              Se eliminarán {marginalAsk.textos} texto(s)
+              Se eliminarán {plural(marginalAsk.textos, "texto", "textos")}
               {marginalAsk.zona === "watermark"
                 ? " de marca de agua"
                 : " de los márgenes superior e inferior"}{" "}
@@ -2374,6 +2380,8 @@ function App() {
                 comentarios={comentarios}
                 filtro={filtroComentarios}
                 setFiltro={setFiltroComentarios}
+                filtroAutor={filtroAutor}
+                setFiltroAutor={setFiltroAutor}
                 seleccionada={annotSel}
                 focoPedido={focoComentarios}
                 onSelect={irAComentario}

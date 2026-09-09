@@ -1,5 +1,5 @@
 /** Borradores rectangulares: recorte, redacción y fantasma de la firma. */
-import type { Mode } from "../../tipos";
+import { plural, type Mode } from "../../tipos";
 import { clampCardLeft } from "../../hooks/pagina/geometria";
 import type { Areas } from "../../hooks/pagina/useAreas";
 
@@ -96,7 +96,7 @@ export default function CapaAreas({
           >
             <p>
               {redactReport
-                ? `Se eliminarán ${redactReport.textos} bloque(s) de texto y ${redactReport.imagenes} imagen(es).`
+                ? `Se eliminarán ${plural(redactReport.textos, "bloque de texto", "bloques de texto")} y ${plural(redactReport.imagenes, "imagen", "imágenes")}.`
                 : "Calculando…"}
             </p>
             <div className="card-actions">

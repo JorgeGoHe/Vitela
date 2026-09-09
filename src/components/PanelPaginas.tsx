@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { plural } from "../tipos";
 import Icon from "./Icon";
 
 /**
@@ -69,7 +70,9 @@ export default function PanelPaginas({
       return;
     }
     anclaRef.current = i;
-    if (seleccion.size > 0) marcar(new Set());
+    // en Acrobat el clic simple hace las dos cosas: llevar a la página y
+    // dejarla seleccionada, que es de donde salen las acciones en lote
+    marcar(new Set([i]));
     gotoPage(i);
   }
 
@@ -109,12 +112,15 @@ export default function PanelPaginas({
       aria-label="Páginas del documento"
       onKeyDown={onKeyDownPanel}
     >
+      {seleccion.size === 0 && pageCount > 1 && (
+        <p className="opt-hint paginas-pista">
+          Clic selecciona la página · ⌘ o ⇧ para varias
+        </p>
+      )}
       {seleccion.size > 0 && (
         <div className="sel-bar">
           <span className="dato">
-            {seleccion.size === 1
-              ? "1 página seleccionada"
-              : `${seleccion.size} páginas seleccionadas`}
+            {plural(seleccion.size, "página seleccionada", "páginas seleccionadas")}
           </span>
           <div className="sel-bar-acciones">
             <button

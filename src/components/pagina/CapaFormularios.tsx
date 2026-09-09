@@ -59,6 +59,14 @@ export default function CapaFormularios({
                 className={`form-field form-choice${resaltarCampos ? " resaltado" : ""}`}
                 title={f.name}
                 aria-label={f.name}
+                // una lista se pinta como lista: con `size` el navegador
+                // enseña las opciones dentro del recuadro, en vez de estirar
+                // un desplegable al alto del campo
+                size={
+                  f.kind === "ListBox"
+                    ? Math.max(2, Math.min(f.options.length, 6))
+                    : undefined
+                }
                 style={caja}
                 value={f.value}
                 onMouseDown={(e) => e.stopPropagation()}

@@ -199,6 +199,11 @@ export function formateaRango(indices: number[]): string {
   return trozos.join(", ");
 }
 
+/** «1 página» / «4 páginas»: la forma correcta, no «4 página(s)». */
+export function plural(n: number, singular: string, plural: string): string {
+  return `${n} ${n === 1 ? singular : plural}`;
+}
+
 export function hexToRgba(hex: string, alpha = 255): Rgba {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255, alpha];
