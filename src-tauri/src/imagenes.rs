@@ -167,9 +167,14 @@ pub fn add_image(
     }))
 }
 
-/// Mueve y/o redimensiona una imagen a los bounds dados (coords de UI).
-/// Válido para imágenes sin rotación.
+/// Mueve, redimensiona, **gira y voltea** una imagen. Los bounds llegan en
+/// coords de UI (espacio propio de la página) y son los que tendría la
+/// imagen sin girar; con `rotate` (múltiplos de 90, horarios) el resultado
+/// queda centrado en esa caja, así que a 90° el ancho y el alto salen
+/// intercambiados, como en Acrobat. `flip_h` y `flip_v` la voltean en
+/// horizontal y en vertical.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 pub fn transform_image(
     work_path: String,
     page_index: u16,
@@ -178,11 +183,20 @@ pub fn transform_image(
     y: f32,
     w: f32,
     h: f32,
+    rotate: Option<i16>,
+    flip_h: Option<bool>,
+    flip_v: Option<bool>,
 ) -> Result<(), String> {
     if w <= 1.0 || h <= 1.0 {
         return Err("Tamaño de imagen inválido".into());
     }
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
+    let giro = rotate.unwrap_or(0).rem_euclid(360);
+    if giro % 90 != 0 {
+        return Err("La imagen solo se gira en múltiplos de 90°".into());
+    }
+    let flip_h = flip_h.unwrap_or(false);
+    let flip_v = flip_v.unwrap_or(false);
+    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -212,13 +226,100 @@ pub fn transform_image(
             obj.scale(nueva_w / old_w, nueva_h / old_h)
                 .map_err(|e| e.to_string())?;
         }
+        // voltear es escalar por −1 en ese eje; girar, un cuarto de vuelta.
+        // Las dos cosas mueven el objeto de sitio (son respecto del origen
+        // del papel), así que después se recoloca por el centro
+        if flip_h || flip_v {
+            obj.scale(if flip_h { -1.0 } else { 1.0 }, if flip_v { -1.0 } else { 1.0 })
+                .map_err(|e| e.to_string())?;
+        }
+        if giro != 0 {
+            // `rotate` viene en grados horarios, como `rotate_page`
+            obj.rotate_counter_clockwise_degrees(-(giro as f32))
+                .map_err(|e| e.to_string())?;
+        }
         let b2 = obj.bounds().map_err(|e| e.to_string())?;
-        let dx = destino.left().value - b2.left().value;
-        let dy = destino.bottom().value - b2.bottom().value;
+        let (dx, dy) = if giro != 0 || flip_h || flip_v {
+            // centrado en la caja pedida: a 90° el ancho y el alto salen
+            // cambiados y encajar por la esquina la desplazaría
+            (
+                (destino.left().value + destino.right().value) / 2.0
+                    - (b2.left().value + b2.right().value) / 2.0,
+                (destino.bottom().value + destino.top().value) / 2.0
+                    - (b2.bottom().value + b2.top().value) / 2.0,
+            )
+        } else {
+            (
+                destino.left().value - b2.left().value,
+                destino.bottom().value - b2.bottom().value,
+            )
+        };
         obj.translate(PdfPoints::new(dx), PdfPoints::new(dy))
             .map_err(|e| e.to_string())?;
         drop(obj);
         page.regenerate_content().map_err(|e| e.to_string())?;
+        drop(page);
+        save_and_close(doc, &work_path)?;
+        Ok(())
+    }))
+}
+
+/// Trae la imagen al frente o la manda al fondo, que es lo que hace falta
+/// cuando una imagen tapa el texto (o al revés). PDFium ordena los objetos
+/// por su posición en el content stream: se saca el objeto y se vuelve a
+/// poner, que es lo único que expone pdfium-render 0.8, cuidando de no
+/// soltar nunca un objeto sacado (su `Drop` destruye el objeto y PDFium
+/// casca).
+#[tauri::command(async)]
+pub fn reorder_image(
+    work_path: String,
+    page_index: u16,
+    object_index: u32,
+    al_frente: bool,
+) -> Result<(), String> {
+    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(crate::mensaje_llano)?;
+        let mut page = doc.pages().get(page_index).map_err(crate::mensaje_llano)?;
+        let total = page.objects().len();
+        {
+            let obj = page
+                .objects()
+                .get(object_index as usize)
+                .map_err(crate::mensaje_llano)?;
+            if obj.as_image_object().is_none() {
+                return Err("No es una imagen".into());
+            }
+        }
+        let ya_esta = (al_frente && object_index as usize + 1 == total)
+            || (!al_frente && object_index == 0);
+        if !ya_esta {
+            // sacar la imagen y volver a añadirla la deja la última, que es
+            // la que se pinta encima
+            let obj = page
+                .objects_mut()
+                .remove_object_at_index(object_index as usize)
+                .map_err(crate::mensaje_llano)?;
+            page.objects_mut()
+                .add_object(obj)
+                .map_err(crate::mensaje_llano)?;
+            if !al_frente {
+                // …y para mandarla al fondo, se pasan por detrás todos los
+                // demás, en su mismo orden
+                for _ in 0..total.saturating_sub(1) {
+                    let otro = page
+                        .objects_mut()
+                        .remove_object_at_index(0)
+                        .map_err(crate::mensaje_llano)?;
+                    page.objects_mut()
+                        .add_object(otro)
+                        .map_err(crate::mensaje_llano)?;
+                }
+            }
+            page.regenerate_content().map_err(crate::mensaje_llano)?;
+        }
         drop(page);
         save_and_close(doc, &work_path)?;
         Ok(())
@@ -391,7 +492,7 @@ mod tests {
         );
 
         // mover y redimensionar
-        transform_image(work.clone(), 0, im.object_index, 50.0, 300.0, 160.0, 80.0)
+        transform_image(work.clone(), 0, im.object_index, 50.0, 300.0, 160.0, 80.0, None, None, None)
             .expect("transformar");
         let imgs = get_images(work.clone(), 0).expect("relistar");
         let im = &imgs[0];
@@ -464,7 +565,8 @@ mod tests {
             .last()
             .expect("una imagen")
             .object_index;
-        transform_image(work.clone(), 0, idx, 150.0, 350.0, 100.0, 60.0).expect("redimensionar");
+        transform_image(work.clone(), 0, idx, 150.0, 350.0, 100.0, 60.0, None, None, None)
+            .expect("redimensionar");
 
         let bounds = |v: &[ImageInfo]| -> Vec<(u32, i32, i32, i32, i32)> {
             v.iter()
@@ -492,5 +594,142 @@ mod tests {
             "la vista previa cambió el render de la página"
         );
         std::fs::remove_file(&png).ok();
+    }
+
+    /// La caja de la primera imagen de la página 0: (índice, x, y, w, h).
+    fn caja(work: &str) -> (u32, f32, f32, f32, f32) {
+        let i = &get_images(work.to_string(), 0).expect("listar imágenes")[0];
+        (i.object_index, i.x, i.y, i.w, i.h)
+    }
+
+    /// Girar y voltear una imagen es la fila contextual de Acrobat: 90° a
+    /// un lado, 90° al otro, espejo horizontal y vertical. Girada 90°, sus
+    /// bounds salen con el ancho y el alto intercambiados y sigue centrada
+    /// donde estaba.
+    #[test]
+    fn girar_y_voltear_una_imagen() {
+        let dir = std::env::temp_dir();
+        let pdf = dir.join("imagenes-girar-test.pdf");
+        let png = dir.join("imagenes-girar-test.png");
+        crea_pdf(&["Con imagen"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        // apaisada y con dos mitades de color distinto, para que el volteo
+        // se note en el render
+        let mut img = image::RgbaImage::new(120, 40);
+        for (x, _, p) in img.enumerate_pixels_mut() {
+            *p = if x < 60 {
+                image::Rgba([210, 30, 30, 255])
+            } else {
+                image::Rgba([30, 30, 210, 255])
+            };
+        }
+        img.save(&png).expect("crear png");
+        add_image(work.clone(), 0, png.to_string_lossy().into_owned(), 100.0, 300.0)
+            .expect("insertar");
+        let (idx, x, y, w, h) = caja(&work);
+        assert!(w > h, "de partida es más ancha que alta");
+
+        transform_image(work.clone(), 0, idx, x, y, w, h, Some(90), None, None)
+            .expect("girar 90°");
+        let (idx, gx, gy, gw, gh) = caja(&work);
+        assert!(
+            (gw - h).abs() < 2.0 && (gh - w).abs() < 2.0,
+            "girada 90° tenía que medir {h}x{w} y mide {gw}x{gh}"
+        );
+        assert!(
+            ((gx + gw / 2.0) - (x + w / 2.0)).abs() < 2.0
+                && ((gy + gh / 2.0) - (y + h / 2.0)).abs() < 2.0,
+            "la imagen girada se ha ido de sitio: ({gx},{gy})"
+        );
+
+        // voltear cambia el render sin cambiar la caja (girada 90°, las dos
+        // mitades de color están una encima de otra: el espejo que se nota
+        // es el vertical)
+        let antes = crate::render_page_png(work.clone(), 0, 400, true).expect("render");
+        transform_image(work.clone(), 0, idx, gx, gy, gw, gh, None, None, Some(true))
+            .expect("voltear");
+        let (idx, _, _, vw, vh) = caja(&work);
+        assert!(
+            (vw - gw).abs() < 2.0 && (vh - gh).abs() < 2.0,
+            "voltear no cambia el tamaño: {vw}x{vh}"
+        );
+        let despues = crate::render_page_png(work.clone(), 0, 400, true).expect("render");
+        assert!(antes != despues, "voltear tiene que verse en el render");
+
+        // un giro que no sea múltiplo de 90 se rechaza en llano
+        let err = transform_image(work.clone(), 0, idx, 100.0, 300.0, 60.0, 40.0, Some(37), None, None)
+            .unwrap_err();
+        assert!(err.contains("múltiplos de 90"), "{err}");
+        std::fs::remove_file(&pdf).ok();
+        std::fs::remove_file(&png).ok();
+    }
+
+    /// Traer al frente y enviar al fondo: cuando la imagen tapa el texto (o
+    /// al revés) es lo único que arregla la página, y el resto del
+    /// contenido no se puede perder por el camino.
+    #[test]
+    fn traer_al_frente_y_enviar_al_fondo() {
+        let dir = std::env::temp_dir();
+        let pdf = dir.join("imagenes-orden-test.pdf");
+        let png = dir.join("imagenes-orden-test.png");
+        crea_pdf(&["Texto de la página"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        image::RgbaImage::from_pixel(60, 30, image::Rgba([30, 160, 60, 255]))
+            .save(&png)
+            .expect("crear png");
+        add_image(work.clone(), 0, png.to_string_lossy().into_owned(), 40.0, 120.0)
+            .expect("insertar");
+        assert_eq!(caja(&work).0, 1, "la imagen entra la última, encima del texto");
+
+        reorder_image(work.clone(), 0, 1, false).expect("al fondo");
+        assert_eq!(caja(&work).0, 0, "ahora se pinta la primera");
+        let t = textos_de(&pdf).join(" ");
+        assert!(t.contains("Texto de la página"), "el texto sigue ahí: {t:?}");
+
+        reorder_image(work.clone(), 0, 0, true).expect("al frente");
+        assert_eq!(caja(&work).0, 1, "vuelve a estar encima");
+        let t = textos_de(&pdf).join(" ");
+        assert!(t.contains("Texto de la página"), "el texto sigue ahí: {t:?}");
+        std::fs::remove_file(&pdf).ok();
+        std::fs::remove_file(&png).ok();
+    }
+
+    /// Deuda de R2: mover y redimensionar una imagen en una página GIRADA
+    /// tiene que dejarla donde se pide, a 90° y a 270°. Es la ruta de
+    /// escritura más delicada y no tenía juez.
+    #[test]
+    fn transformar_una_imagen_en_una_pagina_girada() {
+        for veces in [1u8, 3] {
+            let dir = std::env::temp_dir();
+            let pdf = dir.join(format!("imagenes-girada-{veces}-test.pdf"));
+            let png = dir.join(format!("imagenes-girada-{veces}-test.png"));
+            crea_pdf(&["Girada"], &pdf);
+            let work = pdf.to_string_lossy().into_owned();
+            image::RgbaImage::from_pixel(60, 30, image::Rgba([200, 40, 40, 255]))
+                .save(&png)
+                .expect("crear png");
+            for _ in 0..veces {
+                crate::paginas::rotate_page(work.clone(), 0).expect("girar");
+            }
+            // la UI convierte el gesto al espacio propio de la página antes
+            // de mandarlo; aquí se pide directamente en ese espacio
+            add_image(work.clone(), 0, png.to_string_lossy().into_owned(), 80.0, 200.0)
+                .expect("insertar en página girada");
+            let (idx, ..) = caja(&work);
+            let (dx, dy, dw, dh) = (120.0f32, 260.0f32, 90.0f32, 45.0f32);
+            transform_image(work.clone(), 0, idx, dx, dy, dw, dh, None, None, None)
+                .expect("transformar en página girada");
+            let (_, x, y, w, h) = caja(&work);
+            assert!(
+                (x - dx).abs() < 1.5
+                    && (y - dy).abs() < 1.5
+                    && (w - dw).abs() < 1.5
+                    && (h - dh).abs() < 1.5,
+                "a {}° la imagen queda en ({x},{y}) {w}x{h} y se pidió ({dx},{dy}) {dw}x{dh}",
+                veces as u32 * 90
+            );
+            std::fs::remove_file(&pdf).ok();
+            std::fs::remove_file(&png).ok();
+        }
     }
 }

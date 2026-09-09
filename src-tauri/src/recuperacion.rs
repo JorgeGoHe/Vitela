@@ -109,12 +109,25 @@ pub fn autosave_state(
 }
 
 /// Se cerró bien: no hay nada que recuperar. Lo llama la UI al cerrar el
-/// documento y al salir después de guardar o de descartar.
+/// documento y al salir después de guardar o de descartar, y también
+/// «Descartar» en la banda de recuperación. `work_path` es opcional y solo
+/// sirve para no borrar el apunte de otro documento: sin él se borra el que
+/// haya. Nunca falla: si no hay apunte, no hay nada que hacer.
 #[tauri::command(async)]
-pub fn clear_session() -> Result<(), String> {
+pub fn borra_sesion(work_path: Option<String>) -> Result<(), String> {
     let Some(f) = fichero() else { return Ok(()) };
-    let _ = std::fs::remove_file(f);
+    borra_en(&f, work_path.as_deref());
     Ok(())
+}
+
+pub(crate) fn borra_en(fichero: &std::path::Path, work_path: Option<&str>) {
+    if let Some(w) = work_path.filter(|w| !w.is_empty()) {
+        // el apunte es de otro documento: no es nuestro, no se toca
+        if lee_en(fichero).is_some_and(|s| s.work_path != w) {
+            return;
+        }
+    }
+    let _ = std::fs::remove_file(fichero);
 }
 
 /// Al arrancar: ¿quedó trabajo sin guardar de la vez anterior? Devuelve el
@@ -164,6 +177,25 @@ mod tests {
         let _ = std::fs::remove_file(&f);
         assert!(recupera_en(&f).is_none(), "cerrado limpio, nada que recuperar");
         std::fs::remove_file(&copia).ok();
+    }
+
+    /// «Descartar» y cerrar bien borran el apunte; y si el apunte es de
+    /// otro documento (otra ventana, otra sesión), no se toca.
+    #[test]
+    fn borrar_la_sesion_solo_borra_la_suya() {
+        let f = fichero_de_prueba("borrar");
+        apunta_en(&f, "/tmp/vitela-a.pdf", "/tmp/a.pdf", true).expect("apuntar");
+        borra_en(&f, Some("/tmp/vitela-otro.pdf"));
+        assert!(f.exists(), "el apunte de otro documento no se toca");
+        borra_en(&f, Some("/tmp/vitela-a.pdf"));
+        assert!(!f.exists(), "el suyo sí");
+
+        // sin ruta, se borra el que haya (cerrar la app)
+        apunta_en(&f, "/tmp/vitela-a.pdf", "/tmp/a.pdf", true).expect("apuntar");
+        borra_en(&f, None);
+        assert!(!f.exists());
+        // y borrar dos veces no es un error
+        borra_en(&f, None);
     }
 
     /// Si la copia de trabajo ya no está (el temp la barrió, u otra

@@ -139,6 +139,28 @@ pub(crate) fn familia_dominante(doc: &PdfDocument<'static>, page_index: u16) -> 
         .map(|(familia, _)| familia)
 }
 
+/// Desplazamiento horizontal que hay que aplicar a un texto de ancho `w`
+/// para que quede alineado como se pide respecto del punto de anclaje:
+/// «izq» (por defecto) no mueve nada, «centro» lo centra y «der» lo pega a
+/// la derecha. En un PDF no hay operador de alineación: se coloca el
+/// origen, que es lo que hace Acrobat al alinear un párrafo.
+pub(crate) fn desplazamiento_por_alineacion(align: Option<&str>, w: f32) -> f32 {
+    match align.unwrap_or("izq") {
+        "centro" | "center" => -w / 2.0,
+        "der" | "derecha" | "right" => -w,
+        _ => 0.0,
+    }
+}
+
+/// Ancho de un objeto de texto recién creado (aún sin página). Si PDFium no
+/// lo sabe dar, se estima por caracteres, que para alinear basta.
+fn ancho_del_objeto(obj: &PdfPageTextObject, texto: &str, size: f32) -> f32 {
+    match obj.bounds() {
+        Ok(b) if b.right().value > b.left().value => b.right().value - b.left().value,
+        _ => texto.chars().count() as f32 * size * 0.5,
+    }
+}
+
 /// Lista los objetos de texto de una página (bloques editables), con bounds
 /// en coords de UI.
 #[tauri::command(async)]
@@ -197,8 +219,10 @@ pub fn edit_text_block(
     page_index: u16,
     object_index: u32,
     new_text: String,
+    color: Option<[u8; 4]>,
+    align: Option<String>,
 ) -> Result<(), String> {
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
+    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -223,6 +247,24 @@ pub fn edit_text_block(
                 bounds.bottom(),
             );
             t.set_text(&primera).map_err(|e| e.to_string())?;
+            if let Some([r, g, b, a]) = color {
+                t.set_fill_color(PdfColor::new(r, g, b, a))
+                    .map_err(|e| e.to_string())?;
+            }
+            // alinear es recolocar el origen: el bloque conserva su centro
+            // o su borde derecho, según se pida, en vez de crecer siempre
+            // hacia la derecha
+            if align.is_some() {
+                let ancho_viejo = bounds.right().value - bounds.left().value;
+                let nuevos = obj.bounds().map_err(|e| e.to_string())?;
+                let ancho_nuevo = nuevos.right().value - nuevos.left().value;
+                let dx = desplazamiento_por_alineacion(align.as_deref(), ancho_nuevo)
+                    - desplazamiento_por_alineacion(align.as_deref(), ancho_viejo);
+                if dx.abs() > 0.01 {
+                    obj.translate(PdfPoints::new(dx), PdfPoints::ZERO)
+                        .map_err(|e| e.to_string())?;
+                }
+            }
             drop(obj);
             page.regenerate_content().map_err(|e| e.to_string())?;
             info
@@ -248,6 +290,11 @@ pub fn edit_text_block(
                 }
                 let mut nuevo = PdfPageTextObject::new(&doc, linea, token, font_size)
                     .map_err(|e| e.to_string())?;
+                if let Some([r, g, b, a]) = color {
+                    nuevo
+                        .set_fill_color(PdfColor::new(r, g, b, a))
+                        .map_err(|e| e.to_string())?;
+                }
                 nuevo
                     .translate(
                         base_x,
@@ -277,16 +324,30 @@ pub struct Reemplazo {
     pub to: String,
 }
 
+/// Lo que se ha podido hacer, para decirlo tal cual: «9 de 12 reemplazadas;
+/// 3 están en una fuente que no se puede editar».
+#[derive(serde::Serialize, Debug, Default)]
+pub struct InformeReemplazo {
+    /// Coincidencias reescritas.
+    pub hechas: u16,
+    /// Coincidencias que no se han podido tocar: su bloque ya no dice lo
+    /// que decía, o está en una fuente que no se deja reescribir.
+    pub saltadas: u16,
+}
+
 /// «Reemplazar todo»: reescribe de una vez todas las coincidencias que se
 /// le pasen, **en una sola mutación**, así que un ⌘Z las devuelve todas
-/// juntas. Devuelve cuántas ha cambiado.
+/// juntas. Devuelve el recuento honesto: cuántas ha cambiado y cuántas no.
 ///
 /// Una coincidencia cuyo bloque ya no dice lo que decía —porque el
 /// documento ha cambiado entre la búsqueda y el reemplazo, o porque el
-/// texto no se puede reescribir— se salta sin romper el lote: es mejor
-/// cambiar 9 de 12 y decirlo que no cambiar ninguna.
+/// texto está en una fuente que no se puede reescribir— se salta sin romper
+/// el lote: es mejor cambiar 9 de 12 y decirlo que no cambiar ninguna.
 #[tauri::command(async)]
-pub fn replace_text(work_path: String, matches: Vec<Reemplazo>) -> Result<u16, String> {
+pub fn replace_text(
+    work_path: String,
+    matches: Vec<Reemplazo>,
+) -> Result<InformeReemplazo, String> {
     if matches.is_empty() {
         return Err("No hay ninguna coincidencia que reemplazar".into());
     }
@@ -305,45 +366,51 @@ pub fn replace_text(work_path: String, matches: Vec<Reemplazo>) -> Result<u16, S
                 .entry((m.page_index, m.block_index, m.from, m.to))
                 .or_default() += 1;
         }
-        let mut hechas = 0u16;
-        let mut paginas_tocadas: Vec<u16> = Vec::new();
+        let mut informe = InformeReemplazo::default();
         for ((page_index, block_index, from, to), veces) in por_bloque {
+            let pedidas = veces as u16;
+            let salta = |informe: &mut InformeReemplazo| informe.saltadas += pedidas;
             if from.is_empty() {
+                salta(&mut informe);
                 continue;
             }
             let Ok(mut page) = doc.pages().get(page_index) else {
+                salta(&mut informe);
                 continue;
             };
             let Ok(mut obj) = page.objects_mut().get(block_index as usize) else {
+                salta(&mut informe);
                 continue;
             };
             let Some(t) = obj.as_text_object_mut() else {
+                salta(&mut informe);
                 continue;
             };
             let viejo = t.text();
             let cuantas = viejo.matches(&from).count().min(veces);
             if cuantas == 0 {
                 // el bloque ya no dice lo que decía: se salta
+                salta(&mut informe);
                 continue;
             }
             let nuevo = viejo.replacen(&from, &to, cuantas);
             if t.set_text(&nuevo).is_err() {
+                // fuente que no se deja reescribir
+                salta(&mut informe);
                 continue;
             }
             drop(obj);
             page.regenerate_content().map_err(crate::mensaje_llano)?;
-            hechas += cuantas as u16;
-            if !paginas_tocadas.contains(&page_index) {
-                paginas_tocadas.push(page_index);
-            }
+            informe.hechas += cuantas as u16;
+            informe.saltadas += pedidas - cuantas as u16;
         }
-        if hechas == 0 {
+        if informe.hechas == 0 {
             return Err(
                 "Ninguna de esas coincidencias sigue donde estaba: vuelve a buscar".into(),
             );
         }
         save_and_close(doc, &work_path)?;
-        Ok(hechas)
+        Ok(informe)
     }))
 }
 
@@ -353,6 +420,7 @@ pub fn replace_text(work_path: String, matches: Vec<Reemplazo>) -> Result<u16, S
 /// nombre; sin nombre (o "auto") se detecta la familia dominante de la
 /// página y se aproxima.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 pub fn add_text_block(
     work_path: String,
     page_index: u16,
@@ -361,12 +429,14 @@ pub fn add_text_block(
     text: String,
     font_size: f32,
     font: Option<String>,
+    color: Option<[u8; 4]>,
+    align: Option<String>,
 ) -> Result<(), String> {
     if text.trim().is_empty() {
         return Err("El texto está vacío".into());
     }
     let font_size = font_size.clamp(6.0, 96.0);
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
+    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -382,7 +452,7 @@ pub fn add_text_block(
         // texto salga derecho y no tumbado (como hace add_stamp)
         let vista = crate::Geo::de_pagina(&page);
         let rot = vista.rot;
-        let (_derecha, abajo) = vista.ejes();
+        let (derecha, abajo) = vista.ejes();
         let ancla = vista.propia().ui_a_pdf(x, y);
         let line_h = font_size * 1.2;
         for (i, linea) in text.lines().enumerate() {
@@ -391,6 +461,16 @@ pub fn add_text_block(
             }
             let mut obj = PdfPageTextObject::new(&doc, linea, font, PdfPoints::new(font_size))
                 .map_err(|e| e.to_string())?;
+            if let Some([r, g, b, a]) = color {
+                obj.set_fill_color(PdfColor::new(r, g, b, a))
+                    .map_err(|e| e.to_string())?;
+            }
+            // alinear: el punto que marcó el usuario es el borde izquierdo,
+            // el centro o el borde derecho de la línea, según se pida
+            let dx = desplazamiento_por_alineacion(
+                align.as_deref(),
+                ancho_del_objeto(&obj, linea, font_size),
+            );
             if rot != 0 {
                 obj.rotate_counter_clockwise_degrees(rot as f32)
                     .map_err(|e| e.to_string())?;
@@ -400,8 +480,8 @@ pub fn add_text_block(
             // el que baja la vista
             let bajada = font_size + line_h * i as f32;
             obj.translate(
-                PdfPoints::new(ancla.0 + abajo.0 * bajada),
-                PdfPoints::new(ancla.1 + abajo.1 * bajada),
+                PdfPoints::new(ancla.0 + abajo.0 * bajada + derecha.0 * dx),
+                PdfPoints::new(ancla.1 + abajo.1 * bajada + derecha.1 * dx),
             )
             .map_err(|e| e.to_string())?;
             page.objects_mut()
@@ -478,6 +558,8 @@ mod tests {
             0,
             blocks[0].object_index,
             "Texto editado".into(),
+            None,
+            None,
         )
         .expect("editar bloque");
         let t = textos_de(&tmp);
@@ -508,6 +590,8 @@ mod tests {
             "Añadido a mano\nSegunda línea".into(),
             12.0,
             None,
+            None,
+            None,
         )
         .expect("añadir texto");
 
@@ -531,7 +615,7 @@ mod tests {
         );
 
         // el texto vacío debe rechazarse
-        assert!(add_text_block(work.clone(), 0, 0.0, 0.0, "  ".into(), 12.0, None).is_err());
+        assert!(add_text_block(work.clone(), 0, 0.0, 0.0, "  ".into(), 12.0, None, None, None).is_err());
 
         std::fs::remove_file(&tmp).ok();
     }
@@ -544,7 +628,7 @@ mod tests {
 
         // fuente automática primero (solo hay Helvetica en la página, sin
         // empates): debe detectar la dominante
-        add_text_block(work.clone(), 0, 60.0, 400.0, "Detectada".into(), 12.0, None)
+        add_text_block(work.clone(), 0, 60.0, 400.0, "Detectada".into(), 12.0, None, None, None)
             .expect("añadir automática");
         let blocks = get_text_blocks(work.clone(), 0).expect("listar");
         let auto = blocks
@@ -564,6 +648,8 @@ mod tests {
             "Con serifa".into(),
             14.0,
             Some("Times Bold".into()),
+            None,
+            None,
         )
         .expect("añadir con Times");
         let blocks = get_text_blocks(work.clone(), 0).expect("relistar");
@@ -592,6 +678,8 @@ mod tests {
             0,
             blocks[0].object_index,
             "Primera línea\nSegunda línea\nTercera".into(),
+            None,
+            None,
         )
         .expect("editar multilínea");
 
@@ -638,7 +726,7 @@ mod tests {
                 270 => (s.height - vy, vx),
                 _ => (vx, vy),
             };
-            add_text_block(work.clone(), 0, px, py, "NUEVO".into(), 24.0, None)
+            add_text_block(work.clone(), 0, px, py, "NUEVO".into(), 24.0, None, None, None)
                 .expect("añadir texto");
 
             let bloques = get_text_blocks(work.clone(), 0).expect("bloques");
@@ -676,45 +764,66 @@ mod tests {
     /// derecha y con su esquina superior izquierda donde se pulsó.
     #[test]
     fn la_imagen_nueva_sale_derecha_en_una_pagina_girada() {
-        let pdf = std::env::temp_dir().join("texto-imagen-girada-test.pdf");
-        let png = std::env::temp_dir().join("texto-imagen-girada-test.png");
-        crea_pdf(&["Fondo"], &pdf);
-        image::RgbaImage::from_pixel(120, 40, image::Rgba([200, 30, 30, 255]))
-            .save(&png)
-            .expect("crear png");
-        let work = pdf.to_string_lossy().into_owned();
-        crate::paginas::rotate_page(work.clone(), 0).expect("girar");
-        let s = &crate::get_page_sizes(work.clone()).expect("tamaños")[0];
-        assert_eq!(s.rotation, 90);
-        let (vx, vy) = (100.0f32, 150.0f32);
-        let (px, py) = (vy, s.width - vx);
+        // a 90° y a 270°: el 270 era la deuda de R2, la ruta de escritura
+        // más delicada y la única sin juez
+        for veces in [1u8, 3] {
+            let pdf = std::env::temp_dir().join(format!("texto-imagen-girada-{veces}.pdf"));
+            let png = std::env::temp_dir().join(format!("texto-imagen-girada-{veces}.png"));
+            crea_pdf(&["Fondo"], &pdf);
+            image::RgbaImage::from_pixel(120, 40, image::Rgba([200, 30, 30, 255]))
+                .save(&png)
+                .expect("crear png");
+            let work = pdf.to_string_lossy().into_owned();
+            for _ in 0..veces {
+                crate::paginas::rotate_page(work.clone(), 0).expect("girar");
+            }
+            let s = &crate::get_page_sizes(work.clone()).expect("tamaños")[0];
+            assert_eq!(s.rotation, veces as u16 * 90);
+            // lo que hace la UI: pasar el punto de la vista al espacio
+            // propio de la página antes de mandarlo
+            let a_pagina = |x: f32, y: f32| match s.rotation {
+                90 => (y, s.width - x),
+                180 => (s.width - x, s.height - y),
+                270 => (s.height - y, x),
+                _ => (x, y),
+            };
+            let (vx, vy) = (100.0f32, 150.0f32);
+            let (px, py) = a_pagina(vx, vy);
 
-        crate::imagenes::add_image(
-            work.clone(),
-            0,
-            png.to_string_lossy().into_owned(),
-            px,
-            py,
-        )
-        .expect("insertar imagen");
+            crate::imagenes::add_image(
+                work.clone(),
+                0,
+                png.to_string_lossy().into_owned(),
+                px,
+                py,
+            )
+            .expect("insertar imagen");
 
-        let img = &crate::imagenes::get_images(work.clone(), 0).expect("imágenes")[0];
-        // 120x40 px a 72 dpi son 120x40 pt en la VISTA: en el espacio propio
-        // de una página con /Rotate 90 eso es 40 de ancho por 120 de alto
-        assert!(
-            (img.w - 40.0).abs() < 2.0 && (img.h - 120.0).abs() < 2.0,
-            "la imagen sale tumbada: {:.1}x{:.1} en el espacio propio",
-            img.w,
-            img.h
-        );
-        assert!(
-            (img.x - px).abs() < 2.0 && (img.y - (py - 120.0)).abs() < 2.0,
-            "la imagen queda en ({:.1},{:.1}) y se pidió el ancla en ({px:.1},{py:.1})",
-            img.x,
-            img.y
-        );
-        std::fs::remove_file(&pdf).ok();
-        std::fs::remove_file(&png).ok();
+            let img = &crate::imagenes::get_images(work.clone(), 0).expect("imágenes")[0];
+            // 120x40 px a 72 dpi son 120x40 pt en la VISTA: en el espacio
+            // propio de una página girada eso es 40 de ancho por 120 de alto
+            assert!(
+                (img.w - 40.0).abs() < 2.0 && (img.h - 120.0).abs() < 2.0,
+                "a {}° la imagen sale tumbada: {:.1}x{:.1}",
+                s.rotation,
+                img.w,
+                img.h
+            );
+            // el centro, que no depende de por qué esquina se ancle
+            let centro = a_pagina(vx + 60.0, vy + 20.0);
+            assert!(
+                ((img.x + img.w / 2.0) - centro.0).abs() < 2.0
+                    && ((img.y + img.h / 2.0) - centro.1).abs() < 2.0,
+                "a {}° el centro queda en ({:.1},{:.1}) y tenía que ser ({:.1},{:.1})",
+                s.rotation,
+                img.x + img.w / 2.0,
+                img.y + img.h / 2.0,
+                centro.0,
+                centro.1
+            );
+            std::fs::remove_file(&pdf).ok();
+            std::fs::remove_file(&png).ok();
+        }
     }
 
     /// Buscar y reemplazar: el lote entero es UNA mutación (un ⌘Z lo
@@ -756,7 +865,9 @@ mod tests {
             })
             .collect();
         let antes = pasos(&work);
-        assert_eq!(replace_text(work.clone(), lote).expect("reemplazar"), 3);
+        let informe = replace_text(work.clone(), lote).expect("reemplazar");
+        assert_eq!(informe.hechas, 3);
+        assert_eq!(informe.saltadas, 0);
         assert_eq!(pasos(&work), antes + 1, "reemplazar todo es UN paso");
 
         let texto_de = |p: u16| -> String {
@@ -802,12 +913,142 @@ mod tests {
                 to: "Nada".into(),
             },
         ];
-        assert_eq!(
-            replace_text(work.clone(), lote).expect("reemplazar"),
-            1,
-            "una hecha, la otra saltada"
-        );
+        let informe = replace_text(work.clone(), lote).expect("reemplazar");
+        assert_eq!(informe.hechas, 1, "una hecha");
+        assert_eq!(informe.saltadas, 1, "y la otra contada como saltada");
         assert!(texto_de(1).contains("Vitela"), "la página 2 no se ha tocado");
         std::fs::remove_file(&pdf).ok();
+    }
+    /// Color y alineación del texto: la barra de propiedades de Acrobat.
+    /// La alineación no es un operador del PDF, es dónde se coloca el
+    /// origen del objeto; el color se ve en el render.
+    #[test]
+    fn el_texto_nuevo_puede_ir_en_color_y_alineado() {
+        let tmp = std::env::temp_dir().join("texto-color-align-test.pdf");
+        crea_pdf(&["Base"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        let ancla = 300.0f32;
+        for (align, etiqueta) in [
+            (Some("izq".to_string()), "Izquierda"),
+            (Some("centro".to_string()), "Centrada"),
+            (Some("der".to_string()), "Derecha"),
+        ] {
+            add_text_block(
+                work.clone(),
+                0,
+                ancla,
+                100.0 + 40.0 * (etiqueta.len() as f32 % 3.0),
+                etiqueta.into(),
+                14.0,
+                None,
+                Some([200, 20, 20, 255]),
+                align,
+            )
+            .expect("añadir texto");
+        }
+        let bloques = get_text_blocks(work.clone(), 0).expect("listar");
+        let de = |t: &str| {
+            bloques
+                .iter()
+                .find(|b| b.text.contains(t))
+                .unwrap_or_else(|| panic!("falta el bloque {t}"))
+        };
+        let izq = de("Izquierda");
+        let centro = de("Centrada");
+        let der = de("Derecha");
+        assert!(
+            (izq.x - ancla).abs() < 2.0,
+            "«izq» empieza en el punto: {}",
+            izq.x
+        );
+        assert!(
+            ((centro.x + centro.w / 2.0) - ancla).abs() < 3.0,
+            "«centro» se centra en el punto: {} + {}",
+            centro.x,
+            centro.w
+        );
+        assert!(
+            ((der.x + der.w) - ancla).abs() < 3.0,
+            "«der» acaba en el punto: {} + {}",
+            der.x,
+            der.w
+        );
+
+        // el color se ve: hay rojo en el render donde antes había papel
+        let png = crate::render_page_png(work.clone(), 0, 600, true).expect("render");
+        let img = image::load_from_memory(&png).expect("PNG").to_rgba8();
+        let rojos = img
+            .pixels()
+            .filter(|p| p.0[0] > 150 && p.0[1] < 110 && p.0[2] < 110)
+            .count();
+        assert!(rojos > 50, "el texto rojo apenas pinta ({rojos} píxeles)");
+
+        // y corregir un bloque puede cambiarle el color sin tocar el texto
+        let idx = izq.object_index;
+        edit_text_block(
+            work.clone(),
+            0,
+            idx,
+            "Izquierda".into(),
+            Some([20, 20, 200, 255]),
+            None,
+        )
+        .expect("recolorear");
+        let png = crate::render_page_png(work.clone(), 0, 600, true).expect("render");
+        let img = image::load_from_memory(&png).expect("PNG").to_rgba8();
+        let azules = img
+            .pixels()
+            .filter(|p| p.0[2] > 150 && p.0[0] < 110 && p.0[1] < 110)
+            .count();
+        assert!(azules > 50, "el texto no se ha puesto azul ({azules})");
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// Corregir un bloque centrado lo deja centrado: el texto nuevo crece
+    /// hacia los dos lados, no solo hacia la derecha.
+    #[test]
+    fn corregir_un_bloque_centrado_lo_deja_centrado() {
+        let tmp = std::env::temp_dir().join("texto-align-edit-test.pdf");
+        crea_pdf(&["Base"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        add_text_block(
+            work.clone(),
+            0,
+            300.0,
+            200.0,
+            "Centrado".into(),
+            14.0,
+            None,
+            None,
+            Some("centro".into()),
+        )
+        .expect("añadir");
+        let b = get_text_blocks(work.clone(), 0)
+            .expect("listar")
+            .into_iter()
+            .find(|b| b.text.contains("Centrado"))
+            .expect("bloque");
+        let centro_antes = b.x + b.w / 2.0;
+        edit_text_block(
+            work.clone(),
+            0,
+            b.object_index,
+            "Un texto bastante más largo".into(),
+            None,
+            Some("centro".into()),
+        )
+        .expect("corregir");
+        let b = get_text_blocks(work.clone(), 0)
+            .expect("listar")
+            .into_iter()
+            .find(|b| b.text.contains("bastante"))
+            .expect("bloque corregido");
+        assert!(
+            ((b.x + b.w / 2.0) - centro_antes).abs() < 3.0,
+            "el bloque centrado se ha desplazado: {} -> {}",
+            centro_antes,
+            b.x + b.w / 2.0
+        );
+        std::fs::remove_file(&tmp).ok();
     }
 }

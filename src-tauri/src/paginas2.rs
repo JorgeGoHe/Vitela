@@ -280,7 +280,10 @@ pub fn add_watermark(
             .map_err(|e| e.to_string())?;
         let font = doc.fonts_mut().helvetica_bold();
         let size = font_size.clamp(12.0, 200.0);
-        let alpha = ((color[3] as f32) * opacidad).round().clamp(1.0, 240.0) as u8;
+        // la opacidad viene en su propio parámetro: el color llega opaco y
+        // el alfa sale de `opacity` (tope 240 para que
+        // `remove_marginal_text` siga reconociendo la marca por translúcida)
+        let alpha = (opacidad * 255.0).round().clamp(1.0, 240.0) as u8;
         let c = PdfColor::new(color[0], color[1], color[2], alpha);
         // la imagen lleva la opacidad en su propio alfa: así PDFium le
         // escribe el /SMask y se ve translúcida en cualquier visor

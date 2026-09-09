@@ -182,12 +182,13 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "set_form_choice" => cmd!(formularios::set_form_choice, { work_path: String, page_index: u16, field_index: u16, value: String }),
         "get_text_blocks" => cmd!(texto::get_text_blocks, { path: String, page_index: u16 }),
         "replace_text" => cmd!(texto::replace_text, { work_path: String, matches: Vec<texto::Reemplazo> }),
-        "edit_text_block" => cmd!(texto::edit_text_block, { work_path: String, page_index: u16, object_index: u32, new_text: String }),
-        "add_text_block" => cmd!(texto::add_text_block, { work_path: String, page_index: u16, x: f32, y: f32, text: String, font_size: f32, font: Option<String> }),
+        "edit_text_block" => cmd!(texto::edit_text_block, { work_path: String, page_index: u16, object_index: u32, new_text: String, color: Option<[u8; 4]>, align: Option<String> }),
+        "add_text_block" => cmd!(texto::add_text_block, { work_path: String, page_index: u16, x: f32, y: f32, text: String, font_size: f32, font: Option<String>, color: Option<[u8; 4]>, align: Option<String> }),
         "delete_text_block" => cmd!(texto::delete_text_block, { work_path: String, page_index: u16, object_index: u32 }),
         "get_images" => cmd!(imagenes::get_images, { path: String, page_index: u16 }),
         "add_image" => cmd!(imagenes::add_image, { work_path: String, page_index: u16, image_path: String, x: f32, y: f32 }),
-        "transform_image" => cmd!(imagenes::transform_image, { work_path: String, page_index: u16, object_index: u32, x: f32, y: f32, w: f32, h: f32 }),
+        "transform_image" => cmd!(imagenes::transform_image, { work_path: String, page_index: u16, object_index: u32, x: f32, y: f32, w: f32, h: f32, rotate: Option<i16>, flip_h: Option<bool>, flip_v: Option<bool> }),
+        "reorder_image" => cmd!(imagenes::reorder_image, { work_path: String, page_index: u16, object_index: u32, al_frente: bool }),
         "replace_image" => cmd!(imagenes::replace_image, { work_path: String, page_index: u16, object_index: u32, image_path: String }),
         "delete_image" => cmd!(imagenes::delete_image, { work_path: String, page_index: u16, object_index: u32 }),
         "sign_pdf" => cmd!(crate::sign_pdf, { work_path: String, dest_path: String, cert_pem_path: String, key_pem_path: String, reason: Option<String>, rect: Option<crate::Rect>, page_index: Option<u16>, signer_name: Option<String>, signature_png: Option<String> }),
@@ -243,8 +244,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "history_state" => cmd!(historial::history_state, { work_path: String }),
         "squash_history" => cmd!(historial::squash_history, { work_path: String, steps: u16 }),
         "autosave_state" => cmd!(crate::recuperacion::autosave_state, { work_path: String, original_path: Option<String>, modified: bool }),
-        "clear_session" => crate::recuperacion::clear_session()
-            .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
+        "borra_sesion" => cmd!(crate::recuperacion::borra_sesion, { work_path: Option<String> }),
         "recover_session" => crate::recuperacion::recover_session()
             .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
         "list_recent" => crate::recientes::list_recent()
