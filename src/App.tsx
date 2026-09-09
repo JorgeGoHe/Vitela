@@ -59,6 +59,10 @@ import DialogoComprimir from "./components/DialogoComprimir";
 import "./App.css";
 
 const BASE_WIDTH = 900;
+/** Zoom válido: del 50 % al 400 %, redondeado al 1 %. */
+function recortaZoom(z: number): number {
+  return Math.min(4, Math.max(0.5, Math.round(z * 100) / 100));
+}
 /** Separación vertical entre páginas y padding superior del visor (px). */
 const PAGE_GAP = 24;
 const VIEWER_PAD_TOP = 28;
@@ -84,6 +88,8 @@ function App() {
   const [pageIndex, setPageIndex] = useState(0);
   // la píldora de navegación pasa a campo mientras se teclea una página
   const [pageDraft, setPageDraft] = useState<string | null>(null);
+  // igual que la página, el porcentaje de zoom se puede teclear
+  const [zoomDraft, setZoomDraft] = useState<string | null>(null);
   const [zoom, setZoom] = useState<number | "ajuste">("ajuste");
   const [viewerW, setViewerW] = useState<number | null>(null);
   const viewerRef = useRef<HTMLElement | null>(null);
@@ -410,6 +416,12 @@ function App() {
         if (e.shiftKey) {
           if (pageCount > 0) saveFileAs();
         } else if (modified) saveFile();
+      } else if (mod && e.key === "0" && pageCount > 0) {
+        e.preventDefault();
+        setZoom("ajuste");
+      } else if (mod && e.key === "1" && pageCount > 0) {
+        e.preventDefault();
+        setZoom(1);
       } else if (mod && e.shiftKey && (e.key === "n" || e.key === "N") && pageCount > 0) {
         e.preventDefault();
         setPageDraft(String(pageIndex + 1));
@@ -454,6 +466,31 @@ function App() {
   const ocupado = useSyncExternalStore(subscribeBusy, busyCount) > 0;
 
   const zoomNum = zoom === "ajuste" ? displayWidth / BASE_WIDTH : zoom;
+  // el listener se registra una sola vez: lee el zoom vivo por referencia
+  const zoomNumRef = useRef(zoomNum);
+  zoomNumRef.current = zoomNum;
+
+  /** Salta al porcentaje escrito en la píldora (recortado en silencio). */
+  function aplicaZoomEscrito() {
+    const n = Number.parseInt(zoomDraft ?? "", 10);
+    setZoomDraft(null);
+    if (!Number.isNaN(n)) setZoom(recortaZoom(n / 100));
+  }
+
+  // ⌘+rueda y pinch del trackpad hacen zoom sobre el visor, como en
+  // Acrobat (el pinch llega como wheel con ctrlKey). Sin animación: el
+  // punto de lectura lo conserva el efecto de `displayWidth`.
+  useEffect(() => {
+    const el = viewerRef.current;
+    if (!el) return;
+    function onWheel(e: WheelEvent) {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      setZoom(recortaZoom(zoomNumRef.current * Math.exp(-e.deltaY / 300)));
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
 
   const registerEl = useCallback((page: number, el: HTMLDivElement | null) => {
     if (el) pageElsRef.current.set(page, el);
@@ -1614,25 +1651,53 @@ function App() {
                 title={`Reducir (${MOD}−)`}
                 aria-label="Reducir"
                 onClick={() =>
-                  setZoom(Math.max(0.5, Math.round((zoomNum - 0.25) * 4) / 4))
+                  setZoom(recortaZoom(Math.round((zoomNum - 0.25) * 4) / 4))
                 }
               >
                 <Icon name="minus" size={14} />
               </button>
-              <span>{Math.round(zoomNum * 100)}%</span>
+              {zoomDraft === null ? (
+                <button
+                  className="btn pill-boton"
+                  title={`Escribe un porcentaje de zoom (${MOD}1 = 100 %)`}
+                  aria-label="Porcentaje de zoom"
+                  onClick={() =>
+                    setZoomDraft(String(Math.round(zoomNum * 100)))
+                  }
+                >
+                  {Math.round(zoomNum * 100)}%
+                </button>
+              ) : (
+                <input
+                  className="pill-input"
+                  inputMode="numeric"
+                  autoFocus
+                  aria-label="Porcentaje de zoom (50 a 400)"
+                  value={zoomDraft}
+                  onFocus={(e) => e.currentTarget.select()}
+                  onChange={(e) =>
+                    setZoomDraft(e.target.value.replace(/[^0-9]/g, ""))
+                  }
+                  onBlur={() => setZoomDraft(null)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") aplicaZoomEscrito();
+                    else if (e.key === "Escape") setZoomDraft(null);
+                  }}
+                />
+              )}
               <button
                 className="btn btn-icon"
                 title={`Ampliar (${MOD}+)`}
                 aria-label="Ampliar"
                 onClick={() =>
-                  setZoom(Math.min(4, Math.round((zoomNum + 0.25) * 4) / 4))
+                  setZoom(recortaZoom(Math.round((zoomNum + 0.25) * 4) / 4))
                 }
               >
                 <Icon name="plus" size={14} />
               </button>
               <button
                 className={`btn${zoom === "ajuste" ? " on" : ""}`}
-                title="Ajustar la página al ancho de la ventana"
+                title={`Ajustar la página al ancho de la ventana (${MOD}0)`}
                 aria-pressed={zoom === "ajuste"}
                 onClick={() =>
                   setZoom((z) => (z === "ajuste" ? 1 : "ajuste"))
