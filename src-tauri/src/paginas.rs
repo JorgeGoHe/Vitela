@@ -47,6 +47,63 @@ pub fn rotate_page(work_path: String, page_index: u16) -> Result<(), String> {
 ///
 /// Debe llamarse desde el hilo de PDFium y dentro de una `mutacion`: un
 /// borrado en lote es UN paso de deshacer, no uno por página.
+/// **AC-049.** Todo lo que puede salir mal en una extracción, comprobado
+/// **antes** de escribir el primer fichero: que las páginas siguen ahí, que
+/// llevárselas del original no lo deja sin ninguna y que en la carpeta de
+/// destino se puede escribir de verdad.
+///
+/// Antes se escribían los ficheros y solo después saltaba el error, así que
+/// «extraer todas y eliminarlas» dejaba al usuario con unos PDF que no
+/// había llegado a pedir del todo y el documento intacto. Acrobat lo dice
+/// antes de tocar el disco.
+fn revisa_extraccion(
+    total: u16,
+    page_indices: &[u16],
+    carpeta: &std::path::Path,
+    borrar: bool,
+) -> Result<(), String> {
+    let mut indices: Vec<u16> = page_indices.to_vec();
+    indices.sort_unstable();
+    indices.dedup();
+    if let Some(fuera) = indices.iter().find(|i| **i >= total) {
+        return Err(format!("La página {} ya no está en el documento", fuera + 1));
+    }
+    if borrar && indices.len() as u16 >= total {
+        return Err(
+            "No se pueden extraer todas las páginas y borrarlas del original: un documento \
+             no puede quedarse sin páginas. Quita la marca de «Eliminar las páginas del \
+             original» o deja alguna fuera"
+                .into(),
+        );
+    }
+    carpeta_escribible(carpeta)
+}
+
+/// ¿Se puede escribir en esa carpeta? Se comprueba escribiendo, que es la
+/// única manera que no miente (permisos, disco lleno, volumen de solo
+/// lectura, carpeta que ya no está).
+fn carpeta_escribible(dir: &std::path::Path) -> Result<(), String> {
+    if !dir.is_dir() {
+        return Err(format!(
+            "La carpeta {} ya no está: elige otra",
+            dir.display()
+        ));
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let prueba = dir.join(format!(".vitela-prueba-{nanos}"));
+    std::fs::write(&prueba, b"").map_err(|_| {
+        format!(
+            "No se puede escribir en {}: elige otra carpeta",
+            dir.display()
+        )
+    })?;
+    let _ = std::fs::remove_file(&prueba);
+    Ok(())
+}
+
 fn borra_paginas(work_path: &str, page_indices: &[u16]) -> Result<u16, String> {
     let pdfium = pdfium()?;
     let doc = pdfium
@@ -205,10 +262,18 @@ pub fn extract_pages(
         .map(|i| (i + 1).to_string())
         .collect::<Vec<_>>()
         .join(",");
+    let page_indices_revisar = page_indices.clone();
     // extraer y borrar es UNA operación: un solo paso de deshacer, y si el
     // borrado falla el documento se queda como estaba
     let cuerpo = move |work_path: String| on_pdfium_thread(move || {
         {
+            // AC-049: todo lo que puede fallar, antes de escribir nada
+            let total = crate::with_doc(&work_path, |doc| Ok(doc.pages().len()))?;
+            let carpeta = std::path::Path::new(&dest_path)
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .to_path_buf();
+            revisa_extraccion(total, &page_indices_revisar, &carpeta, borrar)?;
             // AC-046: importar de una copia sin las ventanas de las notas
             // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
             let fuente = crate::anotaciones::fuente_importable(&work_path);
@@ -262,16 +327,15 @@ pub fn extract_each_page(
         let dir = dest_dir.clone();
         let work = work_path.clone();
         let escritos: Vec<String> = on_pdfium_thread(move || {
+            // AC-049: todo lo que puede fallar, antes de escribir nada
+            let total = crate::with_doc(&work, |doc| Ok(doc.pages().len()))?;
+            revisa_extraccion(total, &indices, std::path::Path::new(&dir), borrar)?;
             // AC-046: importar de una copia sin las ventanas de las notas
             // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
             let fuente = crate::anotaciones::fuente_importable(&work);
             let doc = pdfium()?
                 .load_pdf_from_file(fuente.ruta(), None)
                 .map_err(crate::mensaje_llano)?;
-            let total = doc.pages().len();
-            if let Some(fuera) = indices.iter().find(|i| **i >= total) {
-                return Err(format!("La página {} ya no está en el documento", fuera + 1));
-            }
             let mut escritos = Vec::new();
             for i in &indices {
                 let destino = std::path::Path::new(&dir).join(format!("pagina-{}.pdf", i + 1));
@@ -290,7 +354,7 @@ pub fn extract_each_page(
                 crate::anotaciones::repon_popups_en(&escrito)?;
                 escritos.push(escrito);
             }
-            Ok(escritos)
+            Ok::<Vec<String>, String>(escritos)
         })?;
         if borrar {
             let indices = page_indices.clone();
@@ -307,6 +371,78 @@ pub fn extract_each_page(
 
 #[cfg(test)]
 mod tests {
+
+    /// **AC-049.** «Extraer y eliminar del original» con **todas** las
+    /// páginas escribía los ficheros y solo después daba el error, así que
+    /// el usuario se quedaba con unos PDF que no había llegado a pedir del
+    /// todo y el documento intacto. Ahora se comprueba antes de tocar el
+    /// disco, como en Acrobat: la carpeta queda vacía.
+    #[test]
+    fn extraer_y_eliminar_todas_falla_antes_de_escribir_nada() {
+        let dir = std::env::temp_dir();
+        let pdf = dir.join("ac049-extraer.pdf");
+        crea_pdf(&["Una", "Dos", "Tres"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        let carpeta = dir.join("ac049-salida");
+        std::fs::remove_dir_all(&carpeta).ok();
+        std::fs::create_dir_all(&carpeta).expect("carpeta");
+
+        let e = extract_each_page(
+            work.clone(),
+            vec![0, 1, 2],
+            carpeta.to_string_lossy().into_owned(),
+            Some(true),
+        )
+        .unwrap_err();
+        assert!(
+            e.contains("no puede quedarse sin páginas"),
+            "el aviso tiene que explicar qué pasa y cómo salir: {e}"
+        );
+        assert!(
+            e.contains("Eliminar las páginas del original"),
+            "y nombrar la casilla que hay que quitar: {e}"
+        );
+        assert_eq!(
+            std::fs::read_dir(&carpeta).expect("leer carpeta").count(),
+            0,
+            "no se puede haber escrito ni un fichero"
+        );
+
+        // el mismo caso con «extraer a un solo PDF»
+        let destino = carpeta.join("todas.pdf");
+        let e = extract_pages(
+            work.clone(),
+            vec![0, 1, 2],
+            destino.to_string_lossy().into_owned(),
+            Some(true),
+        )
+        .unwrap_err();
+        assert!(e.contains("no puede quedarse sin páginas"), "{e}");
+        assert!(!destino.exists(), "tampoco se ha escrito el PDF");
+
+        // una carpeta que ya no está se dice antes, no a mitad
+        let e = extract_each_page(
+            work.clone(),
+            vec![0],
+            dir.join("ac049-no-existe").to_string_lossy().into_owned(),
+            None,
+        )
+        .unwrap_err();
+        assert!(e.contains("ya no está"), "{e}");
+
+        // y sin la casilla, extraerlas todas sigue valiendo
+        extract_each_page(
+            work.clone(),
+            vec![0, 1, 2],
+            carpeta.to_string_lossy().into_owned(),
+            None,
+        )
+        .expect("extraer sin borrar");
+        assert_eq!(std::fs::read_dir(&carpeta).expect("leer").count(), 3);
+
+        std::fs::remove_dir_all(&carpeta).ok();
+        std::fs::remove_file(&pdf).ok();
+    }
 
     /// **AC-046 (crítico).** Importar una página que lleva una nota adhesiva
     /// mataba el proceso entero con `SIGSEGV`: la nota y su ventana `/Popup`
