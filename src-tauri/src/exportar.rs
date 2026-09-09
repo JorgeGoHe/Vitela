@@ -73,7 +73,7 @@ pub fn export_text(path: String, dest_path: String) -> Result<(), String> {
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct CompressReport {
     pub antes: u64,
     pub despues: u64,
@@ -100,6 +100,9 @@ pub fn compress_pdf(work_path: String, quality: u8, max_dpi: u16) -> Result<Comp
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
         let mut recomprimidas = 0u32;
+        // imágenes vistas (aunque se salten): sirve para distinguir «aquí no
+        // había imágenes» de «las que había ya estaban bien»
+        let mut imagenes_vistas = 0u32;
         for p in 0..doc.pages().len() {
             let mut page = doc.pages().get(p).map_err(|e| e.to_string())?;
             // recopilar candidatas primero: índice, bounds y píxeles
@@ -119,6 +122,7 @@ pub fn compress_pdf(work_path: String, quality: u8, max_dpi: u16) -> Result<Comp
                     let Some(img_obj) = obj.as_image_object() else {
                         continue;
                     };
+                    imagenes_vistas += 1;
                     let Ok(m) = img_obj.matrix() else { continue };
                     // saltar imágenes rotadas o sesgadas
                     if m.b().abs() > 0.01 || m.c().abs() > 0.01 {
@@ -208,8 +212,15 @@ pub fn compress_pdf(work_path: String, quality: u8, max_dpi: u16) -> Result<Comp
                 page.regenerate_content().map_err(|e| e.to_string())?;
             }
         }
+        // dos motivos distintos, los dos con la misma cabeza para no
+        // romper el contrato con la UI («No se ha podido reducir…»)
+        const SIN_IMAGENES: &str =
+            "No se ha podido reducir el tamaño: este documento no tiene imágenes que comprimir";
         const SIN_REDUCIR: &str =
             "No se ha podido reducir el tamaño: las imágenes ya están comprimidas";
+        if imagenes_vistas == 0 {
+            return Err(SIN_IMAGENES.into());
+        }
         if recomprimidas == 0 {
             return Err(SIN_REDUCIR.into());
         }
@@ -239,6 +250,25 @@ mod tests {
     use super::*;
     use crate::tests::crea_pdf;
     use base64::Engine;
+
+    /// «Reducir tamaño» sobre un documento sin ninguna imagen decía que «las
+    /// imágenes ya están comprimidas». No hay imágenes: el motivo es otro.
+    #[test]
+    fn comprimir_sin_imagenes_lo_dice() {
+        let pdf = std::env::temp_dir().join("exportar-comprimir-sin-imagenes-test.pdf");
+        crea_pdf(&["Solo texto"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+        let e = compress_pdf(work, 70, 150).unwrap_err();
+        assert!(
+            e.starts_with("No se ha podido reducir"),
+            "la cabeza del mensaje es el contrato con la UI: {e}"
+        );
+        assert!(
+            e.contains("no tiene imágenes"),
+            "un documento sin imágenes no puede decir que ya están comprimidas: {e}"
+        );
+        std::fs::remove_file(&pdf).ok();
+    }
 
     #[test]
     fn exporta_paginas_y_texto() {
