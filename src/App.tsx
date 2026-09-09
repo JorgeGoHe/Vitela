@@ -817,16 +817,22 @@ function App() {
       setCompressOpen(false);
       setNotice("Comprimiendo…");
       const r = await compressPdf(workPath, compressQuality, compressDpi);
-      const mb = (n: number) => (n / 1024 / 1024).toFixed(2);
+      // por debajo de 1 MB dos decimales de MB no distinguen nada: KB
+      const tam = (n: number) =>
+        n < 1024 * 1024
+          ? `${Math.round(n / 1024)} KB`
+          : `${(n / 1024 / 1024).toFixed(2)} MB`;
       setNotice(
         r.imagenes === 0
           ? "No había imágenes que comprimir."
-          : `${r.imagenes} imagen(es) recomprimidas: ${mb(r.antes)} MB → ${mb(r.despues)} MB`,
+          : `${r.imagenes} imagen(es) recomprimidas: ${tam(r.antes)} → ${tam(r.despues)}`,
       );
       afterMutation(pageCount);
     } catch (e) {
       setNotice(null);
-      setError(String(e));
+      // no reducir no es un fallo: el fichero queda intacto y se avisa
+      if (String(e).startsWith("No se ha podido reducir")) setNotice(String(e));
+      else setError(String(e));
     }
   }
 
