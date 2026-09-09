@@ -74,6 +74,18 @@ export default function DialogoCombinar({
     });
   }
 
+  /** Subir y bajar una fila con el teclado: el arrastre no es la única forma
+   *  de ordenar, como en el panel de páginas. */
+  function intercambia(i: number, delta: number) {
+    const j = i + delta;
+    if (j < 0 || j >= rutas.length) return;
+    setRutas((v) => {
+      const copia = [...v];
+      [copia[i], copia[j]] = [copia[j], copia[i]];
+      return copia;
+    });
+  }
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
@@ -90,7 +102,7 @@ export default function DialogoCombinar({
         {rutas.length === 0 && (
           <p className="sign-empty">
             Todavía no has elegido ningún PDF. Se añadirán en el orden de la
-            lista, que se cambia arrastrando.
+            lista, que se cambia arrastrando o con los botones ▲▼.
           </p>
         )}
         {rutas.length > 0 && (
@@ -147,6 +159,24 @@ export default function DialogoCombinar({
                       </span>
                     )}
                   </span>
+                  <button
+                    className="btn btn-icon"
+                    title="Subir"
+                    aria-label={`Subir ${nombre}`}
+                    disabled={i === 0}
+                    onClick={() => intercambia(i, -1)}
+                  >
+                    <Icon name="up" size={13} />
+                  </button>
+                  <button
+                    className="btn btn-icon"
+                    title="Bajar"
+                    aria-label={`Bajar ${nombre}`}
+                    disabled={i === rutas.length - 1}
+                    onClick={() => intercambia(i, 1)}
+                  >
+                    <Icon name="down" size={13} />
+                  </button>
                   <button
                     className="btn"
                     aria-label={`Quitar ${nombre} de la lista`}

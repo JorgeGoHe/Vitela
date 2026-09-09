@@ -1687,10 +1687,13 @@ textarea {
   gap: 2px;
 }
 
+/* el sidebar mide 200 px: autor, fecha y página se reparten en las líneas
+   que hagan falta en vez de recortar la hora, que es el dato más útil */
 .com-firma {
   display: flex;
-  justify-content: space-between;
-  gap: 6px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 6px;
   font-size: 11px;
   color: var(--fg-muted);
 }
@@ -1699,6 +1702,46 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 100%;
+}
+
+.com-fecha,
+.com-pagina {
+  white-space: nowrap;
+}
+
+.com-pagina {
+  margin-left: auto;
+}
+
+/* lo que va a quedar dentro del recuadro de la firma, con su proporción */
+.firma-previa {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.firma-previa img {
+  max-width: 82%;
+  max-height: 62%;
+  margin-bottom: 14%;
+}
+
+.firma-previa-pie {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 4px;
+  color: #1d1c18;
+  font-size: 9px;
+  line-height: 1.25;
+  text-align: left;
 }
 
 /* el texto se recorta a dos líneas: la lista es un índice, no el comentario */
@@ -1879,7 +1922,9 @@ textarea {
 
 .tool-options {
   position: fixed;
-  top: 52px;
+  /* baja lo que ocupen las bandas de aviso: la de firmas y esta fila son las
+     dos informativas y se peleaban por el mismo sitio */
+  top: calc(52px + var(--bandas, 0) * 31px);
   left: 50%;
   transform: translateX(-50%);
   z-index: 50;
@@ -2206,6 +2251,13 @@ textarea {
 .sel-popover .btn {
   padding: 5px 10px;
   font-size: 12px;
+}
+
+/* el error que pertenece a un campo se dice a su lado, no en la banda roja
+   global, que queda detrás del velo del modal */
+.modal-error {
+  font-size: 12px;
+  color: var(--danger);
 }
 
 /* ---------- modal ---------- */

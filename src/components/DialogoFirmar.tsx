@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { FirmaGuardada } from "../api";
 import { open } from "../dialogos";
 import { useModal } from "../hooks/useModal";
-import type { FirmaDraft } from "../tipos";
+import type { FirmaDraft, Rect } from "../tipos";
 import Icon from "./Icon";
 
 /** Nombre de fichero de una ruta, para no enseñar la ruta entera. */
@@ -19,6 +19,7 @@ function nombreDe(ruta: string): string {
 export default function DialogoFirmar({
   inicial,
   pagina,
+  rect,
   firmas,
   onConfirm,
   onClose,
@@ -26,11 +27,14 @@ export default function DialogoFirmar({
   inicial: FirmaDraft;
   /** Página (desde 1) donde se ha dibujado el recuadro. */
   pagina: number;
+  /** El recuadro dibujado, para enseñar la previa con su proporción. */
+  rect: Rect;
   firmas: FirmaGuardada[];
   onConfirm: (d: FirmaDraft) => void;
   onClose: () => void;
 }) {
   const [d, setD] = useState<FirmaDraft>(inicial);
+  const dibujo = firmas.find((f) => f.id === d.firmaId);
   const esP12 = /\.(p12|pfx)$/i.test(d.certPath);
   const listo = !!d.certPath && (esP12 ? !!d.password : !!d.keyPath);
   const confirmar = () => {
@@ -132,9 +136,9 @@ export default function DialogoFirmar({
             onChange={(e) => setD({ ...d, reason: e.target.value })}
           />
         </label>
-        {firmas.length > 0 && (
-          <label className="prop-field">
-            <span className="card-label">Usar mi firma manuscrita</span>
+        <label className="prop-field">
+          <span className="card-label">Usar mi firma manuscrita</span>
+          {firmas.length > 0 ? (
             <select
               className="size-select"
               value={d.firmaId}
@@ -147,8 +151,32 @@ export default function DialogoFirmar({
                 </option>
               ))}
             </select>
-          </label>
-        )}
+          ) : (
+            <span className="dato">
+              todavía no hay ninguna guardada: se dibujan en el modo Firma
+            </span>
+          )}
+        </label>
+
+        {/* lo que va a quedar en el papel, con la proporción del recuadro que
+            se ha dibujado: firmar deja de ser a ciegas */}
+        <span className="card-label">Así quedará</span>
+        <div
+          className="firma-previa"
+          style={{ aspectRatio: `${Math.max(1, rect.w)} / ${Math.max(1, rect.h)}` }}
+        >
+          {dibujo && (
+            <img
+              src={`data:image/png;base64,${dibujo.png_base64}`}
+              alt="Firma manuscrita"
+            />
+          )}
+          <span className="firma-previa-pie dato">
+            Firmado por {d.signerName.trim() || "(el nombre del certificado)"}
+            <br />
+            {new Date().toLocaleDateString("es-ES")}
+          </span>
+        </div>
 
         <div className="card-actions">
           <button className="btn" onClick={onClose}>

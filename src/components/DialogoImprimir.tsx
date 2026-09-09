@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useModal } from "../hooks/useModal";
-import type { OpcionesImprimir } from "../tipos";
+import { parseRango, type OpcionesImprimir } from "../tipos";
 
 /**
  * Diálogo de impresión propio, el que Acrobat abre antes del diálogo del
@@ -21,7 +21,13 @@ export default function DialogoImprimir({
   onClose: () => void;
 }) {
   const [o, setO] = useState<OpcionesImprimir>(inicial);
-  const confirmar = () => onConfirm(o);
+  // el rango vacío se dice AQUÍ, junto al campo: la banda roja global queda
+  // detrás del velo del modal, que es donde nadie la lee
+  const rangoVacio =
+    o.ambito === "rango" && parseRango(o.rango, pageCount).length === 0;
+  const confirmar = () => {
+    if (!rangoVacio) onConfirm(o);
+  };
   const { ref, onKeyDown } = useModal({ onClose, onConfirm: confirmar });
   const cambia = (parte: Partial<OpcionesImprimir>) =>
     setO((v) => ({ ...v, ...parte }));
@@ -76,6 +82,12 @@ export default function DialogoImprimir({
           onFocus={() => cambia({ ambito: "rango" })}
           onChange={(e) => cambia({ rango: e.target.value, ambito: "rango" })}
         />
+        {rangoVacio && (
+          <p className="modal-error" role="alert">
+            Escribe qué páginas quieres imprimir, por ejemplo «1-3, 8» (el
+            documento tiene {pageCount}).
+          </p>
+        )}
         <select
           className="size-select"
           aria-label="Imprimir solo las pares o las impares"
@@ -140,7 +152,11 @@ export default function DialogoImprimir({
           <button className="btn" onClick={onClose}>
             Cancelar
           </button>
-          <button className="btn btn-primary" onClick={confirmar}>
+          <button
+            className="btn btn-primary"
+            disabled={rangoVacio}
+            onClick={confirmar}
+          >
             Imprimir
           </button>
         </div>

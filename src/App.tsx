@@ -1,4 +1,5 @@
 import {
+  type CSSProperties,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -198,6 +199,16 @@ function resumenSaneado(r: SanitizeReport): string {
   const ultima = partes.pop()!;
   const lista = partes.length > 0 ? `${partes.join(", ")} y ${ultima}` : ultima;
   return `Se quitarán ${lista}. No se puede deshacer guardando, pero ${MOD}Z lo devuelve mientras el documento siga abierto.`;
+}
+
+/** «2 bloques de texto y 1 imagen», con lo que haya: nombrar lo que vale
+ *  cero («y 0 imágenes») es contar algo que no ocurre. */
+function resumenRedaccion(r: RedactReport): string {
+  const partes: string[] = [];
+  if (r.textos > 0) partes.push(plural(r.textos, "bloque de texto", "bloques de texto"));
+  if (r.imagenes > 0) partes.push(plural(r.imagenes, "imagen", "imágenes"));
+  if (partes.length === 0) return "el contenido que haya dentro";
+  return partes.join(" y ");
 }
 
 /** La banda de firmas, en una línea y sin jerga. */
@@ -1966,11 +1977,12 @@ function App() {
    *  liberan los blobs y no se abre nada. */
   async function prepararImpresion(o: OpcionesImprimir) {
     if (!workPath) return;
+    // el rango vacío lo ataja el propio diálogo, junto al campo; aquí solo
+    // puede quedar un subconjunto (pares/impares) que no case con el rango
     const idx = paginasAImprimir(o);
     if (idx.length === 0) {
-      setError(
-        `Escribe qué páginas quieres imprimir, por ejemplo «1-3, 8» (el documento tiene ${pageCount})`,
-      );
+      setPrintOpen(false);
+      setNotice("Ninguna página del rango es de las que has pedido imprimir");
       return;
     }
     setPrintOpts(o);
@@ -2643,11 +2655,19 @@ function App() {
     setActiveSig(null);
   }
 
+  // la fila contextual va fija bajo la barra: sin contar las bandas se
+  // pintaba encima de la de firmas y la cortaba a media frase
+  const bandas =
+    (error ? 1 : 0) +
+    (bandaFirmas && firmasDoc.length > 0 ? 1 : 0) +
+    (notice ? 1 : 0);
+
   return (
     <div
       className={`app${pantallaCompleta ? " presentacion" : ""}${
         pantallaCompleta && pildoraVisible ? " pildora" : ""
       }`}
+      style={{ "--bandas": bandas } as CSSProperties}
     >
       <header className="toolbar">
         <div className="toolbar-left">
@@ -2903,6 +2923,7 @@ function App() {
         <DialogoFirmar
           inicial={firmaDraft}
           pagina={firmaRect.page + 1}
+          rect={firmaRect.rect}
           firmas={firmas}
           onConfirm={aplicarFirma}
           onClose={() => setFirmaRect(null)}
@@ -3031,12 +3052,9 @@ function App() {
           cuerpo={
             <p className="modal-file" style={{ whiteSpace: "normal" }}>
               En {plural(marcasRedact.length, "zona marcada", "zonas marcadas")}{" "}
-              se eliminarán{" "}
-              {plural(redactAsk.textos, "bloque de texto", "bloques de texto")} y{" "}
-              {plural(redactAsk.imagenes, "imagen", "imágenes")}, y quedará una
-              caja negra encima. El contenido se elimina y no se podrá
-              recuperar guardando; {MOD}Z lo devuelve mientras el documento
-              siga abierto.
+              se eliminarán {resumenRedaccion(redactAsk)}, y quedará una caja
+              negra encima. El contenido se elimina y no se podrá recuperar
+              guardando; {MOD}Z lo devuelve mientras el documento siga abierto.
             </p>
           }
           textoConfirmar="Aplicar la redacción"

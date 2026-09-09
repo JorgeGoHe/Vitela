@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import type { AnotacionDoc } from "../api";
 import {
+  fechaAnotacion,
   firmaAnotacion,
   KIND_ICONS,
   KIND_PLURALS,
@@ -214,6 +215,7 @@ export default function PanelComentarios({
           const elegida =
             seleccionada?.page === c.page_index &&
             seleccionada.index === c.index;
+          const fecha = fechaAnotacion(c.modified);
           const firma = firmaAnotacion(c.author, c.modified);
           return (
             <div
@@ -225,15 +227,18 @@ export default function PanelComentarios({
               // sin nada elegido, la primera fila es la que recibe el Tab:
               // con `-1` en todas la lista no se alcanzaba con el teclado
               tabIndex={elegida || (!hayElegida && i === 0) ? 0 : -1}
-              title={c.contents || undefined}
+              title={[firma, c.contents].filter(Boolean).join("\n") || undefined}
               onClick={() => onSelect(c)}
               onKeyDown={(e) => onKeyDown(e, c)}
             >
               <Icon name={KIND_ICONS[c.kind] ?? "note"} size={13} />
               <span className="com-cuerpo">
+                {/* autor, fecha y página en una fila que envuelve: en el
+                    sidebar de 200 px la hora era lo primero que se perdía */}
                 <span className="com-firma dato">
-                  <span className="com-autor">{firma || "Sin autor"}</span>
-                  <span>pág. {c.page_index + 1}</span>
+                  <span className="com-autor">{c.author || "Sin autor"}</span>
+                  {fecha && <span className="com-fecha">{fecha}</span>}
+                  <span className="com-pagina">pág. {c.page_index + 1}</span>
                 </span>
                 <span className="com-texto">
                   {c.contents || KIND_PLURALS[c.kind] || c.kind}

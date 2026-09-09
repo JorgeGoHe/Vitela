@@ -428,27 +428,26 @@ export function autorComentarios(): string | null {
   return cargaPreferencias().autor.trim() || null;
 }
 
-/** «Jorge · 9 sept 2026, 14:30» para el popover de un comentario. La hora
- *  va desde que el `/M` que escribe el backend lleva su zona horaria: sin
- *  ella, dos comentarios del mismo día no se distinguían. */
+/** «9 sept 2026, 14:30» a partir del `/M` del comentario, o cadena vacía si
+ *  no se puede leer. La hora va desde que el `/M` que escribe el backend
+ *  lleva su zona horaria: sin ella, dos comentarios del mismo día no se
+ *  distinguían. */
+export function fechaAnotacion(modified: string): string {
+  if (!modified) return "";
+  const d = new Date(modified);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("es-ES", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** «Jorge · 9 sept 2026, 14:30» para el popover de un comentario. */
 export function firmaAnotacion(author: string, modified: string): string {
-  const partes: string[] = [];
-  if (author) partes.push(author);
-  if (modified) {
-    const d = new Date(modified);
-    if (!Number.isNaN(d.getTime())) {
-      partes.push(
-        d.toLocaleString("es-ES", {
-          day: "numeric",
-          month: "short",
-          year: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
-      );
-    }
-  }
-  return partes.join(" · ");
+  return [author, fechaAnotacion(modified)].filter(Boolean).join(" · ");
 }
 
 /* ---- presentación de página (persistida en localStorage) ---- */

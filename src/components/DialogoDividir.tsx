@@ -13,7 +13,8 @@ export default function DialogoDividir({
   onClose,
 }: {
   pageCount: number;
-  /** Sin marcadores, esa opción no se ofrece: no dividiría nada. */
+  /** Sin marcadores la opción se atenúa, no desaparece: quien no sepa que
+   *  hace falta un índice no descubriría nunca que la función existe. */
   hayMarcadores: boolean;
   onConfirm: (opts: { modo: "cada" | "marcadores"; cada: number }) => void;
   onClose: () => void;
@@ -65,20 +66,22 @@ export default function DialogoDividir({
           />
           páginas
         </label>
-        {hayMarcadores && (
-          <label className="opt-check">
-            <input
-              type="radio"
-              name="modo-dividir"
-              checked={modo === "marcadores"}
-              onChange={() => setModo("marcadores")}
-            />
-            Por los marcadores de primer nivel
-          </label>
-        )}
+        <label className={`opt-check${hayMarcadores ? "" : " disabled"}`}>
+          <input
+            type="radio"
+            name="modo-dividir"
+            disabled={!hayMarcadores}
+            checked={modo === "marcadores"}
+            onChange={() => setModo("marcadores")}
+          />
+          Por los marcadores de primer nivel
+          {!hayMarcadores && " (este documento no tiene)"}
+        </label>
         <p className="modal-file" style={{ whiteSpace: "normal" }}>
           {modo === "cada"
-            ? `Saldrán ${trozos} ficheros de ${cada === 1 ? "1 página" : `${cada} páginas`} (el último puede tener menos). El documento abierto no se toca.`
+            ? `Saldrán ${trozos} ficheros de ${cada === 1 ? "1 página" : `${cada} páginas`}${
+                pageCount % cada === 0 ? "" : " (el último puede tener menos)"
+              }. El documento abierto no se toca.`
             : "Sale un fichero por cada marcador de primer nivel. El documento abierto no se toca."}
         </p>
         <div className="card-actions">
