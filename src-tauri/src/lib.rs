@@ -882,6 +882,7 @@ pub fn run() {
             anotaciones::remove_annotation,
             anotaciones::set_annotation_contents,
             anotaciones::set_annotation_color,
+            anotaciones::get_document_annotations,
             formularios::get_form_fields,
             formularios::set_form_text,
             formularios::set_form_checked,

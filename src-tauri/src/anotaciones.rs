@@ -676,68 +676,118 @@ pub struct DatosAnnot {
 pub fn get_annotations(path: String, page_index: u16) -> Result<Vec<AnnotationInfo>, String> {
     on_pdfium_thread(move || {
         with_doc(&path, |doc| {
-            let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-            let geo = Geo::de_pagina(&page);
-            let annotations = page.annotations();
+            let mut out = lee_annots(doc, page_index)?;
+            aplica_datos(&path, page_index, &mut out);
+            Ok(out)
+        })
+    })
+}
+
+/// Las anotaciones de una página, tal como las ve PDFium (sin el color ni
+/// la firma, que salen de lopdf en `aplica_datos`).
+fn lee_annots(
+    doc: &PdfDocument<'static>,
+    page_index: u16,
+) -> Result<Vec<AnnotationInfo>, String> {
+    let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+    let geo = Geo::de_pagina(&page);
+    let annotations = page.annotations();
+    let mut out = Vec::new();
+    for i in 0..annotations.len() {
+        let Ok(mut a) = annotations.get(i) else {
+            continue;
+        };
+        let kind = format!("{:?}", a.annotation_type());
+        // el /Popup de una nota no es un comentario: es su ventana
+        if kind == "Popup" {
+            continue;
+        }
+        let Ok(b) = a.bounds() else { continue };
+        let mut rects = Vec::new();
+        {
+            // resaltado, subrayado y tachado guardan sus líneas como
+            // quadpoints; tipos distintos sin trait común
+            macro_rules! lee_quads {
+                ($m:expr) => {
+                    if let Some(m) = $m {
+                        let points = m.attachment_points_mut();
+                        for j in 0..points.len() {
+                            if let Ok(q) = points.get(j) {
+                                rects.push(geo.pdf_rect_a_ui(&PdfRect::new(
+                                    q.bottom(),
+                                    q.left(),
+                                    q.top(),
+                                    q.right(),
+                                )));
+                            }
+                        }
+                    }
+                };
+            }
+            lee_quads!(a.as_highlight_annotation_mut());
+            lee_quads!(a.as_underline_annotation_mut());
+            lee_quads!(a.as_strikeout_annotation_mut());
+        }
+        let caja = geo.pdf_rect_a_ui(&b);
+        out.push(AnnotationInfo {
+            index: i as u16,
+            kind,
+            x: caja.x,
+            y: caja.y,
+            w: caja.w,
+            h: caja.h,
+            contents: a.contents().unwrap_or_default(),
+            rects,
+            color: None,
+            author: String::new(),
+            modified: String::new(),
+        });
+    }
+    Ok(out)
+}
+
+/// Completa con lo que solo sabe lopdf: color, autor y fecha.
+fn aplica_datos(path: &str, page_index: u16, out: &mut [AnnotationInfo]) {
+    let Some(datos) = datos_annots_lopdf(path, page_index) else {
+        return;
+    };
+    for a in out.iter_mut() {
+        if let Some(d) = datos.get(a.index as usize) {
+            a.color = d.color;
+            a.author.clone_from(&d.author);
+            a.modified.clone_from(&d.modified);
+        }
+    }
+}
+
+/// Una anotación con la página en la que está, para el panel de
+/// comentarios.
+#[derive(Serialize, Debug)]
+pub struct AnotacionDoc {
+    #[serde(flatten)]
+    pub annot: AnnotationInfo,
+    pub page_index: u16,
+}
+
+/// Todas las anotaciones del documento, ordenadas por página y, dentro de
+/// cada una, en el orden de `/Annots`. Una sola pasada: en un PDF de 300
+/// páginas, pedirlas página a página serían 300 viajes por el canal del
+/// hilo de PDFium.
+#[tauri::command(async)]
+pub fn get_document_annotations(path: String) -> Result<Vec<AnotacionDoc>, String> {
+    on_pdfium_thread(move || {
+        with_doc(&path, |doc| {
+            let paginas = doc.pages().len();
             let mut out = Vec::new();
-            for i in 0..annotations.len() {
-                let Ok(mut a) = annotations.get(i) else {
+            for p in 0..paginas {
+                let Ok(mut anots) = lee_annots(doc, p) else {
                     continue;
                 };
-                let kind = format!("{:?}", a.annotation_type());
-                // el /Popup de una nota no es un comentario: es su ventana
-                if kind == "Popup" {
-                    continue;
-                }
-                let Ok(b) = a.bounds() else { continue };
-                let mut rects = Vec::new();
-                {
-                    // resaltado, subrayado y tachado guardan sus líneas como
-                    // quadpoints; tipos distintos sin trait común
-                    macro_rules! lee_quads {
-                        ($m:expr) => {
-                            if let Some(m) = $m {
-                                let points = m.attachment_points_mut();
-                                for j in 0..points.len() {
-                                    if let Ok(q) = points.get(j) {
-                                        rects.push(geo.pdf_rect_a_ui(&PdfRect::new(
-                                            q.bottom(),
-                                            q.left(),
-                                            q.top(),
-                                            q.right(),
-                                        )));
-                                    }
-                                }
-                            }
-                        };
-                    }
-                    lee_quads!(a.as_highlight_annotation_mut());
-                    lee_quads!(a.as_underline_annotation_mut());
-                    lee_quads!(a.as_strikeout_annotation_mut());
-                }
-                let caja = geo.pdf_rect_a_ui(&b);
-                out.push(AnnotationInfo {
-                    index: i as u16,
-                    kind,
-                    x: caja.x,
-                    y: caja.y,
-                    w: caja.w,
-                    h: caja.h,
-                    contents: a.contents().unwrap_or_default(),
-                    rects,
-                    color: None,
-                    author: String::new(),
-                    modified: String::new(),
-                });
-            }
-            if let Some(datos) = datos_annots_lopdf(&path, page_index) {
-                for a in out.iter_mut() {
-                    if let Some(d) = datos.get(a.index as usize) {
-                        a.color = d.color;
-                        a.author.clone_from(&d.author);
-                        a.modified.clone_from(&d.modified);
-                    }
-                }
+                aplica_datos(&path, p, &mut anots);
+                out.extend(anots.into_iter().map(|annot| AnotacionDoc {
+                    annot,
+                    page_index: p,
+                }));
             }
             Ok(out)
         })
@@ -1646,5 +1696,56 @@ mod tests_apariencia {
             "el popup huérfano se queda en el fichero"
         );
         std::fs::remove_file(&tmp).ok();
+    }
+
+    /// El panel de comentarios pide todo el documento de una vez: una sola
+    /// pasada, con la página de cada anotación y el orden estable.
+    #[test]
+    fn todas_las_anotaciones_del_documento_de_una_vez() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_annots_doc.pdf");
+        crea_pdf(&["Uno", "Dos", "Tres"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        add_note(work.clone(), 0, 200.0, 100.0, "En la 1".into(), Some("Jorge".into()))
+            .expect("nota 1");
+        add_note(work.clone(), 2, 200.0, 100.0, "En la 3".into(), Some("Jorge".into()))
+            .expect("nota 3");
+        crate::anotaciones2::add_stamp(
+            work.clone(),
+            2,
+            "APROBADO".into(),
+            [192, 57, 43, 255],
+            300.0,
+            400.0,
+            18.0,
+            None,
+        )
+        .expect("sello 3");
+
+        let todas = get_document_annotations(work.clone()).expect("listar el documento");
+        assert_eq!(todas.len(), 3, "una en la 1 y dos en la 3: {todas:?}");
+        assert_eq!(
+            todas.iter().map(|a| a.page_index).collect::<Vec<_>>(),
+            vec![0, 2, 2],
+            "ordenadas por página"
+        );
+        assert_eq!(todas[0].annot.contents, "En la 1");
+        assert_eq!(todas[1].annot.contents, "En la 3");
+        assert_eq!(todas[2].annot.kind, "Stamp");
+        assert_eq!(todas[0].annot.author, "Jorge");
+        assert!(!todas[0].annot.modified.is_empty());
+        // el JSON va plano: page_index junto a los campos de la anotación
+        let json = serde_json::to_value(&todas[0]).expect("serializar");
+        assert_eq!(json["page_index"], 0);
+        assert_eq!(json["kind"], "Text");
+        // documento sin comentarios: lista vacía, no un error
+        let vacio = std::env::temp_dir().join("editor_pdf_test_annots_doc_vacio.pdf");
+        crea_pdf(&["Sin nada"], &vacio);
+        assert!(
+            get_document_annotations(vacio.to_string_lossy().into_owned())
+                .expect("listar")
+                .is_empty()
+        );
+        std::fs::remove_file(&tmp).ok();
+        std::fs::remove_file(&vacio).ok();
     }
 }
