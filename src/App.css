@@ -1529,6 +1529,11 @@ textarea {
   background: color-mix(in srgb, var(--danger) 14%, transparent);
 }
 
+/* ni verde ni rojo: Vitela no ha podido comprobarla y lo dice así */
+.banner-firmas.duda {
+  background: color-mix(in srgb, var(--fg-muted) 14%, transparent);
+}
+
 .banner-firmas-texto {
   display: flex;
   align-items: center;
@@ -1567,6 +1572,12 @@ textarea {
   border-left-color: var(--danger);
 }
 
+/* el tercer estado no es rojo: «no se ha podido comprobar» es neutro, y se
+   pinta con el gris lápiz de DESIGN.md */
+.firma-card.duda {
+  border-left-color: var(--fg-muted);
+}
+
 .firma-estado {
   display: flex;
   align-items: center;
@@ -1578,6 +1589,10 @@ textarea {
 
 .firma-card.mal .firma-estado {
   color: var(--danger);
+}
+
+.firma-card.duda .firma-estado {
+  color: var(--fg-muted);
 }
 
 .firma-quien {

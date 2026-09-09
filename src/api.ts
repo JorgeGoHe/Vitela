@@ -655,10 +655,21 @@ export function stampSignature(args: {
 
 /** Una firma del documento, tal como la lee `verify_signatures`. Los
  *  nombres técnicos se quedan aquí: la UI no los enseña nunca. */
+/** Lo que se sabe de una firma. Son TRES estados, no dos: «desconocido» es
+ *  cuando Vitela no ha podido comprobarla (un algoritmo que todavía no sabe
+ *  leer, un CMS que no entiende), y nunca debe pintarse como «modificado».
+ *  Un falso «el documento ha cambiado» sobre un contrato firmado es un error
+ *  caro. */
+export type EstadoFirma = "ok" | "modificado" | "desconocido";
+
 export type FirmaInfo = {
   /** Nombre del firmante escrito en la firma. */
   name: string;
   reason: string;
+  /** Qué se ha podido comprobar; lo decide el backend, no la UI. */
+  estado: EstadoFirma;
+  /** «RSA-2048 / SHA-256», para la tarjeta del panel. */
+  algoritmo: string;
   /** Momento de la firma, en ISO 8601. */
   signed_at: string;
   /** La firma cubre todo el fichero (no solo un trozo). */

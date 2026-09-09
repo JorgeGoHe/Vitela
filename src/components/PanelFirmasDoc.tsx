@@ -31,7 +31,7 @@ export default function PanelFirmasDoc({
         return (
           <div
             key={i}
-            className={`firma-card${estado.ok ? "" : " mal"}`}
+            className={`firma-card ${estado.nivel}`}
             role={f.page_index === null ? undefined : "button"}
             tabIndex={f.page_index === null ? undefined : 0}
             title={
@@ -50,7 +50,16 @@ export default function PanelFirmasDoc({
             }}
           >
             <span className="firma-estado">
-              <Icon name={estado.ok ? "lock" : "close"} size={13} />
+              <Icon
+                name={
+                  estado.nivel === "ok"
+                    ? "lock"
+                    : estado.nivel === "duda"
+                      ? "sliders"
+                      : "close"
+                }
+                size={13}
+              />
               {estado.texto}
             </span>
             <span className="firma-quien">
@@ -71,6 +80,11 @@ export default function PanelFirmasDoc({
                   : "Sin fecha de caducidad"}
               {f.self_signed ? " · autofirmado, no lo respalda nadie más" : ""}
             </span>
+            {/* el algoritmo, en Fragment Mono: es el dato que explica por qué
+                una firma sale como «no se ha podido comprobar» */}
+            {f.algoritmo && (
+              <span className="firma-linea dato">{f.algoritmo}</span>
+            )}
             {f.page_index !== null && (
               <span className="firma-linea dato">
                 pág. {f.page_index + 1}

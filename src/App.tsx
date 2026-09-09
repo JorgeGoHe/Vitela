@@ -91,6 +91,7 @@ import {
   cargaVista,
   estadoDeFirma,
   fechaLarga,
+  type NivelFirma,
   filasDePaginas,
   FIRMA_VACIA,
   type FirmaDraft,
@@ -211,10 +212,24 @@ function resumenRedaccion(r: RedactReport): string {
   return partes.join(" y ");
 }
 
-/** La banda de firmas, en una línea y sin jerga. */
+/** La banda de firmas: una sola línea, sin jerga, y con el peor de los tres
+ *  estados —una firma que no se ha podido comprobar no se pinta en rojo—. */
+function estadoBanda(firmas: FirmaInfo[]): NivelFirma {
+  const niveles = firmas.map((f) => estadoDeFirma(f).nivel);
+  if (niveles.includes("mal")) return "mal";
+  if (niveles.includes("duda")) return "duda";
+  return "ok";
+}
+
+
 function resumenFirmas(firmas: FirmaInfo[]): string {
-  const mala = firmas.find((f) => !estadoDeFirma(f).ok);
-  if (mala) return estadoDeFirma(mala).texto;
+  // la que no está bien manda: se dice quién firmó y qué pasa con ella, sin
+  // dar por buena la primera solo porque sea la primera
+  const dudosa = firmas.find((f) => estadoDeFirma(f).nivel !== "ok");
+  if (dudosa) {
+    const suyo = dudosa.name || dudosa.cert_subject || "";
+    return `${suyo ? `Firmado por ${suyo} · ` : ""}${estadoDeFirma(dudosa).texto.toLowerCase()}`;
+  }
   const quien = firmas[0].name || firmas[0].cert_subject || "";
   const cuando = firmas[0].signed_at ? ` el ${fechaLarga(firmas[0].signed_at)}` : "";
   const cabecera =
@@ -2879,11 +2894,7 @@ function App() {
         </div>
       )}
       {bandaFirmas && firmasDoc.length > 0 && (
-        <div
-          className={`banner-firmas${
-            firmasDoc.every((f) => estadoDeFirma(f).ok) ? "" : " mal"
-          }`}
-        >
+        <div className={`banner-firmas ${estadoBanda(firmasDoc)}`}>
           <button
             className="banner-firmas-texto"
             title="Ver las firmas del documento"

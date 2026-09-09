@@ -2,7 +2,7 @@
  * Tipos y utilidades compartidos entre el visor (App) y las páginas
  * individuales (components/Pagina).
  */
-import type { Rgba } from "./api";
+import type { EstadoFirma, Rgba } from "./api";
 
 /** La app corre en macOS: cambia el modificador de los atajos y cómo se
  *  escriben. Un solo sitio para la pregunta, que se hace en varios. */
@@ -528,19 +528,41 @@ export const FIRMA_VACIA: FirmaDraft = {
 
 /** Lo que se ha comprobado de una firma, dicho en llano. Nunca «CMS», ni
  *  «ByteRange», ni «digest»: el usuario quiere saber si el documento es el
- *  que se firmó, no cómo se ha averiguado. */
+ *  que se firmó, no cómo se ha averiguado.
+ *
+ *  Tres niveles, como Acrobat: bien, mal y **«no se ha podido comprobar»**.
+ *  El tercero es el que faltaba: una firma ECDSA o con SHA-512 salía en rojo
+ *  acusando de manipulación un documento intacto. Acrobat nunca dice «no
+ *  válida» cuando lo que pasa es que no sabe. */
 export function estadoDeFirma(f: {
+  estado?: EstadoFirma;
   covers_whole_file: boolean;
   digest_ok: boolean;
-}): { ok: boolean; texto: string } {
+}): { nivel: NivelFirma; texto: string } {
+  if (f.estado === "desconocido") {
+    return {
+      nivel: "duda",
+      texto:
+        "No se ha podido comprobar la firma: usa un tipo de firma que Vitela todavía no sabe leer",
+    };
+  }
   if (!f.covers_whole_file) {
-    return { ok: false, texto: "Se ha añadido contenido después de firmarse" };
+    return {
+      nivel: "mal",
+      texto: "Se ha añadido contenido después de firmarse",
+    };
   }
-  if (!f.digest_ok) {
-    return { ok: false, texto: "El documento ha cambiado después de firmarse" };
+  if (f.estado === "modificado" || !f.digest_ok) {
+    return {
+      nivel: "mal",
+      texto: "El documento ha cambiado después de firmarse",
+    };
   }
-  return { ok: true, texto: "El documento no ha cambiado desde la firma" };
+  return { nivel: "ok", texto: "El documento no ha cambiado desde la firma" };
 }
+
+/** Cómo se pinta cada estado: verde, rojo o neutro. */
+export type NivelFirma = "ok" | "mal" | "duda";
 
 /** «9 de septiembre de 2026» a partir de un ISO 8601; el texto tal cual si
  *  no se puede leer como fecha. */
