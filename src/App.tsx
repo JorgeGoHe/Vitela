@@ -36,6 +36,7 @@ import {
   duplicatePage,
   insertPdfAt,
   deletePages,
+  extractEachPage,
   extractPages,
   getDocumentAnnotations,
   listRecent,
@@ -2170,21 +2171,20 @@ function App() {
           title: "Carpeta para los PDF extraídos",
         });
         if (typeof dir !== "string") return;
-        const sep = dir.includes("\\") ? "\\" : "/";
-        for (const i of idx) {
-          await extractPages({
-            workPath,
-            pageIndices: [i],
-            destPath: `${dir}${sep}pagina-${i + 1}.pdf`,
-            deleteAfter: false,
-          });
-        }
+        // una sola operación: escribe todos los ficheros y borra dentro de la
+        // misma mutación, así que un fallo a mitad no deja el trabajo hecho a
+        // medias (antes era un bucle de N llamadas y un borrado aparte)
+        const rutas = await extractEachPage({
+          workPath,
+          pageIndices: idx,
+          destDir: dir,
+          deleteAfter: opts.borrar,
+        });
         if (opts.borrar) {
-          const count = await deletePages(workPath, idx);
           setPaginasSel(new Set());
-          afterMutation(count);
+          afterMutation(pageCount - idx.length);
         }
-        setNotice(`${plural(idx.length, "PDF escrito", "PDF escritos")} en ${dir}`);
+        setNotice(`${plural(rutas.length, "PDF escrito", "PDF escritos")} en ${dir}`);
         return;
       }
       const dest = await save({

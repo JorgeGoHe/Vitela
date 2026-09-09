@@ -221,6 +221,19 @@ export function extractPages(args: {
   return invoke("extract_pages", { ...args });
 }
 
+/** «Un fichero por página»: escribe `pagina-N.pdf` por cada índice dentro de
+ *  `destDir` y, con `deleteAfter`, las quita del documento DENTRO de la misma
+ *  mutación. Un fallo a mitad no deja el trabajo hecho a medias ni dos pasos
+ *  de deshacer, y son 200 páginas en un viaje y no en doscientos. */
+export function extractEachPage(args: {
+  workPath: string;
+  pageIndices: number[];
+  destDir: string;
+  deleteAfter?: boolean;
+}): Promise<string[]> {
+  return invoke("extract_each_page", { deleteAfter: false, ...args });
+}
+
 /** Sustituye las páginas `pageIndices` por las de otro PDF (todas, o las
  *  de `otherIndices`), conservando el resto. Devuelve el total. */
 export function replacePages(args: {

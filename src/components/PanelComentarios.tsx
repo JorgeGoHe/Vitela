@@ -52,12 +52,27 @@ export default function PanelComentarios({
     return [...vistos.keys()].sort((a, b) => a.localeCompare(b, "es"));
   }, [comentarios]);
 
-  // los autores que hay de verdad, igual que con los tipos
+  // los autores que hay de verdad, igual que con los tipos. «Sin autor» es
+  // uno más: sin él, filtrar por los comentarios que no traen `/T` era
+  // imposible aunque la lista los agrupase con ese nombre
   const autores = useMemo(() => {
     const vistos = new Set<string>();
-    for (const c of comentarios) if (c.author) vistos.add(c.author);
+    for (const c of comentarios) vistos.add(c.author || "Sin autor");
     return [...vistos].sort((a, b) => a.localeCompare(b, "es"));
   }, [comentarios]);
+
+  // Ningún filtro puede quedarse sin salida: al borrar el último comentario
+  // de un autor su opción desaparecía del desplegable y el panel se quedaba
+  // en «Ningún comentario con ese filtro» sin nada que pulsar
+  useEffect(() => {
+    if (filtro !== "todos" && !tipos.includes(filtro)) setFiltro("todos");
+  }, [filtro, tipos, setFiltro]);
+
+  useEffect(() => {
+    if (filtroAutor !== "todos" && !autores.includes(filtroAutor)) {
+      setFiltroAutor("todos");
+    }
+  }, [filtroAutor, autores, setFiltroAutor]);
 
   const lista = comentarios.filter(
     (c) =>
@@ -131,7 +146,19 @@ export default function PanelComentarios({
   }
 
   return (
-    <div className="com-panel" ref={panelRef} tabIndex={-1}>
+    <div
+      className="com-panel"
+      ref={panelRef}
+      tabIndex={-1}
+      onKeyDown={(e) => {
+        // con un filtro puesto, Esc es la salida rápida; sin él la tecla
+        // sigue hasta la app, donde sale de la herramienta
+        if (e.key !== "Escape" || !filtrando) return;
+        e.stopPropagation();
+        setFiltro("todos");
+        setFiltroAutor("todos");
+      }}
+    >
       {comentarios.length > 0 && (
         <span className="com-total dato">
           {filtrando
@@ -139,7 +166,7 @@ export default function PanelComentarios({
             : plural(comentarios.length, "comentario", "comentarios")}
         </span>
       )}
-      {tipos.length > 1 && (
+      {comentarios.length > 0 && (
         <select
           className="size-select com-filtro"
           aria-label="Filtrar los comentarios por tipo"
@@ -154,7 +181,7 @@ export default function PanelComentarios({
           ))}
         </select>
       )}
-      {autores.length > 1 && (
+      {comentarios.length > 0 && (
         <select
           className="size-select com-filtro"
           aria-label="Filtrar los comentarios por autor"
@@ -173,7 +200,9 @@ export default function PanelComentarios({
         <p className="sign-empty">Todavía no hay comentarios.</p>
       )}
       {comentarios.length > 0 && lista.length === 0 && (
-        <p className="sign-empty">Ningún comentario con ese filtro.</p>
+        <p className="sign-empty">
+          Ningún comentario con ese filtro. Esc lo quita.
+        </p>
       )}
       {lista.length > 0 && (
         <p className="opt-hint com-pista">
