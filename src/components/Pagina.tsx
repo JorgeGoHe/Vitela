@@ -882,11 +882,15 @@ function Pagina({
       const d = anotaciones.calloutLiveRef.current;
       anotaciones.calloutLiveRef.current = null;
       if (!start) return;
-      // un clic simple vale: la caja sale al lado de la punta, para no
-      // obligar a arrastrar cuando solo se quiere señalar
-      anotaciones.setCalloutDraft(
-        d ?? cajaLlamada(start, { x: start.x + 60, y: start.y + 40 }, size),
-      );
+      if (d) {
+        // hubo arrastre: la recta de siempre, punta y caja en un gesto
+        anotaciones.limpiaPuntosCallout();
+        anotaciones.setCalloutDraft(d);
+        return;
+      }
+      // clic sin arrastre: la llamada por puntos, que es la que puede
+      // llevar codo (punta · codo · caja), como la dibuja Acrobat
+      anotaciones.clicCallout(start);
       return;
     }
     if (mode === "freetext") {

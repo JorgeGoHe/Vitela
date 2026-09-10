@@ -539,9 +539,12 @@ export function addCallout(args: {
   punta: [number, number];
   text: string;
   color: Rgba;
+  /** Punto intermedio: con él la `/CL` es de tres puntos y la línea sale
+   *  acodada, como la dibuja Acrobat. Sin él, la recta de siempre. */
+  codo?: [number, number] | null;
   author?: string | null;
 }): Promise<void> {
-  return invoke("add_callout", { author: null, ...args });
+  return invoke("add_callout", { codo: null, author: null, ...args });
 }
 
 /** Lo que se ha llevado un pase de goma: cuántos trazos ha tocado y de

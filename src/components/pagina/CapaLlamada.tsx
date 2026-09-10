@@ -21,6 +21,7 @@ export default function CapaLlamada({
   const {
     calloutDraft,
     setCalloutDraft,
+    calloutPuntos,
     commitCallout,
     gomaRect,
     gomaPos,
@@ -28,16 +29,52 @@ export default function CapaLlamada({
 
   return (
     <>
+      {/* los puntos ya puestos a clics: la punta y, si se ha puesto, el
+          codo. Sin esto el segundo clic no se ve en ninguna parte */}
+      {mode === "callout" && !calloutDraft && calloutPuntos.length > 0 && (
+        <svg className="callout-preview">
+          {calloutPuntos.length > 1 && (
+            <line
+              x1={calloutPuntos[0].x * scale}
+              y1={calloutPuntos[0].y * scale}
+              x2={calloutPuntos[1].x * scale}
+              y2={calloutPuntos[1].y * scale}
+              stroke={tool.freeTextColor}
+              strokeWidth={1.5}
+            />
+          )}
+          {calloutPuntos.map((p, i) => (
+            <circle
+              key={i}
+              cx={p.x * scale}
+              cy={p.y * scale}
+              r={3.5}
+              fill={tool.freeTextColor}
+            />
+          ))}
+        </svg>
+      )}
       {mode === "callout" && calloutDraft && (
         <>
           {/* la línea y la punta: lo que señala la llamada se ve desde el
               primer arrastre, no al guardar */}
           <svg className="callout-preview">
-            <line
-              x1={calloutDraft.punta.x * scale}
-              y1={calloutDraft.punta.y * scale}
-              x2={(calloutDraft.x + calloutDraft.w / 2) * scale}
-              y2={(calloutDraft.y + calloutDraft.h / 2) * scale}
+            {/* con codo la línea va en dos tramos, como la `/CL` de tres
+                puntos que se guarda */}
+            <polyline
+              points={[
+                [calloutDraft.punta.x, calloutDraft.punta.y],
+                ...(calloutDraft.codo
+                  ? [[calloutDraft.codo.x, calloutDraft.codo.y]]
+                  : []),
+                [
+                  calloutDraft.x + calloutDraft.w / 2,
+                  calloutDraft.y + calloutDraft.h / 2,
+                ],
+              ]
+                .map(([px, py]) => `${px * scale},${py * scale}`)
+                .join(" ")}
+              fill="none"
               stroke={tool.freeTextColor}
               strokeWidth={1.5}
             />

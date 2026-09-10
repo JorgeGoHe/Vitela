@@ -575,8 +575,8 @@ export default function OpcionesHerramienta({
             ))}
           </select>
           <span className="opt-hint">
-            Clic donde quieres que señale y arrastra hasta donde va el texto ·
-            Esc cancela
+            Arrastra de lo que señala a donde va el texto · a clics: punta,
+            codo y caja · Esc cancela
           </span>
         </div>
       )}

@@ -34,7 +34,13 @@ import {
 } from "../../tipos";
 import type { MarcaRellenar, ToolProps } from "../../components/Pagina";
 import type { SeleccionTexto } from "./useSeleccionTexto";
-import { pagePoint, puntoAPagina, puntoEnCapa, rectAPagina } from "./geometria";
+import {
+  cajaLlamada,
+  pagePoint,
+  puntoAPagina,
+  puntoEnCapa,
+  rectAPagina,
+} from "./geometria";
 
 /**
  * Anotaciones de la página: la lista (iconos de nota, overlays de marcas,
@@ -120,15 +126,28 @@ export function useAnotaciones(ctx: {
   const freeTextStartRef = useRef<{ x: number; y: number } | null>(null);
   const freeTextLiveRef = useRef<(Rect & { text: string }) | null>(null);
 
-  // llamada (callout): la punta la marca el clic y el arrastre lleva la
-  // caja del texto, que es el gesto de Acrobat
+  // llamada (callout): arrastrar da la recta de siempre —la punta donde
+  // empieza el arrastre y la caja donde acaba—; a clics se pone además el
+  // **codo**, que es la línea de tres tramos que dibuja Acrobat: primer
+  // clic la punta, segundo el codo, tercero la caja
   const [calloutDraft, setCalloutDraft] = useState<
-    (Rect & { punta: { x: number; y: number }; text: string }) | null
+    | (Rect & {
+        punta: { x: number; y: number };
+        codo?: { x: number; y: number } | null;
+        text: string;
+      })
+    | null
   >(null);
   const calloutStartRef = useRef<{ x: number; y: number } | null>(null);
   const calloutLiveRef = useRef<
     (Rect & { punta: { x: number; y: number }; text: string }) | null
   >(null);
+  // los puntos ya puestos a clics (punta, y luego codo); el ref es el que
+  // leen los despachadores de ratón, que no ven el estado del render
+  const [calloutPuntos, setCalloutPuntos] = useState<
+    { x: number; y: number }[]
+  >([]);
+  const calloutPuntosRef = useRef<{ x: number; y: number }[]>([]);
 
   // goma de borrar: la zona que se va a llevar (lo que se ve es lo que se
   // borra) y la posición del cursor redondo
@@ -162,6 +181,8 @@ export function useAnotaciones(ctx: {
     setCalloutDraft(null);
     calloutStartRef.current = null;
     calloutLiveRef.current = null;
+    calloutPuntosRef.current = [];
+    setCalloutPuntos([]);
     setGomaRect(null);
     setGomaPos(null);
     gomaStartRef.current = null;
@@ -303,6 +324,29 @@ export function useAnotaciones(ctx: {
     }
   }
 
+  /** Un clic en modo llamada cuando no ha habido arrastre: pone la punta,
+   *  luego el codo y luego la caja. Con dos clics y un arrastre sale la
+   *  recta de siempre, así que quien no quiera codo no se entera. */
+  function clicCallout(p: { x: number; y: number }) {
+    const puntos = [...calloutPuntosRef.current, p];
+    if (puntos.length < 3) {
+      calloutPuntosRef.current = puntos;
+      setCalloutPuntos(puntos);
+      return;
+    }
+    const [punta, codo, caja] = puntos;
+    calloutPuntosRef.current = [];
+    setCalloutPuntos([]);
+    setCalloutDraft({ ...cajaLlamada(punta, caja, size), codo });
+  }
+
+  /** Olvida los puntos a medio poner (Esc, o un arrastre que manda). */
+  function limpiaPuntosCallout() {
+    if (calloutPuntosRef.current.length === 0) return;
+    calloutPuntosRef.current = [];
+    setCalloutPuntos([]);
+  }
+
   /** Crea la llamada con lo escrito dentro (⌘Enter o «Añadir»). La caja se
    *  parte en líneas al ancho pedido, igual que el cuadro de texto: la
    *  apariencia que se guarda es la que se ve al escribir. */
@@ -316,6 +360,10 @@ export function useAnotaciones(ctx: {
     const lineas = ajustaLineas(d.text, d.w, tool.freeTextSize);
     const alto = Math.max(d.h, altoCuadro(lineas.length, tool.freeTextSize));
     const punta = puntoAPagina(d.punta, size);
+    const codoEnPagina = (c: { x: number; y: number }): [number, number] => {
+      const q = puntoAPagina(c, size);
+      return [q.x, q.y];
+    };
     try {
       await addCallout({
         workPath,
@@ -324,6 +372,7 @@ export function useAnotaciones(ctx: {
         punta: [punta.x, punta.y],
         text: lineas.join("\n"),
         color: hexToRgba(tool.freeTextColor),
+        codo: d.codo ? codoEnPagina(d.codo) : null,
         author: autorComentarios(),
       });
       setCalloutDraft(null);
@@ -705,6 +754,9 @@ export function useAnotaciones(ctx: {
     setCalloutDraft,
     calloutStartRef,
     calloutLiveRef,
+    calloutPuntos,
+    clicCallout,
+    limpiaPuntosCallout,
     commitCallout,
     gomaRect,
     setGomaRect,
