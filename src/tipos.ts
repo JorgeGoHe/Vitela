@@ -2,7 +2,8 @@
  * Tipos y utilidades compartidos entre el visor (App) y las páginas
  * individuales (components/Pagina).
  */
-import type { EstadoFirma, Rgba } from "./api";
+import type { EstadoFirma, RangoEtiquetas, Rgba } from "./api";
+export type { RangoEtiquetas };
 
 /** La app corre en macOS: cambia el modificador de los atajos y cómo se
  *  escriben. Un solo sitio para la pregunta, que se hace en varios. */
@@ -688,6 +689,111 @@ export function cuandoLlano(iso: string): string {
     ...(d.getFullYear() === hoy.getFullYear() ? {} : { year: "numeric" }),
   });
   return `el ${fecha} a las ${hora}`;
+}
+
+/* ---- etiquetas de página (`/PageLabels`) ---- */
+
+/** Un número romano en mayúsculas, hasta 3999 (lo que da el spec). */
+function romano(n: number): string {
+  if (n <= 0) return String(n);
+  const tabla: [number, string][] = [
+    [1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"],
+    [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"],
+    [5, "V"], [4, "IV"], [1, "I"],
+  ];
+  let resto = n;
+  let out = "";
+  for (const [valor, letra] of tabla)
+    while (resto >= valor) {
+      out += letra;
+      resto -= valor;
+    }
+  return out;
+}
+
+/** La numeración por letras del spec: A..Z, luego AA, BB, CC… */
+function porLetras(n: number): string {
+  if (n <= 0) return String(n);
+  const letra = String.fromCharCode(65 + ((n - 1) % 26));
+  return letra.repeat(Math.floor((n - 1) / 26) + 1);
+}
+
+/** El tramo que manda en una página física, o null si no hay ninguno. */
+function rangoDe(
+  rangos: RangoEtiquetas[],
+  i: number,
+): RangoEtiquetas | null {
+  let elegido: RangoEtiquetas | null = null;
+  for (const r of rangos)
+    if (r.desde <= i && (!elegido || r.desde > elegido.desde)) elegido = r;
+  return elegido;
+}
+
+/** Cómo se llama la página `i` (desde 0): «ii», «A-3», «Portada»… Sin
+ *  `/PageLabels` —o con un tramo que no dice nada— es su número físico, que
+ *  es lo que hace cualquier visor. */
+export function etiquetaDePagina(
+  rangos: RangoEtiquetas[],
+  i: number,
+): string {
+  const r = rangoDe(rangos, i);
+  if (!r) return String(i + 1);
+  const n = Math.max(1, r.empieza_en) + (i - r.desde);
+  const cuerpo =
+    r.estilo === "arabigo"
+      ? String(n)
+      : r.estilo === "romano"
+        ? romano(n)
+        : r.estilo === "romano_min"
+          ? romano(n).toLowerCase()
+          : r.estilo === "letra"
+            ? porLetras(n)
+            : r.estilo === "letra_min"
+              ? porLetras(n).toLowerCase()
+              : "";
+  const texto = `${r.prefijo}${cuerpo}`;
+  return texto || String(i + 1);
+}
+
+/** Cómo se enseña una página cuando su etiqueta no es su número físico:
+ *  «ii (2)», como Acrobat. Si coinciden, solo el número. */
+export function pagineoLlano(rangos: RangoEtiquetas[], i: number): string {
+  const etiqueta = etiquetaDePagina(rangos, i);
+  return etiqueta === String(i + 1) ? etiqueta : `${etiqueta} (${i + 1})`;
+}
+
+/** Aplica un tramo de numeración a las páginas `desde`..`hasta` y devuelve
+ *  la lista entera, que es lo que escribe `set_page_labels`. Lo que va
+ *  detrás del tramo conserva la numeración que tenía: sin eso, numerar el
+ *  prólogo en romanos renumeraba el libro entero. */
+export function aplicaRangoEtiquetas(
+  rangos: RangoEtiquetas[],
+  desde: number,
+  hasta: number,
+  nuevo: Omit<RangoEtiquetas, "desde">,
+  pageCount: number,
+): RangoEtiquetas[] {
+  // qué numeración tenía la página de después del tramo, para reponerla
+  const siguiente = hasta + 1;
+  let cola: RangoEtiquetas | null = null;
+  if (siguiente < pageCount && !rangos.some((r) => r.desde === siguiente)) {
+    const antes = rangoDe(rangos, siguiente);
+    cola = antes
+      ? {
+          ...antes,
+          desde: siguiente,
+          empieza_en: antes.empieza_en + (siguiente - antes.desde),
+        }
+      : {
+          desde: siguiente,
+          estilo: "arabigo",
+          prefijo: "",
+          empieza_en: siguiente + 1,
+        };
+  }
+  const resto = rangos.filter((r) => r.desde < desde || r.desde > hasta);
+  const lista = [...resto, { ...nuevo, desde }, ...(cola ? [cola] : [])];
+  return lista.sort((a, b) => a.desde - b.desde);
 }
 
 /* ---- opciones de búsqueda (persistidas en localStorage) ---- */

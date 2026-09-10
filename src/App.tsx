@@ -97,6 +97,8 @@ import {
   type EstadoComentario,
   flattenPdf,
   getMetadata,
+  getPageLabels,
+  setPageLabels,
   historyState,
   removeEncryption,
   TODO_PERMITIDO,
@@ -127,6 +129,9 @@ import {
   cargaZoom,
   cargaVista,
   cuandoLlano,
+  etiquetaDePagina,
+  pagineoLlano,
+  type RangoEtiquetas,
   estadoDeFirma,
   fechaLarga,
   type NivelFirma,
@@ -197,6 +202,7 @@ import DialogoCombinar from "./components/DialogoCombinar";
 import DialogoImagenes from "./components/DialogoImagenes";
 import DialogoAtajos from "./components/DialogoAtajos";
 import DialogoWord from "./components/DialogoWord";
+import DialogoEtiquetas from "./components/DialogoEtiquetas";
 import "./App.css";
 
 const BASE_WIDTH = 900;
@@ -494,6 +500,11 @@ function App() {
     onError: (e) => setError(String(e)),
   });
   const refrescarHistorial = historial.refrescar;
+  // etiquetas de página (`/PageLabels`): cómo se llama cada hoja —«ii»,
+  // «A-3»— en la píldora, en las miniaturas y en «Ir a la página». Sin
+  // `/PageLabels` la lista viene vacía y todo se llama por su número
+  const [etiquetas, setEtiquetas] = useState<RangoEtiquetas[]>([]);
+  const [etiquetasOpen, setEtiquetasOpen] = useState(false);
   const [wmOpen, setWmOpen] = useState(false);
   const [marginalAsk, setMarginalAsk] = useState<{
     zona: "watermark" | "header" | "footer";
@@ -1555,6 +1566,52 @@ function App() {
       cancelled = true;
     };
   }, [workPath, docVersion]);
+
+  // Etiquetas de página: van con el documento y cambian con cualquier
+  // mutación que toque las páginas, así que cuelgan de `docVersion`
+  useEffect(() => {
+    if (!workPath) {
+      setEtiquetas([]);
+      return;
+    }
+    let cancelled = false;
+    getPageLabels(workPath)
+      .then((r) => {
+        if (!cancelled) setEtiquetas(r);
+      })
+      .catch(() => {
+        if (!cancelled) setEtiquetas([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workPath, docVersion]);
+
+  /** Cómo se llama la página `i`: su etiqueta si el documento la trae, y si
+   *  no, su número. */
+  const nombreDePagina = useCallback(
+    (i: number) => etiquetaDePagina(etiquetas, i),
+    [etiquetas],
+  );
+
+  /** Escribe la numeración entera («Numerar páginas…»). */
+  async function aplicarEtiquetas(rangos: RangoEtiquetas[]) {
+    if (!workPath) return;
+    setEtiquetasOpen(false);
+    try {
+      await setPageLabels(workPath, rangos);
+      setEtiquetas(rangos);
+      setModified(true);
+      refrescarHistorial();
+      setNotice(
+        rangos.length === 0
+          ? `Numeración quitada: las páginas vuelven a llamarse 1 a ${pageCount} · ${MOD}Z lo deshace`
+          : `Páginas numeradas · ${MOD}Z lo deshace`,
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   // Comentarios de todo el documento (pestaña del sidebar): se recargan con
   // la misma versión que invalida el caché de renders y con cada anotación
@@ -4445,6 +4502,16 @@ function App() {
           onClose={() => setDescartarAsk(null)}
         />
       )}
+      {etiquetasOpen && (
+        <DialogoEtiquetas
+          pageCount={pageCount}
+          pageIndex={pageIndex}
+          rangos={etiquetas}
+          onConfirm={aplicarEtiquetas}
+          onQuitar={() => aplicarEtiquetas([])}
+          onClose={() => setEtiquetasOpen(false)}
+        />
+      )}
       {wordAsk && (
         <DialogoWord
           pageCount={pageCount}
@@ -4943,6 +5010,8 @@ function App() {
                 duplicatePageAt={duplicatePageAt}
                 blankPageAfter={blankPageAfter}
                 deletePage={deletePage}
+                nombreDePagina={nombreDePagina}
+                onNumerar={() => setEtiquetasOpen(true)}
               />
             )}
           </aside>
@@ -5116,17 +5185,25 @@ function App() {
                 <button
                   className="btn pill-boton"
                   title={`Ir a la página (⇧${MOD}N)`}
-                  aria-label="Ir a la página"
+                  aria-label={`Ir a la página · ahora ${pagineoLlano(
+                    etiquetas,
+                    paginaMostrada,
+                  )} de ${pageCount}`}
                   onClick={() => setPageDraft(String(paginaMostrada + 1))}
                 >
-                  {paginaMostrada + 1} / {pageCount}
+                  {/* con `/PageLabels` manda el nombre de la página y el
+                      número físico va detrás entre paréntesis, como Acrobat */}
+                  {pagineoLlano(etiquetas, paginaMostrada)} / {pageCount}
                 </button>
               ) : (
                 <input
                   className="pill-input"
                   inputMode="numeric"
                   autoFocus
-                  aria-label={`Ir a la página (1 a ${pageCount})`}
+                  // el número que se escribe es siempre el FÍSICO: es el
+                  // que sabe todo el mundo y el único que no depende de la
+                  // numeración del documento
+                  aria-label={`Ir a la página (1 a ${pageCount}, por su número)`}
                   value={pageDraft}
                   onFocus={(e) => e.currentTarget.select()}
                   onChange={(e) =>

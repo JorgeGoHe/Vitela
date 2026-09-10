@@ -756,6 +756,44 @@ export function setMetadata(workPath: string, meta: Metadata): Promise<void> {
   return invoke("set_metadata", { workPath, meta });
 }
 
+/** Los estilos de numeración del spec (`/S` de `/PageLabels`), en el
+ *  vocabulario de la interfaz. `ninguno` es la página que solo lleva
+ *  prefijo (la portada, «Anexo»). */
+export type EstiloEtiqueta =
+  | "arabigo"
+  | "romano"
+  | "romano_min"
+  | "letra"
+  | "letra_min"
+  | "ninguno";
+
+/** Un tramo de la numeración: desde qué página física empieza, con qué
+ *  estilo, con qué prefijo y en qué número. Las claves van en snake_case:
+ *  es una estructura anidada dentro de la lista. */
+export type RangoEtiquetas = {
+  /** Página física en la que empieza el tramo (desde 0). */
+  desde: number;
+  estilo: EstiloEtiqueta;
+  prefijo: string;
+  empieza_en: number;
+};
+
+/** Las etiquetas de página del documento (`/PageLabels`). Un PDF que no las
+ *  trae devuelve la lista vacía, y entonces la página se llama por su
+ *  número físico. */
+export function getPageLabels(path: string): Promise<RangoEtiquetas[]> {
+  return invoke("get_page_labels", { path });
+}
+
+/** Reescribe la numeración entera. Con la lista vacía se quita el
+ *  `/PageLabels` y el documento vuelve a numerarse 1..N. */
+export function setPageLabels(
+  workPath: string,
+  rangos: RangoEtiquetas[],
+): Promise<void> {
+  return invoke("set_page_labels", { workPath, rangos });
+}
+
 export type LinkInfo = {
   x: number;
   y: number;

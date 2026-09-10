@@ -24,6 +24,8 @@ export default function PanelPaginas({
   girarLote,
   eliminarLote,
   extraerLote,
+  nombreDePagina,
+  onNumerar,
 }: {
   thumbs: (string | null)[];
   pageIndex: number;
@@ -40,6 +42,10 @@ export default function PanelPaginas({
   girarLote: (cuartos: number) => void;
   eliminarLote: () => void;
   extraerLote: () => void;
+  /** Cómo se llama la página `i`: su etiqueta (`ii`, `A-3`) o su número. */
+  nombreDePagina: (i: number) => string;
+  /** «Numerar páginas…», donde Acrobat lo pone: en Organizar páginas. */
+  onNumerar: () => void;
 }) {
   // arrastre para reordenar: la página que se lleva y el hueco donde caería
   const arrastreRef = useRef<number | null>(null);
@@ -115,6 +121,13 @@ export default function PanelPaginas({
       {seleccion.size === 0 && pageCount > 1 && (
         <p className="opt-hint paginas-pista">
           Clic selecciona la página · ⌘ o ⇧ para varias
+          <button
+            className="btn btn-link"
+            title="Poner a este documento la numeración que se lee en la portada (i, ii, A-1…)"
+            onClick={onNumerar}
+          >
+            Numerar páginas…
+          </button>
         </p>
       )}
       {seleccion.size > 0 && (
@@ -169,7 +182,7 @@ export default function PanelPaginas({
           }`}
           role="option"
           aria-selected={seleccion.has(i)}
-          aria-label={`Página ${i + 1} de ${pageCount}`}
+          aria-label={`Página ${nombreDePagina(i)} de ${pageCount}`}
           tabIndex={i === pageIndex ? 0 : -1}
           draggable
           onDragStart={(e) => {
@@ -213,7 +226,13 @@ export default function PanelPaginas({
           ) : (
             <div className="thumb-placeholder" />
           )}
-          <span className="thumb-num">{i + 1}</span>
+          {/* con etiquetas de página manda su nombre, y el número físico
+              va detrás entre paréntesis: es el que se escribe en «Ir a» */}
+          <span className="thumb-num">
+            {nombreDePagina(i) === String(i + 1)
+              ? i + 1
+              : `${nombreDePagina(i)} (${i + 1})`}
+          </span>
           <div className="thumb-actions">
             <button
               title="Subir"
