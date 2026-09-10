@@ -904,13 +904,44 @@ export function compressPdf(
   return invoke("compress_pdf", { workPath, quality, maxDpi });
 }
 
-/** Crea un campo de formulario (texto o casilla) en la página. */
+/** Los cinco tipos que crea «Preparar formulario» de Acrobat. */
+export type TipoCampo = "text" | "checkbox" | "radio" | "combo" | "list";
+
+/** Las propiedades del primer panel de Acrobat. Van dentro de una
+ *  estructura anidada, y Tauri solo pasa a snake_case los argumentos de
+ *  primer nivel del comando: por eso estas claves se escriben ya como las
+ *  espera el backend. */
+export type PropsCampo = {
+  /** Texto de ayuda al pasar el ratón (`/TU`). */
+  tooltip: string | null;
+  /** Bit 2 de `/Ff`. */
+  obligatorio: boolean;
+  /** Bit 1 de `/Ff`. */
+  solo_lectura: boolean;
+  /** `/DV`. */
+  valor_defecto: string | null;
+  /** Posición en el orden de tabulación de la página. */
+  orden_tab: number | null;
+};
+
+/** Crea un campo de formulario en la página.
+ *
+ *  En un botón de radio, los widgets del mismo `group` comparten **una sola
+ *  entrada en `/Fields`** con un `/Kids` por opción, que es lo que hace que
+ *  desmarcar los hermanos sea automático y no una casualidad; `exportValue`
+ *  es lo que queda escrito en `/V` cuando se marca esa opción. En un
+ *  desplegable o una lista, `options` son las opciones. Los tres campos van
+ *  vacíos en los tipos que no los usan. */
 export function createFormField(args: {
   workPath: string;
   pageIndex: number;
-  kind: "text" | "checkbox";
+  kind: TipoCampo;
   rect: { x: number; y: number; w: number; h: number };
   name: string;
+  group: string;
+  exportValue: string;
+  options: string[];
+  props: PropsCampo;
 }): Promise<void> {
   return invoke("create_form_field", { ...args });
 }

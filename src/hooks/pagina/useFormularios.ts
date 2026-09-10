@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "../../ipc";
-import { createFormField, deleteFormField, setFormChoice } from "../../api";
+import {
+  createFormField,
+  deleteFormField,
+  setFormChoice,
+  type TipoCampo,
+} from "../../api";
 import type { FormFieldInfo, Mode, PageSize, Rect } from "../../tipos";
 import { rectAPagina } from "./geometria";
 
@@ -48,7 +53,21 @@ export function useFormularios(ctx: {
   const formStartRef = useRef<{ x: number; y: number } | null>(null);
   const formLiveRef = useRef<Rect | null>(null);
   const [formName, setFormName] = useState("campo");
-  const [formKind, setFormKind] = useState<"text" | "checkbox">("text");
+  const [formKind, setFormKind] = useState<TipoCampo>("text");
+  // botón de radio: el grupo es la entrada de `/Fields` que comparten todas
+  // las opciones, y el valor de exportación lo que se escribe al marcar esta
+  const [formGroup, setFormGroup] = useState("");
+  const [formExport, setFormExport] = useState("");
+  // desplegable y lista: una opción por línea
+  const [formOptions, setFormOptions] = useState("");
+  // «Más opciones»: las propiedades del primer panel de Acrobat
+  const [formTooltip, setFormTooltip] = useState("");
+  const [formObligatorio, setFormObligatorio] = useState(false);
+  const [formSoloLectura, setFormSoloLectura] = useState(false);
+  // grupos de radio ya creados en esta sesión: con uno dibujado, el
+  // siguiente propone el mismo y lo dice, que es el defecto de Acrobat que
+  // NO hay que copiar (allí salen tres campos que se marcan todos a la vez)
+  const gruposRef = useRef<Set<string>>(new Set());
   // campo que hay que abrir en cuanto lleguen los datos frescos: al tabular,
   // guardar el valor recarga la lista y borraría el borrador recién puesto
   const proximoRef = useRef<number | null>(null);
@@ -183,18 +202,53 @@ export function useFormularios(ctx: {
     }
   }
 
+  /** Las opciones del desplegable o de la lista, una por línea. */
+  const opcionesCampo = formOptions
+    .split("\n")
+    .map((o) => o.trim())
+    .filter(Boolean);
+
+  /** En un radio el nombre del campo ES el del grupo: los hermanos cuelgan
+   *  de una sola entrada en `/Fields`. */
+  const esRadio = formKind === "radio";
+  const esEleccion = formKind === "combo" || formKind === "list";
+  const nombreCampo = (esRadio ? formGroup : formName).trim();
+  /** Ya hay una opción de este grupo: el diálogo lo dice antes de crear. */
+  const grupoConocido = esRadio && gruposRef.current.has(nombreCampo);
+  const puedeCrearCampo =
+    nombreCampo !== "" &&
+    (!esRadio || formExport.trim() !== "") &&
+    (!esEleccion || opcionesCampo.length > 0);
+
   async function applyFormField() {
-    if (!workPath || !formDraft || !formName.trim()) return;
+    if (!workPath || !formDraft || !puedeCrearCampo) return;
     try {
       await createFormField({
         workPath,
         pageIndex: index,
         kind: formKind,
         rect: rectAPagina(formDraft, size),
-        name: formName.trim(),
+        name: nombreCampo,
+        group: esRadio ? nombreCampo : "",
+        exportValue: esRadio ? formExport.trim() : "",
+        options: opcionesCampo,
+        props: {
+          tooltip: formTooltip.trim() || null,
+          obligatorio: formObligatorio,
+          solo_lectura: formSoloLectura,
+          valor_defecto: null,
+          orden_tab: null,
+        },
       });
       setFormDraft(null);
-      onModeChange("select");
+      if (esRadio) {
+        // el grupo se queda puesto para la opción siguiente y el valor se
+        // vacía: dibujar el segundo radio no debe repetir el primero
+        gruposRef.current.add(nombreCampo);
+        setFormExport("");
+      } else {
+        onModeChange("select");
+      }
       onPageMutated(index);
     } catch (e) {
       onError(e);
@@ -213,6 +267,22 @@ export function useFormularios(ctx: {
     setFormName,
     formKind,
     setFormKind,
+    formGroup,
+    setFormGroup,
+    formExport,
+    setFormExport,
+    formOptions,
+    setFormOptions,
+    formTooltip,
+    setFormTooltip,
+    formObligatorio,
+    setFormObligatorio,
+    formSoloLectura,
+    setFormSoloLectura,
+    esRadio,
+    esEleccion,
+    grupoConocido,
+    puedeCrearCampo,
     submitFieldDraft,
     tabulaCampo,
     elegirOpcion,

@@ -1055,6 +1055,19 @@ textarea {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
+/* obligatorio: el borde del acento, que es el que ya marca los campos */
+.form-field.obligatorio {
+  outline: 1.5px solid var(--accent);
+}
+
+/* «Más opciones» de la tarjeta del campo nuevo: plegado y callado */
+.opt-mas {
+  align-self: flex-start;
+  padding: 2px 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
 /* desplegables y listas: un select nativo encima del campo */
 .form-choice {
   border: none;

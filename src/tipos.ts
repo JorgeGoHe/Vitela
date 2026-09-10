@@ -70,6 +70,9 @@ export type FormFieldInfo = {
   /** Opciones del desplegable o de la lista; vacío en el resto. */
   options: string[];
   checked: boolean;
+  /** Campo obligatorio (bit 2 de `/Ff`). Los PDFs que no lo declaren y los
+   *  motores que no lo lean lo dejan sin definir: entonces no se pinta. */
+  required?: boolean;
   x: number;
   y: number;
   w: number;

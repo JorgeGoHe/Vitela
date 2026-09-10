@@ -1,4 +1,6 @@
 /** Campos de formulario (modo selección), su tarjeta y la del campo nuevo. */
+import { useState } from "react";
+import type { TipoCampo } from "../../api";
 import type { Mode } from "../../tipos";
 import { clampCardLeft } from "../../hooks/pagina/geometria";
 import type { Formularios } from "../../hooks/pagina/useFormularios";
@@ -15,6 +17,15 @@ type Props = {
 
 /** Los que se rellenan eligiendo, no escribiendo. */
 const ELECCION = ["ComboBox", "ListBox"];
+
+/** Los cinco tipos de «Preparar formulario», con su nombre en español. */
+const TIPOS_CAMPO: [TipoCampo, string][] = [
+  ["text", "Texto"],
+  ["checkbox", "Casilla"],
+  ["radio", "Botón de radio"],
+  ["combo", "Desplegable"],
+  ["list", "Lista"],
+];
 
 export default function CapaFormularios({
   mode,
@@ -33,6 +44,22 @@ export default function CapaFormularios({
     setFormName,
     formKind,
     setFormKind,
+    formGroup,
+    setFormGroup,
+    formExport,
+    setFormExport,
+    formOptions,
+    setFormOptions,
+    formTooltip,
+    setFormTooltip,
+    formObligatorio,
+    setFormObligatorio,
+    formSoloLectura,
+    setFormSoloLectura,
+    esRadio,
+    esEleccion,
+    grupoConocido,
+    puedeCrearCampo,
     submitFieldDraft,
     tabulaCampo,
     elegirOpcion,
@@ -40,6 +67,10 @@ export default function CapaFormularios({
     removeFormField,
     applyFormField,
   } = formularios;
+  // «Más opciones» va plegado: quien crea un campo suele querer solo el
+  // nombre, y las propiedades del panel de Acrobat estorban hasta que hacen
+  // falta
+  const [masOpciones, setMasOpciones] = useState(false);
   return (
     <>
       {mode === "select" &&
@@ -87,11 +118,14 @@ export default function CapaFormularios({
           return (
             <div
               key={`f${f.annot_index}`}
-              className={`form-field${resaltarCampos ? " resaltado" : ""}`}
+              className={`form-field${resaltarCampos ? " resaltado" : ""}${
+                f.required ? " obligatorio" : ""
+              }`}
               role="button"
               tabIndex={0}
-              title={f.name}
-              aria-label={f.name}
+              title={f.required ? `${f.name} · obligatorio` : f.name}
+              aria-label={f.required ? `${f.name}, obligatorio` : f.name}
+              aria-required={f.required || undefined}
               style={caja}
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => {
@@ -179,28 +213,115 @@ export default function CapaFormularios({
                 type="text"
                 className="stamp-input"
                 autoFocus
-                placeholder="Nombre del campo"
-                value={formName}
-                onChange={(e) => setFormName(e.target.value)}
+                aria-label={esRadio ? "Nombre del grupo" : "Nombre del campo"}
+                placeholder={
+                  esRadio ? "Nombre del grupo (sexo)" : "Nombre del campo"
+                }
+                value={esRadio ? formGroup : formName}
+                onChange={(e) =>
+                  esRadio
+                    ? setFormGroup(e.target.value)
+                    : setFormName(e.target.value)
+                }
               />
               <select
                 className="size-select"
+                aria-label="Tipo de campo"
                 value={formKind}
-                onChange={(e) =>
-                  setFormKind(e.target.value as "text" | "checkbox")
-                }
+                onChange={(e) => setFormKind(e.target.value as TipoCampo)}
               >
-                <option value="text">Texto</option>
-                <option value="checkbox">Casilla</option>
+                {TIPOS_CAMPO.map(([v, etiqueta]) => (
+                  <option key={v} value={v}>
+                    {etiqueta}
+                  </option>
+                ))}
               </select>
             </div>
+            {esRadio && (
+              <>
+                <div className="card-row">
+                  <input
+                    type="text"
+                    className="stamp-input"
+                    aria-label="Valor de esta opción"
+                    placeholder="Valor de esta opción (Mujer)"
+                    value={formExport}
+                    onChange={(e) => setFormExport(e.target.value)}
+                  />
+                </div>
+                {/* el defecto de Acrobat que NO se copia: allí tres radios
+                    sueltos se marcan todos a la vez y nadie lo avisa */}
+                {grupoConocido && (
+                  <span className="opt-hint">
+                    Se añadirá al grupo «{formGroup.trim()}»; solo se podrá
+                    marcar uno.
+                  </span>
+                )}
+              </>
+            )}
+            {esEleccion && (
+              <textarea
+                className="stamp-input"
+                rows={3}
+                aria-label="Opciones, una por línea"
+                placeholder="Una opción por línea"
+                value={formOptions}
+                onChange={(e) => setFormOptions(e.target.value)}
+              />
+            )}
+            <button
+              className="btn opt-mas"
+              aria-expanded={masOpciones}
+              onClick={() => setMasOpciones((v) => !v)}
+            >
+              {masOpciones ? "▾" : "▸"} Más opciones
+            </button>
+            {masOpciones && (
+              <>
+                <div className="card-row">
+                  <input
+                    type="text"
+                    className="stamp-input"
+                    aria-label="Texto de ayuda"
+                    placeholder="Texto de ayuda al pasar el ratón"
+                    value={formTooltip}
+                    onChange={(e) => setFormTooltip(e.target.value)}
+                  />
+                </div>
+                <label className="opt-check">
+                  <input
+                    type="checkbox"
+                    checked={formObligatorio}
+                    onChange={(e) => setFormObligatorio(e.target.checked)}
+                  />
+                  Obligatorio
+                </label>
+                <label className="opt-check">
+                  <input
+                    type="checkbox"
+                    checked={formSoloLectura}
+                    onChange={(e) => setFormSoloLectura(e.target.checked)}
+                  />
+                  Solo lectura
+                </label>
+              </>
+            )}
             <div className="card-actions">
               <button
                 className="btn btn-primary"
-                disabled={!formName.trim()}
+                disabled={!puedeCrearCampo}
+                title={
+                  puedeCrearCampo
+                    ? undefined
+                    : esRadio
+                      ? "Pon el nombre del grupo y el valor de esta opción"
+                      : esEleccion
+                        ? "Escribe al menos una opción"
+                        : "Ponle un nombre al campo"
+                }
                 onClick={applyFormField}
               >
-                Crear campo
+                {esRadio ? "Crear la opción" : "Crear campo"}
               </button>
               <button className="btn" onClick={() => setFormDraft(null)}>
                 Cancelar
