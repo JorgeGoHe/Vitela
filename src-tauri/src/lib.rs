@@ -1115,6 +1115,7 @@ pub fn run() {
             anotaciones2::add_stamp,
             anotaciones2::add_free_text,
             anotaciones2::add_callout,
+            anotaciones2::add_measure,
             anotaciones2::erase_ink,
             anotaciones2::erase_ink_area,
             anotaciones2::transform_annotation,

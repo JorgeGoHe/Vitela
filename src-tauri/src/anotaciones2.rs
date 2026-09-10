@@ -823,6 +823,234 @@ pub fn add_callout(
     })
 }
 
+/// Deja puesta una medida como **comentario**: una anotación `/Line` (dos
+/// puntos), `/PolyLine` (perímetro) o `/Polygon` (área) con la cifra en su
+/// `/Contents` y su `/AP` dibujado a mano.
+///
+/// Es lo que hace Acrobat, y la diferencia se nota: la medida sale en el
+/// panel de comentarios, se borra con Supr como cualquier otro y **no
+/// ensucia el texto del documento**. Vitela la escribía como contenido de
+/// página (`add_shape` más `add_text_block`): no aparecía en Comentarios,
+/// no se podía quitar como comentario, `get_text_blocks` devolvía «150,44
+/// m» como texto del documento y hacían falta **dos** ⌘Z aunque la banda
+/// prometiera uno. Aquí es una sola mutación.
+///
+/// `points` va en el espacio propio de la página, como el resto de los
+/// comandos que escriben. No se escribe un diccionario `/Measure`: la
+/// escala la fija el usuario por documento en la interfaz, y un `/Measure`
+/// sin escala de verdad diría que el PDF trae una que no trae.
+#[tauri::command(async)]
+pub fn add_measure(
+    work_path: String,
+    page_index: u16,
+    points: Vec<[f32; 2]>,
+    text: String,
+    color: [u8; 4],
+    closed: Option<bool>,
+    author: Option<String>,
+) -> Result<(), String> {
+    if points.len() < 2 {
+        return Err("Una medida necesita al menos dos puntos".into());
+    }
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Err("La medida está vacía".into());
+    }
+    let cerrada = closed.unwrap_or(false) && points.len() > 2;
+    let autor = crate::anotaciones::autor_o_sistema(author);
+    let fecha = crate::anotaciones::fecha_pdf_ahora();
+    crate::cirugia(&work_path, move |doc| {
+        use lopdf::{Dictionary, Object};
+        let page_id = *doc
+            .get_pages()
+            .get(&(page_index as u32 + 1))
+            .ok_or("Página fuera de rango")?;
+        let geo = crate::formularios2::geo_pagina(doc, page_id)?;
+        let pdf: Vec<(f32, f32)> = points.iter().map(|p| geo.ui_a_pdf(p[0], p[1])).collect();
+
+        const SIZE: f32 = 10.0;
+        // el /Rect abarca el dibujo, las flechas y la etiqueta
+        let aire = SIZE * 1.6;
+        let x0 = pdf.iter().map(|p| p.0).fold(f32::MAX, f32::min) - aire;
+        let y0 = pdf.iter().map(|p| p.1).fold(f32::MAX, f32::min) - aire;
+        let x1 = pdf.iter().map(|p| p.0).fold(f32::MIN, f32::max) + aire;
+        let y1 = pdf.iter().map(|p| p.1).fold(f32::MIN, f32::max) + aire;
+        let (r, g, b) = (
+            color[0] as f32 / 255.0,
+            color[1] as f32 / 255.0,
+            color[2] as f32 / 255.0,
+        );
+
+        let ap_id = apariencia_medida(doc, [x0, y0, x1, y1], &pdf, cerrada, &text, [r, g, b]);
+
+        let (subtipo, it) = match (pdf.len(), cerrada) {
+            (2, _) => (&b"Line"[..], &b"LineDimension"[..]),
+            (_, true) => (&b"Polygon"[..], &b"PolygonDimension"[..]),
+            _ => (&b"PolyLine"[..], &b"PolyLineDimension"[..]),
+        };
+        let mut annot = Dictionary::new();
+        annot.set("Type", Object::Name(b"Annot".to_vec()));
+        annot.set("Subtype", Object::Name(subtipo.to_vec()));
+        // `/IT` es lo que distingue una medida de una raya cualquiera, y es
+        // lo que mira Acrobat al abrirla
+        annot.set("IT", Object::Name(it.to_vec()));
+        annot.set(
+            "Rect",
+            Object::Array(vec![x0.into(), y0.into(), x1.into(), y1.into()]),
+        );
+        if pdf.len() == 2 {
+            annot.set(
+                "L",
+                Object::Array(vec![
+                    pdf[0].0.into(),
+                    pdf[0].1.into(),
+                    pdf[1].0.into(),
+                    pdf[1].1.into(),
+                ]),
+            );
+        } else {
+            annot.set(
+                "Vertices",
+                Object::Array(pdf.iter().flat_map(|p| [p.0.into(), p.1.into()]).collect()),
+            );
+        }
+        if !cerrada {
+            // los remates de los extremos: es lo que dibuja la cota
+            annot.set(
+                "LE",
+                Object::Array(vec![
+                    Object::Name(b"OpenArrow".to_vec()),
+                    Object::Name(b"OpenArrow".to_vec()),
+                ]),
+            );
+        }
+        // la cifra va en el /Contents: es lo que enseña el panel de
+        // comentarios y lo que sale en el post-it de cualquier visor
+        annot.set("Contents", crate::documento::cadena_pdf(&text));
+        annot.set("C", Object::Array(vec![r.into(), g.into(), b.into()]));
+        annot.set("F", 4i64); // Print
+        annot.set("T", crate::documento::cadena_pdf(&autor));
+        annot.set("CreationDate", Object::string_literal(fecha.clone()));
+        annot.set("M", Object::string_literal(fecha));
+        let mut bs = Dictionary::new();
+        bs.set("W", Object::Integer(1));
+        bs.set("S", Object::Name(b"S".to_vec()));
+        annot.set("BS", Object::Dictionary(bs));
+        let mut ap = Dictionary::new();
+        ap.set("N", Object::Reference(ap_id));
+        annot.set("AP", Object::Dictionary(ap));
+        let annot_id = doc.add_object(annot);
+        crate::formularios2::anade_a_annots(doc, page_id, annot_id)
+    })
+}
+
+/// El `/AP` de una medida, dibujado **en coordenadas de página** (`/BBox`
+/// igual al `/Rect`, como la apariencia de las marcas de texto): la
+/// polilínea, sus dos puntas de flecha y la cifra sobre un recuadro blanco
+/// para que se lea encima del documento.
+fn apariencia_medida(
+    doc: &mut lopdf::Document,
+    caja: [f32; 4],
+    pdf: &[(f32, f32)],
+    cerrada: bool,
+    texto: &str,
+    color: [f32; 3],
+) -> lopdf::ObjectId {
+    use lopdf::{Dictionary, Object, Stream};
+    let [r, g, b] = color;
+    const SIZE: f32 = 10.0;
+    let mut ops = Vec::new();
+    ops.extend_from_slice(
+        format!(
+            "q {r:.4} {g:.4} {b:.4} RG 1.5 w {:.2} {:.2} m ",
+            pdf[0].0, pdf[0].1
+        )
+        .as_bytes(),
+    );
+    for p in &pdf[1..] {
+        ops.extend_from_slice(format!("{:.2} {:.2} l ", p.0, p.1).as_bytes());
+    }
+    if cerrada {
+        ops.extend_from_slice(b"h ");
+    }
+    ops.extend_from_slice(b"S Q\n");
+    if !cerrada {
+        ops.extend_from_slice(&flecha(pdf[0], pdf[1], color));
+        let n = pdf.len();
+        ops.extend_from_slice(&flecha(pdf[n - 1], pdf[n - 2], color));
+    }
+
+    // la cifra, centrada en el punto medio del dibujo y sobre un recuadro
+    // blanco: sin él, encima de un texto no se lee
+    let cx = pdf.iter().map(|p| p.0).sum::<f32>() / pdf.len() as f32;
+    let cy = pdf.iter().map(|p| p.1).sum::<f32>() / pdf.len() as f32;
+    let ancho = ancho_helvetica(texto, SIZE);
+    let pad = 2.0;
+    let (bx, by) = (cx - ancho / 2.0 - pad, cy - SIZE * 0.5 - pad);
+    ops.extend_from_slice(
+        format!(
+            "q 1 1 1 rg {bx:.2} {by:.2} {:.2} {:.2} re f Q\n",
+            ancho + pad * 2.0,
+            SIZE + pad * 2.0
+        )
+        .as_bytes(),
+    );
+    ops.extend_from_slice(
+        format!(
+            "BT /Helv {SIZE:.2} Tf {r:.4} {g:.4} {b:.4} rg {:.2} {:.2} Td ",
+            cx - ancho / 2.0,
+            cy - SIZE * 0.3
+        )
+        .as_bytes(),
+    );
+    ops.push(b'(');
+    ops.extend_from_slice(&winansi(texto));
+    ops.extend_from_slice(b") Tj ET\n");
+
+    let helv = crate::seguridad::fuente_helvetica(doc);
+    let mut fuentes = Dictionary::new();
+    fuentes.set("Helv", Object::Reference(helv));
+    let mut recursos = Dictionary::new();
+    recursos.set("Font", Object::Dictionary(fuentes));
+    let mut forma = Dictionary::new();
+    forma.set("Type", Object::Name(b"XObject".to_vec()));
+    forma.set("Subtype", Object::Name(b"Form".to_vec()));
+    forma.set("FormType", 1i64);
+    forma.set(
+        "BBox",
+        Object::Array(vec![
+            caja[0].into(),
+            caja[1].into(),
+            caja[2].into(),
+            caja[3].into(),
+        ]),
+    );
+    forma.set("Resources", Object::Dictionary(recursos));
+    let mut stream = Stream::new(forma, ops);
+    let _ = stream.compress();
+    doc.add_object(stream)
+}
+
+/// La punta de flecha en `desde`, mirando hacia `hacia`. PDFium no escribe
+/// apariencias, así que el remate que declara `/LE` lo dibujamos nosotros.
+fn flecha(desde: (f32, f32), hacia: (f32, f32), color: [f32; 3]) -> Vec<u8> {
+    let [r, g, b] = color;
+    let (px, py) = desde;
+    let (dx, dy) = (hacia.0 - px, hacia.1 - py);
+    let largo = (dx * dx + dy * dy).sqrt().max(0.001);
+    let (ux, uy) = (dx / largo, dy / largo);
+    let punta = 8.0f32.min(largo * 0.4);
+    let ala = 0.42f32; // ±24°, la de Acrobat
+    let (c, s) = (ala.cos(), ala.sin());
+    let a1 = (px + punta * (ux * c - uy * s), py + punta * (ux * s + uy * c));
+    let a2 = (px + punta * (ux * c + uy * s), py + punta * (-ux * s + uy * c));
+    format!(
+        "q {r:.4} {g:.4} {b:.4} RG 1.5 w {:.2} {:.2} m {px:.2} {py:.2} l {:.2} {:.2} l S Q\n",
+        a1.0, a1.1, a2.0, a2.1
+    )
+    .into_bytes()
+}
+
 /// Le aplica a la línea de una llamada (`/CL`) y a los márgenes de su caja
 /// (`/RD`) la misma transformación que se le ha aplicado al `/Rect`: sin
 /// esto, arrastrar el cuadro dejaba la punta donde estaba.
@@ -1607,6 +1835,110 @@ mod tests {
         assert!(crate::anotaciones::get_annotations(work.clone(), 0)
             .expect("listar")
             .is_empty());
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// **R43b (AC-069 y «Distinto» 3).** La medida que se deja puesta es un
+    /// **comentario**, no contenido de la página: sale en el panel de
+    /// comentarios, se borra con Supr y no ensucia el texto del documento.
+    /// Y es **una** mutación, que es lo que la banda promete: antes eran
+    /// `add_shape` más `add_text_block`, así que el primer ⌘Z quitaba la
+    /// cifra y dejaba la raya.
+    #[test]
+    fn la_medida_puesta_es_un_comentario_y_un_solo_paso_de_deshacer() {
+        let tmp = std::env::temp_dir().join("anot2-medida.pdf");
+        crea_pdf(&["Plano"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        let textos_antes = crate::texto::get_text_blocks(work.clone(), 0).expect("bloques").len();
+        let pasos = crate::historial::history_state(work.clone()).expect("historial").undo;
+
+        add_measure(
+            work.clone(),
+            0,
+            vec![[100.0, 300.0], [340.0, 300.0]],
+            "150,44 m".into(),
+            [200, 40, 40, 255],
+            None,
+            Some("Jorge".into()),
+        )
+        .expect("dejar la medida puesta");
+
+        assert_eq!(
+            crate::historial::history_state(work.clone()).expect("historial").undo,
+            pasos + 1,
+            "un gesto, un paso de deshacer"
+        );
+
+        // es un comentario, con la cifra dentro
+        let anots = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar");
+        assert_eq!(anots.len(), 1, "sale en el panel de comentarios: {anots:?}");
+        assert_eq!(anots[0].kind, "Line");
+        assert_eq!(anots[0].contents, "150,44 m");
+        assert_eq!(anots[0].author, "Jorge");
+
+        // y NO es texto del documento
+        let textos = crate::texto::get_text_blocks(work.clone(), 0).expect("bloques");
+        assert_eq!(textos.len(), textos_antes, "la cifra no entra en el texto: {textos:?}");
+        assert!(
+            !textos.iter().any(|b| b.text.contains("150,44")),
+            "la medida no ensucia el content stream"
+        );
+
+        // se ve en el render, que es lo que PDFium no hace solo
+        crate::render_page_png(work.clone(), 0, 200, true).expect("render con la medida");
+
+        // se borra como cualquier comentario
+        crate::anotaciones::remove_annotation(work.clone(), 0, 0).expect("borrar con Supr");
+        assert!(crate::anotaciones::get_annotations(work.clone(), 0)
+            .expect("listar")
+            .is_empty());
+
+        // el área de un polígono es un /Polygon cerrado, sin flechas
+        add_measure(
+            work.clone(),
+            0,
+            vec![[100.0, 300.0], [300.0, 300.0], [300.0, 420.0], [100.0, 420.0]],
+            "2,4 m²".into(),
+            [40, 120, 200, 255],
+            Some(true),
+            None,
+        )
+        .expect("dejar puesta el área");
+        let anots = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar");
+        assert_eq!(anots[0].kind, "Polygon");
+        assert_eq!(anots[0].contents, "2,4 m²");
+        // y el perímetro, una polilínea abierta
+        add_measure(
+            work.clone(),
+            0,
+            vec![[100.0, 500.0], [200.0, 520.0], [300.0, 500.0]],
+            "310 cm".into(),
+            [40, 120, 200, 255],
+            None,
+            None,
+        )
+        .expect("dejar puesto el perímetro");
+        let anots = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar");
+        // ojo: `get_annotations` da el nombre con el que PDFium llama al
+        // subtipo, que aquí es «Polyline» y no el «PolyLine» del spec
+        assert!(
+            anots.iter().any(|a| a.kind == "Polyline"),
+            "el perímetro es una polilínea: {anots:?}"
+        );
+
+        // dos puntos como mínimo, y algo que decir
+        assert!(add_measure(work.clone(), 0, vec![[1.0, 1.0]], "x".into(), [0, 0, 0, 255], None, None)
+            .is_err());
+        assert!(add_measure(
+            work.clone(),
+            0,
+            vec![[1.0, 1.0], [2.0, 2.0]],
+            "  ".into(),
+            [0, 0, 0, 255],
+            None,
+            None
+        )
+        .is_err());
         std::fs::remove_file(&tmp).ok();
     }
 

@@ -211,6 +211,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "add_stamp" => cmd!(anotaciones2::add_stamp, { work_path: String, page_index: u16, text: String, color: [u8; 4], x: f32, y: f32, font_size: f32, author: Option<String> }),
         "add_free_text" => cmd!(anotaciones2::add_free_text, { work_path: String, page_index: u16, rect: crate::Rect, text: String, font_size: f32, color: [u8; 4], border: bool, author: Option<String> }),
         "add_callout" => cmd!(anotaciones2::add_callout, { work_path: String, page_index: u16, rect: crate::Rect, punta: [f32; 2], text: String, color: [u8; 4], author: Option<String> }),
+        "add_measure" => cmd!(anotaciones2::add_measure, { work_path: String, page_index: u16, points: Vec<[f32; 2]>, text: String, color: [u8; 4], closed: Option<bool>, author: Option<String> }),
         "erase_ink" => cmd!(anotaciones2::erase_ink, { work_path: String, page_index: u16, annot_index: u16, rect: crate::Rect }),
         "erase_ink_area" => cmd!(anotaciones2::erase_ink_area, { work_path: String, page_index: u16, rect: crate::Rect }),
         "transform_annotation" => cmd!(anotaciones2::transform_annotation, { work_path: String, page_index: u16, annot_index: u16, x: f32, y: f32, w: f32, h: f32 }),
@@ -449,6 +450,13 @@ mod tests {
     /// excepción mientras las dos mitades se escriben en paralelo, y se
     /// quita al integrar.
     const NADIE_LLAMA: &[(&str, &str)] = &[
+        (
+            "add_measure",
+            "pendiente_ui — R43b: «Dejar la medida puesta» pasa a escribir \
+             un comentario `/Line`, `/PolyLine` o `/Polygon` en vez de \
+             contenido de página. La UI del ciclo 7 lo llama desde el modo \
+             Medir, con los vértices de R38",
+        ),
         (
             "detect_form_fields",
             "pendiente_ui — H7: «Reconocer campos…». Solo propone, no \
