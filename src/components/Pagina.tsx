@@ -476,6 +476,11 @@ function Pagina({
       anotaciones.setShapeDraft(null);
       return;
     }
+    if (mode === "adjunto") {
+      // el clic dice dónde va la chincheta y el diálogo, qué fichero
+      anotaciones.adjuntaFichero(x, y);
+      return;
+    }
     if (mode === "stamp") {
       anotaciones.placeStamp(x, y);
       return;

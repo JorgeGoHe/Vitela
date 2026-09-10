@@ -4077,6 +4077,12 @@ function App() {
       hint: "Estampar un sello (APROBADO, BORRADOR…) con un clic",
     },
     {
+      id: "adjunto",
+      icon: "clip",
+      label: "Adjuntar",
+      hint: "Meter un fichero dentro del PDF, con su chincheta en la página (clic donde va)",
+    },
+    {
       id: "firmar",
       icon: "sign",
       label: "Firma",
@@ -4176,7 +4182,15 @@ function App() {
             {(
               [
                 ["select"],
-                ["draw", "note", "freetext", "callout", "shape", "stamp"],
+                [
+                  "draw",
+                  "note",
+                  "freetext",
+                  "callout",
+                  "shape",
+                  "stamp",
+                  "adjunto",
+                ],
                 ["medir"],
                 ["edit", "image"],
                 ["firmar"],

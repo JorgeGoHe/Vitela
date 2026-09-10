@@ -2488,7 +2488,8 @@ textarea {
   min-width: 0;
 }
 
-.textlayer.mode-stamp {
+.textlayer.mode-stamp,
+.textlayer.mode-adjunto {
   cursor: copy;
 }
 

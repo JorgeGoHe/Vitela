@@ -6,8 +6,10 @@ import {
   type MouseEvent,
 } from "react";
 import { invoke } from "../../ipc";
+import { open } from "../../dialogos";
 import {
   addCallout,
+  addFileAttachmentAnnotation,
   addFreeText,
   addMarkup,
   eraseInkArea,
@@ -442,6 +444,32 @@ export function useAnotaciones(ctx: {
     }
   }
 
+  /** «Adjuntar aquí»: el fichero se mete dentro del PDF y queda como un
+   *  comentario con chincheta en ese punto, que es el `/FileAttachment` de
+   *  Acrobat. El adjunto del documento (`add_attachment`) es otra cosa: va
+   *  en `/EmbeddedFiles` y no está en ninguna página. */
+  async function adjuntaFichero(x: number, y: number) {
+    if (!workPath) return;
+    const sel = await open({ multiple: false, title: "Adjuntar a la página" });
+    if (typeof sel !== "string") return;
+    const p = puntoAPagina({ x, y }, size);
+    try {
+      await addFileAttachmentAnnotation({
+        workPath,
+        pageIndex: index,
+        punto: [p.x, p.y],
+        srcPath: sel,
+        author: autorComentarios(),
+      });
+      onAnnotated(index);
+      onNotice(
+        `${sel.split(/[\\/]/).pop()} va dentro del documento · ${MOD}Z lo quita`,
+      );
+    } catch (e) {
+      onError(e);
+    }
+  }
+
   async function submitNote() {
     if (!workPath || !noteDraft || !noteDraft.text.trim()) {
       setNoteDraft(null);
@@ -689,6 +717,7 @@ export function useAnotaciones(ctx: {
     markupSelection,
     commitShape,
     placeStamp,
+    adjuntaFichero,
     colocaMarca,
     submitNote,
     finishStroke,

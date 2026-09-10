@@ -148,6 +148,8 @@ export type Mode =
   | "callout"
   /** Medir: distancia y área sobre la página, sin tocar el documento. */
   | "medir"
+  /** Adjuntar un fichero a un punto de la página, como comentario. */
+  | "adjunto"
   /** Dibujar el recuadro donde se verá la firma con certificado. */
   | "firma-cert";
 export type ShapeKind = "rect" | "ellipse" | "line" | "arrow";

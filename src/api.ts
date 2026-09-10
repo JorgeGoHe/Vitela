@@ -781,6 +781,21 @@ export function getMetadata(path: string): Promise<Metadata> {
   return invoke("get_metadata", { path });
 }
 
+/** Adjunta un fichero **a un punto de la página**, como comentario
+ *  (`/FileAttachment` con el fichero embebido y una chincheta por
+ *  apariencia). Es distinto del adjunto del documento (`add_attachment`),
+ *  que va en `/EmbeddedFiles` y no tiene sitio en ninguna página. El punto
+ *  va en el espacio propio de la página. */
+export function addFileAttachmentAnnotation(args: {
+  workPath: string;
+  pageIndex: number;
+  punto: [number, number];
+  srcPath: string;
+  author?: string | null;
+}): Promise<number> {
+  return invoke("add_file_attachment_annotation", { author: null, ...args });
+}
+
 /** Una fuente del documento, como la enseña Acrobat en su pestaña
  *  «Fuentes»: cómo se llama, de qué tipo es y si va dentro del fichero. */
 export type FuenteInfo = {
