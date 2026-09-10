@@ -61,6 +61,7 @@ export default function MenuAcciones({
   abrirMarcaAgua,
   abrirEncabezado,
   askRemoveMarginal,
+  quitarFondo,
   openProperties,
   abrirPreferencias,
   signPdf,
@@ -108,6 +109,9 @@ export default function MenuAcciones({
   abrirMarcaAgua: () => void;
   abrirEncabezado: () => void;
   askRemoveMarginal: (zona: "watermark" | "header") => void;
+  /** «Quitar fondo…»: se lleva el color, la imagen y el texto puestos como
+   *  fondo, que `remove_marginal_text` no sabía quitar. */
+  quitarFondo: () => void;
   openProperties: () => void;
   abrirPreferencias: () => void;
   signPdf: () => void;
@@ -296,7 +300,7 @@ export default function MenuAcciones({
             />
             <Entrada
               icon="water"
-              texto="Marca de agua…"
+              texto="Marca de agua y fondo…"
               onSelect={ejecutar(abrirMarcaAgua)}
             />
             <Entrada
@@ -308,6 +312,11 @@ export default function MenuAcciones({
               icon="water"
               texto="Quitar marca de agua…"
               onSelect={ejecutar(() => askRemoveMarginal("watermark"))}
+            />
+            <Entrada
+              icon="water"
+              texto="Quitar fondo…"
+              onSelect={ejecutar(quitarFondo)}
             />
             <Entrada
               icon="hf"

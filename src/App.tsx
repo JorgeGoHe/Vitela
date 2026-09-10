@@ -34,6 +34,8 @@ import { abrirRuta, open, save, openUrl } from "./dialogos";
 import {
   addBlankPage,
   removeMarginalText,
+  addBackground,
+  removeBackground,
   addHeaderFooter,
   addBates,
   addWatermark,
@@ -551,6 +553,8 @@ function App() {
     paginas: number | null;
   } | null>(null);
   const [wmOpen, setWmOpen] = useState(false);
+  // cuántas cosas va a quitar «Quitar fondo…», contadas por el ensayo previo
+  const [fondoAsk, setFondoAsk] = useState<number | null>(null);
   const [marginalAsk, setMarginalAsk] = useState<{
     zona: "watermark" | "header" | "footer";
     textos: number;
@@ -3066,6 +3070,37 @@ function App() {
     }
   }
 
+  /** «Quitar fondo…»: primero el ensayo, que cuenta lo que hay —el color, la
+   *  imagen y el texto que se pusieron como fondo o marca de agua— y solo
+   *  entonces se pregunta. Sin esto, un fondo de imagen se quedaba dentro
+   *  para siempre en cuanto ⌘Z dejaba de alcanzar. */
+  async function askRemoveBackground() {
+    if (!workPath) return;
+    try {
+      const r = await removeBackground(workPath, true);
+      const cuantos = (r.objetos ?? 0) + (r.textos ?? 0);
+      if (cuantos === 0) {
+        setNotice("Este documento no lleva ningún fondo puesto por Vitela.");
+        return;
+      }
+      setFondoAsk(cuantos);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function applyRemoveBackground() {
+    if (!workPath) return;
+    setFondoAsk(null);
+    try {
+      await removeBackground(workPath, false);
+      afterMutation(pageCount);
+      setNotice(`Fondo quitado · ${MOD}Z para deshacer`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function applyRemoveMarginal() {
     if (!workPath || !marginalAsk) return;
     try {
@@ -3086,6 +3121,24 @@ function App() {
   async function applyWatermark(opts: MarcaAguaOpts) {
     if (!workPath) return;
     try {
+      // el fondo no se coloca ni se gira: cubre la página entera y va por su
+      // propio comando, que además deja marcado lo que pone para que
+      // «Quitar fondo…» sepa qué quitar
+      if (opts.tipo === "color" || (opts.tipo === "imagen" && opts.detras)) {
+        await addBackground({
+          workPath,
+          color: opts.tipo === "color" ? hexToRgba(opts.color) : null,
+          imagePng: opts.tipo === "imagen" ? opts.imagePng : null,
+          opacity: opts.opacity / 100,
+          pageIndices: opts.pageIndices,
+        });
+        setWmOpen(false);
+        afterMutation(pageCount);
+        setNotice(
+          `Fondo añadido en ${plural(opts.pageIndices?.length ?? pageCount, "página", "páginas")} · ${MOD}Z para deshacer`,
+        );
+        return;
+      }
       await addWatermark({
         workPath,
         text: opts.text,
@@ -4145,6 +4198,7 @@ function App() {
     "marca-de-agua": () => setWmOpen(true),
     "encabezado-pie": () => setHfOpen(true),
     "quitar-marca-de-agua": () => askRemoveMarginal("watermark"),
+    "quitar-fondo": askRemoveBackground,
     "quitar-encabezados": () => askRemoveMarginal("header"),
     "reconocer-campos": reconocerCampos,
     "adjuntar-fichero": anadirAdjunto,
@@ -4513,6 +4567,7 @@ function App() {
                 abrirMarcaAgua={() => setWmOpen(true)}
                 abrirEncabezado={() => setHfOpen(true)}
                 askRemoveMarginal={askRemoveMarginal}
+                quitarFondo={askRemoveBackground}
                 openProperties={openProperties}
                 signPdf={empezarFirma}
                 certificar={empezarCertificacion}
@@ -4824,6 +4879,22 @@ function App() {
           peligro
           onConfirm={applyQuitarProteccion}
           onClose={() => setQuitarProtAsk(false)}
+        />
+      )}
+      {fondoAsk !== null && (
+        <DialogoConfirmar
+          titulo="Quitar el fondo"
+          cuerpo={
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              Se quitarán {plural(fondoAsk, "elemento", "elementos")} puestos
+              como fondo o marca de agua —el color, la imagen y el texto— en
+              todo el documento. El contenido de las páginas no se toca.
+            </p>
+          }
+          textoConfirmar="Quitar"
+          peligro
+          onConfirm={applyRemoveBackground}
+          onClose={() => setFondoAsk(null)}
         />
       )}
       {marginalAsk && (

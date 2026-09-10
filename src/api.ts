@@ -695,6 +695,43 @@ export function addWatermark(args: {
   });
 }
 
+/** El **fondo** de Acrobat: un color sólido a sangre o una imagen debajo
+ *  del contenido de la página, con su opacidad. Va aparte de la marca de
+ *  agua porque no se coloca ni se gira: cubre la página entera, que es el
+ *  caso por defecto del diálogo de Acrobat. Se manda `color` **o**
+ *  `imagePng`, nunca los dos. Lo que pone Vitela queda marcado, y por eso
+ *  `remove_background` sabe quitarlo. */
+export function addBackground(args: {
+  workPath: string;
+  /** Color sólido del fondo, opaco (la opacidad va en su parámetro). */
+  color?: Rgba | null;
+  /** PNG en base64 cuando el fondo es una imagen. */
+  imagePng?: string | null;
+  opacity: number;
+  /** Índices de página, o null para todas. */
+  pageIndices?: number[] | null;
+}): Promise<void> {
+  return invoke("add_background", {
+    color: null,
+    imagePng: null,
+    pageIndices: null,
+    ...args,
+  });
+}
+
+/** Cuenta (o quita) lo que se puso como fondo o como marca de agua: los
+ *  objetos marcados —el rectángulo de color y la imagen— además del texto.
+ *  `remove_marginal_text` solo sabía del texto, y por eso un fondo de imagen
+ *  se quedaba dentro para siempre. */
+export type FondoQuitado = { objetos: number; textos: number };
+
+export function removeBackground(
+  workPath: string,
+  dryRun: boolean,
+): Promise<FondoQuitado> {
+  return invoke("remove_background", { workPath, dryRun });
+}
+
 /** Elimina el texto marginal añadido (marca de agua o encabezados/pies). */
 export function removeMarginalText(
   workPath: string,

@@ -3132,6 +3132,13 @@ textarea {
   flex-shrink: 0;
 }
 
+/* el fondo a sangre en la vista previa: cubre la hoja entera, que es lo que
+   lo distingue de una marca de agua colocada */
+.previa-fondo {
+  position: absolute;
+  inset: 0;
+}
+
 /* la chincheta de un fichero adjunto: el mismo botón que la nota, con el
    color del clip que ya pinta su apariencia */
 .adjunto-icon {

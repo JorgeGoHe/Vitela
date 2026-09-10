@@ -25,7 +25,12 @@ const GIROS: [number, string][] = [
 /** Ancho en píxeles de la vista previa. */
 const PREVIA = 190;
 
+/** Qué se pone: texto, imagen o un color sólido a sangre (que solo tiene
+ *  sentido como fondo, y por eso enciende «Fondo» y no se apaga). */
+export type TipoMarca = "texto" | "imagen" | "color";
+
 export type MarcaAguaOpts = {
+  tipo: TipoMarca;
   text: string;
   fontSize: number;
   color: string;
@@ -41,9 +46,14 @@ export type MarcaAguaOpts = {
 };
 
 /**
- * Marca de agua: texto o imagen, con rango de páginas y **vista previa en
- * vivo** sobre la página actual. Sin la previa, poner una marca de agua bien
- * eran tres o cinco ciclos de aplicar, mirar y deshacer.
+ * Marca de agua **y fondo**: texto, imagen o color sólido, con rango de
+ * páginas y **vista previa en vivo** sobre la página actual. Sin la previa,
+ * poner una marca de agua bien eran tres o cinco ciclos de aplicar, mirar y
+ * deshacer.
+ *
+ * El fondo se llama fondo y está donde se busca: era una casilla escondida
+ * dentro de «Marca de agua…» y el color sólido —el caso por defecto de
+ * Acrobat— no se podía hacer.
  */
 export default function DialogoMarcaAgua({
   pageCount,
@@ -62,7 +72,7 @@ export default function DialogoMarcaAgua({
   onApply: (opts: MarcaAguaOpts) => void;
   onClose: () => void;
 }) {
-  const [tipo, setTipo] = useState<"texto" | "imagen">("texto");
+  const [tipo, setTipo] = useState<TipoMarca>("texto");
   const [text, setText] = useState("BORRADOR");
   const [fontSize, setFontSize] = useState(64);
   const [color, setColor] = useState(() => cargaColores().marcaAgua ?? COLORS[1]);
@@ -78,16 +88,20 @@ export default function DialogoMarcaAgua({
   // «detrás del contenido» es lo que Acrobat llama Fondo: el mismo trabajo,
   // con el objeto al principio de la página en vez de al final
   const [detras, setDetras] = useState(false);
+  // el color sólido tapa la página entera: solo existe como fondo
+  const esColor = tipo === "color";
+  const alFondo = detras || esColor;
   const ficheroRef = useRef<HTMLInputElement | null>(null);
 
   const indices = indicesDeRango(todas, rango, pageCount);
   const listo =
-    (tipo === "texto" ? !!text.trim() : !!imagen) &&
+    (tipo === "texto" ? !!text.trim() : tipo === "color" ? true : !!imagen) &&
     (todas || (indices?.length ?? 0) > 0);
 
   function aplicar() {
     if (!listo) return;
     onApply({
+      tipo,
       text,
       fontSize,
       color,
@@ -96,7 +110,7 @@ export default function DialogoMarcaAgua({
       position,
       pageIndices: indices,
       imagePng: tipo === "imagen" ? (imagen?.png ?? null) : null,
-      detras,
+      detras: alFondo,
     });
   }
 
@@ -128,13 +142,13 @@ export default function DialogoMarcaAgua({
         className="modal modal-hf"
         role="dialog"
         aria-modal="true"
-        aria-label="Marca de agua"
+        aria-label="Marca de agua y fondo"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
         ref={ref}
         tabIndex={-1}
       >
-        <h3>Marca de agua</h3>
+        <h3>Marca de agua y fondo</h3>
         <div className="card-row">
           <label className="opt-check">
             <input
@@ -154,6 +168,15 @@ export default function DialogoMarcaAgua({
             />
             Imagen
           </label>
+          <label className="opt-check">
+            <input
+              type="radio"
+              name="tipo-marca"
+              checked={esColor}
+              onChange={() => setTipo("color")}
+            />
+            Color sólido
+          </label>
         </div>
         {tipo === "texto" ? (
           <input
@@ -163,6 +186,11 @@ export default function DialogoMarcaAgua({
             value={text}
             onChange={(e) => setText(e.target.value)}
           />
+        ) : esColor ? (
+          <p className="modal-file" style={{ whiteSpace: "normal" }}>
+            El color cubre la página entera, por detrás del contenido: es el
+            fondo de Acrobat.
+          </p>
         ) : (
           <div className="card-row">
             <button className="btn" onClick={() => ficheroRef.current?.click()}>
@@ -208,21 +236,23 @@ export default function DialogoMarcaAgua({
               </option>
             ))}
           </select>
-          <select
-            className="size-select"
-            title="Giro"
-            aria-label="Giro de la marca"
-            value={rotation}
-            onChange={(e) => setRotation(Number(e.target.value))}
-          >
-            {GIROS.map(([g, etiqueta]) => (
-              <option key={g} value={g}>
-                {etiqueta}
-              </option>
-            ))}
-          </select>
+          {!esColor && (
+            <select
+              className="size-select"
+              title="Giro"
+              aria-label="Giro de la marca"
+              value={rotation}
+              onChange={(e) => setRotation(Number(e.target.value))}
+            >
+              {GIROS.map(([g, etiqueta]) => (
+                <option key={g} value={g}>
+                  {etiqueta}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
-        {tipo === "texto" && (
+        {(tipo === "texto" || esColor) && (
           <div className="swatches">
             {COLORS.map((c) => (
               <button
@@ -255,23 +285,37 @@ export default function DialogoMarcaAgua({
           </div>
         )}
         <div className="card-row previa-fila">
-          <div className="pos-grid" title="Posición en la página">
-            {POSICIONES.map((p) => (
-              <button
-                key={p}
-                className={`pos-cell${position === p ? " on" : ""}`}
-                aria-label={`Posición ${p}`}
-                aria-pressed={position === p}
-                onClick={() => setPosition(p)}
-              />
-            ))}
-          </div>
+          {!esColor && (
+            <div className="pos-grid" title="Posición en la página">
+              {POSICIONES.map((p) => (
+                <button
+                  key={p}
+                  className={`pos-cell${position === p ? " on" : ""}`}
+                  aria-label={`Posición ${p}`}
+                  aria-pressed={position === p}
+                  onClick={() => setPosition(p)}
+                />
+              ))}
+            </div>
+          )}
           {previaSrc && previaSize && (
             <div
               className="previa-pagina"
               style={{ width: PREVIA, height: altoPrevia }}
             >
               <img src={previaSrc} alt={`Página ${paginaActual + 1}`} />
+              {esColor ? (
+                // el fondo va a sangre: la previa lo pinta sobre la hoja
+                // entera, multiplicando como se verá en el papel
+                <div
+                  className="previa-fondo"
+                  style={{
+                    background: color,
+                    opacity: opacity / 100,
+                    mixBlendMode: "multiply",
+                  }}
+                />
+              ) : (
               <div
                 className="previa-marca"
                 style={{
@@ -282,7 +326,7 @@ export default function DialogoMarcaAgua({
                   // debajo del contenido: en la previa se multiplica, que es
                   // lo que se ve en el papel —el texto de la página encima,
                   // la marca asomando por donde no hay tinta—
-                  mixBlendMode: detras ? "multiply" : undefined,
+                  mixBlendMode: alFondo ? "multiply" : undefined,
                 }}
               >
                 {tipo === "imagen" && imagen ? (
@@ -297,6 +341,7 @@ export default function DialogoMarcaAgua({
                   </span>
                 )}
               </div>
+              )}
             </div>
           )}
         </div>
@@ -308,20 +353,26 @@ export default function DialogoMarcaAgua({
           setRango={setRango}
         />
         <label
-          className="opt-check"
-          title="Lo que Acrobat llama «Fondo»: el mismo dibujo, debajo del texto"
+          className={`opt-check${esColor ? " disabled" : ""}`}
+          title={
+            esColor
+              ? "Un color sólido solo puede ir detrás: delante taparía la página"
+              : "El fondo de Acrobat: el mismo dibujo, debajo del texto"
+          }
         >
           <input
             type="checkbox"
-            checked={detras}
+            checked={alFondo}
+            disabled={esColor}
             onChange={(e) => setDetras(e.target.checked)}
           />
-          Detrás del contenido
+          Fondo (detrás del contenido)
         </label>
         <p className="modal-file" style={{ whiteSpace: "normal" }}>
           Se añade como contenido del documento; la previa es aproximada.
-          {detras &&
+          {alFondo &&
             " Detrás del contenido queda tapada donde la página lleve una imagen o un fondo opaco."}
+          {" Se puede quitar después con «Quitar fondo…»."}
         </p>
         <div className="card-actions">
           <button className="btn" onClick={onClose}>
