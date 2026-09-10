@@ -466,6 +466,10 @@ compila los instaladores a mano o al etiquetar `v*`.
     El espaciado entre caracteres (`Tc`) se conectó en el ciclo 6 (ver
     abajo): pdfium-render 0.8 no lo expone, así que lo escribe un segundo
     pase con lopdf.
+    Queda fuera el espaciado entre caracteres (`Tc`): pdfium-render 0.8 no
+    lo expone y falsearlo con espacios sería mentir. **El mando de la UI se
+    retiró en el ciclo 6** (R24): existía, viajaba hasta el `invoke` y
+    moría ahí, y un mando que no hace nada es peor que no tenerlo.
   - `crop_image(work, page, object_index, rect)` (`imagenes.rs`): recorta
     el **bitmap**, no la caja, por el camino de `replace_image`, así que
     lo que queda fuera desaparece del fichero en vez de esconderse detrás.
@@ -651,7 +655,8 @@ compila los instaladores a mano o al etiquetar `v*`.
       texto, con los ocho tiradores de siempre) y `crop_image` (recortar,
       desde el popover de la imagen). `TextBlock` trae `color`, que es lo que
       pinta el swatch «A» de la fila contextual; `add_text_block` y
-      `edit_text_block` aceptan `line_height` y `char_spacing`.
+      `edit_text_block` aceptan `line_height` (`char_spacing` se retiró en
+      el ciclo 6: no existía en el backend).
     - `reply_annotation` (hilos `/IRT`), `set_annotation_state` (los cuatro
       estados de revisión de Acrobat, con el nombre que se escribe en el PDF:
       `Accepted`, `Rejected`, `Cancelled`, `Completed`) y
@@ -667,6 +672,86 @@ compila los instaladores a mano o al etiquetar `v*`.
     - `autosave_state` pide **tres** argumentos: sin `modified` todas las
       llamadas se rechazaban con un 400 y la recuperación no tenía nada que
       recuperar (AC-047). El fallo ya no se traga en silencio.
+- **La mitad de la UI del ciclo 6** (según el desarrollador de interfaz):
+  - Comandos nuevos que llama la UI, con los nombres de argumento en
+    camelCase que exige el test cruzado de R25:
+    - `pdf_from_images(imagePaths, destPath, tamano)` — «Crear PDF desde
+      imágenes…», en el estado vacío y en Archivo del menú «Acciones»
+      (`DialogoImagenes`). Devuelve cuántas páginas ha escrito y el PDF se
+      abre al terminar. **Falta la entrada del menú nativo**: el id vive en
+      `menu::estructura()`, que es de `src-tauri/`, así que la añade quien
+      integre (y con ella su entrada en `accionesMenu`, o el test canta).
+    - `open_attachment(path, index)` y `delete_attachment(workPath, index)`
+      — «Abrir» (acción principal de la fila y doble clic) y «Quitar» con
+      confirmación en `PanelAdjuntos`, que además se recorre con ↑↓ y borra
+      con Supr. Abrir pasa por el backend porque el permiso del opener está
+      acotado a http/https/mailto y el webview no puede abrir un fichero
+      del disco. **`open_attachment` no estaba en el contrato del
+      analista**: los nombres de argumento se eligieron como los de
+      `save_attachment`, que es la otra lectura.
+    - `add_callout(workPath, pageIndex, rect, punta, text, color, author)`
+      — modo «Llamada»: clic donde señala, arrastre hasta donde va el
+      texto. `punta` es la pareja `[x, y]` en el espacio propio de la
+      página, como el `rect`.
+    - `erase_ink(workPath, pageIndex, annotIndex, rect)` — la goma, un
+      conmutador dentro del modo Dibujar. La zona que se pinta al arrastrar
+      es exactamente el rectángulo que se manda: lo que se ve es lo que se
+      borra. Se llama una vez por trazo `Ink` que toque la zona.
+    - `create_form_field` acepta ahora `kind` `"radio"`, `"combo"` y
+      `"list"` además de texto y casilla, más `group`, `exportValue`,
+      `options` y `props` (`{ tooltip, obligatorio, solo_lectura,
+      valor_defecto, orden_tab }`). Ojo: **`props` es una estructura
+      anidada**, y Tauri solo pasa a snake_case los argumentos de primer
+      nivel del comando, así que sus claves van ya en snake_case.
+      `group` y `exportValue` se mandan siempre (cadena vacía cuando el
+      tipo no los usa) y `options` siempre como lista.
+    - `edit_text_block` gana `reflow`: la UI lo pide cuando el bloque ocupa
+      más de una línea (`h > font_size * 1.5`, o hay saltos de línea), que
+      es cuando hay párrafo que recolocar. Y `add_text_block` /
+      `edit_text_block` **ya no mandan `char_spacing`** (R24).
+    - `export_docx` recibe por fin `pageIndices`: el aviso previo pasa a ser
+      `DialogoWord`, con el bloque `RangoPaginas` de siempre. No hay
+      contador ni Cancelar porque el comando es un solo viaje sin progreso
+      ni interrupción, y la banda lo dice en vez de fingirlos.
+  - **Modos nuevos**: `callout` (llamada) y `medir`. Cada uno con su capa
+    propia —`CapaLlamada`, `CapaMedida`—, como el recorte de imagen: los
+    despachadores de ratón de `Pagina.tsx` solo ganan su rama, sin tocar el
+    orden de las que ya había.
+  - **Medir** (`useMedida`): distancia y área sobre la página, con la
+    medida en Fragment Mono. La escala se fija arrastrando sobre algo de
+    medida conocida y se guarda en `localStorage` **por ruta**
+    (`cargaEscala`/`guardaEscala` en `tipos.ts`, milímetros por punto);
+    sin fijarla se mide el papel (`MM_POR_PUNTO`), que es lo que hace
+    Acrobat cuando el PDF no trae `/Measure`. Solo toca el documento con
+    «Dejar la medida puesta», que la escribe con `add_shape` y
+    `add_text_block` (dos pasos de deshacer, y se dice).
+  - **Leer en voz alta** (`useLectura`): `speechSynthesis` del webview
+    sobre `get_page_text`, **desde la página que se está leyendo**, con
+    ⇧⌘Y, la entrada de «Acciones» y los controles en la fila contextual
+    (que mientras suena es la de la lectura). Esc calla, y cambiar o cerrar
+    documento también. Sin voz en español se dice y se lee con la del
+    sistema; sin voz ninguna se dice y no se intenta. Ganchos de QA
+    `window.__vitelaLeer(desde, hastaElFinal)` y
+    `window.__vitelaPararLectura()`.
+  - **Copiar y Seleccionar todo** ya no reenvían la tecla a ciegas: actúan
+    sobre el `input`/`textarea` con el foco si lo hay, luego sobre la
+    selección del DOM y solo entonces reenvían la tecla al visor.
+    `reenviaTecla` **devuelve si alguien la ha atendido** (los listeners que
+    actúan llaman a `preventDefault`), y cuando no hay nada que copiar se
+    dice en la banda. Atenuar la entrada del menú necesitaría que
+    `set_menu_state` supiera de la selección, que es backend.
+  - `FormFieldInfo` declara `required?: boolean` (opcional): si
+    `get_form_fields` lo trae, el campo obligatorio se pinta con el borde
+    del acento; si no, no se pinta nada.
+  - Remates del QA del ciclo 5: «Reemplazar todo» manda **una entrada por
+    coincidencia** (dos en la misma línea son dos entradas: `replace_text`
+    cuenta cuántas le llegan), `tamanoFichero` dice los bytes por debajo de
+    1 KB, la fecha del adjunto sale en formato local, la banda de firmas
+    añade «no se ha comprobado quién emitió el certificado» cuando la
+    confianza no es de raíz conocida (**sin cambiar el color**: la
+    confianza es del certificado y la validez del documento) y la banda de
+    recuperación se pliega a un botón «Recuperar…» de la barra en cuanto se
+    abre otro documento.
 - **Menú nativo** (`menu.rs`): Archivo, Editar, Ver, Documento, Ventana y
   Ayuda en la barra del sistema, espejo del menú «Acciones» de la app —
   con esto la búsqueda de menús de macOS encuentra por fin «Marca de
@@ -714,8 +799,7 @@ compila los instaladores a mano o al etiquetar `v*`.
     `quitar-proteccion`, `aplanar`, `redactar`, `sanitizar`,
     `propiedades`, `exportar-imagenes`, `exportar-texto`, `exportar-word`,
     `comprimir`.
-  - Ayuda: `atajos` (⌘/) (y Acerca de, nativa).
-  - Ayuda: `atajos` (y Acerca de, nativa).
+  - Ayuda: `atajos` (⌘/ y F1) (y Acerca de, nativa).
 - **Protección** (`seguridad.rs`): `encrypt_pdf` compone la máscara `/P`
   del spec a partir de `permisos { imprimir, copiar, editar }` (los tres a
   `true` por defecto): bit 3 imprimir —y con él el 12, alta calidad—, bit 5
@@ -1028,7 +1112,7 @@ compila los instaladores a mano o al etiquetar `v*`.
 - **Fila contextual** (`OpcionesHerramienta`): además de trazo, formas,
   sello y cuadro, el modo Editar lleva color («A» = el que ya tenga, que es
   el defecto, y que se pinta del color real del bloque señalado —`TextBlock`
-  trae `color`—), alineación, interlineado y espaciado entre caracteres, y el modo Firma la fila de marcas de rellenar
+  trae `color`—), alineación e interlineado, y el modo Firma la fila de marcas de rellenar
   (✓, ✗, ●, línea y «Texto», que lleva al cuadro de texto). La fila va fija
   bajo la barra y **baja lo que ocupen las bandas** (`--bandas` en el
   `.app`): antes se pintaba encima de la de firmas.
@@ -1041,11 +1125,9 @@ compila los instaladores a mano o al etiquetar `v*`.
   al ancho (los tres de Acrobat) · ⌥⌘1 plegar el panel lateral, ⌥⌘2
   Marcadores y ⌥⌘3 Comentarios (abren la pestaña Y le llevan el foco) ·
   ⌘L pantalla completa (Esc sale) · ⇧⌘L modo nocturno del documento ·
-  ⌥← y ⌥→ historial de vistas · ⌘/ atajos de teclado ·
-  ⇧⌘N ir a la página · ←/→ página anterior y siguiente · Esc quita las
-  ⌥← y ⌥→ historial de vistas ·
+  ⌥← y ⌥→ historial de vistas · ⇧⌘Y leer en voz alta desde esta página ·
   ⇧⌘N ir a la página · ⌘/ y F1 abren los atajos (la pantalla se lista a sí
-  misma) · ←/→ página anterior y siguiente · Esc quita las
+  misma) · ←/→ página anterior y siguiente · Esc para la lectura, quita las
   coincidencias de búsqueda y, si no hay, sale de la herramienta · Supr
   borra la anotación seleccionada · ⌘A todo el texto de la página (dentro
   del panel de páginas, seleccionarlas todas) · ⌘C copiar la selección.
@@ -1118,6 +1200,8 @@ compila los instaladores a mano o al etiquetar `v*`.
    contextual lleva interlineado y espaciado: el interlineado se resuelve
    **colocando los objetos** (en un PDF no hay `TL` que valga entre objetos
    distintos) y el espaciado sí es el operador `Tc`, escrito con lopdf.
+   contextual lleva interlineado (que no es `TL`: es dónde se coloca el
+   objeto de la línea siguiente).
    Imágenes: insertar, mover,
    redimensionar, girar, voltear, ordenar, recortar (`crop_image`, desde el
    popover), reemplazar y borrar objetos de imagen
@@ -1133,6 +1217,13 @@ compila los instaladores a mano o al etiquetar `v*`.
    **Varias firmas**: sobre un documento ya firmado, la nueva va en una
    actualización incremental que no toca un byte de las anteriores.
    PDFium no firma: cirugía con lopdf y criptografía con RustCrypto
+8. ✅ Comentarios completos: llamada (`/FreeText` con `/CL`), comentario
+   asociado a un resaltado (doble clic sobre la marca) y goma de borrar
+   (`erase_ink`, un conmutador del modo Dibujar). Formularios: radio con
+   grupo, desplegable, lista y las propiedades del primer panel de Acrobat.
+   Medir distancias y áreas con escala por documento, y leer en voz alta
+   con la síntesis del webview. Reflujo del párrafo al corregir texto
+   (`edit_text_block` con `reflow`).
 
 ## Convenciones
 
