@@ -7,9 +7,8 @@ import {
   resizeTextBlock,
 } from "../../api";
 import {
-  ajustaLineas,
-  altoCuadro,
   hexToRgba,
+  plural,
   rgbaToHex,
   type Mode,
   type PageSize,
@@ -204,7 +203,7 @@ export function useTexto(ctx: {
     if (!workPath || !blockDraft) return;
     const parrafo = esParrafo(blockDraft.block, blockDraft.text);
     try {
-      await editTextBlock({
+      const informe = await editTextBlock({
         workPath,
         pageIndex: index,
         objectIndex: blockDraft.block.object_index,
@@ -217,19 +216,17 @@ export function useTexto(ctx: {
       setBlockDraft(null);
       onPageMutated(index);
       // el párrafo puede crecer más de lo que queda de papel: se dice, en
-      // vez de escribir fuera de la página en silencio
-      if (parrafo) {
-        const lineas = ajustaLineas(
-          blockDraft.text,
-          blockDraft.block.w,
-          blockDraft.block.font_size,
-        ).length;
-        const alto = altoCuadro(lineas, blockDraft.block.font_size);
-        if (blockDraft.block.y + alto > size.height) {
-          onNotice(
-            "El párrafo no cabe en la página; el texto que sobra queda fuera del papel",
-          );
-        }
+      // vez de escribir fuera de la página en silencio. Lo decide el
+      // backend, que ha repartido las líneas y sabe con qué columna; medirlo
+      // aquí otra vez era un segundo criterio para lo mismo, y el peor
+      if (informe.se_sale) {
+        onNotice(
+          `El párrafo no cabe en la página: ha quedado en ${plural(
+            informe.lineas,
+            "línea",
+            "líneas",
+          )} y el texto que sobra se queda fuera del papel`,
+        );
       }
     } catch (e) {
       onError(e);

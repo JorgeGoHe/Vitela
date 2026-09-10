@@ -88,6 +88,16 @@ export function addTextBlock(args: {
   });
 }
 
+/** Lo que el backend sabe de la edición que acaba de hacer: en cuántas
+ *  líneas ha quedado el párrafo, si se sale del papel y si ha refluido de
+ *  verdad. `se_sale` lo decide **después** del reflujo real y con la columna
+ *  que ha usado, así que la UI no vuelve a medirlo por su cuenta. */
+export type InformeEdicion = {
+  lineas: number;
+  se_sale: boolean;
+  reflujo: boolean;
+};
+
 /** Reescribe un bloque del content stream. Sin `color` ni `align` se queda
  *  con los que tuviera: editar no debe recolorear sin querer.
  *
@@ -105,7 +115,7 @@ export function editTextBlock(args: {
   lineHeight?: number | null;
   charSpacing?: number | null;
   reflow?: boolean | null;
-}): Promise<void> {
+}): Promise<InformeEdicion> {
   return invoke("edit_text_block", {
     color: null,
     align: null,
