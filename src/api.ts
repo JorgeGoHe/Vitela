@@ -673,9 +673,17 @@ export function addHeaderFooter(
   });
 }
 
+/** Un marcador del árbol. `top` y `zoom` son el destino fino (`/XYZ` del
+ *  spec): a qué altura de la página y con qué aumento se estaba mirando
+ *  cuando se creó, para que volver a él devuelva la vista exacta y no el
+ *  principio de la página. `top` va en puntos desde el borde de arriba, en
+ *  el espacio de la vista, como el resto de la UI; el backend lo pasa al de
+ *  la página. Un marcador ajeno con `/Fit` llega sin los dos. */
 export type OutlineNode = {
   title: string;
   page_index: number | null;
+  top: number | null;
+  zoom: number | null;
   children: OutlineNode[];
 };
 

@@ -2119,6 +2119,21 @@ textarea {
   background: var(--btn-hover);
 }
 
+/* dónde va a caer el marcador que se arrastra: línea arriba o abajo para
+   el mismo nivel, y el marco del acento para «dentro de este» */
+.bm-row.drop-antes {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.bm-row.drop-despues {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.bm-row.drop-dentro {
+  box-shadow: inset 2px 0 0 var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
 .bm-title {
   flex: 1;
   min-width: 0;
@@ -2176,6 +2191,11 @@ textarea {
 .bm-add {
   margin-top: 6px;
   justify-content: center;
+}
+
+.bm-hint {
+  display: block;
+  margin-top: 6px;
 }
 
 .sign-item {

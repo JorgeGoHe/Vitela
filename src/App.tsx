@@ -382,6 +382,14 @@ function App() {
   const [annotVersion, setAnnotVersion] = useState(0);
   const [pageVersions, setPageVersions] = useState<number[]>([]);
   const [selOwner, setSelOwner] = useState<number | null>(null);
+  // el texto que hay seleccionado en el visor: lo dice la página que tiene
+  // la selección y lo usa ⌘B para titular el marcador, como Acrobat. En un
+  // ref porque no pinta nada: guardarlo en estado repintaría el visor entero
+  // en cada carácter arrastrado
+  const textoSelRef = useRef("");
+  const recibeSeleccion = useCallback((texto: string) => {
+    textoSelRef.current = texto;
+  }, []);
   // deshacer/rehacer general (instantáneas en el backend); tras restaurar
   // hace falta el refresco completo porque puede cambiar hasta el recuento
   const historial = useHistorial({
@@ -1413,6 +1421,64 @@ function App() {
     }
   }
 
+  /** A qué altura de la página que se está leyendo va el visor, en puntos
+   *  de la página: es el `top` del destino fino de un marcador. */
+  function altoDeVista(): { top: number | null; zoom: number | null } {
+    const el = pageElsRef.current.get(pageIndex);
+    const s = pageSizes[pageIndex];
+    const visor = viewerRef.current;
+    if (!el || !s || !visor) return { top: null, zoom: null };
+    const alto = el.getBoundingClientRect().height;
+    if (alto <= 0) return { top: null, zoom: null };
+    const escala = alto / s.height;
+    const dif = visor.getBoundingClientRect().top - el.getBoundingClientRect().top;
+    return {
+      top: Math.max(0, Math.round((dif / escala) * 10) / 10),
+      zoom: Math.round(zoomNumRef.current * 100) / 100,
+    };
+  }
+
+  /** ⌘B: marcador de este punto de lectura, titulado con lo que haya
+   *  seleccionado —como Acrobat— y, si no hay nada, con la página. Se
+   *  añade al final del árbol y ⌘Z lo quita. */
+  function crearMarcador() {
+    if (!workPath || pageCount === 0) return;
+    const sel = textoSelRef.current.replace(/\s+/g, " ").trim();
+    // un título largo no cabe en el panel de nadie: Acrobat también lo corta
+    const title = sel
+      ? sel.length > 60
+        ? `${sel.slice(0, 60)}…`
+        : sel
+      : `Página ${pageIndex + 1}`;
+    const { top, zoom: z } = altoDeVista();
+    persistOutline([
+      ...outline,
+      { title, page_index: pageIndex, top, zoom: z, children: [] },
+    ]);
+    setNotice(`Marcador «${title}» creado · ${MOD}Z lo quita`);
+  }
+
+  /** Seguir un marcador: su página **y** su punto de vista, que es lo que
+   *  distingue un marcador de un número de página. Sigue pasando por
+   *  `saltarA`, así que ⌥← vuelve a donde se estaba. */
+  function seguirMarcador(n: OutlineNode) {
+    if (n.page_index === null) return;
+    if (n.zoom && n.zoom > 0) setZoom(n.zoom);
+    saltarA(n.page_index);
+    if (n.top === null) return;
+    const top = n.top;
+    // el scroll se ajusta cuando el visor ya tiene el alto del zoom nuevo
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const el = pageElsRef.current.get(n.page_index as number);
+        const s = pageSizes[n.page_index as number];
+        if (!el || !s) return;
+        const escala = el.getBoundingClientRect().height / s.height;
+        viewerRef.current?.scrollBy({ top: top * escala });
+      }),
+    );
+  }
+
   async function persistOutline(nodes: OutlineNode[]) {
     if (!workPath) return;
     const anterior = outline;
@@ -1538,6 +1604,17 @@ function App() {
         e.preventDefault();
         if (lectura.leyendo) lectura.parar();
         else lectura.leer(pageIndex, true);
+      } else if (
+        mod &&
+        !e.shiftKey &&
+        !enCampo &&
+        (e.key === "b" || e.key === "B") &&
+        pageCount > 0
+      ) {
+        // ⌘B: marcador de este punto de lectura, con el texto seleccionado
+        // por título, que es como se hace en Acrobat
+        e.preventDefault();
+        crearMarcador();
       } else if (mod && e.shiftKey && (e.key === "l" || e.key === "L")) {
         // el modo nocturno del documento: solo cambia lo que se ve
         e.preventDefault();
@@ -4186,9 +4263,9 @@ function App() {
             {sidebarTab === "marcadores" && (
               <PanelMarcadores
                 outline={outline}
-                currentPage={pageIndex}
-                onGoto={saltarA}
+                onGoto={seguirMarcador}
                 onChange={persistOutline}
+                onAnadir={crearMarcador}
               />
             )}
             {sidebarTab === "paginas" && (
@@ -4327,6 +4404,7 @@ function App() {
                     annotSel?.page === i ? annotSel.index : null
                   }
                   claimSel={setSelOwner}
+                  onSeleccion={recibeSeleccion}
                   requestRender={requestRender}
                   registerEl={registerEl}
                   onAnnotated={afterAnnotate}

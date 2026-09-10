@@ -28,6 +28,9 @@ export function useSeleccionTexto(ctx: {
   /** Es la página que está leyendo el usuario (la de la píldora). */
   esActual: boolean;
   claimSel: (page: number | null) => void;
+  /** El texto seleccionado en esta página, para quien lo necesite fuera
+   *  (⌘B pone un marcador con él, como Acrobat). */
+  onSeleccion: (texto: string) => void;
   onError: (e: unknown) => void;
   onNotice: (texto: string) => void;
 }) {
@@ -42,6 +45,7 @@ export function useSeleccionTexto(ctx: {
     selOwner,
     esActual,
     claimSel,
+    onSeleccion,
     onError,
     onNotice,
   } = ctx;
@@ -162,6 +166,22 @@ export function useSeleccionTexto(ctx: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [selection, copySelection]);
+
+  /** El texto de la selección viva, tal cual. */
+  const textoSeleccionado =
+    selection && pageText
+      ? pageText.chars
+          .slice(selection.start, selection.end + 1)
+          .map((c) => c.ch)
+          .join("")
+      : "";
+
+  // quien manda es la página dueña de la selección: las demás no pisan lo
+  // que ha seleccionado el usuario
+  useEffect(() => {
+    if (selOwner === index || (selOwner === null && textoSeleccionado))
+      onSeleccion(textoSeleccionado);
+  }, [textoSeleccionado, selOwner, index, onSeleccion]);
 
   const selectionRects =
     selection && pageText

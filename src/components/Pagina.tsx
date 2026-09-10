@@ -121,6 +121,9 @@ type Props = {
   /** Índice del comentario elegido en el panel, si está en esta página. */
   seleccionExterna: number | null;
   claimSel: (page: number | null) => void;
+  /** El texto que hay seleccionado en esta página: ⌘B pone un marcador con
+   *  él, como Acrobat. */
+  onSeleccion: (texto: string) => void;
   requestRender: (page: number, width: number, pv: number) => Promise<string>;
   registerEl: (page: number, el: HTMLDivElement | null) => void;
   onAnnotated: (page: number) => void;
@@ -171,6 +174,7 @@ function Pagina({
   selOwner,
   seleccionExterna,
   claimSel,
+  onSeleccion,
   requestRender,
   registerEl,
   onAnnotated,
@@ -275,6 +279,7 @@ function Pagina({
     selOwner,
     esActual,
     claimSel,
+    onSeleccion,
     onError,
     onNotice,
   });

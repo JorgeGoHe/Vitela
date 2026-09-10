@@ -76,6 +76,8 @@ const GRUPOS: { titulo: string; atajos: Atajo[] }[] = [
     titulo: "Documento",
     atajos: [
       [atajo("D"), "Propiedades del documento"],
+      [atajo("B"), "Marcador aquí, con el texto seleccionado por título"],
+      [atajo("F2", ""), "Renombrar el marcador señalado"],
       [atajo("Enter"), "Confirmar una nota o un cuadro de texto"],
       [atajo("Tab", ""), "Confirmar el campo y saltar al siguiente"],
       [atajo("Tab", "shift"), "Volver al campo anterior"],
