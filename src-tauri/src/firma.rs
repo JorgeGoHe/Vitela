@@ -120,14 +120,6 @@ pub fn esta_firmado(path: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Frase para el usuario cuando ya hay una firma y volver a firmar se la
-/// llevaría por delante. Vitela reescribe el fichero entero al firmar (no
-/// hace actualización incremental), así que la firma anterior dejaría de
-/// cuadrar con el documento: mejor decirlo que romperla en silencio.
-pub const AVISO_YA_FIRMADO: &str =
-    "El documento ya lleva una firma y volver a firmarlo invalidaría la anterior. \
-     Guarda una copia sin firmar y firma esa.";
-
 /// Frase para el usuario cuando una operación destruiría la firma. Ni
 /// «ByteRange» ni «PKCS#7»: qué pasa y qué hacer.
 pub const AVISO_FIRMADO: &str =
@@ -282,26 +274,71 @@ fn apariencia_firma(
     Ok(doc.add_object(Stream::new(forma, ops)))
 }
 
-/// Firma el PDF de `src_path` y escribe el resultado en `dest_path`.
-pub fn sign(
-    src_path: &str,
-    dest_path: &str,
+/// Dónde se escribe el campo de firma: sobre el documento entero, que se
+/// reescribe (la primera firma), o sobre una **revisión nueva** pegada al
+/// final, dejando los bytes de antes exactamente donde estaban (la segunda
+/// y siguientes). Es la diferencia entre poder firmar un contrato entre dos
+/// personas y no poder.
+enum Destino<'a> {
+    Entero(&'a mut LoDoc),
+    Incremental(&'a mut lopdf::IncrementalDocument),
+}
+
+impl Destino<'_> {
+    /// El documento donde se escriben los objetos nuevos.
+    fn escritura(&mut self) -> &mut LoDoc {
+        match self {
+            Destino::Entero(doc) => doc,
+            Destino::Incremental(inc) => &mut inc.new_document,
+        }
+    }
+
+    /// El documento donde se lee lo que ya había (páginas, catálogo,
+    /// `/Annots`, `/AcroForm`).
+    fn lectura(&self) -> &LoDoc {
+        match self {
+            Destino::Entero(doc) => doc,
+            Destino::Incremental(inc) => inc.get_prev_documents(),
+        }
+    }
+
+    fn add_object(&mut self, objeto: impl Into<Object>) -> lopdf::ObjectId {
+        self.escritura().add_object(objeto)
+    }
+
+    /// Cambia un objeto que ya existía. En una actualización incremental
+    /// hay que **traérselo antes** a la revisión nueva: es esa copia la que
+    /// se escribe al final del fichero, sin tocar la de atrás.
+    fn cambia(
+        &mut self,
+        id: lopdf::ObjectId,
+        f: impl FnOnce(&mut Object) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if let Destino::Incremental(inc) = self {
+            inc.opt_clone_object_to_new_document(id)
+                .map_err(|e| e.to_string())?;
+        }
+        let objeto = self
+            .escritura()
+            .get_object_mut(id)
+            .map_err(|e| e.to_string())?;
+        f(objeto)
+    }
+}
+
+/// Escribe el campo de firma —diccionario `/Sig` con sus huecos, widget con
+/// su apariencia, `/Annots` de la página y `/AcroForm` del catálogo— en el
+/// destino que se le dé. Deja el `/Contents` en ceros y el `/ByteRange` con
+/// números largos: los dos huecos los rellena [`cose_la_firma`] cuando el
+/// fichero ya está serializado y se sabe dónde ha caído cada cosa.
+fn escribe_campo_de_firma(
+    destino: &mut Destino,
+    page_id: lopdf::ObjectId,
     cred: &Credenciales,
     reason: Option<String>,
     apariencia: &Apariencia,
+    ordinal: usize,
 ) -> Result<(), String> {
-    // firmar reescribe el fichero entero: una firma anterior quedaría
-    // apuntando a desplazamientos que ya no existen
-    if esta_firmado(src_path) {
-        return Err(AVISO_YA_FIRMADO.to_string());
-    }
-    let mut doc = LoDoc::load(src_path).map_err(|e| format!("No se ha podido leer el PDF: {e}"))?;
-    let pagina = apariencia.page_index.unwrap_or(0) as u32 + 1;
-    let page_id = *doc
-        .get_pages()
-        .get(&pagina)
-        .ok_or("La página donde va la firma no existe")?;
-
     // diccionario de firma con huecos para ByteRange y Contents
     let mut sig = Dictionary::new();
     sig.set("Type", Object::Name(b"Sig".to_vec()));
@@ -330,9 +367,11 @@ pub fn sign(
         .unwrap_or_else(|| nombre_llano(&cred.cert.tbs_certificate.subject.to_string()));
     sig.set("Name", crate::documento::cadena_pdf(&nombre));
     if let Some(r) = reason.as_deref() {
-        sig.set("Reason", Object::string_literal(r));
+        // como el /Name: en UTF-16 si lleva acentos, que si no un motivo
+        // con «también» sale «tambiÃ©n» en la tarjeta de cualquier visor
+        sig.set("Reason", crate::documento::cadena_pdf(r));
     }
-    let sig_id = doc.add_object(sig);
+    let sig_id = destino.add_object(sig);
 
     // widget de firma: invisible sin `rect`, y con su propia apariencia si
     // la UI dibujó el rectángulo (que es como firma Acrobat)
@@ -340,10 +379,12 @@ pub fn sign(
     widget.set("Type", Object::Name(b"Annot".to_vec()));
     widget.set("Subtype", Object::Name(b"Widget".to_vec()));
     widget.set("FT", Object::Name(b"Sig".to_vec()));
-    widget.set("T", Object::string_literal("Firma1"));
+    // el nombre del campo tiene que ser único: dos «Firma1» en el mismo
+    // /AcroForm son el mismo campo para cualquier visor
+    widget.set("T", Object::string_literal(format!("Firma{ordinal}")));
     let caja = match &apariencia.rect {
         Some(r) => {
-            let geo = crate::formularios2::geo_pagina(&doc, page_id)?;
+            let geo = crate::formularios2::geo_pagina(destino.lectura(), page_id)?;
             let c = geo.ui_rect_a_pdf(r);
             [c.left().value, c.bottom().value, c.right().value, c.top().value]
         }
@@ -363,7 +404,7 @@ pub fn sign(
     widget.set("P", Object::Reference(page_id));
     if apariencia.rect.is_some() {
         let ap_id = apariencia_firma(
-            &mut doc,
+            destino.escritura(),
             caja[2] - caja[0],
             caja[3] - caja[1],
             &nombre,
@@ -376,11 +417,12 @@ pub fn sign(
         widget.set("AP", Object::Dictionary(ap));
         widget.set("DA", Object::string_literal("/Helv 0 Tf 0 g"));
     }
-    let widget_id = doc.add_object(widget);
+    let widget_id = destino.add_object(widget);
 
     // añadir el widget a los Annots de la página (array directo o referencia)
     let annots_target = {
-        let page = doc
+        let page = destino
+            .lectura()
             .get_object(page_id)
             .and_then(|o| o.as_dict())
             .map_err(|e| e.to_string())?;
@@ -390,29 +432,32 @@ pub fn sign(
         }
     };
     if let Some(rid) = annots_target {
-        let arr = doc
-            .get_object_mut(rid)
-            .and_then(|o| o.as_array_mut())
-            .map_err(|e| e.to_string())?;
-        arr.push(Object::Reference(widget_id));
+        destino.cambia(rid, |o| {
+            o.as_array_mut()
+                .map_err(|e| e.to_string())?
+                .push(Object::Reference(widget_id));
+            Ok(())
+        })?;
     } else {
-        let page = doc
-            .get_object_mut(page_id)
-            .and_then(|o| o.as_dict_mut())
-            .map_err(|e| e.to_string())?;
-        match page.get_mut(b"Annots") {
-            Ok(Object::Array(arr)) => arr.push(Object::Reference(widget_id)),
-            _ => page.set("Annots", Object::Array(vec![Object::Reference(widget_id)])),
-        }
+        destino.cambia(page_id, |o| {
+            let page = o.as_dict_mut().map_err(|e| e.to_string())?;
+            match page.get_mut(b"Annots") {
+                Ok(Object::Array(arr)) => arr.push(Object::Reference(widget_id)),
+                _ => page.set("Annots", Object::Array(vec![Object::Reference(widget_id)])),
+            }
+            Ok(())
+        })?;
     }
 
     // AcroForm del catálogo: crear o fusionar, con SigFlags 3
-    let catalog_id = doc
+    let catalog_id = destino
+        .lectura()
         .trailer
         .get(b"Root")
         .and_then(|o| o.as_reference())
         .map_err(|e| e.to_string())?;
     let existing_form: Option<Dictionary> = {
+        let doc = destino.lectura();
         let catalog = doc
             .get_object(catalog_id)
             .and_then(|o| o.as_dict())
@@ -428,33 +473,58 @@ pub fn sign(
         }
     };
     let mut form = existing_form.unwrap_or_default();
-    match form.get_mut(b"Fields") {
-        Ok(Object::Array(arr)) => arr.push(Object::Reference(widget_id)),
-        _ => form.set("Fields", Object::Array(vec![Object::Reference(widget_id)])),
+    // el /Fields puede ser una referencia a un array: hay que resolverlo o
+    // la firma nueva se quedaría fuera del formulario
+    let fields_ref = match form.get(b"Fields") {
+        Ok(Object::Reference(rid)) => Some(*rid),
+        _ => None,
+    };
+    match fields_ref {
+        Some(rid) => {
+            let mut arr = destino
+                .lectura()
+                .get_object(rid)
+                .and_then(|o| o.as_array())
+                .cloned()
+                .unwrap_or_default();
+            arr.push(Object::Reference(widget_id));
+            form.set("Fields", Object::Array(arr));
+        }
+        None => match form.get_mut(b"Fields") {
+            Ok(Object::Array(arr)) => arr.push(Object::Reference(widget_id)),
+            _ => form.set("Fields", Object::Array(vec![Object::Reference(widget_id)])),
+        },
     }
     form.set("SigFlags", 3i64);
-    let catalog = doc
-        .get_object_mut(catalog_id)
-        .and_then(|o| o.as_dict_mut())
-        .map_err(|e| e.to_string())?;
-    catalog.set("AcroForm", Object::Dictionary(form));
+    destino.cambia(catalog_id, |o| {
+        o.as_dict_mut()
+            .map_err(|e| e.to_string())?
+            .set("AcroForm", Object::Dictionary(form));
+        Ok(())
+    })
+}
 
-    // serializar y localizar el hueco de /Contents
-    let mut out = Vec::new();
-    doc.save_to(&mut out)
-        .map_err(|e| format!("No se ha podido serializar: {e}"))?;
+/// Rellena los dos huecos que dejó [`escribe_campo_de_firma`] sobre el
+/// fichero ya serializado: el `/ByteRange` (que solo se puede escribir
+/// cuando se sabe dónde ha caído el `/Contents`) y el PKCS#7.
+///
+/// `desde` es el byte a partir del cual buscar: en una actualización
+/// incremental, el principio de la revisión nueva, porque delante hay otra
+/// firma con su propio `/ByteRange` y su propio `/Contents`.
+fn cose_la_firma(out: &mut [u8], desde: usize, cred: &Credenciales) -> Result<(), String> {
     let marker: Vec<u8> = {
         let mut v = vec![b'<'];
         v.extend(std::iter::repeat_n(b'0', SIG_LEN * 2));
         v.push(b'>');
         v
     };
-    let contents_start =
-        find_subslice(&out, &marker).ok_or("No se encontró el hueco de la firma")?;
+    let contents_start = desde
+        + find_subslice(&out[desde..], &marker).ok_or("No se encontró el hueco de la firma")?;
     let contents_end = contents_start + marker.len();
 
     // parchear ByteRange manteniendo la longitud del hueco
-    let br_pos = find_subslice(&out, b"/ByteRange").ok_or("No se encontró /ByteRange")?;
+    let br_pos =
+        desde + find_subslice(&out[desde..], b"/ByteRange").ok_or("No se encontró /ByteRange")?;
     let open = br_pos
         + out[br_pos..]
             .iter()
@@ -487,7 +557,81 @@ pub fn sign(
     }
     let hex: String = der.iter().map(|byte| format!("{byte:02X}")).collect();
     out[contents_start + 1..contents_start + 1 + hex.len()].copy_from_slice(hex.as_bytes());
+    Ok(())
+}
 
+/// Cuántas veces aparece `aguja` en `pajar`.
+fn cuenta_subslices(pajar: &[u8], aguja: &[u8]) -> usize {
+    let mut n = 0;
+    let mut i = 0;
+    while let Some(j) = find_subslice(&pajar[i..], aguja) {
+        n += 1;
+        i += j + aguja.len();
+    }
+    n
+}
+
+/// Firma el PDF de `src_path` y escribe el resultado en `dest_path`.
+///
+/// **Si el documento ya lleva firma, la nueva va detrás**, en una
+/// actualización incremental: los bytes de antes se quedan **exactamente**
+/// donde estaban y el fichero crece por el final con el campo nuevo, el
+/// `/Annots` de su página, el `/AcroForm` actualizado, una tabla de
+/// referencias cruzadas con `/Prev` y su `%%EOF`. Es el caso normal de un
+/// contrato: dos personas firmando el mismo documento. La primera firma
+/// deja de cubrir el fichero entero (`covers_whole_file`) y **eso no es
+/// una manipulación**: hay bytes detrás que ella no avala, que es lo que
+/// significa una revisión nueva.
+pub fn sign(
+    src_path: &str,
+    dest_path: &str,
+    cred: &Credenciales,
+    reason: Option<String>,
+    apariencia: &Apariencia,
+) -> Result<(), String> {
+    let bytes =
+        std::fs::read(src_path).map_err(|e| format!("No se ha podido leer el PDF: {e}"))?;
+    let doc =
+        LoDoc::load_mem(&bytes).map_err(|e| format!("No se ha podido leer el PDF: {e}"))?;
+    let pagina = apariencia.page_index.unwrap_or(0) as u32 + 1;
+    let page_id = *doc
+        .get_pages()
+        .get(&pagina)
+        .ok_or("La página donde va la firma no existe")?;
+    // el `/ByteRange` es lo que distingue a un PDF firmado
+    let ordinal = cuenta_subslices(&bytes, b"/ByteRange") + 1;
+
+    let (mut out, desde) = if ordinal > 1 {
+        let anteriores = bytes.len();
+        let mut inc = lopdf::IncrementalDocument::create_from(bytes, doc);
+        escribe_campo_de_firma(
+            &mut Destino::Incremental(&mut inc),
+            page_id,
+            cred,
+            reason,
+            apariencia,
+            ordinal,
+        )?;
+        let mut out = Vec::new();
+        inc.save_to(&mut out)
+            .map_err(|e| format!("No se ha podido serializar: {e}"))?;
+        (out, anteriores)
+    } else {
+        let mut doc = doc;
+        escribe_campo_de_firma(
+            &mut Destino::Entero(&mut doc),
+            page_id,
+            cred,
+            reason,
+            apariencia,
+            ordinal,
+        )?;
+        let mut out = Vec::new();
+        doc.save_to(&mut out)
+            .map_err(|e| format!("No se ha podido serializar: {e}"))?;
+        (out, 0)
+    };
+    cose_la_firma(&mut out, desde, cred)?;
     std::fs::write(dest_path, &out).map_err(|e| format!("No se ha podido escribir: {e}"))
 }
 
@@ -1228,6 +1372,16 @@ mod tests {
         .expect("credenciales de prueba")
     }
 
+    /// Otro firmante, para el contrato que firman dos personas: el
+    /// certificado que emitió la AC de prueba.
+    fn otras_credenciales() -> Credenciales {
+        credenciales_pem(
+            include_str!("../fixtures/test_hija_cert.pem"),
+            include_str!("../fixtures/test_hija_key.pem"),
+        )
+        .expect("las credenciales de la otra firmante")
+    }
+
     /// **R20.** Una firma buena seguida de un cambio legítimo —rellenar un
     /// campo, una segunda firma, el DSS de una firma con LTV— no es una
     /// manipulación: el `/ByteRange` deja de cubrir el fichero (hay bytes
@@ -1708,6 +1862,58 @@ mod tests {
             std::fs::remove_file(p).ok();
         }
     }
+    /// **H4, el primer paso.** Antes de escribir nada de la segunda firma
+    /// hay que saber si lopdf conserva **byte a byte** el documento
+    /// anterior al guardar una actualización incremental: si normalizara
+    /// los objetos viejos, la primera firma se rompería y todo el trabajo
+    /// sobraría.
+    ///
+    /// `covers_whole_file` deja de ser cierto y eso es lo correcto: hay
+    /// bytes detrás que la primera firma no avala. R20 ya enseñó que eso es
+    /// neutro y no una manipulación.
+    #[test]
+    fn guardar_incrementalmente_un_pdf_firmado_no_le_rompe_la_firma() {
+        let dir = std::env::temp_dir();
+        let src = dir.join("firma-incremental-base.pdf");
+        let firmado = dir.join("firma-incremental-firmado.pdf");
+        let crecido = dir.join("firma-incremental-crecido.pdf");
+        crea_pdf(&["Contrato"], &src);
+        sign(
+            &src.to_string_lossy(),
+            &firmado.to_string_lossy(),
+            &credenciales(),
+            None,
+            &Apariencia::default(),
+        )
+        .expect("firmar");
+        let antes = std::fs::read(&firmado).expect("leer el firmado");
+
+        // guardar incrementalmente SIN tocar nada
+        let doc = LoDoc::load(&firmado).expect("cargar");
+        let mut inc = lopdf::IncrementalDocument::create_from(antes.clone(), doc);
+        let mut out: Vec<u8> = Vec::new();
+        inc.save_to(&mut out).expect("guardar incremental");
+        std::fs::write(&crecido, &out).expect("escribir");
+
+        assert!(out.len() > antes.len(), "una revisión nueva añade bytes");
+        assert_eq!(
+            &out[..antes.len()],
+            &antes[..],
+            "los bytes de la primera revisión tienen que quedarse exactamente donde estaban"
+        );
+
+        let f = &verify_signatures(crecido.to_string_lossy().into_owned()).expect("verificar")[0];
+        assert_eq!(f.estado, ESTADO_OK, "la firma sigue cuadrando: {f:?}");
+        assert!(f.digest_ok);
+        assert!(
+            !f.covers_whole_file,
+            "y ya no cubre el fichero entero, que es justo lo que significa una revisión detrás"
+        );
+        for p in [&src, &firmado, &crecido] {
+            std::fs::remove_file(p).ok();
+        }
+    }
+
     /// **R28.** De un DN se enseña el nombre, no el DN. La tarjeta del
     /// panel decía «Emitido por
     /// `CN=AC FNMT Usuarios,OU=Ceres,O=FNMT-RCM,C=ES`» en una línea que
@@ -1872,30 +2078,173 @@ mod tests {
         }
     }
     impl rsa::rand_core::CryptoRng for Entropia {}
-
-    /// Vitela reescribe el fichero al firmar, así que firmar encima de una
-    /// firma la destruiría. Acrobat encadena firmas con actualización
-    /// incremental; mientras eso no exista, lo honesto es negarse y decir
-    /// qué hacer, no dejar el documento con una firma rota.
+    /// **H4.** Dos personas firmando el mismo contrato, que es el caso que
+    /// hasta el ciclo 5 mandaba al usuario a Acrobat: firmar encima avisaba
+    /// y se plantaba, porque Vitela reescribía el fichero entero.
+    ///
+    /// Ahora la segunda firma va en una **actualización incremental**: los
+    /// bytes de antes se quedan donde estaban y el fichero crece por el
+    /// final. Las dos firmas comprueban, la primera ya no cubre el fichero
+    /// entero —hay una revisión detrás, que es lo normal en un PDF firmado
+    /// que sigue vivo— y sigue en `ok`, no en rojo.
     #[test]
-    fn firmar_un_documento_ya_firmado_avisa_en_vez_de_romper_la_firma() {
-        let (dest, _) = pdf_firmado("firma-doble");
-        let otra = dest.with_extension("otra.pdf");
-        let err = sign(
-            &dest.to_string_lossy(),
-            &otra.to_string_lossy(),
+    fn dos_personas_pueden_firmar_el_mismo_documento() {
+        let dir = std::env::temp_dir();
+        let src = dir.join("firma-dos-personas.pdf");
+        let una = dir.join("firma-dos-personas-1.pdf");
+        let dos = dir.join("firma-dos-personas-2.pdf");
+        crea_pdf(&["Contrato de arrendamiento"], &src);
+        sign(
+            &src.to_string_lossy(),
+            &una.to_string_lossy(),
+            &credenciales(),
+            Some("Conforme".into()),
+            &Apariencia::default(),
+        )
+        .expect("la primera firma");
+        let primera = std::fs::read(&una).expect("leer");
+
+        // la segunda, con otro certificado y **visible**: la apariencia se
+        // dibuja en la revisión nueva y la geometría de la página se lee de
+        // la de atrás
+        sign(
+            &una.to_string_lossy(),
+            &dos.to_string_lossy(),
+            &otras_credenciales(),
+            Some("También conforme".into()),
+            &Apariencia {
+                rect: Some(crate::Rect { x: 60.0, y: 500.0, w: 180.0, h: 60.0 }),
+                page_index: Some(0),
+                signer_name: Some("Ada Lovelace".into()),
+                signature_png: None,
+            },
+        )
+        .expect("la segunda firma");
+        let ambas = std::fs::read(&dos).expect("leer");
+
+        assert_eq!(
+            &ambas[..primera.len()],
+            &primera[..],
+            "la revisión de la primera firma no se toca ni un byte"
+        );
+
+        let firmas = verify_signatures(dos.to_string_lossy().into_owned()).expect("verificar");
+        assert_eq!(firmas.len(), 2, "dos firmas: {firmas:?}");
+        assert_eq!(firmas[0].estado, ESTADO_OK, "la primera: {:?}", firmas[0]);
+        assert!(firmas[0].digest_ok);
+        assert!(
+            !firmas[0].covers_whole_file,
+            "la primera ya no cubre el fichero: detrás está la segunda"
+        );
+        assert_eq!(firmas[1].estado, ESTADO_OK, "la segunda: {:?}", firmas[1]);
+        assert!(
+            firmas[1].covers_whole_file,
+            "la segunda sí cubre el fichero entero"
+        );
+        assert_ne!(
+            firmas[0].cert_subject, firmas[1].cert_subject,
+            "las firma dos personas distintas"
+        );
+        assert_eq!(firmas[0].reason, "Conforme");
+        assert_eq!(firmas[1].reason, "También conforme");
+        assert!(firmas[0].rect.is_none(), "la primera es invisible");
+        assert!(
+            firmas[1].rect.is_some(),
+            "la segunda lleva su sello dibujado en la revisión nueva"
+        );
+        assert_eq!(firmas[1].name, "Ada Lovelace");
+        // y la página se renderiza con el sello encima
+        crate::render_page_png(dos.to_string_lossy().into_owned(), 0, 200, true)
+            .expect("render con dos firmas");
+        // y el documento se sigue pudiendo abrir y leer
+        assert!(
+            crate::tests::textos_de(&dos)[0].contains("Contrato de arrendamiento"),
+            "el documento sigue leyéndose entero"
+        );
+
+        // y una tercera encima sigue sin romper a las dos de antes
+        let tres = dir.join("firma-dos-personas-3.pdf");
+        sign(
+            &dos.to_string_lossy(),
+            &tres.to_string_lossy(),
             &credenciales(),
             None,
             &Apariencia::default(),
         )
-        .unwrap_err();
-        assert!(err.contains("ya lleva una firma"), "aviso poco claro: {err}");
-        assert!(err.contains("copia sin firmar"), "falta el qué hacer: {err}");
-        assert!(!otra.exists(), "no se escribe nada si no se va a firmar");
-        // y la firma que había sigue valiendo
-        let f = &verify_signatures(dest.to_string_lossy().into_owned()).expect("verificar")[0];
-        assert_eq!(f.estado, ESTADO_OK);
-        std::fs::remove_file(&dest).ok();
+        .expect("la tercera firma");
+        let firmas = verify_signatures(tres.to_string_lossy().into_owned()).expect("verificar");
+        assert_eq!(firmas.len(), 3);
+        assert!(
+            firmas.iter().all(|f| f.estado == ESTADO_OK),
+            "las tres siguen cuadrando: {firmas:?}"
+        );
+
+        for p in [&src, &una, &dos, &tres] {
+            std::fs::remove_file(p).ok();
+        }
+    }
+
+    /// **H4.** Un cambio **entre** las dos firmas es una revisión más, no
+    /// una manipulación: la primera firma sigue cuadrando con los bytes que
+    /// avaló, y decir «modificado» sería acusar en falso.
+    #[test]
+    fn un_cambio_entre_las_dos_firmas_no_acusa_a_la_primera() {
+        let dir = std::env::temp_dir();
+        let src = dir.join("firma-entre-medias.pdf");
+        let una = dir.join("firma-entre-medias-1.pdf");
+        let tocado = dir.join("firma-entre-medias-tocado.pdf");
+        let dos = dir.join("firma-entre-medias-2.pdf");
+        crea_pdf(&["Contrato"], &src);
+        sign(
+            &src.to_string_lossy(),
+            &una.to_string_lossy(),
+            &credenciales(),
+            None,
+            &Apariencia::default(),
+        )
+        .expect("la primera firma");
+
+        // una revisión incremental por medio (lo que hace rellenar un campo)
+        let primera = std::fs::read(&una).expect("leer");
+        let doc = LoDoc::load(&una).expect("cargar");
+        let mut inc = lopdf::IncrementalDocument::create_from(primera.clone(), doc);
+        let id = inc.new_document.add_object(Object::string_literal("una revisión"));
+        let root = inc
+            .get_prev_documents()
+            .trailer
+            .get(b"Root")
+            .and_then(|o| o.as_reference())
+            .expect("root");
+        inc.opt_clone_object_to_new_document(root).expect("clonar");
+        inc.new_document
+            .get_object_mut(root)
+            .and_then(|o| o.as_dict_mut())
+            .expect("catálogo")
+            .set("Vitela", Object::Reference(id));
+        let mut out = Vec::new();
+        inc.save_to(&mut out).expect("guardar");
+        std::fs::write(&tocado, &out).expect("escribir");
+
+        sign(
+            &tocado.to_string_lossy(),
+            &dos.to_string_lossy(),
+            &otras_credenciales(),
+            None,
+            &Apariencia::default(),
+        )
+        .expect("la segunda firma");
+
+        let firmas = verify_signatures(dos.to_string_lossy().into_owned()).expect("verificar");
+        assert_eq!(firmas.len(), 2);
+        assert_eq!(
+            firmas[0].estado, ESTADO_OK,
+            "la primera sigue cuadrando con lo que firmó: {:?}",
+            firmas[0]
+        );
+        assert_eq!(firmas[1].estado, ESTADO_OK);
+        for p in [&src, &una, &tocado, &dos] {
+            std::fs::remove_file(p).ok();
+        }
     }
 
     /// El contenido del `/AP /N` del widget de firma de la página `pagina`.
