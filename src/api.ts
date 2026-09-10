@@ -1358,12 +1358,41 @@ export type CompressReport = {
   imagenes: number;
 };
 
+/** Una categoría de la auditoría de espacio: cuánto pesa y qué parte del
+ *  fichero es. Son las de Acrobat —imágenes, fuentes incrustadas, contenido
+ *  de página, anotaciones, adjuntos, marcadores y enlaces, metadatos,
+ *  estructura y «lo demás»— y la suma cuadra con el tamaño del fichero. */
+export type CategoriaPeso = {
+  categoria: string;
+  bytes: number;
+  porcentaje: number;
+};
+
+/** De qué está hecho el PDF. Es lo que contesta «¿por qué pesa 40 MB?», que
+ *  es la pregunta que la gente le hace a Acrobat y la que hace que reducir
+ *  el tamaño se entienda en vez de ser una ruleta. */
+export function auditPdf(path: string): Promise<CategoriaPeso[]> {
+  return invoke("audit_pdf", { path });
+}
+
+/** Reduce el tamaño: recomprime las imágenes y, si se pide, descarta lo que
+ *  no hace falta. Nunca dice que ha reducido si el fichero ha crecido. */
 export function compressPdf(
   workPath: string,
   quality: number,
   maxDpi: number,
+  quitarAdjuntos: boolean,
+  quitarMetadatos: boolean,
+  aplanarFormularios: boolean,
 ): Promise<CompressReport> {
-  return invoke("compress_pdf", { workPath, quality, maxDpi });
+  return invoke("compress_pdf", {
+    workPath,
+    quality,
+    maxDpi,
+    quitarAdjuntos,
+    quitarMetadatos,
+    aplanarFormularios,
+  });
 }
 
 /** Los cinco tipos que crea «Preparar formulario» de Acrobat. */

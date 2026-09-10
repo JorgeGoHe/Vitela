@@ -515,6 +515,20 @@ export const IMPRIMIR_POR_DEFECTO: OpcionesImprimir = {
   comp: COMPOSICION_POR_DEFECTO,
 };
 
+/** Lo que «Reducir tamaño» puede descartar además de recomprimir las
+ *  imágenes, que son las casillas del Optimizer de Acrobat. */
+export type OpcionesComprimir = {
+  quitarAdjuntos: boolean;
+  quitarMetadatos: boolean;
+  aplanarFormularios: boolean;
+};
+
+export const COMPRIMIR_POR_DEFECTO: OpcionesComprimir = {
+  quitarAdjuntos: false,
+  quitarMetadatos: false,
+  aplanarFormularios: false,
+};
+
 /* ---- ajuste de línea del cuadro de texto (FreeText) ---- */
 
 /** Interlineado del `/AP` del cuadro de texto. */

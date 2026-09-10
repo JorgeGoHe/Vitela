@@ -83,7 +83,9 @@ import {
   type Reciente,
 } from "./api";
 import {
+  auditPdf,
   compressPdf,
+  type CategoriaPeso,
   encryptPdf,
   exportPagesPng,
   exportText,
@@ -156,6 +158,7 @@ import {
   guardaPreferencias,
   guardaVista,
   IMPRIMIR_POR_DEFECTO,
+  COMPRIMIR_POR_DEFECTO,
   marcaAvisoPantalla,
   type ModoPagina,
   type OpcionesImprimir,
@@ -691,6 +694,10 @@ function App() {
   const [compressOpen, setCompressOpen] = useState(false);
   const [compressQuality, setCompressQuality] = useState(75);
   const [compressDpi, setCompressDpi] = useState(150);
+  // de qué está hecho el fichero: se pide al abrir el diálogo y se enseña
+  // arriba del todo, que es lo que hace que reducir el tamaño se entienda
+  const [auditoria, setAuditoria] = useState<CategoriaPeso[] | null>(null);
+  const [compressOpts, setCompressOpts] = useState(COMPRIMIR_POR_DEFECTO);
   const [notice, setNoticeTexto] = useState<string | null>(null);
   // los avisos de progreso («Comprimiendo…») no se van solos: mientras dura
   // el trabajo son el único indicio de que la app no está colgada
@@ -3866,12 +3873,31 @@ function App() {
     }
   }
 
+  /** «Reducir tamaño…»: primero la auditoría, que es lo que contesta «¿por
+   *  qué pesa esto?»; el diálogo se abre ya, y la ficha entra cuando llega
+   *  —si falla, las casillas siguen funcionando—. */
+  function abrirComprimir() {
+    if (!workPath) return;
+    setAuditoria(null);
+    setCompressOpen(true);
+    auditPdf(workPath)
+      .then(setAuditoria)
+      .catch(() => setAuditoria([]));
+  }
+
   async function applyCompress() {
     if (!workPath) return;
     try {
       setCompressOpen(false);
       setNotice("Comprimiendo…", { persistente: true });
-      const r = await compressPdf(workPath, compressQuality, compressDpi);
+      const r = await compressPdf(
+        workPath,
+        compressQuality,
+        compressDpi,
+        compressOpts.quitarAdjuntos,
+        compressOpts.quitarMetadatos,
+        compressOpts.aplanarFormularios,
+      );
       setNotice(
         r.imagenes === 0
           ? "No había imágenes que comprimir."
@@ -4438,7 +4464,7 @@ function App() {
     // reenvían la tecla al visor, cuya selección no es del DOM
     copiar: copiarDelMenu,
     "seleccionar-todo": seleccionarTodoDelMenu,
-    comprimir: () => setCompressOpen(true),
+    comprimir: abrirComprimir,
     /* Ayuda */
     atajos: () => setAtajosAbiertos(true),
   };
@@ -4811,7 +4837,7 @@ function App() {
                 exportarWord={() => setWordAsk(true)}
                 exportarComentarios={exportarComentarios}
                 importarComentarios={importarComentarios}
-                abrirComprimir={() => setCompressOpen(true)}
+                abrirComprimir={abrirComprimir}
                 leerEnVozAlta={() => {
                   if (lectura.leyendo) lectura.parar();
                   else lectura.leer(pageIndex, true);
@@ -5480,6 +5506,9 @@ function App() {
           setQuality={setCompressQuality}
           dpi={compressDpi}
           setDpi={setCompressDpi}
+          auditoria={auditoria}
+          opciones={compressOpts}
+          setOpciones={setCompressOpts}
           onConfirm={applyCompress}
           onClose={() => setCompressOpen(false)}
         />
