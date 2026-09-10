@@ -1076,6 +1076,21 @@ compila los instaladores a mano o al etiquetar `v*`.
     `algoritmo` dice cuál de las dos cosas es: con «certificado del
     firmante ausente» la culpa no es del algoritmo y la banda no puede
     decir que lo sea.
+  - **La auditoría cuenta lo que hay dentro de un Form XObject** (AC-094,
+    `exportar.rs`): la imagen de un fondo, de una marca de agua, de una
+    firma manuscrita o de un sello vive dentro de un Form, y `clasifica`
+    reclamaba el Form entero como contenido antes de que nadie la mirara.
+    Un fichero cuyo peso era íntegramente una foto decía «imágenes 0 %».
+    Ahora entra en su `/Resources` —imágenes y fuentes primero, con el
+    mismo tope de 20.000 objetos y un corte de profundidad para los
+    ciclos— y solo después reclama el resto.
+  - **La tabla del Optimizer, en español** (AC-089): `CategoriaPeso` gana
+    `etiqueta` («Imágenes», «Marcadores y enlaces», «Lo demás»). La
+    componía nadie y la pantalla que existe para explicarte de qué está
+    hecho tu fichero enseñaba `lo_demas` y `marcadores_y_enlaces`,
+    identificadores de Rust con guion bajo y sin tildes. La escribe el
+    backend para que no haya dos listas de nombres que puedan separarse, y
+    un test exige una por categoría, todas distintas.
   - **Un mensaje con carreras de espacios dentro** (C-9): un literal partido
     en varias líneas sin la barra invertida se lleva el sangrado del código
     dentro de la frase, y eso lo lee el usuario. El aviso del PDF cifrado

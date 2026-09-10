@@ -614,9 +614,32 @@ fn familia_css(familia: &str) -> &'static str {
 #[derive(Serialize, Debug)]
 pub struct CategoriaPeso {
     pub categoria: String,
+    /// Cómo se llama en español, que es lo que enseña la tabla. Sin esto,
+    /// la pantalla que existe para explicarte de qué está hecho tu fichero
+    /// decía `lo_demas` y `marcadores_y_enlaces`: identificadores de Rust,
+    /// con guion bajo y sin tildes. La compone el backend para que no haya
+    /// dos listas de nombres que puedan separarse.
+    pub etiqueta: String,
     pub bytes: u64,
     /// Porcentaje del fichero, con un decimal.
     pub porcentaje: f32,
+}
+
+/// Cómo se llama cada categoría en la tabla. Hay una por cada valor de
+/// `CATEGORIAS`, y un test lo comprueba.
+fn etiqueta_de(categoria: &str) -> &'static str {
+    match categoria {
+        "imagenes" => "Imágenes",
+        "fuentes" => "Fuentes",
+        "contenido" => "Contenido de las páginas",
+        "anotaciones" => "Comentarios",
+        "adjuntos" => "Ficheros adjuntos",
+        "marcadores_y_enlaces" => "Marcadores y enlaces",
+        "metadatos" => "Metadatos",
+        "estructura" => "Estructura del documento",
+        "lo_demas" => "Lo demás",
+        _ => "Lo demás",
+    }
 }
 
 /// Las categorías de Acrobat, en el orden en que las enseña.
@@ -676,6 +699,7 @@ pub fn audit_pdf(path: String) -> Result<Vec<CategoriaPeso>, String> {
                     let bytes = pesos.get(c).copied().unwrap_or(0);
                     CategoriaPeso {
                         categoria: (*c).to_string(),
+                        etiqueta: etiqueta_de(c).to_string(),
                         bytes,
                         porcentaje: (bytes as f64 * 1000.0 / suma as f64).round() as f32 / 10.0,
                     }
@@ -710,47 +734,98 @@ fn tamano_dict(d: &lopdf::Dictionary) -> usize {
 
 /// De quién es cada objeto. El primero que reclama uno se lo queda: un
 /// stream de imagen que además cuelga de una anotación cuenta una vez.
-fn clasifica<'a>(
+/// Marca como de `cat` el objeto y todo lo que cuelga de él. El primero
+/// que reclama se lo queda: por eso el orden de las llamadas importa.
+fn reclama(
     doc: &lopdf::Document,
-    out: &mut std::collections::BTreeMap<lopdf::ObjectId, &'a str>,
+    out: &mut std::collections::BTreeMap<lopdf::ObjectId, &'static str>,
+    obj: Option<&lopdf::Object>,
+    cat: &'static str,
 ) {
     use lopdf::Object;
-    let reclama = |out: &mut std::collections::BTreeMap<lopdf::ObjectId, &'a str>,
-                       obj: Option<&Object>,
-                       cat: &'a str| {
-        let mut pila: Vec<lopdf::ObjectId> = match obj {
-            Some(Object::Reference(id)) => vec![*id],
-            Some(Object::Array(a)) => a.iter().filter_map(|o| o.as_reference().ok()).collect(),
-            _ => Vec::new(),
-        };
-        let mut vistos = 0;
-        while let Some(id) = pila.pop() {
-            vistos += 1;
-            if vistos > 20_000 {
-                return;
-            }
-            if out.contains_key(&id) {
-                continue;
-            }
-            out.insert(id, cat);
-            // se baja por el grafo: un `/StructTreeRoot` o un árbol de
-            // marcadores son cientos de objetos colgando
-            if let Ok(o) = doc.get_object(id) {
-                let mut hijos = Vec::new();
-                recoge_hijos(o, &mut hijos);
-                pila.extend(hijos);
+    let mut pila: Vec<lopdf::ObjectId> = match obj {
+        Some(Object::Reference(id)) => vec![*id],
+        Some(Object::Array(a)) => a.iter().filter_map(|o| o.as_reference().ok()).collect(),
+        _ => Vec::new(),
+    };
+    let mut vistos = 0;
+    while let Some(id) = pila.pop() {
+        vistos += 1;
+        if vistos > 20_000 {
+            return;
+        }
+        if out.contains_key(&id) {
+            continue;
+        }
+        out.insert(id, cat);
+        // se baja por el grafo: un `/StructTreeRoot` o un árbol de
+        // marcadores son cientos de objetos colgando
+        if let Ok(o) = doc.get_object(id) {
+            let mut hijos = Vec::new();
+            recoge_hijos(o, &mut hijos);
+            pila.extend(hijos);
+        }
+    }
+}
+
+/// Clasifica un `/XObject` de recursos **entrando en los Form XObject**
+/// (AC-094). El fondo, la marca de agua de imagen, la firma manuscrita y
+/// los sellos de imagen viven todos dentro de un Form, y reclamar el Form
+/// entero como contenido se llevaba su imagen por delante: un fichero cuyo
+/// peso era íntegramente una foto decía «imágenes 0 %» y «contenido
+/// 100 %», que es lo contrario de lo que la pantalla existe para explicar.
+fn clasifica_xobjects(
+    doc: &lopdf::Document,
+    out: &mut std::collections::BTreeMap<lopdf::ObjectId, &'static str>,
+    xobj: &lopdf::Dictionary,
+    profundidad: u8,
+) {
+    for (_, v) in xobj.iter() {
+        let d = dict_res(doc, v);
+        let subtipo = d
+            .as_ref()
+            .and_then(|d| d.get(b"Subtype").and_then(|o| o.as_name()).ok())
+            .unwrap_or_default()
+            .to_vec();
+        if subtipo == b"Image" {
+            reclama(doc, out, Some(v), "imagenes");
+            continue;
+        }
+        // un Form: primero lo suyo, que es donde está lo que se puede
+        // reconocer. La profundidad corta los ciclos
+        if profundidad < 8 {
+            if let Some(res) = d
+                .as_ref()
+                .and_then(|d| d.get(b"Resources").ok())
+                .and_then(|o| dict_res(doc, o))
+            {
+                if let Some(fuentes) = res.get(b"Font").ok().and_then(|o| dict_res(doc, o)) {
+                    for (_, f) in fuentes.iter() {
+                        reclama(doc, out, Some(f), "fuentes");
+                    }
+                }
+                if let Some(dentro) = res.get(b"XObject").ok().and_then(|o| dict_res(doc, o)) {
+                    clasifica_xobjects(doc, out, &dentro, profundidad + 1);
+                }
             }
         }
-    };
+        reclama(doc, out, Some(v), "contenido");
+    }
+}
 
+fn clasifica(
+    doc: &lopdf::Document,
+    out: &mut std::collections::BTreeMap<lopdf::ObjectId, &'static str>,
+) {
+    use lopdf::Object;
     let catalogo = doc.catalog().cloned().unwrap_or_default();
     // lo específico primero: quien reclama antes se lo queda
-    reclama(out, catalogo.get(b"Metadata").ok(), "metadatos");
-    reclama(out, doc.trailer.get(b"Info").ok(), "metadatos");
-    reclama(out, catalogo.get(b"StructTreeRoot").ok(), "estructura");
-    reclama(out, catalogo.get(b"Outlines").ok(), "marcadores_y_enlaces");
+    reclama(doc, out, catalogo.get(b"Metadata").ok(), "metadatos");
+    reclama(doc, out, doc.trailer.get(b"Info").ok(), "metadatos");
+    reclama(doc, out, catalogo.get(b"StructTreeRoot").ok(), "estructura");
+    reclama(doc, out, catalogo.get(b"Outlines").ok(), "marcadores_y_enlaces");
     if let Some(names) = catalogo.get(b"Names").ok().and_then(|o| dict_res(doc, o)) {
-        reclama(out, names.get(b"EmbeddedFiles").ok(), "adjuntos");
+        reclama(doc, out, names.get(b"EmbeddedFiles").ok(), "adjuntos");
     }
 
     for page_id in doc.get_pages().into_values() {
@@ -758,7 +833,7 @@ fn clasifica<'a>(
             continue;
         };
         let page = page.clone();
-        reclama(out, page.get(b"Contents").ok(), "contenido");
+        reclama(doc, out, page.get(b"Contents").ok(), "contenido");
         // las anotaciones: los enlaces y los adjuntos van aparte, que es lo
         // que la tabla tiene que poder separar
         if let Ok(annots) = page.get(b"Annots") {
@@ -780,25 +855,17 @@ fn clasifica<'a>(
                     b"FileAttachment" => "adjuntos",
                     _ => "anotaciones",
                 };
-                reclama(out, Some(&a), cat);
+                reclama(doc, out, Some(&a), cat);
             }
         }
         if let Some(res) = page.get(b"Resources").ok().and_then(|o| dict_res(doc, o)) {
             if let Some(fuentes) = res.get(b"Font").ok().and_then(|o| dict_res(doc, o)) {
                 for (_, v) in fuentes.iter() {
-                    reclama(out, Some(v), "fuentes");
+                    reclama(doc, out, Some(v), "fuentes");
                 }
             }
             if let Some(xobj) = res.get(b"XObject").ok().and_then(|o| dict_res(doc, o)) {
-                for (_, v) in xobj.iter() {
-                    let es_imagen = dict_res(doc, v)
-                        .map(|d| {
-                            d.get(b"Subtype").and_then(|o| o.as_name()).unwrap_or_default()
-                                == b"Image"
-                        })
-                        .unwrap_or(false);
-                    reclama(out, Some(v), if es_imagen { "imagenes" } else { "contenido" });
-                }
+                clasifica_xobjects(doc, out, &xobj, 0);
             }
         }
     }
@@ -832,6 +899,68 @@ mod tests {
     use super::*;
     use crate::tests::crea_pdf;
     use base64::Engine;
+
+    /// **AC-094.** La imagen de un fondo, de una marca de agua, de una
+    /// firma manuscrita o de un sello vive dentro de un Form XObject, y
+    /// reclamar el Form entero como contenido se llevaba su imagen por
+    /// delante: un fichero cuyo peso era íntegramente una foto decía
+    /// «imágenes 0 %» y «contenido 100 %», que es lo contrario de lo que
+    /// esa pantalla existe para explicar.
+    #[test]
+    fn la_auditoria_cuenta_la_imagen_que_va_dentro_de_un_fondo() {
+        let pdf = std::env::temp_dir().join("exportar-auditoria-fondo.pdf");
+        crea_pdf(&["Con fondo", "Y otra"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        // una foto grande y con ruido: lo que de verdad pesa en un PDF
+        let mut foto = image::RgbaImage::new(700, 500);
+        let mut semilla: u32 = 11;
+        for p in foto.pixels_mut() {
+            semilla = semilla.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let v = (semilla >> 24) as u8;
+            *p = image::Rgba([v, v.wrapping_add(17), v.wrapping_add(53), 255]);
+        }
+        let mut png = Vec::new();
+        foto.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .expect("png");
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        crate::paginas2::add_background(work.clone(), None, Some(b64), None, None)
+            .expect("poner el fondo");
+
+        let tabla = audit_pdf(work.clone()).expect("auditar");
+        let imagenes = tabla
+            .iter()
+            .find(|c| c.categoria == "imagenes")
+            .expect("la fila de imágenes");
+        assert!(
+            imagenes.porcentaje > 80.0,
+            "el peso del fichero es la foto del fondo, y la tabla tiene que decirlo: \
+             {tabla:?}"
+        );
+        std::fs::remove_file(&pdf).ok();
+    }
+
+    /// **AC-089.** La tabla enseñaba `lo_demas` y `marcadores_y_enlaces`,
+    /// identificadores de Rust con guion bajo y sin tildes, en la pantalla
+    /// que existe para explicarte de qué está hecho tu fichero. Cada
+    /// categoría tiene su nombre en español, y lo compone el backend para
+    /// que no haya dos listas que puedan separarse.
+    #[test]
+    fn cada_categoria_de_la_auditoria_tiene_su_nombre_en_espanol() {
+        for c in CATEGORIAS {
+            let etiqueta = etiqueta_de(c);
+            assert!(
+                !etiqueta.contains('_') && etiqueta.starts_with(char::is_uppercase),
+                "«{c}» sale como «{etiqueta}», que no es un nombre para una persona"
+            );
+            assert_ne!(etiqueta, c, "«{c}» no tiene nombre propio en la tabla");
+        }
+        // y ninguna se llama como otra, que sería no poder distinguirlas
+        let mut nombres: Vec<&str> = CATEGORIAS.iter().map(|c| etiqueta_de(c)).collect();
+        nombres.sort();
+        let antes = nombres.len();
+        nombres.dedup();
+        assert_eq!(antes, nombres.len(), "dos categorías se llaman igual");
+    }
 
     /// **La auditoría de espacio** del PDF Optimizer: en qué se va el peso
     /// del fichero. Lo que hay que probar es que **cuadra**: una tabla que
