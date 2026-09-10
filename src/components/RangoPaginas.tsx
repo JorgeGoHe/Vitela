@@ -11,18 +11,21 @@ export default function RangoPaginas({
   setTodas,
   rango,
   setRango,
+  etiqueta = "Páginas",
 }: {
   pageCount: number;
   todas: boolean;
   setTodas: (v: boolean) => void;
   rango: string;
   setRango: (v: string) => void;
+  /** De qué páginas se habla, cuando no son las del documento abierto. */
+  etiqueta?: string;
 }) {
   const cuantas = todas ? pageCount : parseRango(rango, pageCount).length;
 
   return (
     <>
-      <span className="card-label">Páginas</span>
+      <span className="card-label">{etiqueta}</span>
       <div className="card-row rango-fila">
         <label className="opt-check">
           <input

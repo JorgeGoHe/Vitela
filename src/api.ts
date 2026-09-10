@@ -629,12 +629,17 @@ export function duplicatePage(
   return invoke("duplicate_page", { workPath, pageIndex });
 }
 
+/** Mete otro PDF en la posición `index`. `pageIndices` es el rango del
+ *  **documento que entra** (null = entero): Acrobat lo pregunta desde
+ *  siempre y sin él había que insertar el fichero completo y borrar
+ *  después lo que sobraba. */
 export function insertPdfAt(
   workPath: string,
   otherPath: string,
   index: number,
+  pageIndices: number[] | null,
 ): Promise<number> {
-  return invoke("insert_pdf_at", { workPath, otherPath, index });
+  return invoke("insert_pdf_at", { workPath, otherPath, index, pageIndices });
 }
 
 /** Tamaño de página de «Crear PDF desde imágenes»: A4 y Carta ajustan la

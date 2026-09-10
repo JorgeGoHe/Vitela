@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useModal } from "../hooks/useModal";
-import { plural } from "../tipos";
+import { indicesDeRango, plural } from "../tipos";
+import RangoPaginas from "./RangoPaginas";
 
 /**
  * «Insertar PDF…»: dónde entra el documento que se acaba de elegir. Acrobat
@@ -22,16 +23,28 @@ export default function DialogoInsertar({
   paginasQueEntran: number | null;
   pageCount: number;
   paginaActual: number;
-  /** Índice (desde 0) en el que entra la primera página que llega. */
-  onConfirm: (index: number) => void;
+  /** Índice (desde 0) en el que entra la primera página que llega, y qué
+   *  páginas del otro documento entran (null = todas). */
+  onConfirm: (index: number, pageIndices: number[] | null) => void;
   onClose: () => void;
 }) {
   const [donde, setDonde] = useState<"antes" | "despues">("despues");
   const [pagina, setPagina] = useState(paginaActual + 1);
+  const [todas, setTodas] = useState(true);
+  const [rango, setRango] = useState("");
 
   const n = Math.min(Math.max(1, pagina), pageCount);
   const index = donde === "antes" ? n - 1 : n;
-  const confirmar = () => onConfirm(index);
+  // el rango es del documento QUE ENTRA, así que se cuenta sobre sus páginas
+  const indices =
+    paginasQueEntran === null
+      ? null
+      : indicesDeRango(todas, rango, paginasQueEntran);
+  const cuantas = indices?.length ?? paginasQueEntran;
+  const listo = todas || (indices?.length ?? 0) > 0;
+  const confirmar = () => {
+    if (listo) onConfirm(index, indices);
+  };
   const { ref, onKeyDown } = useModal({ onClose, onConfirm: confirmar });
 
   return (
@@ -73,10 +86,20 @@ export default function DialogoInsertar({
             />
           </label>
         </div>
+        {paginasQueEntran !== null && (
+          <RangoPaginas
+            pageCount={paginasQueEntran}
+            todas={todas}
+            setTodas={setTodas}
+            rango={rango}
+            setRango={setRango}
+            etiqueta="Páginas del documento que entra"
+          />
+        )}
         <p className="modal-file" style={{ whiteSpace: "normal" }}>
-          {paginasQueEntran === null
+          {cuantas === null
             ? `El documento entero entra ${donde === "antes" ? "antes" : "después"} de la página ${n} de ${pageCount}.`
-            : `${plural(paginasQueEntran, "página entra", "páginas entran")} ${
+            : `${plural(cuantas, "página entra", "páginas entran")} ${
                 donde === "antes" ? "antes" : "después"
               } de la página ${n} de ${pageCount}.`}
         </p>
@@ -84,7 +107,11 @@ export default function DialogoInsertar({
           <button className="btn" onClick={onClose}>
             Cancelar
           </button>
-          <button className="btn btn-primary" onClick={confirmar}>
+          <button
+            className="btn btn-primary"
+            disabled={!listo}
+            onClick={confirmar}
+          >
             Insertar
           </button>
         </div>

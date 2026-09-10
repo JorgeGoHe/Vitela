@@ -3067,15 +3067,24 @@ function App() {
     setInsertarAsk({ path: selected, paginas: info?.page_count ?? null });
   }
 
-  async function aplicarInsertar(index: number) {
+  async function aplicarInsertar(index: number, pageIndices: number[] | null) {
     const pendiente = insertarAsk;
     setInsertarAsk(null);
     if (!workPath || !pendiente) return;
     try {
-      const count = await insertPdfAt(workPath, pendiente.path, index);
+      const count = await insertPdfAt(
+        workPath,
+        pendiente.path,
+        index,
+        pageIndices,
+      );
       afterMutation(count, index);
       setNotice(
-        `PDF insertado en la página ${index + 1} · ${MOD}Z para deshacer`,
+        `${
+          pageIndices
+            ? plural(pageIndices.length, "página insertada", "páginas insertadas")
+            : "PDF insertado"
+        } en la página ${index + 1} · ${MOD}Z para deshacer`,
       );
     } catch (e) {
       setError(String(e));
