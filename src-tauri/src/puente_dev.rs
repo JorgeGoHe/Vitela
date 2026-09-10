@@ -209,6 +209,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
             .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
         "delete_stored_signature" => cmd!(firmas_visuales::delete_stored_signature, { id: String }),
         "get_image_data" => cmd!(imagenes::get_image_data, { path: String, page_index: u16, object_index: u32 }),
+        "save_image_data" => cmd!(imagenes::save_image_data, { work_path: String, page_index: u16, object_index: u32, dest_path: String }),
         "add_markup" => cmd!(anotaciones2::add_markup, { work_path: String, page_index: u16, rects: Vec<crate::Rect>, kind: String, color: Option<[u8; 4]>, author: Option<String> }),
         "add_shape" => cmd!(anotaciones2::add_shape, { work_path: String, page_index: u16, kind: String, x1: f32, y1: f32, x2: f32, y2: f32, stroke: [u8; 4], fill: Option<[u8; 4]>, stroke_width: f32, author: Option<String> }),
         "add_stamp" => cmd!(anotaciones2::add_stamp, { work_path: String, page_index: u16, text: String, color: [u8; 4], x: f32, y: f32, font_size: f32, author: Option<String> }),
@@ -453,6 +454,12 @@ mod tests {
     /// excepción mientras las dos mitades se escriben en paralelo, y se
     /// quita al integrar.
     const NADIE_LLAMA: &[(&str, &str)] = &[
+        (
+            "save_image_data",
+            "pendiente_ui — «Guardar imagen como…» del popover de la imagen, \
+             apuntada para el ciclo 8. El backend va por delante porque es \
+             el mismo bitmap que `get_image_data` y sin base64 de por medio",
+        ),
         (
             "export_comments_pdf",
             "pendiente_ui — H9: el resumen de comentarios imprimible. La UI \

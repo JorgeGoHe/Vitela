@@ -1149,6 +1149,7 @@ pub fn run() {
             firmas_visuales::list_stored_signatures,
             firmas_visuales::delete_stored_signature,
             imagenes::get_image_data,
+            imagenes::save_image_data,
             anotaciones2::add_markup,
             anotaciones2::add_shape,
             anotaciones2::add_stamp,

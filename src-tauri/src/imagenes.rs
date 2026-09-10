@@ -40,6 +40,46 @@ pub fn get_image_data(path: String, page_index: u16, object_index: u32) -> Resul
     })
 }
 
+/// «Guardar imagen como…»: escribe el objeto de imagen tal como se ve —con
+/// sus máscaras y su transparencia aplicadas— en un fichero PNG.
+///
+/// Es el mismo bitmap que `get_image_data`, pero **sin pasar por base64 ni
+/// por el webview**: una foto de 12 MP en base64 son 30 MB de cadena
+/// cruzando el canal para acabar en el disco, y el navegador de la sesión
+/// de QA no puede escribir ficheros de todas formas.
+///
+/// Escribe fuera del documento: no muta nada ni deja paso de deshacer.
+#[tauri::command(async)]
+pub fn save_image_data(
+    work_path: String,
+    page_index: u16,
+    object_index: u32,
+    dest_path: String,
+) -> Result<(), String> {
+    on_pdfium_thread(move || {
+        // copia aparte de solo lectura, por lo mismo que `get_image_data`:
+        // `get_processed_image` transforma el objeto y no lo deja como
+        // estaba
+        let doc = pdfium()?
+            .load_pdf_from_file(&work_path, None)
+            .map_err(crate::mensaje_llano)?;
+        let page = doc.pages().get(page_index).map_err(crate::mensaje_llano)?;
+        let obj = page
+            .objects()
+            .get(object_index as usize)
+            .map_err(crate::mensaje_llano)?;
+        let img = obj
+            .as_image_object()
+            .ok_or("No es una imagen")?
+            .get_processed_image(&doc)
+            .map_err(crate::mensaje_llano)?;
+        img.save_with_format(&dest_path, image::ImageFormat::Png)
+            .map_err(|e| {
+                crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}"))
+            })
+    })
+}
+
 #[derive(Serialize)]
 pub struct ImageInfo {
     pub object_index: u32,
@@ -508,6 +548,57 @@ pub fn delete_image(work_path: String, page_index: u16, object_index: u32) -> Re
 
 #[cfg(test)]
 mod tests {
+
+    /// «Guardar imagen como…»: el mismo bitmap que la vista previa, pero
+    /// escrito directamente en el disco. Una foto de 12 MP en base64 son
+    /// 30 MB de cadena cruzando el canal para acabar en un fichero.
+    #[test]
+    fn guardar_una_imagen_del_pdf_deja_un_png_que_se_abre() {
+        let dir = std::env::temp_dir();
+        let origen = dir.join("imagenes-guardar-origen.png");
+        image::RgbaImage::from_pixel(40, 20, image::Rgba([10, 200, 30, 255]))
+            .save(&origen)
+            .expect("crear el png");
+        let pdf = dir.join("imagenes-guardar.pdf");
+        crate::tests::crea_pdf(&["Con foto"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        add_image(
+            work.clone(),
+            0,
+            origen.to_string_lossy().into_owned(),
+            80.0,
+            80.0,
+        )
+        .expect("insertar la imagen");
+        let imagenes = get_images(work.clone(), 0).expect("imágenes");
+        assert_eq!(imagenes.len(), 1);
+
+        let dest = dir.join("imagenes-guardar-salida.png");
+        save_image_data(
+            work.clone(),
+            0,
+            imagenes[0].object_index,
+            dest.to_string_lossy().into_owned(),
+        )
+        .expect("guardar la imagen");
+        let salida = image::open(&dest).expect("el PNG se abre").to_rgba8();
+        assert_eq!((salida.width(), salida.height()), (40, 20), "el tamaño del bitmap");
+        assert_eq!(salida.get_pixel(20, 10).0, [10, 200, 30, 255], "y su color");
+
+        // un objeto que no es una imagen se dice en llano
+        let err = save_image_data(
+            work.clone(),
+            0,
+            999,
+            dest.to_string_lossy().into_owned(),
+        )
+        .unwrap_err();
+        assert!(!err.contains("os error") && !err.contains("Pdfium"), "jerga: {err}");
+
+        for p in [&origen, &pdf, &dest] {
+            std::fs::remove_file(p).ok();
+        }
+    }
     use super::*;
     use crate::tests::crea_pdf;
 
