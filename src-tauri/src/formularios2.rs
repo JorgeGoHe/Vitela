@@ -1319,6 +1319,94 @@ mod tests {
             .unwrap_or(true)
     }
 
+    /// **R40b (AC-063).** Un grupo de radios recién creado tiene que salir
+    /// **sin marcar**, y marcar uno tiene que apagar a sus hermanos.
+    ///
+    /// Hasta el ciclo 6 los tres salían marcados: `is_checked()` de
+    /// pdfium-render 0.8 devuelve `true` para todas las opciones cuando el
+    /// campo está en `/V /Off` (el estado «Off» cuenta como estado presente
+    /// en el `/AP`). Con eso la UI conmutaba `!checked` —siempre `false`—
+    /// y volvía a escribir `/Off`: el formulario no se podía rellenar
+    /// nunca, ni al primer clic ni al décimo.
+    #[test]
+    fn un_grupo_de_radios_sale_sin_marcar_y_marcar_uno_apaga_a_los_demas() {
+        let pdf = std::env::temp_dir().join("formularios2-radios-marcar.pdf");
+        crea_pdf(&["Radios"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        for i in 0..3 {
+            create_form_field(
+                work.clone(),
+                0,
+                "radio".into(),
+                Rect { x: 60.0, y: 250.0 + i as f32 * 40.0, w: 20.0, h: 20.0 },
+                format!("op{i}"),
+                Some("sexo".into()),
+                Some(format!("op{i}")),
+                None,
+                None,
+            )
+            .expect("crear la opción");
+        }
+
+        let campos = crate::formularios::get_form_fields(work.clone(), 0).expect("campos");
+        assert_eq!(campos.len(), 3);
+        assert!(
+            campos.iter().all(|c| !c.checked),
+            "un grupo recién creado no tiene nada elegido: {:?}",
+            campos.iter().map(|c| c.checked).collect::<Vec<_>>()
+        );
+
+        // marcar el segundo: solo el segundo
+        crate::formularios::set_form_checked(work.clone(), 0, campos[1].annot_index, true)
+            .expect("marcar el segundo");
+        let campos = crate::formularios::get_form_fields(work.clone(), 0).expect("campos");
+        assert_eq!(
+            campos.iter().map(|c| c.checked).collect::<Vec<_>>(),
+            vec![false, true, false],
+            "solo el segundo"
+        );
+
+        // y marcar el tercero apaga al segundo: eso es lo que distingue un
+        // grupo de radios de tres casillas sueltas
+        crate::formularios::set_form_checked(work.clone(), 0, campos[2].annot_index, true)
+            .expect("marcar el tercero");
+        let campos = crate::formularios::get_form_fields(work.clone(), 0).expect("campos");
+        assert_eq!(
+            campos.iter().map(|c| c.checked).collect::<Vec<_>>(),
+            vec![false, false, true],
+            "el tercero, y el segundo se ha apagado"
+        );
+
+        // una casilla suelta sí se conmuta, que es lo suyo
+        create_form_field(
+            work.clone(),
+            0,
+            "checkbox".into(),
+            Rect { x: 200.0, y: 250.0, w: 16.0, h: 16.0 },
+            "acepto".into(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("crear la casilla");
+        let casilla = crate::formularios::get_form_fields(work.clone(), 0)
+            .expect("campos")
+            .into_iter()
+            .find(|c| c.name == "acepto")
+            .expect("la casilla");
+        assert!(!casilla.checked, "recién creada, sin marcar");
+        crate::formularios::set_form_checked(work.clone(), 0, casilla.annot_index, true)
+            .expect("marcar");
+        let casilla = crate::formularios::get_form_fields(work.clone(), 0)
+            .expect("campos")
+            .into_iter()
+            .find(|c| c.name == "acepto")
+            .expect("la casilla");
+        assert!(casilla.checked, "la casilla queda marcada");
+        std::fs::remove_file(&pdf).ok();
+    }
+
     /// **H2.** Un grupo de tres radios es **un solo campo** con tres
     /// `/Kids`, no tres campos que se marcan a la vez. Ese es el defecto de
     /// Acrobat que aquí no se copia: allí, crear tres radios sin entender

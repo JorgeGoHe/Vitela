@@ -28,11 +28,16 @@ pub struct FormFieldInfo {
 #[tauri::command(async)]
 pub fn get_form_fields(path: String, page_index: u16) -> Result<Vec<FormFieldInfo>, String> {
     on_pdfium_thread(move || {
-        // el bit de «obligatorio» lo lee lopdf: pdfium-render 0.8 no expone
-        // el /Ff del campo, y sin él la UI no puede resaltar lo que hay que
-        // rellenar antes de enviar
-        let obligatorios = crate::with_lopdf(&path, |doc| Ok(banderas_de_annots(doc, page_index)))
-            .unwrap_or_default();
+        // el bit de «obligatorio» y el estado de las casillas los lee
+        // lopdf: pdfium-render 0.8 no expone el `/Ff` del campo, y su
+        // `is_checked()` miente en un grupo de radios (AC-063)
+        let (obligatorios, marcados) = crate::with_lopdf(&path, |doc| {
+            Ok((
+                banderas_de_annots(doc, page_index),
+                marcados_de_annots(doc, page_index),
+            ))
+        })
+        .unwrap_or_default();
         with_doc(&path, |doc| {
             let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
             let geo = crate::Geo::de_pagina(&page);
@@ -57,20 +62,17 @@ pub fn get_form_fields(path: String, page_index: u16) -> Result<Vec<FormFieldInf
                 let Ok(b) = a.bounds() else { continue };
                 let kind = format!("{:?}", field.field_type());
                 let (value, checked) = match field.field_type() {
-                    PdfFormFieldType::Checkbox => (
-                        String::new(),
-                        field
-                            .as_checkbox_field()
-                            .and_then(|c| c.is_checked().ok())
-                            .unwrap_or(false),
-                    ),
-                    PdfFormFieldType::RadioButton => (
-                        String::new(),
-                        field
-                            .as_radio_button_field()
-                            .and_then(|r| r.is_checked().ok())
-                            .unwrap_or(false),
-                    ),
+                    // el estado sale del `/AS` del widget, que es lo que el
+                    // visor pinta. `is_checked()` de pdfium-render 0.8
+                    // devuelve `true` para **todas** las opciones de un
+                    // grupo de radios cuando el campo está en `/V /Off` —el
+                    // estado «Off» cuenta como estado presente en su `/AP`—
+                    // y con eso el formulario no se podía rellenar: la UI
+                    // conmutaba `!checked`, que siempre era `false`, y
+                    // volvía a escribir `/Off` (AC-063)
+                    PdfFormFieldType::Checkbox | PdfFormFieldType::RadioButton => {
+                        (String::new(), marcados.get(i).copied().unwrap_or(false))
+                    }
                     PdfFormFieldType::Text => (
                         field
                             .as_text_field()
@@ -187,6 +189,86 @@ fn banderas_de_annots(doc: &lopdf::Document, page_index: u16) -> Vec<i64> {
                 .unwrap_or(0)
         })
         .collect()
+}
+
+/// Si cada anotación de la página está **marcada**, en el orden de
+/// `/Annots` (el mismo `annot_index` de `get_form_fields`).
+///
+/// El estado de un botón es su `/AS`, que es el estado del `/AP` que el
+/// visor pinta: `/Off` es apagado y cualquier otro nombre, encendido. Si el
+/// widget no lo lleva —un PDF de fuera que solo escribió el valor del
+/// campo— se mira el `/V`, heredado del padre en un grupo de radios, contra
+/// el valor de exportación de esa opción.
+fn marcados_de_annots(doc: &lopdf::Document, page_index: u16) -> Vec<bool> {
+    use lopdf::Object;
+    let Some(lista) = crate::anotaciones::lista_annots(doc, page_index) else {
+        return Vec::new();
+    };
+    lista
+        .iter()
+        .map(|o| {
+            let Object::Reference(id) = o else { return false };
+            let Ok(d) = doc.get_object(*id).and_then(|o| o.as_dict()) else {
+                return false;
+            };
+            if let Some(estado) = d.get(b"AS").ok().and_then(estado_nombre) {
+                return estado != "Off";
+            }
+            let export = export_de(doc, d);
+            let valor = heredado(doc, d, b"V");
+            match (valor, export) {
+                (Some(v), Some(e)) => v == e,
+                (Some(v), None) => v != "Off",
+                _ => false,
+            }
+        })
+        .collect()
+}
+
+/// El nombre de un estado de botón (`/AS`, `/V`): puede llegar como nombre
+/// o **como cadena** —PDFium escribe `"/Yes"` al marcar una casilla desde
+/// su API—, y entonces trae la barra pegada delante.
+fn estado_nombre(o: &lopdf::Object) -> Option<String> {
+    let s = match o {
+        lopdf::Object::Name(n) => String::from_utf8_lossy(n).into_owned(),
+        lopdf::Object::String(b, _) => String::from_utf8_lossy(b).into_owned(),
+        _ => return None,
+    };
+    Some(s.trim_start_matches('/').to_string())
+}
+
+/// El valor de exportación de un widget de botón: el estado de su `/AP /N`
+/// que no es «Off».
+fn export_de(doc: &lopdf::Document, widget: &lopdf::Dictionary) -> Option<String> {
+    use lopdf::Object;
+    let ap = widget.get(b"AP").ok()?;
+    let ap = match ap {
+        Object::Dictionary(d) => d.clone(),
+        Object::Reference(rid) => doc.get_object(*rid).ok()?.as_dict().ok()?.clone(),
+        _ => return None,
+    };
+    let n = match ap.get(b"N").ok()? {
+        Object::Dictionary(d) => d.clone(),
+        Object::Reference(rid) => doc.get_object(*rid).ok()?.as_dict().ok()?.clone(),
+        _ => return None,
+    };
+    n.iter()
+        .map(|(k, _)| String::from_utf8_lossy(k).into_owned())
+        .find(|k| k != "Off")
+}
+
+/// Una clave del campo, buscándola en el widget y subiendo por `/Parent`
+/// (en un grupo de radios el campo de verdad es el padre).
+fn heredado(doc: &lopdf::Document, widget: &lopdf::Dictionary, clave: &[u8]) -> Option<String> {
+    let mut actual = widget.clone();
+    for _ in 0..8 {
+        if let Ok(v) = actual.get(clave) {
+            return estado_nombre(v);
+        }
+        let padre = actual.get(b"Parent").and_then(|o| o.as_reference()).ok()?;
+        actual = doc.get_object(padre).ok()?.as_dict().ok()?.clone();
+    }
+    None
 }
 
 /// Etiquetas de las opciones de un desplegable o una lista, en su orden.
