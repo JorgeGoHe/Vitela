@@ -2976,11 +2976,12 @@ function App() {
         position: opts.position,
         pageIndices: opts.pageIndices,
         imagePng: opts.imagePng,
+        detras: opts.detras,
       });
       setWmOpen(false);
       afterMutation(pageCount);
       setNotice(
-        `Marca de agua añadida en ${plural(opts.pageIndices?.length ?? pageCount, "página", "páginas")} · ${MOD}Z para deshacer`,
+        `${opts.detras ? "Fondo añadido" : "Marca de agua añadida"} en ${plural(opts.pageIndices?.length ?? pageCount, "página", "páginas")} · ${MOD}Z para deshacer`,
       );
     } catch (e) {
       setError(String(e));

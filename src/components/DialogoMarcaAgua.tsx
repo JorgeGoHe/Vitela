@@ -36,6 +36,8 @@ export type MarcaAguaOpts = {
   pageIndices: number[] | null;
   /** PNG en base64 cuando la marca es una imagen; si no, null. */
   imagePng: string | null;
+  /** Debajo del contenido de la página, que es el «Fondo» de Acrobat. */
+  detras: boolean;
 };
 
 /**
@@ -73,6 +75,9 @@ export default function DialogoMarcaAgua({
   const [imagen, setImagen] = useState<{ nombre: string; png: string } | null>(
     null,
   );
+  // «detrás del contenido» es lo que Acrobat llama Fondo: el mismo trabajo,
+  // con el objeto al principio de la página en vez de al final
+  const [detras, setDetras] = useState(false);
   const ficheroRef = useRef<HTMLInputElement | null>(null);
 
   const indices = indicesDeRango(todas, rango, pageCount);
@@ -91,6 +96,7 @@ export default function DialogoMarcaAgua({
       position,
       pageIndices: indices,
       imagePng: tipo === "imagen" ? (imagen?.png ?? null) : null,
+      detras,
     });
   }
 
@@ -273,6 +279,10 @@ export default function DialogoMarcaAgua({
                   top: `${fila * 33.33}%`,
                   opacity: opacity / 100,
                   transform: `rotate(${-rotation}deg)`,
+                  // debajo del contenido: en la previa se multiplica, que es
+                  // lo que se ve en el papel —el texto de la página encima,
+                  // la marca asomando por donde no hay tinta—
+                  mixBlendMode: detras ? "multiply" : undefined,
                 }}
               >
                 {tipo === "imagen" && imagen ? (
@@ -297,8 +307,21 @@ export default function DialogoMarcaAgua({
           rango={rango}
           setRango={setRango}
         />
+        <label
+          className="opt-check"
+          title="Lo que Acrobat llama «Fondo»: el mismo dibujo, debajo del texto"
+        >
+          <input
+            type="checkbox"
+            checked={detras}
+            onChange={(e) => setDetras(e.target.checked)}
+          />
+          Detrás del contenido
+        </label>
         <p className="modal-file" style={{ whiteSpace: "normal" }}>
           Se añade como contenido del documento; la previa es aproximada.
+          {detras &&
+            " Detrás del contenido queda tapada donde la página lleve una imagen o un fondo opaco."}
         </p>
         <div className="card-actions">
           <button className="btn" onClick={onClose}>

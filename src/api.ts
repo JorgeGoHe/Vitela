@@ -663,10 +663,14 @@ export function addWatermark(args: {
   opacity?: number;
   /** Giro en grados; 45 es la diagonal de siempre. */
   rotation?: number;
+  /** Debajo del contenido de la página (el objeto entra en la posición 0),
+   *  que es lo que Acrobat llama «Fondo». Sin él, encima, como siempre. */
+  detras?: boolean;
 }): Promise<void> {
   return invoke("add_watermark", {
     pageIndices: null,
     imagePng: null,
+    detras: false,
     ...args,
   });
 }
