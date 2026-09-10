@@ -1628,3 +1628,297 @@ pub fn get_document_info(path: String) -> Result<DocumentoInfo, String> {
         })
     })
 }
+
+/// **La vista inicial** del documento (Acrobat: la cuarta pestaña de las
+/// propiedades, ⌘D): cómo se abre este PDF en cualquier visor —por qué
+/// página, con qué zoom, con qué disposición y con qué panel desplegado—.
+///
+/// Es la única parte de las propiedades que además **se escribe**, y vive
+/// en el catálogo: `/OpenAction` (la página y el zoom), `/PageLayout` (la
+/// disposición) y `/PageMode` (el panel).
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq)]
+pub struct VistaInicial {
+    /// Página de arranque (0 = la primera). `None` es «lo que decida el
+    /// visor», que es lo que hace un PDF sin `/OpenAction`.
+    #[serde(default)]
+    pub page_index: Option<u16>,
+    /// A qué altura de la página se llega, en el espacio propio de la
+    /// página con el origen arriba-izquierda, como el `top` de un marcador.
+    #[serde(default)]
+    pub top: Option<f32>,
+    /// El zoom, 1,0 = 100 %. `None` con `ajuste` en `"zoom"` significa
+    /// «déjalo como está», que es el `null` del spec.
+    #[serde(default)]
+    pub zoom: Option<f32>,
+    /// Cómo se encaja la página: `"zoom"` (`/XYZ`, el zoom manda),
+    /// `"pagina"` (`/Fit`), `"ancho"` (`/FitH`), `"alto"` (`/FitV`) o `""`
+    /// si el documento no dice nada.
+    #[serde(default)]
+    pub ajuste: String,
+    /// Disposición: `"una"`, `"continuo"`, `"dos"`, `"dos-continuo"` o
+    /// `""`. Son las cuatro de la píldora de Vitela y las cuatro de
+    /// Acrobat.
+    #[serde(default)]
+    pub disposicion: String,
+    /// Panel desplegado al abrir: `"ninguno"`, `"marcadores"`,
+    /// `"miniaturas"`, `"adjuntos"`, `"capas"`, `"pantalla-completa"` o
+    /// `""`.
+    #[serde(default)]
+    pub panel: String,
+}
+
+/// `/PageLayout` del spec ↔ las cuatro disposiciones de la app.
+fn disposicion_nuestra(nombre: &[u8]) -> String {
+    match nombre {
+        b"SinglePage" => "una",
+        b"OneColumn" => "continuo",
+        b"TwoPageLeft" | b"TwoPageRight" => "dos",
+        b"TwoColumnLeft" | b"TwoColumnRight" => "dos-continuo",
+        _ => "",
+    }
+    .to_string()
+}
+
+fn disposicion_pdf(nuestra: &str) -> Option<&'static str> {
+    Some(match nuestra {
+        "una" => "SinglePage",
+        "continuo" => "OneColumn",
+        "dos" => "TwoPageLeft",
+        "dos-continuo" => "TwoColumnLeft",
+        _ => return None,
+    })
+}
+
+/// `/PageMode` del spec ↔ el panel que la app despliega.
+fn panel_nuestro(nombre: &[u8]) -> String {
+    match nombre {
+        b"UseNone" => "ninguno",
+        b"UseOutlines" => "marcadores",
+        b"UseThumbs" => "miniaturas",
+        b"UseAttachments" => "adjuntos",
+        b"UseOC" => "capas",
+        b"FullScreen" => "pantalla-completa",
+        _ => "",
+    }
+    .to_string()
+}
+
+fn panel_pdf(nuestro: &str) -> Option<&'static str> {
+    Some(match nuestro {
+        "ninguno" => "UseNone",
+        "marcadores" => "UseOutlines",
+        "miniaturas" => "UseThumbs",
+        "adjuntos" => "UseAttachments",
+        "capas" => "UseOC",
+        "pantalla-completa" => "FullScreen",
+        _ => return None,
+    })
+}
+
+/// Lee la vista inicial del catálogo. Un documento que no dice nada
+/// devuelve la ficha vacía —no un error—: es un PDF que deja decidir al
+/// visor, que es el caso de casi todos.
+#[tauri::command(async)]
+pub fn get_open_action(path: String) -> Result<VistaInicial, String> {
+    on_pdfium_thread(move || {
+        crate::with_lopdf(&path, |doc| {
+            let paginas: Vec<ObjectId> = doc.get_pages().values().copied().collect();
+            let mut out = VistaInicial::default();
+            let Ok(catalog) = doc.catalog() else {
+                return Ok(out);
+            };
+            if let Ok(nombre) = catalog.get(b"PageLayout").and_then(|o| o.as_name()) {
+                out.disposicion = disposicion_nuestra(nombre);
+            }
+            if let Ok(nombre) = catalog.get(b"PageMode").and_then(|o| o.as_name()) {
+                out.panel = panel_nuestro(nombre);
+            }
+            if let Ok(accion) = catalog.get(b"OpenAction") {
+                // el `/OpenAction` es un destino o una acción `/GoTo`, las
+                // dos formas de escribir lo mismo: `destino_de` ya las
+                // entiende las dos, así que se le pasa como si fuera un
+                // marcador
+                let mut nodo = Dictionary::new();
+                nodo.set("Dest", accion.clone());
+                let d = destino_de(doc, &nodo, &paginas);
+                out.page_index = d.page_index;
+                out.top = d.top;
+                out.zoom = d.zoom;
+                out.ajuste = ajuste_de(doc, accion).unwrap_or_default();
+            }
+            Ok(out)
+        })
+    })
+}
+
+/// El modo de encaje del destino (`/XYZ`, `/Fit`, `/FitH`, `/FitV`…) en el
+/// vocabulario de la app.
+fn ajuste_de(doc: &LoDoc, accion: &Object) -> Option<String> {
+    let arr = resuelve_dest(doc, accion, 0).or_else(|| {
+        let a = dict_de(doc, accion)?;
+        resuelve_dest(doc, a.get(b"D").ok()?, 0)
+    })?;
+    let modo = arr.get(1)?.as_name().ok()?;
+    Some(
+        match modo {
+            b"XYZ" => "zoom",
+            b"Fit" | b"FitB" => "pagina",
+            b"FitH" | b"FitBH" => "ancho",
+            b"FitV" | b"FitBV" => "alto",
+            b"FitR" => "pagina",
+            _ => "",
+        }
+        .to_string(),
+    )
+}
+
+/// Escribe la vista inicial. Los campos vacíos **quitan** lo que hubiera:
+/// una ficha vacía devuelve el documento a «lo que decida el visor», que es
+/// lo que hace el «Predeterminado» de Acrobat.
+#[tauri::command(async)]
+pub fn set_open_action(work_path: String, vista: VistaInicial) -> Result<(), String> {
+    cirugia(&work_path, move |doc| {
+        let paginas: Vec<ObjectId> = doc.get_pages().values().copied().collect();
+        let destino = match vista.page_index {
+            Some(p) => {
+                let page_id = *paginas
+                    .get(p as usize)
+                    .ok_or("Esa página no está en el documento")?;
+                // el `top` vuelve a coordenadas del papel, como en los
+                // marcadores; `left` se queda en `null` («déjalo como
+                // está»): la vista inicial no fija la columna
+                let top = vista.top.and_then(|y| {
+                    let geo = crate::formularios2::geo_pagina(doc, page_id).ok()?;
+                    Some(Object::Real(geo.ui_a_pdf(0.0, y).1))
+                });
+                Some(Object::Array(match vista.ajuste.as_str() {
+                    "pagina" => vec![Object::Reference(page_id), Object::Name(b"Fit".to_vec())],
+                    "ancho" => vec![
+                        Object::Reference(page_id),
+                        Object::Name(b"FitH".to_vec()),
+                        top.unwrap_or(Object::Null),
+                    ],
+                    "alto" => vec![
+                        Object::Reference(page_id),
+                        Object::Name(b"FitV".to_vec()),
+                        Object::Null,
+                    ],
+                    _ => vec![
+                        Object::Reference(page_id),
+                        Object::Name(b"XYZ".to_vec()),
+                        Object::Null,
+                        top.unwrap_or(Object::Null),
+                        vista
+                            .zoom
+                            .filter(|z| *z > 0.0)
+                            .map(Object::Real)
+                            .unwrap_or(Object::Null),
+                    ],
+                }))
+            }
+            None => None,
+        };
+        let catalog_id = doc
+            .trailer
+            .get(b"Root")
+            .and_then(|o| o.as_reference())
+            .map_err(|e| e.to_string())?;
+        let catalog = doc
+            .get_object_mut(catalog_id)
+            .and_then(|o| o.as_dict_mut())
+            .map_err(|e| e.to_string())?;
+        match destino {
+            Some(d) => catalog.set("OpenAction", d),
+            None => {
+                catalog.remove(b"OpenAction");
+            }
+        }
+        match disposicion_pdf(&vista.disposicion) {
+            Some(n) => catalog.set("PageLayout", Object::Name(n.as_bytes().to_vec())),
+            None => {
+                catalog.remove(b"PageLayout");
+            }
+        }
+        match panel_pdf(&vista.panel) {
+            Some(n) => catalog.set("PageMode", Object::Name(n.as_bytes().to_vec())),
+            None => {
+                catalog.remove(b"PageMode");
+            }
+        }
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+mod tests_vista_inicial {
+    use super::*;
+    use crate::tests::crea_pdf;
+
+    /// **R56 — «Vista inicial».** La cuarta pestaña de ⌘D en Acrobat, y la
+    /// única parte de las propiedades que además se escribe: cómo se abre
+    /// este documento **en cualquier visor**, no solo en Vitela.
+    #[test]
+    fn la_vista_inicial_se_lee_se_escribe_y_se_quita() {
+        let pdf = std::env::temp_dir().join("documento-vista-inicial.pdf");
+        crea_pdf(&["Uno", "Dos", "Tres"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+
+        // un PDF que no dice nada devuelve la ficha vacía, no un error
+        let vacia = get_open_action(work.clone()).expect("leer");
+        assert_eq!(vacia, VistaInicial::default());
+
+        set_open_action(
+            work.clone(),
+            VistaInicial {
+                page_index: Some(2),
+                top: Some(120.0),
+                zoom: Some(1.5),
+                ajuste: "zoom".into(),
+                disposicion: "dos".into(),
+                panel: "marcadores".into(),
+            },
+        )
+        .expect("escribir");
+        let leida = get_open_action(work.clone()).expect("releer");
+        assert_eq!(leida.page_index, Some(2));
+        assert_eq!(leida.zoom, Some(1.5));
+        assert_eq!(leida.ajuste, "zoom");
+        assert_eq!(leida.disposicion, "dos");
+        assert_eq!(leida.panel, "marcadores");
+        assert!(
+            leida.top.map(|t| (t - 120.0).abs() < 0.5).unwrap_or(false),
+            "el top vuelve donde estaba: {:?}",
+            leida.top
+        );
+
+        // «ajustar al ancho» es otro modo del spec y se lee como tal
+        set_open_action(
+            work.clone(),
+            VistaInicial {
+                page_index: Some(0),
+                ajuste: "ancho".into(),
+                ..Default::default()
+            },
+        )
+        .expect("escribir ancho");
+        let leida = get_open_action(work.clone()).expect("releer");
+        assert_eq!(leida.ajuste, "ancho");
+        assert_eq!(leida.page_index, Some(0));
+
+        // y la ficha vacía devuelve el documento a «lo que decida el visor»
+        set_open_action(work.clone(), VistaInicial::default()).expect("quitar");
+        assert_eq!(get_open_action(work.clone()).expect("releer"), VistaInicial::default());
+
+        // una página que no está se dice antes de escribir nada
+        assert!(set_open_action(
+            work.clone(),
+            VistaInicial {
+                page_index: Some(9),
+                ..Default::default()
+            },
+        )
+        .unwrap_err()
+        .contains("no está en el documento"));
+        std::fs::remove_file(&pdf).ok();
+    }
+}

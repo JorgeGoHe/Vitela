@@ -1242,6 +1242,8 @@ pub fn run() {
             documento::get_document_info,
             documento::get_page_labels,
             documento::set_page_labels,
+            documento::get_open_action,
+            documento::set_open_action,
             documento::set_metadata,
             documento::get_links,
             seguridad::encrypt_pdf,

@@ -240,6 +240,8 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "get_document_info" => cmd!(documento::get_document_info, { path: String }),
         "get_page_labels" => cmd!(documento::get_page_labels, { path: String }),
         "set_page_labels" => cmd!(documento::set_page_labels, { work_path: String, rangos: Vec<documento::RangoEtiqueta> }),
+        "get_open_action" => cmd!(documento::get_open_action, { path: String }),
+        "set_open_action" => cmd!(documento::set_open_action, { work_path: String, vista: documento::VistaInicial }),
         "set_metadata" => cmd!(documento::set_metadata, { work_path: String, meta: documento::Metadata }),
         "get_links" => cmd!(documento::get_links, { path: String, page_index: u16 }),
         "encrypt_pdf" => cmd!(seguridad::encrypt_pdf, { work_path: String, dest_path: Option<String>, user_password: String, owner_password: Option<String>, permisos: Option<seguridad::Permisos> }),
@@ -477,6 +479,14 @@ mod tests {
         (
             "add_background",
             "ciclo 9: «Fondo ▸ Color» espera al diálogo de marca de agua y fondo",
+        ),
+        (
+            "get_open_action",
+            "ciclo 9 (R56): «Vista inicial» es la cuarta pestaña de ⌘D y llega con la interfaz",
+        ),
+        (
+            "set_open_action",
+            "ciclo 9 (R56): ídem, es la única parte de las propiedades que se escribe",
         ),
         (
             "remove_background",
