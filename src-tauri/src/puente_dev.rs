@@ -461,17 +461,7 @@ mod tests {
     /// excepción mientras las dos mitades se escriben en paralelo, y se
     /// quita al integrar.
     const NADIE_LLAMA: &[(&str, &str)] = &[
-        ("save_image_data", "pendiente_ui — R46 del ciclo 8: «Guardar imagen como…» en el popover de la imagen"),
-        ("add_measure", "pendiente_ui — R47 del ciclo 8: «Dejar la medida puesta» deja add_stroke + add_text_block"),
-        ("create_form_fields", "pendiente_ui — R48 del ciclo 8: las propuestas se aceptan en una cirugía, no en N llamadas fundidas"),
-        ("get_page_labels", "pendiente_ui — tanda 3 del ciclo 8: la píldora y las miniaturas dirán «ii (2)»"),
-        ("set_page_labels", "pendiente_ui — tanda 3 del ciclo 8: «Organizar páginas ▸ Numerar páginas»"),
-        ("add_bates", "pendiente_ui — tanda 3 del ciclo 8: el diálogo de Bates completo (prefijo, sufijo, dígitos, inicio y rango)"),
-        ("get_document_info", "pendiente_ui — tanda 3 del ciclo 8: las propiedades ampliadas de ⌘D (fuentes, tamaños y seguridad)"),
-        ("add_file_attachment_annotation", "pendiente_ui — tanda 4 del ciclo 8: la chincheta de «Comentar ▸ Adjuntar archivo»"),
-        ("export_form_data_xfdf", "pendiente_ui — tanda 6 del ciclo 8: «Más ▸ Exportar datos» del formulario"),
-        ("import_form_data_xfdf", "pendiente_ui — tanda 6 del ciclo 8: «Más ▸ Importar datos» del formulario"),
-        ("certify_pdf", "pendiente_ui — tanda 6 del ciclo 8: certificar no tiene interfaz este ciclo; el diálogo con los tres niveles en llano va en el 9"),
+        ("certify_pdf", "ciclo 9: certificar con /DocMDP necesita su diálogo y su id de menú"),
     ];
 
     /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada
@@ -485,18 +475,7 @@ mod tests {
     /// del backend sin vía de acceso: existe, está probada y el usuario no
     /// puede llegar a ella. Fue el estado exacto de `char_spacing` durante
     /// un ciclo entero. La lista tiene que quedar vacía al cerrar el ciclo.
-    const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[
-        (
-            "add_callout",
-            "codo",
-            "pendiente_ui — R52 del ciclo 8: el segundo clic pone el codo y el tercero la caja",
-        ),
-        (
-            "add_watermark",
-            "detras",
-            "pendiente_ui — tanda 3 del ciclo 8: la casilla «detrás del contenido» de la marca de agua",
-        ),
-    ];
+    const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[];
 
     /// **R45b.** Parámetros **obligatorios** en Rust que el envoltorio de
     /// `api.ts` declara opcionales (`workPath?: string`, un tipo que admite
@@ -506,13 +485,7 @@ mod tests {
     /// que llega es `null`, que `String` no sabe deserializar. El comando
     /// devuelve error, la llamada se lo traga y la función no pasa. Cada
     /// entrada es (comando, parámetro, motivo) y la lista cierra vacía.
-    const OPCIONALES_INDEBIDOS: &[(&str, &str, &str)] = &[(
-        "borra_sesion",
-        "work_path",
-        "pendiente_ui — R45 del ciclo 8: `borraSesion` pasa a exigir la copia \
-         de trabajo y las tres llamadas que hoy mandan `null` (descartar la \
-         sesión, cerrar el último documento y guardar) mandan la suya",
-    )];
+    const OPCIONALES_INDEBIDOS: &[(&str, &str, &str)] = &[];
 
     /// Llamadas cuyos argumentos no son un objeto literal y el test no
     /// puede leer (`invoke("render_page", args, opts)`, que arma el objeto
