@@ -781,6 +781,40 @@ export function getMetadata(path: string): Promise<Metadata> {
   return invoke("get_metadata", { path });
 }
 
+/** Una fuente del documento, como la enseña Acrobat en su pestaña
+ *  «Fuentes»: cómo se llama, de qué tipo es y si va dentro del fichero. */
+export type FuenteInfo = {
+  nombre: string;
+  /** «TrueType», «Type1», «Type0 (CID)»… tal como lo dice el PDF. */
+  tipo: string;
+  incrustada: boolean;
+};
+
+/** Lo que Acrobat enseña en las cuatro pestañas de «Propiedades» y no se
+ *  puede escribir: es la ficha del fichero, no sus metadatos. */
+export type DocumentInfo = {
+  bytes: number;
+  page_count: number;
+  /** Versión del PDF, «1.7». */
+  version: string;
+  /** Tamaño de la primera página, en puntos. */
+  page_width: number;
+  page_height: number;
+  /** Si tiene AcroForm con campos. */
+  formulario: boolean;
+  cifrado: boolean;
+  /** Qué deja hacer el `/P` del documento. */
+  permisos: Permisos;
+  fuentes: FuenteInfo[];
+};
+
+/** La ficha completa del documento abierto (solo lectura). Contesta a «¿por
+ *  qué este PDF pesa 40 MB?», que es la pregunta que la gente le hace a
+ *  Acrobat. */
+export function getDocumentInfo(path: string): Promise<DocumentInfo> {
+  return invoke("get_document_info", { path });
+}
+
 export function setMetadata(workPath: string, meta: Metadata): Promise<void> {
   return invoke("set_metadata", { workPath, meta });
 }

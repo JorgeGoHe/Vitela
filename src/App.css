@@ -2067,6 +2067,20 @@ textarea {
   margin-left: 6px;
 }
 
+/* la ficha de solo lectura de «Propiedades»: líneas, no tabla */
+.prop-ficha {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 13px;
+  color: var(--fg);
+  line-height: 1.6;
+}
+
+.prop-fuentes {
+  max-height: 140px;
+  overflow-y: auto;
+}
+
 .paginas-acciones {
   display: flex;
   gap: 14px;

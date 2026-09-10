@@ -97,6 +97,8 @@ import {
   setAnnotationState,
   type EstadoComentario,
   flattenPdf,
+  getDocumentInfo,
+  type DocumentInfo,
   getMetadata,
   getPageLabels,
   setPageLabels,
@@ -654,6 +656,10 @@ function App() {
   const [noticeSaliendo, setNoticeSaliendo] = useState(false);
   const [outline, setOutlineState] = useState<OutlineNode[]>([]);
   const [propsDraft, setPropsDraft] = useState<Metadata | null>(null);
+  // la ficha de solo lectura que acompaña a los metadatos: tamaño, versión,
+  // fuentes y qué deja hacer la protección. Puede llegar después (o no
+  // llegar), y el diálogo se abre igual
+  const [propsFicha, setPropsFicha] = useState<DocumentInfo | null>(null);
   const [prefsAbiertas, setPrefsAbiertas] = useState(false);
   // sesiones que quedaron a medias en un cierre inesperado: una banda de una
   // línea, no un modal, que es como Vitela cuenta todo lo demás. Son varias
@@ -2090,7 +2096,13 @@ function App() {
   async function openProperties() {
     if (!workPath) return;
     try {
+      setPropsFicha(null);
       setPropsDraft(await getMetadata(workPath));
+      // la ficha va aparte: si falla, las propiedades que se escriben se
+      // siguen pudiendo editar
+      getDocumentInfo(workPath)
+        .then(setPropsFicha)
+        .catch(() => setPropsFicha(null));
     } catch (e) {
       setError(String(e));
     }
@@ -4440,6 +4452,7 @@ function App() {
       {propsDraft && (
         <DialogoPropiedades
           initial={propsDraft}
+          ficha={propsFicha}
           onSave={saveProperties}
           onClose={() => setPropsDraft(null)}
         />
