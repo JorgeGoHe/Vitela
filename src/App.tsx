@@ -537,7 +537,7 @@ function App() {
   const [imagenesOpen, setImagenesOpen] = useState(false);
   // la imagen que el backend no ha podido leer: se marca en su fila para
   // quitarla y seguir con las demás, en vez de perder la lista entera
-  const [imagenesFallo, setImagenesFallo] = useState<string | null>(null);
+  const [imagenesFallos, setImagenesFallos] = useState<string[]>([]);
   // «Ayuda ▸ Atajos de teclado»: el único sitio donde están todos escritos
   const [atajosAbiertos, setAtajosAbiertos] = useState(false);
   const {
@@ -2602,7 +2602,13 @@ function App() {
    *  documento abierto) y lo abre al terminar, que es lo que se quiere hacer
    *  con él a continuación. Si una imagen no se puede leer, el diálogo sigue
    *  abierto con esa fila marcada: se quita y se vuelve a intentar con las
-   *  demás, en vez de perder la lista. */
+   *  demás, en vez de perder la lista.
+   *
+   *  Un lote puede salir a medias —el backend se salta la foto que no se
+   *  deja leer en vez de tirar las otras diecinueve— y entonces se dice
+   *  cuántas han salido y **cuál falta**: nunca un resultado parcial en
+   *  silencio. Con imágenes saltadas el PDF no se abre y el diálogo se queda
+   *  donde estaba, que es donde se arregla la lista. */
   async function crearDesdeImagenes(opts: {
     rutas: string[];
     tamano: TamanoImagenes;
@@ -2615,16 +2621,31 @@ function App() {
     if (!dest) return;
     try {
       setNotice("Creando el PDF…", { persistente: true });
-      const paginas = await pdfFromImages(opts.rutas, dest, opts.tamano);
-      setImagenesFallo(null);
+      const { paginas, saltadas } = await pdfFromImages(
+        opts.rutas,
+        dest,
+        opts.tamano,
+      );
+      setImagenesFallos(saltadas);
+      if (saltadas.length > 0) {
+        // a medias: se cuenta lo que ha salido, se nombran las que no y la
+        // lista se queda en pantalla con esas filas marcadas
+        const nombres = saltadas.map((r) => r.split(/[\\/]/).pop() ?? r);
+        setNotice(
+          `${paginas} de ${plural(opts.rutas.length, "página", "páginas")} en ${dest} · ${nombres.join(
+            ", ",
+          )} ${nombres.length === 1 ? "no se ha" : "no se han"} podido leer`,
+        );
+        return;
+      }
       setImagenesOpen(false);
       await openPath(dest);
       setNotice(`${plural(paginas, "página escrita", "páginas escritas")} en ${dest}`);
     } catch (e) {
       setNotice(null);
       const msg = String(e);
-      // el backend nombra la imagen que no ha podido leer: se marca su fila
-      setImagenesFallo(opts.rutas.find((r) => msg.includes(r)) ?? null);
+      // no ha salido ninguna: el backend nombra las que no ha podido leer
+      setImagenesFallos(opts.rutas.filter((r) => msg.includes(r)));
       setError(msg);
     }
   }
@@ -3928,11 +3949,11 @@ function App() {
       )}
       {imagenesOpen && (
         <DialogoImagenes
-          fallo={imagenesFallo}
+          fallos={imagenesFallos}
           onConfirm={crearDesdeImagenes}
           onClose={() => {
             setImagenesOpen(false);
-            setImagenesFallo(null);
+            setImagenesFallos([]);
           }}
         />
       )}

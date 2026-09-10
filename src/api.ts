@@ -584,11 +584,16 @@ export type TamanoImagenes = "a4" | "carta" | "imagen";
 /** Crea un PDF nuevo con una imagen por página. Escribe un fichero aparte:
  *  no toca el documento abierto ni deja paso de deshacer. Devuelve cuántas
  *  páginas ha escrito. */
+/** Lo que ha salido de un lote de imágenes: cuántas páginas se han escrito
+ *  y las rutas de las que no se han dejado leer, para poder decir «19 de
+ *  20» con el nombre de la que falta en vez de tirar el lote entero. */
+export type InformeImagenes = { paginas: number; saltadas: string[] };
+
 export function pdfFromImages(
   imagePaths: string[],
   destPath: string,
   tamano: TamanoImagenes,
-): Promise<number> {
+): Promise<InformeImagenes> {
   return invoke("pdf_from_images", { imagePaths, destPath, tamano });
 }
 

@@ -23,14 +23,15 @@ function partesDe(ruta: string): { nombre: string; dir: string } {
  * de las páginas.
  */
 export default function DialogoImagenes({
-  fallo,
+  fallos,
   onConfirm,
   onClose,
 }: {
-  /** Ruta de la imagen que el backend no ha podido leer, si el intento
-   *  anterior falló: se marca en su fila para poder quitarla y seguir con
-   *  las demás, en vez de perder la lista entera. */
-  fallo: string | null;
+  /** Rutas de las imágenes que el backend no ha podido leer en el intento
+   *  anterior —todas, o las que se saltó por el camino—: se marcan en su
+   *  fila para poder quitarlas y seguir con las demás, en vez de perder la
+   *  lista entera. */
+  fallos: string[];
   onConfirm: (opts: { rutas: string[]; tamano: TamanoImagenes }) => void;
   onClose: () => void;
 }) {
@@ -90,7 +91,7 @@ export default function DialogoImagenes({
           <div className="combinar-lista">
             {rutas.map((r, i) => {
               const { nombre, dir } = partesDe(r);
-              const mala = fallo === r;
+              const mala = fallos.includes(r);
               return (
                 <div key={`${r}-${i}`} className="combinar-fila">
                   <span className="dato combinar-orden">{i + 1}</span>
