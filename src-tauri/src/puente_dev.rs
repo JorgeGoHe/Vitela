@@ -302,6 +302,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "export_text" => cmd!(exportar::export_text, { path: String, dest_path: String }),
         "export_docx" => cmd!(exportar::export_docx, { work_path: String, dest_path: String, page_indices: Option<Vec<u16>> }),
         "compress_pdf" => cmd!(exportar::compress_pdf, { work_path: String, quality: u8, max_dpi: u16 }),
+        "audit_pdf" => cmd!(exportar::audit_pdf, { path: String }),
         "create_form_field" => cmd!(crate::formularios2::create_form_field, { work_path: String, page_index: u16, kind: String, rect: crate::Rect, name: String, group: Option<String>, export_value: Option<String>, options: Option<Vec<String>>, props: Option<crate::formularios2::PropsCampo> }),
         "export_form_data_xfdf" => cmd!(crate::formularios2::export_form_data_xfdf, { work_path: String, dest_path: String }),
         "import_form_data_xfdf" => cmd!(crate::formularios2::import_form_data_xfdf, { work_path: String, src_path: String }),
@@ -524,6 +525,11 @@ mod tests {
         (
             "cancel_search",
             "ciclo 9: su botón «Cancelar» vive en la banda de progreso de esa búsqueda",
+        ),
+        (
+            "audit_pdf",
+            "ciclo 9: la barra apilada y la tabla del diálogo de comprimir llegan \
+             con la interfaz",
         ),
         (
             "compose_print",

@@ -1333,6 +1333,7 @@ pub fn run() {
             exportar::export_text,
             exportar::export_docx,
             exportar::compress_pdf,
+            exportar::audit_pdf,
             formularios2::create_form_field,
             formularios2::create_form_fields,
             formularios2::export_form_data_xfdf,

@@ -245,11 +245,300 @@ pub fn compress_pdf(work_path: String, quality: u8, max_dpi: u16) -> Result<Comp
     }))
 }
 
+/// Una categoría de la auditoría de espacio: cuánto ocupa y qué parte del
+/// fichero es.
+#[derive(Serialize, Debug)]
+pub struct CategoriaPeso {
+    pub categoria: String,
+    pub bytes: u64,
+    /// Porcentaje del fichero, con un decimal.
+    pub porcentaje: f32,
+}
+
+/// Las categorías de Acrobat, en el orden en que las enseña.
+const CATEGORIAS: [&str; 9] = [
+    "imagenes",
+    "fuentes",
+    "contenido",
+    "anotaciones",
+    "adjuntos",
+    "marcadores_y_enlaces",
+    "metadatos",
+    "estructura",
+    "lo_demas",
+];
+
+/// **La auditoría de espacio** del PDF Optimizer de Acrobat: en qué se va
+/// el peso del fichero.
+///
+/// Es la mitad que hace que «Reducir tamaño» se entienda: sin ella, quien
+/// tiene un PDF de 40 MB no sabe si son las fotos, las fuentes
+/// incrustadas o el árbol de estructura, y por tanto no sabe qué casilla
+/// marcar. Contesta a «¿por qué pesa 40 MB?» junto a las fuentes de ⌘D.
+///
+/// **Cuadra con el fichero**: lo que no se ha sabido atribuir —las tablas
+/// de referencias cruzadas, la sintaxis de los objetos, el hueco entre
+/// revisiones— va en «lo demás», que es lo honesto: la suma de la tabla es
+/// el tamaño del fichero y no una aproximación que no cuadre con lo que
+/// dice el Finder.
+#[tauri::command(async)]
+pub fn audit_pdf(path: String) -> Result<Vec<CategoriaPeso>, String> {
+    let total = std::fs::metadata(&path)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer el fichero: {e}")))?
+        .len();
+    on_pdfium_thread(move || {
+        crate::with_lopdf(&path, |doc| {
+            let mut de_quien: std::collections::BTreeMap<lopdf::ObjectId, &str> =
+                std::collections::BTreeMap::new();
+            clasifica(doc, &mut de_quien);
+            let mut pesos: std::collections::BTreeMap<&str, u64> = std::collections::BTreeMap::new();
+            let mut atribuido = 0u64;
+            for (id, obj) in doc.objects.iter() {
+                let n = tamano_de(obj) as u64;
+                let cat = de_quien.get(id).copied().unwrap_or("lo_demas");
+                *pesos.entry(cat).or_default() += n;
+                if cat != "lo_demas" {
+                    atribuido += n;
+                }
+            }
+            // «lo demás» es lo que queda del fichero: la sintaxis, el xref
+            // y todo lo que no se ha sabido de quién era
+            let resto = total.saturating_sub(atribuido);
+            pesos.insert("lo_demas", resto);
+            let suma = pesos.values().sum::<u64>().max(1);
+            Ok(CATEGORIAS
+                .iter()
+                .map(|c| {
+                    let bytes = pesos.get(c).copied().unwrap_or(0);
+                    CategoriaPeso {
+                        categoria: (*c).to_string(),
+                        bytes,
+                        porcentaje: (bytes as f64 * 1000.0 / suma as f64).round() as f32 / 10.0,
+                    }
+                })
+                .collect())
+        })
+    })
+}
+
+/// Cuánto ocupa un objeto una vez escrito, aproximado por sus partes. Los
+/// streams —que son el 95 % de cualquier PDF con fotos— se cuentan
+/// exactos: sus bytes son sus bytes.
+fn tamano_de(obj: &lopdf::Object) -> usize {
+    use lopdf::Object;
+    match obj {
+        Object::Null => 4,
+        Object::Boolean(_) => 5,
+        Object::Integer(n) => n.to_string().len(),
+        Object::Real(_) => 8,
+        Object::Name(n) => n.len() + 1,
+        Object::String(s, _) => s.len() + 2,
+        Object::Array(a) => a.iter().map(tamano_de).sum::<usize>() + 2 + a.len(),
+        Object::Dictionary(d) => tamano_dict(d),
+        Object::Stream(s) => tamano_dict(&s.dict) + s.content.len() + 20,
+        Object::Reference(_) => 10,
+    }
+}
+
+fn tamano_dict(d: &lopdf::Dictionary) -> usize {
+    d.iter().map(|(k, v)| k.len() + 2 + tamano_de(v)).sum::<usize>() + 4
+}
+
+/// De quién es cada objeto. El primero que reclama uno se lo queda: un
+/// stream de imagen que además cuelga de una anotación cuenta una vez.
+fn clasifica<'a>(
+    doc: &lopdf::Document,
+    out: &mut std::collections::BTreeMap<lopdf::ObjectId, &'a str>,
+) {
+    use lopdf::Object;
+    let reclama = |out: &mut std::collections::BTreeMap<lopdf::ObjectId, &'a str>,
+                       obj: Option<&Object>,
+                       cat: &'a str| {
+        let mut pila: Vec<lopdf::ObjectId> = match obj {
+            Some(Object::Reference(id)) => vec![*id],
+            Some(Object::Array(a)) => a.iter().filter_map(|o| o.as_reference().ok()).collect(),
+            _ => Vec::new(),
+        };
+        let mut vistos = 0;
+        while let Some(id) = pila.pop() {
+            vistos += 1;
+            if vistos > 20_000 {
+                return;
+            }
+            if out.contains_key(&id) {
+                continue;
+            }
+            out.insert(id, cat);
+            // se baja por el grafo: un `/StructTreeRoot` o un árbol de
+            // marcadores son cientos de objetos colgando
+            if let Ok(o) = doc.get_object(id) {
+                let mut hijos = Vec::new();
+                recoge_hijos(o, &mut hijos);
+                pila.extend(hijos);
+            }
+        }
+    };
+
+    let catalogo = doc.catalog().cloned().unwrap_or_default();
+    // lo específico primero: quien reclama antes se lo queda
+    reclama(out, catalogo.get(b"Metadata").ok(), "metadatos");
+    reclama(out, doc.trailer.get(b"Info").ok(), "metadatos");
+    reclama(out, catalogo.get(b"StructTreeRoot").ok(), "estructura");
+    reclama(out, catalogo.get(b"Outlines").ok(), "marcadores_y_enlaces");
+    if let Some(names) = catalogo.get(b"Names").ok().and_then(|o| dict_res(doc, o)) {
+        reclama(out, names.get(b"EmbeddedFiles").ok(), "adjuntos");
+    }
+
+    for page_id in doc.get_pages().into_values() {
+        let Ok(page) = doc.get_object(page_id).and_then(|o| o.as_dict()) else {
+            continue;
+        };
+        let page = page.clone();
+        reclama(out, page.get(b"Contents").ok(), "contenido");
+        // las anotaciones: los enlaces y los adjuntos van aparte, que es lo
+        // que la tabla tiene que poder separar
+        if let Ok(annots) = page.get(b"Annots") {
+            let lista: Vec<Object> = match annots {
+                Object::Array(a) => a.clone(),
+                Object::Reference(id) => doc
+                    .get_object(*id)
+                    .and_then(|o| o.as_array())
+                    .cloned()
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            };
+            for a in lista {
+                let subtipo = dict_res(doc, &a)
+                    .and_then(|d| d.get(b"Subtype").and_then(|o| o.as_name()).ok().map(|n| n.to_vec()))
+                    .unwrap_or_default();
+                let cat = match subtipo.as_slice() {
+                    b"Link" => "marcadores_y_enlaces",
+                    b"FileAttachment" => "adjuntos",
+                    _ => "anotaciones",
+                };
+                reclama(out, Some(&a), cat);
+            }
+        }
+        if let Some(res) = page.get(b"Resources").ok().and_then(|o| dict_res(doc, o)) {
+            if let Some(fuentes) = res.get(b"Font").ok().and_then(|o| dict_res(doc, o)) {
+                for (_, v) in fuentes.iter() {
+                    reclama(out, Some(v), "fuentes");
+                }
+            }
+            if let Some(xobj) = res.get(b"XObject").ok().and_then(|o| dict_res(doc, o)) {
+                for (_, v) in xobj.iter() {
+                    let es_imagen = dict_res(doc, v)
+                        .map(|d| {
+                            d.get(b"Subtype").and_then(|o| o.as_name()).unwrap_or_default()
+                                == b"Image"
+                        })
+                        .unwrap_or(false);
+                    reclama(out, Some(v), if es_imagen { "imagenes" } else { "contenido" });
+                }
+            }
+        }
+    }
+}
+
+/// Las referencias que cuelgan de un objeto, para bajar por el grafo.
+fn recoge_hijos(obj: &lopdf::Object, out: &mut Vec<lopdf::ObjectId>) {
+    use lopdf::Object;
+    match obj {
+        Object::Reference(id) => out.push(*id),
+        Object::Array(a) => a.iter().for_each(|o| recoge_hijos(o, out)),
+        Object::Dictionary(d) => d.iter().for_each(|(_, v)| recoge_hijos(v, out)),
+        Object::Stream(s) => s.dict.iter().for_each(|(_, v)| recoge_hijos(v, out)),
+        _ => {}
+    }
+}
+
+/// El diccionario de un objeto, siguiendo la referencia si hace falta.
+fn dict_res(doc: &lopdf::Document, obj: &lopdf::Object) -> Option<lopdf::Dictionary> {
+    use lopdf::Object;
+    match obj {
+        Object::Dictionary(d) => Some(d.clone()),
+        Object::Stream(s) => Some(s.dict.clone()),
+        Object::Reference(id) => dict_res(doc, doc.get_object(*id).ok()?),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tests::crea_pdf;
     use base64::Engine;
+
+    /// **La auditoría de espacio** del PDF Optimizer: en qué se va el peso
+    /// del fichero. Lo que hay que probar es que **cuadra**: una tabla que
+    /// suma 31 MB de un fichero de 40 no contesta a «¿por qué pesa 40 MB?»,
+    /// que es la única pregunta para la que existe.
+    #[test]
+    fn la_auditoria_reparte_el_peso_del_fichero_entero() {
+        let pdf = std::env::temp_dir().join("exportar-auditoria.pdf");
+        crea_pdf(&["Informe", "Anexo"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        // una foto grande y con ruido, que es lo que de verdad pesa en un
+        // PDF y lo que la tabla tiene que señalar
+        let mut foto = image::RgbaImage::new(600, 400);
+        let mut semilla: u32 = 7;
+        for p in foto.pixels_mut() {
+            semilla = semilla.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let v = (semilla >> 24) as u8;
+            *p = image::Rgba([v, v.wrapping_add(40), v.wrapping_add(90), 255]);
+        }
+        let ruta_foto = std::env::temp_dir().join("exportar-auditoria-foto.png");
+        foto.save(&ruta_foto).expect("guardar la foto");
+        crate::imagenes::add_image(
+            work.clone(),
+            0,
+            ruta_foto.to_string_lossy().into_owned(),
+            40.0,
+            40.0,
+        )
+        .expect("meter la foto");
+        crate::anotaciones::add_note(
+            work.clone(),
+            0,
+            100.0,
+            100.0,
+            "Una nota".into(),
+            None,
+        )
+        .expect("nota");
+
+        let tabla = audit_pdf(work.clone()).expect("auditar");
+        assert_eq!(tabla.len(), 9, "las nueve categorías de Acrobat");
+        let suma: u64 = tabla.iter().map(|c| c.bytes).sum();
+        let fichero = std::fs::metadata(&work).expect("peso").len();
+        let error = (suma as f64 - fichero as f64).abs() / fichero as f64;
+        assert!(
+            error < 0.01,
+            "la tabla suma {suma} y el fichero pesa {fichero}"
+        );
+        assert!(
+            (tabla.iter().map(|c| c.porcentaje).sum::<f32>() - 100.0).abs() < 0.6,
+            "los porcentajes tienen que sumar cien: {tabla:?}"
+        );
+
+        // y señala a la foto, que es la que pesa
+        let de = |cat: &str| {
+            tabla
+                .iter()
+                .find(|c| c.categoria == cat)
+                .map(|c| c.bytes)
+                .expect("categoría")
+        };
+        assert!(
+            de("imagenes") > fichero / 2,
+            "la foto es más de medio fichero y la tabla dice {}",
+            de("imagenes")
+        );
+        assert!(de("anotaciones") > 0, "la nota tiene que contarse");
+
+        std::fs::remove_file(&ruta_foto).ok();
+        std::fs::remove_file(&pdf).ok();
+    }
 
     /// Un fichero del `.docx` (que es un zip), como texto.
     fn dentro_del_docx(docx: &std::path::Path, fichero: &str) -> String {
