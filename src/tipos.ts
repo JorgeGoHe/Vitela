@@ -921,6 +921,43 @@ export function guardaColor(accion: string, color: string) {
  *  Acrobat cuando el PDF no trae `/Measure`. */
 export const MM_POR_PUNTO = 25.4 / 72;
 
+/* ---- reglas, guías y cuadrícula (andamio, no documento) ---- */
+
+const CLAVE_GUIAS = "editorPdf.guias";
+
+/** Las guías de un documento, en puntos de página: `v` son las verticales
+ *  (su x) y `h` las horizontales (su y). **No tocan el fichero**: son el
+ *  andamio de quien coloca sellos y campos, así que viven donde vive la
+ *  escala de medida, en `localStorage` y por ruta. */
+export type Guias = { v: number[]; h: number[] };
+
+export const SIN_GUIAS: Guias = { v: [], h: [] };
+
+export function cargaGuias(path: string | null): Guias {
+  if (!path) return SIN_GUIAS;
+  try {
+    const todas = JSON.parse(localStorage.getItem(CLAVE_GUIAS) ?? "{}");
+    const g = todas[path];
+    const nums = (x: unknown) =>
+      Array.isArray(x) ? x.filter((n) => Number.isFinite(n)) : [];
+    return { v: nums(g?.v), h: nums(g?.h) };
+  } catch {
+    return SIN_GUIAS;
+  }
+}
+
+export function guardaGuias(path: string | null, guias: Guias) {
+  if (!path) return;
+  try {
+    const todas = JSON.parse(localStorage.getItem(CLAVE_GUIAS) ?? "{}");
+    if (guias.v.length === 0 && guias.h.length === 0) delete todas[path];
+    else todas[path] = guias;
+    localStorage.setItem(CLAVE_GUIAS, JSON.stringify(todas));
+  } catch {
+    /* sin localStorage las guías valen para esta sesión y ya */
+  }
+}
+
 const CLAVE_ESCALA = "editorPdf.escala";
 
 /** La escala se pide una vez por documento y se guarda por su ruta: un

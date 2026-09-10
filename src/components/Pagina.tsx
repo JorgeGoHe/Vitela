@@ -7,6 +7,7 @@
 import { memo, useEffect, useRef, useState } from "react";
 import {
   charIndexAt,
+  type Guias,
   type Mode,
   type PageSize,
   type Rect,
@@ -33,6 +34,7 @@ import CapaAreas from "./pagina/CapaAreas";
 import CapaLlamada from "./pagina/CapaLlamada";
 import CapaMedida from "./pagina/CapaMedida";
 import CapaPropuestas from "./pagina/CapaPropuestas";
+import CapaGuias from "./pagina/CapaGuias";
 import CapaEnlaces from "./pagina/CapaEnlaces";
 import CapaFormularios from "./pagina/CapaFormularios";
 import CapaImagenes from "./pagina/CapaImagenes";
@@ -153,6 +155,14 @@ type Props = {
   onPropuestaQuitar: (i: number) => void;
   onPropuestaRenombrar: (i: number, nombre: string) => void;
   onPropuestaTipo: (i: number) => void;
+  /** Andamio: reglas, guías y cuadrícula. No tocan el fichero. */
+  reglas: boolean;
+  cuadricula: boolean;
+  guiasVisibles: boolean;
+  guias: Guias;
+  escalaMm: number;
+  onGuia: (eje: "v" | "h", valor: number) => void;
+  onQuitarGuia: (eje: "v" | "h", valor: number) => void;
   /** Quita una marca de esta página (la lista la lleva App). */
   quitarMarca: (page: number, annotIndex: number) => void;
   /** La lista de marcas ha cambiado: que App la relea. */
@@ -204,6 +214,13 @@ function Pagina({
   onPropuestaQuitar,
   onPropuestaRenombrar,
   onPropuestaTipo,
+  reglas,
+  cuadricula,
+  guiasVisibles,
+  guias,
+  escalaMm,
+  onGuia,
+  onQuitarGuia,
   quitarMarca,
   onMarcasCambian,
   pedirTextoNuevo,
@@ -1045,6 +1062,18 @@ function Pagina({
             viewRotation={viewRotation}
             displayWidth={displayWidth}
             tool={tool}
+          />
+          <CapaGuias
+            reglas={reglas}
+            cuadricula={cuadricula}
+            guiasVisibles={guiasVisibles}
+            guias={guias}
+            escalaMm={escalaMm}
+            scale={scale}
+            displayWidth={displayWidth}
+            displayHeight={altoHoja}
+            onGuia={onGuia}
+            onQuitarGuia={onQuitarGuia}
           />
           <CapaAreas
             mode={mode}

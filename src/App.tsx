@@ -148,6 +148,10 @@ import {
   type ModoPagina,
   type OpcionesImprimir,
   cargaEscala,
+  cargaGuias,
+  guardaGuias,
+  type Guias,
+  SIN_GUIAS,
   cargaResaltarCampos,
   copyToClipboard,
   guardaEscala,
@@ -700,10 +704,39 @@ function App() {
   // la escala de medida es del documento, no de la herramienta: se guarda
   // por ruta y se recupera al abrirlo (un plano no cambia de escala)
   const [escalaMm, setEscalaMm] = useState(MM_POR_PUNTO);
+  // andamio: reglas (⌘R), guías (⌘;) y cuadrícula (⌘'). No tocan el
+  // fichero ni se imprimen; las guías se guardan por ruta, como la escala
+  const [reglas, setReglas] = useState(false);
+  const [cuadricula, setCuadricula] = useState(false);
+  const [guiasVisibles, setGuiasVisibles] = useState(true);
+  const [guias, setGuias] = useState<Guias>(SIN_GUIAS);
   const fijarEscala = useCallback(
     (mm: number) => {
       setEscalaMm(mm);
       guardaEscala(originalPath, mm);
+    },
+    [originalPath],
+  );
+  /** Deja una guía nueva. Van por ruta, así que el andamio de un plano
+   *  sigue ahí la próxima vez que se abra el documento. */
+  const ponGuia = useCallback(
+    (eje: "v" | "h", valor: number) => {
+      setGuias((g) => {
+        const siguiente = { ...g, [eje]: [...g[eje], valor] };
+        guardaGuias(originalPath, siguiente);
+        return siguiente;
+      });
+      setGuiasVisibles(true);
+    },
+    [originalPath],
+  );
+  const quitaGuia = useCallback(
+    (eje: "v" | "h", valor: number) => {
+      setGuias((g) => {
+        const siguiente = { ...g, [eje]: g[eje].filter((v) => v !== valor) };
+        guardaGuias(originalPath, siguiente);
+        return siguiente;
+      });
     },
     [originalPath],
   );
@@ -793,6 +826,7 @@ function App() {
       setBandaFirmas(false);
       setNombreProvisional(null);
       setEscalaMm(cargaEscala(original !== undefined ? original : path));
+      setGuias(cargaGuias(original !== undefined ? original : path));
       setOriginalPath(original !== undefined ? original : path);
       setWorkPath(info.work_path);
       setPageCount(info.page_count);
@@ -2247,6 +2281,17 @@ function App() {
         // por título, que es como se hace en Acrobat
         e.preventDefault();
         crearMarcador();
+      } else if (mod && (e.key === "r" || e.key === "R") && pageCount > 0) {
+        // ⌘R: las reglas, como en Acrobat (en un navegador esta tecla
+        // recarga, así que el `preventDefault` no es opcional)
+        e.preventDefault();
+        setReglas((v) => !v);
+      } else if (mod && e.key === ";" && pageCount > 0) {
+        e.preventDefault();
+        setGuiasVisibles((v) => !v);
+      } else if (mod && e.key === "'" && pageCount > 0) {
+        e.preventDefault();
+        setCuadricula((v) => !v);
       } else if (mod && e.shiftKey && (e.key === "l" || e.key === "L")) {
         // el modo nocturno del documento: solo cambia lo que se ve
         e.preventDefault();
@@ -5310,6 +5355,13 @@ function App() {
                   onPropuestaQuitar={quitarPropuesta}
                   onPropuestaRenombrar={renombraPropuesta}
                   onPropuestaTipo={cambiaTipoPropuesta}
+                  reglas={reglas}
+                  cuadricula={cuadricula}
+                  guiasVisibles={guiasVisibles}
+                  guias={guias}
+                  escalaMm={escalaMm}
+                  onGuia={ponGuia}
+                  onQuitarGuia={quitaGuia}
                   quitarMarca={quitarMarca}
                   onMarcasCambian={refrescarMarcas}
                   pedirTextoNuevo={pedirTextoNuevo}
