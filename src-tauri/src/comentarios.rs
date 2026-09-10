@@ -223,7 +223,7 @@ pub fn export_comments(
 /// que lleva dentro la copia de trabajo — `vitela-<nombre>-<nanos>.pdf`, de
 /// donde sale `<nombre>.pdf`—. **El nombre del temporal no se enseña
 /// nunca**: no significa nada para quien recibe el fichero.
-fn nombre_de_documento(document_name: Option<&str>, path: &str) -> String {
+pub(crate) fn nombre_de_documento(document_name: Option<&str>, path: &str) -> String {
     let solo_fichero = |s: &str| {
         std::path::Path::new(s)
             .file_name()
@@ -251,7 +251,7 @@ fn nombre_de_documento(document_name: Option<&str>, path: &str) -> String {
 /// Una fecha ISO 8601 escrita como se escribe en español: «10/09/2026
 /// 00:25». El resumen se le manda a una persona, y
 /// `2026-09-10T00:25:56+02:00` es la lengua de la máquina.
-fn fecha_en_espanol(iso: &str) -> String {
+pub(crate) fn fecha_en_espanol(iso: &str) -> String {
     chrono::DateTime::parse_from_rfc3339(iso)
         .map(|d| d.format("%d/%m/%Y %H:%M").to_string())
         .unwrap_or_else(|_| iso.to_string())
@@ -259,7 +259,7 @@ fn fecha_en_espanol(iso: &str) -> String {
 
 /// El tipo de anotación en la lengua del usuario: en el resumen no puede
 /// poner «Squiggly».
-fn tipo_en_llano(kind: &str) -> &'static str {
+pub(crate) fn tipo_en_llano(kind: &str) -> &'static str {
     match kind {
         "Text" => "Nota",
         "Highlight" => "Resaltado",

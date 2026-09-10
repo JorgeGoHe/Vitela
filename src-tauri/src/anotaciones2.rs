@@ -1377,7 +1377,7 @@ fn borra_del_trazo(
 /// Parte el content stream de un trazo en (todo lo de antes del camino, los
 /// caminos). Solo entiende `m` y `l`, que es lo único que escribe el dibujo
 /// de Vitela; lo demás se conserva tal cual delante.
-fn parte_el_camino(datos: &[u8]) -> (Vec<u8>, Vec<Vec<(f32, f32)>>) {
+pub(crate) fn parte_el_camino(datos: &[u8]) -> (Vec<u8>, Vec<Vec<(f32, f32)>>) {
     let texto = String::from_utf8_lossy(datos);
     let piezas: Vec<&str> = texto.split_whitespace().collect();
     let mut cabecera = String::new();

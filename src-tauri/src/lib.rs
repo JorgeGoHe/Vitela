@@ -719,6 +719,7 @@ mod busqueda;
 mod documento;
 mod exportar;
 mod comentarios;
+mod comentarios2;
 mod confianza;
 mod firma;
 mod firmas_visuales;
@@ -1083,6 +1084,9 @@ pub fn run() {
             comentarios::reply_annotation,
             comentarios::set_annotation_state,
             comentarios::export_comments,
+            comentarios2::export_comments_pdf,
+            comentarios2::export_comments_xfdf,
+            comentarios2::import_comments_xfdf,
             formularios::get_form_fields,
             formularios::set_form_text,
             formularios::set_form_checked,

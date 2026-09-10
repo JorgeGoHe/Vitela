@@ -5981,6 +5981,7 @@ dependencies = [
  "p256",
  "p384",
  "pdfium-render",
+ "quick-xml",
  "rsa",
  "rustls-native-certs",
  "security-framework",

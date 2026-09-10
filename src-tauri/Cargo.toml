@@ -55,6 +55,9 @@ getrandom = "0.2"
 # puente HTTP de QA (el código solo se compila en debug)
 tiny_http = "0.12"
 docx-rs = "0.4.22"
+# XFDF: XML plano, para exportar e importar comentarios (ya venía en el
+# árbol con docx-rs, así que no trae nada nuevo al build)
+quick-xml = "0.41"
 
 # cadena de confianza de las firmas (ciclo 5): las raíces las pone el
 # sistema, no Vitela. En macOS las evalúa el propio llavero; en Windows y

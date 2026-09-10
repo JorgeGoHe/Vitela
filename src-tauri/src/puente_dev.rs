@@ -178,6 +178,9 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "reply_annotation" => cmd!(crate::comentarios::reply_annotation, { work_path: String, page_index: u16, annot_index: u16, text: String, author: Option<String> }),
         "set_annotation_state" => cmd!(crate::comentarios::set_annotation_state, { work_path: String, page_index: u16, annot_index: u16, state: String, author: Option<String> }),
         "export_comments" => cmd!(crate::comentarios::export_comments, { work_path: String, dest_path: String, document_name: Option<String> }),
+        "export_comments_pdf" => cmd!(crate::comentarios2::export_comments_pdf, { work_path: String, dest_path: String, orden: String, document_name: Option<String> }),
+        "export_comments_xfdf" => cmd!(crate::comentarios2::export_comments_xfdf, { work_path: String, dest_path: String }),
+        "import_comments_xfdf" => cmd!(crate::comentarios2::import_comments_xfdf, { work_path: String, src_path: String }),
         "get_form_fields" => cmd!(formularios::get_form_fields, { path: String, page_index: u16 }),
         "set_form_text" => cmd!(formularios::set_form_text, { work_path: String, page_index: u16, annot_index: u16, value: String }),
         "set_form_checked" => cmd!(formularios::set_form_checked, { work_path: String, page_index: u16, annot_index: u16, checked: bool }),
@@ -450,6 +453,22 @@ mod tests {
     /// excepción mientras las dos mitades se escriben en paralelo, y se
     /// quita al integrar.
     const NADIE_LLAMA: &[(&str, &str)] = &[
+        (
+            "export_comments_pdf",
+            "pendiente_ui — H9: el resumen de comentarios imprimible. La UI \
+             del ciclo 7 lo elige en el propio diálogo de guardar (.txt · \
+             .pdf · .xfdf), con el orden solo cuando es PDF",
+        ),
+        (
+            "export_comments_xfdf",
+            "pendiente_ui — H9: la revisión que se le devuelve a quien la \
+             pidió, en el mismo diálogo",
+        ),
+        (
+            "import_comments_xfdf",
+            "pendiente_ui — H9: «Importar comentarios…», con su id de menú \
+             ya puesto",
+        ),
         (
             "add_measure",
             "pendiente_ui — R43b: «Dejar la medida puesta» pasa a escribir \

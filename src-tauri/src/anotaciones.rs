@@ -750,7 +750,7 @@ pub(crate) fn texto_de_cadena_pdf(o: &lopdf::Object) -> String {
     }
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct AnnotationInfo {
     pub index: u16,
     pub kind: String,
@@ -910,7 +910,7 @@ fn aplica_datos(path: &str, page_index: u16, out: &mut Vec<AnnotationInfo>) {
 
 /// Una anotación con la página en la que está, para el panel de
 /// comentarios.
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct AnotacionDoc {
     #[serde(flatten)]
     pub annot: AnnotationInfo,
