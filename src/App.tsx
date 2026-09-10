@@ -921,7 +921,9 @@ function App() {
   function descartarSesion(s: Sesion) {
     setSesionRota(null);
     invoke("close_document", { workPath: s.work_path }).catch(() => {});
-    borraSesion().catch(() => {});
+    borraSesion(s.work_path).catch((e) =>
+      console.warn("no se ha podido borrar el apunte de sesión:", e),
+    );
     setNotice("Descartados los cambios sin guardar de la sesión anterior");
   }
 
@@ -1252,7 +1254,9 @@ function App() {
       setPestanas(restantes);
       setPestanaActiva(restantes[0].id);
       aplicaPestana(restantes[0]);
-      borraSesion(anterior).catch(() => {});
+      borraSesion(anterior).catch((e) =>
+        console.warn("no se ha podido borrar el apunte de sesión:", e),
+      );
       invoke("close_document", { workPath: anterior }).catch((e) =>
         setError(String(e)),
       );
@@ -1297,7 +1301,9 @@ function App() {
     evictAll();
     setDocVersion((v) => v + 1);
     setMenuState(false).catch(() => {});
-    borraSesion().catch(() => {});
+    borraSesion(anterior).catch((e) =>
+      console.warn("no se ha podido borrar el apunte de sesión:", e),
+    );
     invoke("close_document", { workPath: anterior }).catch((e) => setError(String(e)));
   }
 
@@ -3433,7 +3439,9 @@ function App() {
       setNombreProvisional(null);
       setModified(false);
       // guardado: ya no hay nada que recuperar
-      borraSesion().catch(() => {});
+      borraSesion(workPath).catch((e) =>
+        console.warn("no se ha podido borrar el apunte de sesión:", e),
+      );
       setNotice(`Guardado en ${dest}`);
       return true;
     } catch (e) {
