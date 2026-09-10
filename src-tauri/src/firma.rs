@@ -327,7 +327,7 @@ pub fn sign(
     let nombre = apariencia
         .signer_name
         .clone()
-        .unwrap_or_else(|| nombre_comun(&cred.cert.tbs_certificate.subject.to_string()));
+        .unwrap_or_else(|| nombre_llano(&cred.cert.tbs_certificate.subject.to_string()));
     sig.set("Name", crate::documento::cadena_pdf(&nombre));
     if let Some(r) = reason.as_deref() {
         sig.set("Reason", Object::string_literal(r));
@@ -509,8 +509,20 @@ pub struct FirmaInfo {
     /// lleva dentro la firma, y la firma RSA de esos datos la hizo la clave
     /// del certificado embebido.
     pub digest_ok: bool,
+    /// Quién es el titular del certificado, **en llano**: el `CN` y, si no
+    /// lo lleva, el `O`. Un DN RFC 4514 entero
+    /// (`CN=AC FNMT Usuarios,OU=Ceres,O=FNMT-RCM,C=ES`) en una tarjeta que
+    /// existe para decir algo en español es jerga; Acrobat enseña «AC FNMT
+    /// Usuarios».
     pub cert_subject: String,
+    /// Quién lo emitió, en llano, con el mismo criterio.
     pub cert_issuer: String,
+    /// El DN completo del titular, tal como viene en el certificado, para
+    /// el día que haya un «ver detalles del certificado» (y, mientras
+    /// tanto, para el `title` de la tarjeta).
+    pub cert_subject_dn: String,
+    /// El DN completo del emisor.
+    pub cert_issuer_dn: String,
     pub not_before: String,
     pub not_after: String,
     /// El certificado está **fuera de su periodo de validez**, por
@@ -563,9 +575,15 @@ pub const ESTADO_DESCONOCIDO: &str = "desconocido";
 /// hizo la clave del certificado que viaja en ella, y qué dice ese
 /// certificado (sujeto, emisor y validez).
 ///
-/// **Sin cadena de confianza**: no se consulta el llavero del sistema. Por
-/// eso no hay ningún «válida» aquí: hay `digest_ok` (el documento no ha
-/// cambiado), `expired` y `self_signed`, y la UI dice exactamente eso.
+/// **Con cadena de confianza desde el ciclo 5, y sin revocación**: se
+/// consulta el almacén del sistema (el llavero en macOS, las raíces
+/// nativas fuera) y el resultado va en `confianza` (`"raiz_conocida"`,
+/// `"autofirmado"`, `"desconocida"`), evaluado en el momento de la firma
+/// —el atributo firmado `signingTime`, que es la palabra del firmante:
+/// sin sello de tiempo (TSA) no hay más, y es lo que hace Acrobat—. Ni
+/// CRL ni OCSP, así que **sigue sin haber ningún «válida»** aquí: hay
+/// `digest_ok` (el documento no ha cambiado), `expired`, `self_signed` y
+/// quién responde por el certificado, y la UI dice exactamente eso.
 #[tauri::command(async)]
 pub fn verify_signatures(path: String) -> Result<Vec<FirmaInfo>, String> {
     crate::on_pdfium_thread(move || {
@@ -705,6 +723,8 @@ fn lee_firma(
         digest_ok: false,
         cert_subject: String::new(),
         cert_issuer: String::new(),
+        cert_subject_dn: String::new(),
+        cert_issuer_dn: String::new(),
         not_before: String::new(),
         not_after: String::new(),
         expired: false,
@@ -740,8 +760,10 @@ fn lee_firma(
         && hueco.last() == Some(&b'>');
 
     if let Some(cms) = lee_cms(contents) {
-        info.cert_subject = cms.subject;
-        info.cert_issuer = cms.issuer;
+        info.cert_subject = nombre_llano(&cms.subject);
+        info.cert_issuer = nombre_llano(&cms.issuer);
+        info.cert_subject_dn = cms.subject;
+        info.cert_issuer_dn = cms.issuer;
         info.not_before = cms.not_before;
         info.not_after = cms.not_after;
         info.expired = cms.expired;
@@ -766,7 +788,7 @@ fn lee_firma(
         }
         .to_string();
         if info.name.is_empty() {
-            info.name = nombre_comun(&info.cert_subject);
+            info.name = info.cert_subject.clone();
         }
     }
     info
@@ -933,7 +955,7 @@ fn lee_cms(der_con_relleno: &[u8]) -> Option<DatosCms> {
         hash,
         firma_ok,
         algoritmo,
-        self_signed: subject == issuer,
+        self_signed: crate::confianza::es_autofirmado(&cert),
         subject,
         issuer,
         not_before: iso(&cert.tbs_certificate.validity.not_before),
@@ -1123,15 +1145,73 @@ fn verifica_ecdsa(spki: &[u8], prehash: &[u8], firma: &[u8]) -> (Option<bool>, &
     (None, "de curva desconocida")
 }
 
-/// El CN de un sujeto RFC 4514 («CN=Jorge,O=Vitela»); si no lo lleva, el
-/// sujeto entero, que siempre es mejor que una casilla vacía.
-fn nombre_comun(sujeto: &str) -> String {
-    sujeto
-        .split(',')
-        .map(str::trim)
-        .find_map(|p| p.strip_prefix("CN="))
-        .unwrap_or(sujeto)
-        .to_string()
+/// El nombre de un DN RFC 4514 en llano: el `CN` y, si no lo lleva, el `O`;
+/// si tampoco, el DN entero, que siempre es mejor que una casilla vacía.
+///
+/// Acrobat enseña «Emitido por: AC FNMT Usuarios», no
+/// `CN=AC FNMT Usuarios,OU=Ceres,O=FNMT-RCM,C=ES`. El DN completo se
+/// conserva aparte (`cert_subject_dn` / `cert_issuer_dn`).
+///
+/// **Las comas escapadas no parten el nombre**: en RFC 4514 una coma
+/// dentro de un valor va como `\,` («CN=Pérez\, Ada,O=Vitela» es un solo
+/// componente), y partir por comas a secas dejaba «Pérez\» en la tarjeta.
+pub(crate) fn nombre_llano(dn: &str) -> String {
+    let partes = componentes(dn);
+    for clave in ["CN=", "O="] {
+        if let Some(v) = partes.iter().find_map(|p| p.strip_prefix(clave)) {
+            let v = desescapa(v);
+            if !v.is_empty() {
+                return v;
+            }
+        }
+    }
+    dn.to_string()
+}
+
+/// Parte un DN por sus comas **de verdad**: las precedidas de un número
+/// impar de barras invertidas van dentro del valor.
+fn componentes(dn: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut actual = String::new();
+    let mut escapa = false;
+    for c in dn.chars() {
+        if escapa {
+            actual.push(c);
+            escapa = false;
+            continue;
+        }
+        match c {
+            '\\' => {
+                actual.push(c);
+                escapa = true;
+            }
+            ',' => {
+                out.push(actual.trim().to_string());
+                actual = String::new();
+            }
+            _ => actual.push(c),
+        }
+    }
+    out.push(actual.trim().to_string());
+    out
+}
+
+/// Quita las barras de escape de un valor RFC 4514 («Pérez\, Ada» →
+/// «Pérez, Ada»).
+fn desescapa(valor: &str) -> String {
+    let mut out = String::new();
+    let mut escapa = false;
+    for c in valor.chars() {
+        if escapa {
+            out.push(c);
+            escapa = false;
+        } else if c == '\\' {
+            escapa = true;
+        } else {
+            out.push(c);
+        }
+    }
+    out.trim().to_string()
 }
 
 #[cfg(test)]
@@ -1628,6 +1708,79 @@ mod tests {
             std::fs::remove_file(p).ok();
         }
     }
+    /// **R28.** De un DN se enseña el nombre, no el DN. La tarjeta del
+    /// panel decía «Emitido por
+    /// `CN=AC FNMT Usuarios,OU=Ceres,O=FNMT-RCM,C=ES`» en una línea que
+    /// existe precisamente para hablar en llano.
+    ///
+    /// El caso que hay que acertar es la coma escapada: en RFC 4514 una
+    /// coma dentro de un valor va como `\,` y partir por comas a secas
+    /// dejaba medio apellido.
+    #[test]
+    fn del_dn_se_ensena_el_nombre_y_una_coma_escapada_no_lo_parte() {
+        assert_eq!(
+            nombre_llano("CN=AC FNMT Usuarios,OU=Ceres,O=FNMT-RCM,C=ES"),
+            "AC FNMT Usuarios"
+        );
+        // una coma dentro del CN: un solo componente, con su coma
+        assert_eq!(
+            nombre_llano(r"CN=Pérez\, Ada,O=Vitela,C=ES"),
+            "Pérez, Ada"
+        );
+        // sin CN, el O
+        assert_eq!(nombre_llano("OU=Ceres,O=FNMT-RCM,C=ES"), "FNMT-RCM");
+        // sin ninguno de los dos, el DN entero antes que una casilla vacía
+        assert_eq!(nombre_llano("C=ES"), "C=ES");
+        assert_eq!(nombre_llano(""), "");
+        // el CN vacío no gana: se sigue buscando algo que decir
+        assert_eq!(nombre_llano("CN=,O=Vitela"), "Vitela");
+    }
+
+    /// **R28.** Y en la firma de verdad: el nombre llano en `cert_subject`
+    /// y `cert_issuer`, el DN completo guardado aparte.
+    #[test]
+    fn la_tarjeta_de_la_firma_lleva_el_nombre_y_el_dn_va_aparte() {
+        let dir = std::env::temp_dir();
+        let src = dir.join("firma-dn-llano.pdf");
+        let dest = dir.join("firma-dn-llano-out.pdf");
+        crea_pdf(&["Contrato"], &src);
+        sign(
+            &src.to_string_lossy(),
+            &dest.to_string_lossy(),
+            &credenciales(),
+            None,
+            &Apariencia::default(),
+        )
+        .expect("firmar");
+        let f = &verify_signatures(dest.to_string_lossy().into_owned()).expect("verificar")[0];
+        assert!(
+            !f.cert_subject.contains('='),
+            "el sujeto sale en llano y no como DN: {}",
+            f.cert_subject
+        );
+        assert!(
+            !f.cert_issuer.contains('='),
+            "y el emisor también: {}",
+            f.cert_issuer
+        );
+        assert!(
+            f.cert_subject_dn.contains("CN="),
+            "el DN entero se conserva: {}",
+            f.cert_subject_dn
+        );
+        assert_eq!(f.cert_subject, nombre_llano(&f.cert_subject_dn));
+        assert_eq!(f.cert_issuer, nombre_llano(&f.cert_issuer_dn));
+        // sin `/Name` en el diccionario de firma, quien firma es ese mismo
+        // nombre llano
+        assert_eq!(f.name, f.cert_subject);
+        // y «autofirmado» lo dice la definición buena (nombre Y firma),
+        // no solo que el sujeto y el emisor se llamen igual
+        assert!(f.self_signed, "el certificado de prueba es autofirmado");
+        for p in [&src, &dest] {
+            std::fs::remove_file(p).ok();
+        }
+    }
+
     /// Una firma ECDSA P-256 —lo que llevan hoy las firmas cualificadas— es
     /// una firma buena: tiene que salir «ok», no en rojo. Vitela solo sabía
     /// RSA/SHA-256 y daba por manipulado todo lo demás.
