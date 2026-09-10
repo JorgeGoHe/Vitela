@@ -520,6 +520,22 @@ export function insertPdfAt(
   return invoke("insert_pdf_at", { workPath, otherPath, index });
 }
 
+/** Tamaño de página de «Crear PDF desde imágenes»: A4 y Carta ajustan la
+ *  foto con 36 pt de margen y la centran; «imagen» hace la página del
+ *  tamaño de la foto a 72 dpi, sin margen. */
+export type TamanoImagenes = "a4" | "carta" | "imagen";
+
+/** Crea un PDF nuevo con una imagen por página. Escribe un fichero aparte:
+ *  no toca el documento abierto ni deja paso de deshacer. Devuelve cuántas
+ *  páginas ha escrito. */
+export function pdfFromImages(
+  imagePaths: string[],
+  destPath: string,
+  tamano: TamanoImagenes,
+): Promise<number> {
+  return invoke("pdf_from_images", { imagePaths, destPath, tamano });
+}
+
 export function cropPage(
   workPath: string,
   pageIndex: number,

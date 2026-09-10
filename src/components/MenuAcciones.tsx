@@ -47,6 +47,7 @@ export default function MenuAcciones({
   abrirReemplazar,
   abrirDividir,
   abrirCombinar,
+  crearDesdeImagenes,
   insertPdfHere,
   recortarPagina,
   abrirMarcaAgua,
@@ -85,6 +86,8 @@ export default function MenuAcciones({
   abrirDividir: () => void;
   /** Rejilla de «Combinar ficheros…»; «Añadir PDF…» se queda para uno solo. */
   abrirCombinar: () => void;
+  /** «Crear PDF desde imágenes…»: escribe un fichero nuevo y lo abre. */
+  crearDesdeImagenes: () => void;
   insertPdfHere: () => void;
   recortarPagina: () => void;
   abrirMarcaAgua: () => void;
@@ -240,6 +243,11 @@ export default function MenuAcciones({
               icon="extract"
               texto="Dividir documento…"
               onSelect={ejecutar(abrirDividir)}
+            />
+            <Entrada
+              icon="image"
+              texto="Crear PDF desde imágenes…"
+              onSelect={ejecutar(crearDesdeImagenes)}
             />
             <Entrada
               icon="sliders"

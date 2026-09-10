@@ -2571,6 +2571,24 @@ textarea {
   color: rgba(253, 253, 251, 0.4);
 }
 
+/* la otra puerta de entrada del estado vacío: hacer un PDF cuando no hay
+   ninguno. Va callada al lado de «Abrir PDF», que es la acción principal */
+.placeholder-otra {
+  color: rgba(253, 253, 251, 0.82);
+  border: 1px solid rgba(253, 253, 251, 0.26);
+  border-radius: 4px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.placeholder-otra svg {
+  color: rgba(253, 253, 251, 0.82);
+}
+
+.placeholder-otra:hover:not(:disabled) {
+  background: rgba(253, 253, 251, 0.12);
+}
+
 .banner-notice p {
   color: var(--fg);
 }

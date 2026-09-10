@@ -36,6 +36,8 @@ import {
   addWatermark,
   duplicatePage,
   insertPdfAt,
+  pdfFromImages,
+  type TamanoImagenes,
   deletePages,
   extractEachPage,
   extractPages,
@@ -170,6 +172,7 @@ import DialogoImprimir from "./components/DialogoImprimir";
 import DialogoReemplazar from "./components/DialogoReemplazar";
 import DialogoDividir from "./components/DialogoDividir";
 import DialogoCombinar from "./components/DialogoCombinar";
+import DialogoImagenes from "./components/DialogoImagenes";
 import DialogoAtajos from "./components/DialogoAtajos";
 import "./App.css";
 
@@ -478,6 +481,12 @@ function App() {
   const [descartarAsk, setDescartarAsk] = useState<Sesion | null>(null);
   // «Exportar a Word»: el aviso de lo que no sale va ANTES de elegir destino
   const [wordAsk, setWordAsk] = useState(false);
+  // «Crear PDF desde imágenes…»: se ofrece también sin documento, que es
+  // donde está el usuario cuando todavía no tiene ninguno
+  const [imagenesOpen, setImagenesOpen] = useState(false);
+  // la imagen que el backend no ha podido leer: se marca en su fila para
+  // quitarla y seguir con las demás, en vez de perder la lista entera
+  const [imagenesFallo, setImagenesFallo] = useState<string | null>(null);
   // «Ayuda ▸ Atajos de teclado»: el único sitio donde están todos escritos
   const [atajosAbiertos, setAtajosAbiertos] = useState(false);
   const {
@@ -2463,6 +2472,37 @@ function App() {
     }
   }
 
+  /** «Crear PDF desde imágenes…»: escribe un fichero nuevo (no toca el
+   *  documento abierto) y lo abre al terminar, que es lo que se quiere hacer
+   *  con él a continuación. Si una imagen no se puede leer, el diálogo sigue
+   *  abierto con esa fila marcada: se quita y se vuelve a intentar con las
+   *  demás, en vez de perder la lista. */
+  async function crearDesdeImagenes(opts: {
+    rutas: string[];
+    tamano: TamanoImagenes;
+  }) {
+    const dest = await save({
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+      defaultPath: "imagenes.pdf",
+      title: "Guardar el PDF de las imágenes",
+    });
+    if (!dest) return;
+    try {
+      setNotice("Creando el PDF…", { persistente: true });
+      const paginas = await pdfFromImages(opts.rutas, dest, opts.tamano);
+      setImagenesFallo(null);
+      setImagenesOpen(false);
+      await openPath(dest);
+      setNotice(`${plural(paginas, "página escrita", "páginas escritas")} en ${dest}`);
+    } catch (e) {
+      setNotice(null);
+      const msg = String(e);
+      // el backend nombra la imagen que no ha podido leer: se marca su fila
+      setImagenesFallo(opts.rutas.find((r) => msg.includes(r)) ?? null);
+      setError(msg);
+    }
+  }
+
   async function applyCompress() {
     if (!workPath) return;
     try {
@@ -3183,6 +3223,7 @@ function App() {
                 abrirReemplazar={() => setReemplazarOpen(true)}
                 abrirDividir={() => setDividirOpen(true)}
                 abrirCombinar={() => setCombinarOpen(true)}
+                crearDesdeImagenes={() => setImagenesOpen(true)}
                 insertPdfHere={insertPdfHere}
                 recortarPagina={() => {
                   selectMode("select");
@@ -3668,6 +3709,16 @@ function App() {
           onClose={() => setCombinarOpen(false)}
         />
       )}
+      {imagenesOpen && (
+        <DialogoImagenes
+          fallo={imagenesFallo}
+          onConfirm={crearDesdeImagenes}
+          onClose={() => {
+            setImagenesOpen(false);
+            setImagenesFallo(null);
+          }}
+        />
+      )}
       {exportOpen && (
         <DialogoExportar
           fmt={exportFmt}
@@ -3922,6 +3973,15 @@ function App() {
                 <p className="placeholder-pista">
                   Arrastra un PDF aquí o pulsa Abrir
                 </p>
+                {/* sin documento es cuando se quiere hacer uno: la puerta
+                    de entrada de Acrobat está justo aquí */}
+                <button
+                  className="btn placeholder-otra"
+                  onClick={() => setImagenesOpen(true)}
+                >
+                  <Icon name="image" size={14} />
+                  Crear PDF desde imágenes…
+                </button>
                 {recientes.length > 0 && (
                   <div className="recientes">
                     <span className="card-label">Recientes</span>
