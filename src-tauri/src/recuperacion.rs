@@ -2,13 +2,22 @@
 //!
 //! La copia de trabajo ya vive en temp y ya sobrevive a un cierre bruto: lo
 //! único que faltaba era **el apunte de que existía y no se había
-//! guardado**. Eso es este módulo: un `sesion.json` en `DIR_DATOS` con la
-//! copia viva, el original del que salió y si tenía cambios sin guardar.
+//! guardado**. Eso es este módulo: un `sesion.json` en `DIR_DATOS` con una
+//! entrada por documento vivo —la copia, el original del que salió y si
+//! tenía cambios sin guardar—.
+//!
+//! **Una lista, no un apunte** (ciclo 8). Con pestañas hay varios
+//! documentos abiertos a la vez, y con un solo apunte cambiar de pestaña
+//! sobrescribía el de la anterior: tres documentos con cambios y un cierre
+//! bruto devolvían **uno**, el último que se tocó. La entrada se indexa por
+//! copia de trabajo, así que cada comando toca la suya y deja las demás en
+//! paz. El fichero viejo —un objeto suelto— se lee como una lista de uno:
+//! quien actualice la app no pierde lo que tuviera a medias.
 //!
 //! Como en Acrobat, esto es silencioso: no hay insignias, ni avisos
-//! periódicos, ni ajuste en Preferencias. Solo al arrancar, si el apunte
-//! sigue ahí, la UI ofrece recuperar el documento por su nombre; al cerrar
-//! bien, el apunte se borra y no vuelve a salir.
+//! periódicos, ni ajuste en Preferencias. Solo al arrancar, si queda algún
+//! apunte, la UI ofrece recuperar los documentos por su nombre; al cerrar
+//! bien, el apunte de ese documento se borra y no vuelve a salir.
 
 use serde::{Deserialize, Serialize};
 
@@ -39,6 +48,65 @@ fn fichero() -> Option<std::path::PathBuf> {
     Some(dir.join("sesion.json"))
 }
 
+/// El fichero por dentro: una lista con versión. Un objeto suelto —el
+/// formato de antes del ciclo 8— también se lee, como una lista de uno.
+#[derive(Serialize, Deserialize, Debug, Default)]
+struct Apuntes {
+    /// Sin `serde(default)` **a propósito**: es lo que distingue el
+    /// formato nuevo del viejo. Con un defecto, el objeto suelto de antes
+    /// del ciclo 8 se leía como una lista vacía y el trabajo de quien
+    /// actualizara la app se perdía en silencio.
+    sesiones: Vec<Sesion>,
+}
+
+/// Todo lo que hay apuntado, sin comprobar nada. Entiende los dos formatos:
+/// el `{ "sesiones": [...] }` de ahora y el objeto suelto de antes.
+pub(crate) fn lee_todo(fichero: &std::path::Path) -> Vec<Apunte> {
+    let Ok(texto) = std::fs::read_to_string(fichero) else {
+        return Vec::new();
+    };
+    let mut sesiones = match serde_json::from_str::<Apuntes>(&texto) {
+        Ok(a) => a.sesiones,
+        // el formato viejo: un solo documento, que es una lista de uno
+        Err(_) => match serde_json::from_str::<Sesion>(&texto) {
+            Ok(s) => vec![s],
+            Err(_) => return Vec::new(),
+        },
+    };
+    for s in &mut sesiones {
+        let de = |ruta: &str| {
+            std::path::Path::new(ruta)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        };
+        s.name = de(&s.original_path)
+            .or_else(|| de(&s.work_path))
+            .unwrap_or_else(|| "documento".into());
+    }
+    sesiones
+}
+
+/// Alias para leerse mejor donde se usa: cada elemento es el apunte de un
+/// documento.
+pub(crate) type Apunte = Sesion;
+
+/// Escribe la lista entera; con la lista vacía, el fichero se va (no hay
+/// nada que recuperar y un fichero de cero apuntes es basura que alguien
+/// tendrá que interpretar algún día).
+fn escribe(fichero: &std::path::Path, sesiones: Vec<Sesion>) -> Result<(), String> {
+    if sesiones.is_empty() {
+        let _ = std::fs::remove_file(fichero);
+        return Ok(());
+    }
+    let json = serde_json::to_string_pretty(&Apuntes { sesiones })
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido apuntar la sesión: {e}")))?;
+    std::fs::write(fichero, json)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido apuntar la sesión: {e}")))
+}
+
+/// Apunta **un** documento: actualiza su entrada y deja las demás como
+/// estaban. Con pestañas, apuntar el de delante no puede borrar el de
+/// detrás.
 pub(crate) fn apunta_en(
     fichero: &std::path::Path,
     work_path: &str,
@@ -52,52 +120,50 @@ pub(crate) fn apunta_en(
         cuando: chrono::Local::now().to_rfc3339(),
         name: String::new(),
     };
-    let json = serde_json::to_string_pretty(&sesion)
-        .map_err(|e| crate::mensaje_llano(format!("No se ha podido apuntar la sesión: {e}")))?;
-    std::fs::write(fichero, json)
-        .map_err(|e| crate::mensaje_llano(format!("No se ha podido apuntar la sesión: {e}")))
-}
-
-/// El apunte tal como está en disco, sin comprobar nada.
-pub(crate) fn lee_en(fichero: &std::path::Path) -> Option<Sesion> {
-    let mut s: Sesion = std::fs::read_to_string(fichero)
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())?;
-    let de = |ruta: &str| {
-        std::path::Path::new(ruta)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-    };
-    s.name = de(&s.original_path)
-        .or_else(|| de(&s.work_path))
-        .unwrap_or_else(|| "documento".into());
-    Some(s)
-}
-
-/// Lo que hay que ofrecer al arrancar: un apunte **con cambios sin
-/// guardar** y cuya copia de trabajo siga en el disco. Si la copia ya no
-/// está (temp barrido, otra instancia que la cerró) no hay nada que
-/// recuperar y el apunte se retira.
-pub(crate) fn recupera_en(fichero: &std::path::Path) -> Option<Sesion> {
-    let s = lee_en(fichero)?;
-    if !s.modificado || !std::path::Path::new(&s.work_path).is_file() {
-        let _ = std::fs::remove_file(fichero);
-        return None;
+    let mut sesiones = lee_todo(fichero);
+    for s in &mut sesiones {
+        s.name = String::new(); // se recalcula al leer, no se guarda rancio
     }
-    Some(s)
+    match sesiones.iter().position(|s| s.work_path == work_path) {
+        Some(i) => sesiones[i] = sesion,
+        None => sesiones.push(sesion),
+    }
+    escribe(fichero, sesiones)
 }
 
-/// La copia de trabajo apuntada, si la hay. La usa el barrido de huérfanos
-/// del arranque para no llevarse justo lo que hay que recuperar.
-pub(crate) fn copia_apuntada() -> Option<String> {
-    let s = lee_en(&fichero()?)?;
-    Some(s.work_path)
+/// Lo que hay que ofrecer al arrancar: los apuntes **con cambios sin
+/// guardar** cuya copia de trabajo siga en el disco. Si la copia ya no está
+/// (temp barrido, otra instancia que la cerró) no hay nada que recuperar y
+/// ese apunte se retira; los demás se quedan.
+pub(crate) fn recupera_en(fichero: &std::path::Path) -> Vec<Sesion> {
+    let todas = lee_todo(fichero);
+    let (vivas, muertas): (Vec<Sesion>, Vec<Sesion>) = todas
+        .into_iter()
+        .partition(|s| s.modificado && std::path::Path::new(&s.work_path).is_file());
+    if !muertas.is_empty() {
+        // las que ya no se pueden recuperar no se vuelven a ofrecer
+        let _ = escribe(fichero, vivas.clone());
+    }
+    vivas
+}
+
+/// Las copias de trabajo apuntadas. Las usa el barrido de huérfanos del
+/// arranque para no llevarse justo lo que hay que recuperar: **todas**, no
+/// la primera. Con tres documentos apuntados, proteger uno y barrer los
+/// otros dos es peor que no barrer nada.
+pub(crate) fn copias_apuntadas() -> Vec<String> {
+    let Some(f) = fichero() else { return Vec::new() };
+    lee_todo(&f).into_iter().map(|s| s.work_path).collect()
 }
 
 /// La UI apunta el estado del documento vivo: al abrirlo, cuando pasa a
 /// «modificado» y tras cada mutación (con su propio retardo, no en cada
 /// tecla). Escribir el apunte es escribir un JSON de cuatro líneas: la
 /// copia de trabajo ya está en el disco, no se copia nada.
+///
+/// Toca **solo la entrada de esa copia de trabajo**: con varias pestañas
+/// abiertas, el autoguardado de la de delante no puede borrar lo que tenga
+/// sin guardar la de detrás.
 #[tauri::command(async)]
 pub fn autosave_state(
     work_path: String,
@@ -108,14 +174,14 @@ pub fn autosave_state(
     apunta_en(&f, &work_path, &original_path.unwrap_or_default(), modified)
 }
 
-/// Se cerró bien: no hay nada que recuperar. Lo llama la UI al cerrar el
-/// documento y al salir después de guardar o de descartar, y también
-/// «Descartar» en la banda de recuperación.
+/// Se cerró bien: no hay nada que recuperar **de ese documento**. Lo llama
+/// la UI al cerrar una pestaña y al salir después de guardar o de
+/// descartar, y también «Descartar» en la banda de recuperación.
 ///
-/// `work_path` es **obligatorio** desde el ciclo 7: el apunte se borra solo
-/// si es de ese documento. Con varios documentos abiertos, cerrar uno no
-/// puede llevarse el trabajo sin guardar de otro, y «bórrame el apunte que
-/// haya» deja de ser una orden que alguien pueda querer dar.
+/// `work_path` es **obligatorio** desde el ciclo 7: se quita la entrada de
+/// ese documento y las demás se quedan. Con varios documentos abiertos,
+/// cerrar uno no puede llevarse el trabajo sin guardar de otro, y «bórrame
+/// el apunte que haya» deja de ser una orden que alguien pueda querer dar.
 ///
 /// Obligatorio quiere decir **que no admite `null`**: Tauri no sabe
 /// deserializar un `String` desde `null`, así que una llamada sin la copia
@@ -133,22 +199,27 @@ pub fn borra_sesion(work_path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Quita el apunte de una copia de trabajo; sin ruta, los quita todos (que
+/// es cerrar la app entera). Con la lista vacía, el fichero se va.
 pub(crate) fn borra_en(fichero: &std::path::Path, work_path: Option<&str>) {
-    if let Some(w) = work_path.filter(|w| !w.is_empty()) {
-        // el apunte es de otro documento: no es nuestro, no se toca
-        if lee_en(fichero).is_some_and(|s| s.work_path != w) {
-            return;
-        }
-    }
-    let _ = std::fs::remove_file(fichero);
+    let quedan: Vec<Sesion> = match work_path.filter(|w| !w.is_empty()) {
+        Some(w) => lee_todo(fichero).into_iter().filter(|s| s.work_path != w).collect(),
+        None => Vec::new(),
+    };
+    let _ = escribe(fichero, quedan);
 }
 
-/// Al arrancar: ¿quedó trabajo sin guardar de la vez anterior? Devuelve el
-/// apunte para la banda («Tenías cambios sin guardar en *factura.pdf*»,
-/// con Recuperar y Descartar), o `None` si no hay nada que ofrecer.
+/// Al arrancar: ¿quedó trabajo sin guardar de la vez anterior? Devuelve un
+/// apunte por documento —posiblemente ninguno— para la banda («Tenías
+/// cambios sin guardar en **3 documentos**», con Recuperar y Descartar).
+///
+/// Es una **lista** desde el ciclo 8: con pestañas, un cierre bruto puede
+/// dejar varios documentos con cambios, y devolver solo el último que se
+/// tocó es prometer una red que no está. Recuperar los abre cada uno en su
+/// pestaña.
 #[tauri::command(async)]
-pub fn recover_session() -> Result<Option<Sesion>, String> {
-    let Some(f) = fichero() else { return Ok(None) };
+pub fn recover_session() -> Result<Vec<Sesion>, String> {
+    let Some(f) = fichero() else { return Ok(Vec::new()) };
     Ok(recupera_en(&f))
 }
 
@@ -173,7 +244,9 @@ mod tests {
         let work = copia.to_string_lossy().into_owned();
 
         apunta_en(&f, &work, "/Users/jorge/facturas/factura.pdf", true).expect("apuntar");
-        let s = recupera_en(&f).expect("hay algo que recuperar");
+        let ofrecidas = recupera_en(&f);
+        assert_eq!(ofrecidas.len(), 1, "hay algo que recuperar");
+        let s = &ofrecidas[0];
         assert_eq!(s.work_path, work);
         assert_eq!(s.original_path, "/Users/jorge/facturas/factura.pdf");
         assert!(s.modificado);
@@ -182,18 +255,81 @@ mod tests {
 
         // guardar deja el documento sin cambios pendientes: nada que ofrecer
         apunta_en(&f, &work, "/Users/jorge/facturas/factura.pdf", false).expect("apuntar");
-        assert!(recupera_en(&f).is_none(), "sin cambios no se ofrece nada");
+        assert!(recupera_en(&f).is_empty(), "sin cambios no se ofrece nada");
 
         // y cerrar limpiamente borra el apunte
         apunta_en(&f, &work, "", true).expect("apuntar");
-        assert!(recupera_en(&f).is_some());
+        assert_eq!(recupera_en(&f).len(), 1);
         let _ = std::fs::remove_file(&f);
-        assert!(recupera_en(&f).is_none(), "cerrado limpio, nada que recuperar");
+        assert!(recupera_en(&f).is_empty(), "cerrado limpio, nada que recuperar");
         std::fs::remove_file(&copia).ok();
     }
 
-    /// «Descartar» y cerrar bien borran el apunte; y si el apunte es de
-    /// otro documento (otra ventana, otra sesión), no se toca.
+    /// **H6b.** Con pestañas hay varios documentos abiertos y el
+    /// autoguardado va del que está delante: apuntar uno **no puede** borrar
+    /// el apunte de otro. Con un solo apunte, tres documentos con cambios y
+    /// un cierre bruto devolvían uno, y los otros dos se perdían sin que
+    /// nadie lo dijera. Una red de seguridad en la que no se puede confiar
+    /// del todo es peor que ninguna.
+    #[test]
+    fn apuntar_un_documento_no_borra_el_apunte_de_otro() {
+        let f = fichero_de_prueba("varios");
+        apunta_en(&f, "/tmp/vitela-a.pdf", "/tmp/a.pdf", true).expect("apuntar a");
+        apunta_en(&f, "/tmp/vitela-b.pdf", "/tmp/b.pdf", true).expect("apuntar b");
+        apunta_en(&f, "/tmp/vitela-c.pdf", "/tmp/c.pdf", false).expect("apuntar c");
+
+        let todos = lee_todo(&f);
+        assert_eq!(todos.len(), 3, "tres documentos, tres apuntes: {todos:?}");
+        assert_eq!(
+            todos.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            vec!["a.pdf", "b.pdf", "c.pdf"]
+        );
+
+        // volver a la primera pestaña actualiza **su** entrada, no añade otra
+        apunta_en(&f, "/tmp/vitela-a.pdf", "/tmp/a.pdf", false).expect("reapuntar a");
+        let todos = lee_todo(&f);
+        assert_eq!(todos.len(), 3, "la entrada se actualiza, no se duplica");
+        assert!(!todos[0].modificado, "y es la suya la que cambia");
+        assert!(todos[1].modificado, "la de al lado se queda como estaba");
+
+        // cerrar una pestaña se lleva la suya y solo la suya
+        borra_en(&f, Some("/tmp/vitela-b.pdf"));
+        let quedan = lee_todo(&f);
+        assert_eq!(quedan.len(), 2);
+        assert!(!quedan.iter().any(|s| s.work_path == "/tmp/vitela-b.pdf"));
+
+        // y cerrar la app entera los quita todos
+        borra_en(&f, None);
+        assert!(!f.exists(), "sin apuntes, el fichero se va");
+    }
+
+    /// Solo se ofrece lo que se puede recuperar de verdad: con cambios y
+    /// con la copia todavía en el disco. Lo demás se retira **sin tocar a
+    /// los vecinos**.
+    #[test]
+    fn se_ofrecen_los_que_tienen_cambios_y_copia_viva() {
+        let f = fichero_de_prueba("vivos");
+        let copia = std::env::temp_dir().join("vitela-test-sesion-viva.pdf");
+        crate::tests::crea_pdf(&["Contrato"], &copia);
+        let viva = copia.to_string_lossy().into_owned();
+
+        apunta_en(&f, &viva, "/tmp/contrato.pdf", true).expect("con cambios y copia");
+        apunta_en(&f, "/tmp/vitela-fantasma.pdf", "/tmp/x.pdf", true).expect("sin copia");
+        apunta_en(&f, &viva.replace(".pdf", "-2.pdf"), "/tmp/y.pdf", false).expect("guardado");
+
+        let ofrecidas = recupera_en(&f);
+        assert_eq!(ofrecidas.len(), 1, "solo uno se puede recuperar: {ofrecidas:?}");
+        assert_eq!(ofrecidas[0].work_path, viva);
+        // los apuntes inútiles se retiran solos, y el bueno se queda
+        let quedan = lee_todo(&f);
+        assert_eq!(quedan.len(), 1);
+        assert_eq!(quedan[0].work_path, viva);
+        std::fs::remove_file(&copia).ok();
+        std::fs::remove_file(&f).ok();
+    }
+
+    /// «Descartar» y cerrar bien borran el apunte; y el de otro documento
+    /// (otra ventana, otra sesión) no se toca.
     #[test]
     fn borrar_la_sesion_solo_borra_la_suya() {
         let f = fichero_de_prueba("borrar");
@@ -203,7 +339,7 @@ mod tests {
         borra_en(&f, Some("/tmp/vitela-a.pdf"));
         assert!(!f.exists(), "el suyo sí");
 
-        // sin ruta, se borra el que haya (cerrar la app)
+        // sin ruta, se borran los que haya (cerrar la app)
         apunta_en(&f, "/tmp/vitela-a.pdf", "/tmp/a.pdf", true).expect("apuntar");
         borra_en(&f, None);
         assert!(!f.exists());
@@ -218,8 +354,34 @@ mod tests {
     fn no_se_ofrece_recuperar_una_copia_que_ya_no_esta() {
         let f = fichero_de_prueba("sin-copia");
         apunta_en(&f, "/tmp/vitela-que-ya-no-esta.pdf", "/tmp/x.pdf", true).expect("apuntar");
-        assert!(recupera_en(&f).is_none());
+        assert!(recupera_en(&f).is_empty());
         assert!(!f.exists(), "el apunte inútil se retira solo");
+    }
+
+    /// **H6b.** Quien actualiza la app puede tener un `sesion.json` del
+    /// formato viejo —un objeto suelto— con trabajo dentro. Se lee como una
+    /// lista de uno: perder el trabajo de alguien al actualizar sería el
+    /// peor momento posible para estrenar un formato.
+    #[test]
+    fn el_apunte_del_formato_viejo_se_lee_como_una_lista_de_uno() {
+        let f = fichero_de_prueba("formato-viejo");
+        std::fs::write(
+            &f,
+            br#"{"original_path":"/tmp/viejo.pdf","work_path":"/tmp/vitela-viejo.pdf",
+                 "modificado":true,"cuando":"2026-09-09T19:40:00+02:00"}"#,
+        )
+        .expect("escribir el formato viejo");
+        let todos = lee_todo(&f);
+        assert_eq!(todos.len(), 1, "un objeto suelto es una lista de uno");
+        assert_eq!(todos[0].work_path, "/tmp/vitela-viejo.pdf");
+        assert_eq!(todos[0].name, "viejo.pdf");
+        assert!(todos[0].modificado);
+
+        // y al apuntar el segundo documento, el fichero pasa al formato
+        // nuevo sin perder al primero
+        apunta_en(&f, "/tmp/vitela-nuevo.pdf", "/tmp/nuevo.pdf", true).expect("apuntar");
+        assert_eq!(lee_todo(&f).len(), 2);
+        std::fs::remove_file(&f).ok();
     }
 
     /// Un apunte corrupto no puede impedir que la app arranque.
@@ -227,8 +389,8 @@ mod tests {
     fn un_apunte_corrupto_no_rompe_el_arranque() {
         let f = fichero_de_prueba("corrupto");
         std::fs::write(&f, b"esto no es JSON").expect("escribir basura");
-        assert!(lee_en(&f).is_none());
-        assert!(recupera_en(&f).is_none());
+        assert!(lee_todo(&f).is_empty());
+        assert!(recupera_en(&f).is_empty());
         std::fs::remove_file(&f).ok();
     }
 }

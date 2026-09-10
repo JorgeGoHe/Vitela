@@ -220,14 +220,20 @@ fn borra_copias_abiertas() {
 /// instantáneas (`vitela-historial/`) huérfanas de cierres bruscos. Solo las
 /// de hace más de 24 h, para no pisar a otra instancia de la app viva.
 fn barre_huerfanos(dir: &std::path::Path, edad_minima: std::time::Duration) -> usize {
-    // la copia que hay apuntada para recuperar NO es huérfana: es
-    // justamente el trabajo que se salvó de un cierre bruto
-    let apuntada = recuperacion::copia_apuntada().unwrap_or_default();
-    let nombre_apuntado = std::path::Path::new(&apuntada)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let salvada = move |n: &str| !nombre_apuntado.is_empty() && n.starts_with(&nombre_apuntado);
+    // las copias que hay apuntadas para recuperar NO son huérfanas: son
+    // justamente el trabajo que se salvó de un cierre bruto. Son varias
+    // desde el ciclo 8 (una por documento abierto): proteger la primera y
+    // barrer las otras dos es peor que no barrer nada
+    let nombres_apuntados: Vec<String> = recuperacion::copias_apuntadas()
+        .iter()
+        .filter_map(|ruta| {
+            std::path::Path::new(ruta)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .filter(|n| !n.is_empty())
+        .collect();
+    let salvada = move |n: &str| nombres_apuntados.iter().any(|a| n.starts_with(a.as_str()));
     let mut borrados = barre_ficheros(dir, edad_minima, |n| {
         n.starts_with("vitela-") && (n.ends_with(".pdf") || n.ends_with(".pdf.tmp")) && !salvada(n)
     });
@@ -1805,9 +1811,23 @@ pub(crate) mod tests {
             b"x",
         )
         .unwrap();
+        // **H6b**: dos documentos apuntados, no uno. Con pestañas, un
+        // cierre bruto deja varias copias que recuperar, y proteger la
+        // primera mientras el barrido se lleva la segunda es peor que no
+        // barrer nada.
+        let salvada2 = dir.join("vitela-salvada-2.pdf");
+        std::fs::write(&salvada2, b"x").unwrap();
+        std::fs::write(
+            dir.join("vitela-historial").join("vitela-salvada-2.pdf.snap1"),
+            b"x",
+        )
+        .unwrap();
         let sesion = datos.join("sesion.json");
+        let _ = std::fs::remove_file(&sesion);
         recuperacion::apunta_en(&sesion, &salvada.to_string_lossy(), "/tmp/factura.pdf", true)
             .expect("apuntar");
+        recuperacion::apunta_en(&sesion, &salvada2.to_string_lossy(), "/tmp/albaran.pdf", true)
+            .expect("apuntar el segundo");
 
         assert_eq!(
             barre_huerfanos(&dir, std::time::Duration::ZERO),
@@ -1815,10 +1835,13 @@ pub(crate) mod tests {
             "solo se va la huérfana de verdad"
         );
         assert!(salvada.exists(), "la copia apuntada tiene que sobrevivir");
-        assert!(
-            dir.join("vitela-historial").join("vitela-salvada-1.pdf.snap1").exists(),
-            "y sus instantáneas con ella"
-        );
+        assert!(salvada2.exists(), "y la del segundo documento también");
+        for snap in ["vitela-salvada-1.pdf.snap1", "vitela-salvada-2.pdf.snap1"] {
+            assert!(
+                dir.join("vitela-historial").join(snap).exists(),
+                "y sus instantáneas con ellas: {snap}"
+            );
+        }
         let _ = std::fs::remove_file(&sesion);
         let _ = std::fs::remove_dir_all(&dir);
     }
