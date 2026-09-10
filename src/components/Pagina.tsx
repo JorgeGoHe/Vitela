@@ -129,9 +129,6 @@ type Props = {
   registerEl: (page: number, el: HTMLDivElement | null) => void;
   onAnnotated: (page: number) => void;
   onPageMutated: (page: number) => void;
-  /** Funde los últimos pasos del historial en uno (una acción del usuario
-   *  que necesita varios comandos). */
-  onAgruparHistorial: (pasos: number) => void;
   onDocMutated: (newCount: number, nextPage?: number) => void;
   onError: (e: unknown) => void;
   onNotice: (texto: string) => void;
@@ -190,7 +187,6 @@ function Pagina({
   registerEl,
   onAnnotated,
   onPageMutated,
-  onAgruparHistorial,
   onDocMutated,
   onError,
   onNotice,
@@ -340,8 +336,7 @@ function Pagina({
     mode,
     size,
     tool,
-    onPageMutated,
-    onAgrupar: onAgruparHistorial,
+    onAnnotated,
     onError,
     onNotice,
   });

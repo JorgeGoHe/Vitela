@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { addTextBlock } from "../../api";
-import { invoke } from "../../ipc";
+import { addMeasure } from "../../api";
 import {
   autorComentarios,
   formateaArea,
@@ -60,8 +59,9 @@ const MINIMO: Record<string, number> = { perimetro: 2, area: 3 };
  * Acrobat: Distancia entre dos puntos —un arrastre—, y Perímetro y Área
  * **por vértices**: clic por punto, doble clic o Enter cierra, Retroceso
  * quita el último y Esc cancela. No toca el documento salvo cuando se pide
- * «dejar la medida puesta», que la escribe como un trazo con su texto al
- * lado.
+ * «dejar la medida puesta», que la escribe como **anotación de medida**
+ * (`add_measure`): sale en el panel de comentarios, se selecciona, se mueve
+ * y se borra desde ahí, como en Acrobat.
  *
  * La escala se fija una vez por documento con un arrastre sobre algo de
  * medida conocida y se guarda por ruta; sin ella se mide el papel, que es
@@ -73,10 +73,9 @@ export function useMedida(ctx: {
   mode: Mode;
   size: PageSize;
   tool: ToolProps;
-  onPageMutated: (page: number) => void;
-  /** Funde los últimos pasos del historial en uno: dejar una medida son dos
-   *  comandos (el trazo y su texto) y un solo gesto del usuario. */
-  onAgrupar: (pasos: number) => void;
+  /** La medida que se deja puesta es un comentario, así que refresca lo
+   *  mismo que cualquier otra anotación (panel incluido). */
+  onAnnotated: (page: number) => void;
   onError: (e: unknown) => void;
   onNotice: (texto: string) => void;
 }) {
@@ -86,8 +85,7 @@ export function useMedida(ctx: {
     mode,
     size,
     tool,
-    onPageMutated,
-    onAgrupar,
+    onAnnotated,
     onError,
     onNotice,
   } = ctx;
@@ -150,43 +148,27 @@ export function useMedida(ctx: {
     onNotice(`Escala fijada: ese trazo mide ${formateaLongitud(pt, realMm / pt)}`);
   }
 
-  /** «Dejar la medida puesta»: el trazo con su texto al lado. Son dos pasos
-   *  de deshacer, y se dice. */
-  async function escribeMedida(pts: Vertice[], texto: string) {
+  /** «Dejar la medida puesta»: una anotación de medida con la cifra
+   *  dentro. Una sola mutación —un ⌘Z la quita— y, sobre todo, un
+   *  comentario: sale en el panel, se selecciona y se borra desde ahí en
+   *  vez de tener que editar el documento. */
+  async function escribeMedida(pts: Vertice[], texto: string, cerrar: boolean) {
     if (!workPath || pts.length < 2) return;
-    const color = hexToRgba(tool.shapeColor);
-    // el trazo entero en UNA llamada: `add_stroke` acepta la polilínea
-    // completa, así que una medida es una anotación y no una por tramo
     const puntos = pts.map((p) => {
       const q = puntoAPagina(p, size);
       return [q.x, q.y] as [number, number];
     });
     try {
-      await invoke("add_stroke", {
+      await addMeasure({
         workPath,
         pageIndex: index,
         points: puntos,
-        color,
-        width: 1,
+        text: texto,
+        color: hexToRgba(tool.shapeColor),
+        closed: cerrar,
         author: autorComentarios(),
       });
-      // el texto va junto al centro de la figura, apartado del trazo
-      const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
-      const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
-      const anclaje = puntoAPagina({ x: cx + 4, y: cy - 4 }, size);
-      await addTextBlock({
-        workPath,
-        pageIndex: index,
-        x: anclaje.x,
-        y: anclaje.y,
-        text: texto,
-        fontSize: 9,
-        color,
-      });
-      // el trazo y su texto son dos comandos y un solo gesto: se funden en
-      // un paso de historial, o «⌘Z la quita» pedía dos ⌘Z (AC-069)
-      onAgrupar(2);
-      onPageMutated(index);
+      onAnnotated(index);
       onNotice(`Medida puesta: ${texto} · ${MOD}Z la quita`);
     } catch (e) {
       onError(e);
@@ -201,6 +183,7 @@ export function useMedida(ctx: {
         { x: d.x2, y: d.y2 },
       ],
       etiquetaDe(d),
+      false,
     );
   }
 
@@ -215,8 +198,9 @@ export function useMedida(ctx: {
       return;
     }
     if (!cerrada || vertices.length < 2) return;
-    const pts = tipo === "area" ? [...vertices, vertices[0]] : vertices;
-    escribeMedida(pts, etiquetaPoligono(vertices));
+    // el área va cerrada por el comando (`/Polygon`), no repitiendo el
+    // primer vértice al final
+    escribeMedida(vertices, etiquetaPoligono(vertices), tipo === "area");
     setVertices([]);
     setCerrada(false);
   }
@@ -252,12 +236,12 @@ export function useMedida(ctx: {
     setCerrada(true);
     setCursor(null);
     if (tool.medidaDejar) {
-      const pts = tipo === "area" ? [...vertices, vertices[0]] : vertices;
       escribeMedida(
-        pts,
+        vertices,
         tipo === "area"
           ? formateaArea(areaPoligono(vertices), tool.escalaMm)
           : formateaLongitud(perimetroDe(vertices, false), tool.escalaMm),
+        tipo === "area",
       );
     }
   }

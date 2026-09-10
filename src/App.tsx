@@ -4976,7 +4976,6 @@ function App() {
                   registerEl={registerEl}
                   onAnnotated={afterAnnotate}
                   onPageMutated={afterPageMutation}
-                  onAgruparHistorial={historial.agrupar}
                   onDocMutated={afterMutation}
                   onError={mostrarError}
                   onNotice={mostrarAviso}

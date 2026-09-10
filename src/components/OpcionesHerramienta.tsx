@@ -509,7 +509,10 @@ export default function OpcionesHerramienta({
           >
             Fijar la escala…
           </button>
-          <label className="opt-check">
+          <label
+            className="opt-check"
+            title="La medida queda como comentario: sale en el panel y se borra desde ahí"
+          >
             <input
               type="checkbox"
               checked={medidaDejar}

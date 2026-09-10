@@ -1102,6 +1102,23 @@ export function getImageData(
   return invoke("get_image_data", { path, pageIndex, objectIndex });
 }
 
+/** La medida que se deja puesta, como comentario y no como dibujo:
+ *  `/Line` con dos puntos, `/PolyLine` con más (perímetro) y `/Polygon`
+ *  con `closed` (área), con la cifra en el `/Contents`. Los puntos van en
+ *  el espacio propio de la página. Una sola mutación: un ⌘Z la quita, sale
+ *  en el panel de comentarios y se borra desde ahí. */
+export function addMeasure(args: {
+  workPath: string;
+  pageIndex: number;
+  points: [number, number][];
+  text: string;
+  color: Rgba;
+  closed?: boolean;
+  author?: string | null;
+}): Promise<number> {
+  return invoke("add_measure", { closed: false, author: null, ...args });
+}
+
 /** Escribe el bitmap de un objeto de imagen en un PNG del disco. Es el
  *  mismo mapa de bits de `getImageData`, pero sin cruzar el canal en
  *  base64: lo escribe el backend, que es el único que puede. */

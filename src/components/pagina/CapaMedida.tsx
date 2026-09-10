@@ -97,7 +97,7 @@ export default function CapaMedida({
               {cerrada && (
                 <button
                   className="medida-dejar"
-                  title="Escribir esta medida en el documento"
+                  title="Dejar esta medida como comentario del documento"
                   onMouseDown={(e) => e.stopPropagation()}
                   onClick={dejaLaDeAhora}
                 >
@@ -132,7 +132,7 @@ export default function CapaMedida({
             {!calibre && hayMedida && (
               <button
                 className="medida-dejar"
-                title="Escribir esta medida en el documento"
+                title="Dejar esta medida como comentario del documento"
                 onMouseDown={(e) => e.stopPropagation()}
                 onClick={dejaLaDeAhora}
               >
