@@ -54,6 +54,14 @@ pub struct OpcionesComposicion {
     /// Dónde se escribe. Sin él, un temporal que barre el arranque.
     #[serde(default)]
     pub dest_path: Option<String>,
+    /// Lo que el diálogo llama «Documento y marcas» (por defecto) frente a
+    /// «Solo el documento». Con `true` —o sin el campo— los comentarios y
+    /// los campos de formulario se **aplanan sobre una copia** antes de
+    /// convertir cada página en Form XObject, porque un XObject se lleva el
+    /// `/Contents` de la página y las anotaciones viven fuera de él: sin
+    /// ese paso, folleto, N-up y póster imprimían el documento pelado.
+    #[serde(default)]
+    pub con_anotaciones: Option<bool>,
 }
 
 /// Lo que sale de componer.
@@ -101,6 +109,21 @@ pub fn compose_print(
         crate::invalidate_doc_cache(&work_path);
         let mut doc = LoDoc::load(&work_path)
             .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer el PDF: {e}")))?;
+        // «Documento y marcas»: los comentarios y los campos rellenados se
+        // hornean en el contenido de una copia, que es lo único que se
+        // lleva el Form XObject. La copia se borra al terminar.
+        let mut aplanada: Option<String> = None;
+        if opciones.con_anotaciones.unwrap_or(true) && tiene_anotaciones(&doc) {
+            let copia = temporal("vitela-composicion-marcas");
+            std::fs::copy(&work_path, &copia).map_err(|e| {
+                crate::mensaje_llano(format!("No se ha podido preparar la composición: {e}"))
+            })?;
+            aplana(&copia)?;
+            doc = LoDoc::load(&copia).map_err(|e| {
+                crate::mensaje_llano(format!("No se ha podido leer el PDF: {e}"))
+            })?;
+            aplanada = Some(copia);
+        }
         let paginas: Vec<ObjectId> = doc.get_pages().into_values().collect();
         let elegidas: Vec<ObjectId> = match &opciones.page_indices {
             Some(v) => {
@@ -137,7 +160,11 @@ pub fn compose_print(
         };
         pon_las_paginas(&mut doc, hojas)?;
         doc.prune_objects();
-        doc.save(&destino)
+        let escrito = doc.save(&destino);
+        if let Some(copia) = &aplanada {
+            std::fs::remove_file(copia).ok();
+        }
+        escrito
             .map_err(|e| crate::mensaje_llano(format!("No se ha podido escribir {destino}: {e}")))?;
         Ok(Composicion {
             path: destino,
@@ -146,6 +173,48 @@ pub fn compose_print(
             paginas: entradas.len() as u16,
         })
     })
+}
+
+/// Una ruta en el temporal que barre el arranque (`vitela-*` de más de 24 h).
+fn temporal(prefijo: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir()
+        .join(format!("{prefijo}-{nanos}.pdf"))
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// ¿Hay alguna anotación en alguna página? Aplanar un documento sin
+/// comentarios ni campos cuesta una reescritura entera para nada.
+fn tiene_anotaciones(doc: &LoDoc) -> bool {
+    doc.get_pages().into_values().any(|id| {
+        let Ok(dict) = doc.get_object(id).and_then(|o| o.as_dict()) else {
+            return false;
+        };
+        match dict.get(b"Annots").and_then(|o| doc.dereference(o)) {
+            Ok((_, Object::Array(a))) => !a.is_empty(),
+            _ => false,
+        }
+    })
+}
+
+/// Hornea las anotaciones en el contenido de la copia: el mismo par que usa
+/// el Optimizer —generar el `/AP` que falte y `FPDFPage_Flatten`—, para que
+/// un resaltado o una casilla marcada dejen de vivir fuera del `/Contents`.
+fn aplana(path: &str) -> Result<(), String> {
+    crate::seguridad::prepara_para_aplanar(path)?;
+    let pdfium = crate::pdfium()?;
+    let doc = pdfium
+        .load_pdf_from_file(path, None)
+        .map_err(crate::mensaje_llano)?;
+    for i in 0..doc.pages().len() {
+        let mut page = doc.pages().get(i).map_err(crate::mensaje_llano)?;
+        page.flatten().map_err(crate::mensaje_llano)?;
+    }
+    crate::save_and_close(doc, path)
 }
 
 /// Una página del documento ya convertida en Form XObject, con el tamaño
@@ -541,6 +610,97 @@ mod tests {
         let id = *doc.get_pages().get(&i).expect("página");
         let c = crate::formularios2::caja_de_pagina(&doc, id).expect("caja");
         (c[2] - c[0], c[3] - c[1])
+    }
+
+    /// Tinta de una hoja compuesta: píxeles que no son papel blanco. Es la
+    /// forma honesta de comprobar que algo **sale impreso**, en vez de
+    /// mirar si el objeto está escrito en algún sitio del fichero.
+    fn tinta(path: &str) -> u64 {
+        let png = crate::render_page_png(path.to_string(), 0, 400, true).expect("render");
+        let img = image::load_from_memory(&png).expect("png").to_rgb8();
+        img.pixels()
+            .filter(|p| p.0[0] < 240 || p.0[1] < 240 || p.0[2] < 240)
+            .count() as u64
+    }
+
+    /// **Las marcas salen en la composición** (C-2). Folleto, N-up y póster
+    /// meten cada página dentro de un Form XObject, y un XObject se lleva
+    /// el `/Contents` de la página: un resaltado y una casilla marcada
+    /// viven en `/Annots`, o sea fuera, así que se hornean antes sobre una
+    /// copia. El desplegable ofrecía «Documento y marcas» e imprimía el
+    /// documento pelado; «Solo el documento» sí se salta el paso.
+    #[test]
+    fn las_marcas_salen_en_la_composicion_y_solo_el_documento_las_salta() {
+        let pdf = std::env::temp_dir().join("imprimir-marcas.pdf");
+        crea_pdf(&["Uno", "Dos"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        let caja = crate::Rect { x: 40.0, y: 90.0, w: 300.0, h: 40.0 };
+        crate::anotaciones2::add_markup(
+            work.clone(),
+            0,
+            vec![caja.clone()],
+            "highlight".into(),
+            Some([255, 0, 0, 255]),
+            None,
+        )
+        .expect("resaltar");
+        crate::formularios2::create_form_field(
+            work.clone(),
+            0,
+            "checkbox".into(),
+            crate::Rect { x: 40.0, y: 200.0, w: 24.0, h: 24.0 },
+            "acepto".into(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("casilla");
+        let campos = crate::formularios::get_form_fields(work.clone(), 0).expect("campos");
+        let acepto = campos.iter().find(|f| f.name == "acepto").expect("acepto");
+        crate::formularios::set_form_checked(work.clone(), 0, acepto.annot_index, true)
+            .expect("marcar");
+
+        let compone = |con: Option<bool>, dest: &str| {
+            compose_print(
+                work.clone(),
+                "nup".into(),
+                OpcionesComposicion {
+                    por_hoja: Some(2),
+                    con_anotaciones: con,
+                    dest_path: Some(dest.to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("componer")
+        };
+        let con = std::env::temp_dir().join("imprimir-marcas-con.pdf");
+        let sin = std::env::temp_dir().join("imprimir-marcas-sin.pdf");
+        let con = con.to_string_lossy().into_owned();
+        let sin = sin.to_string_lossy().into_owned();
+        let r = compone(None, &con);
+        assert_eq!(r.hojas, 1, "dos páginas 2-up caben en una hoja");
+        compone(Some(false), &sin);
+
+        // el documento sigue siendo el mismo: componer no muta la copia
+        assert_eq!(
+            crate::anotaciones::get_annotations(work.clone(), 0)
+                .expect("anotaciones")
+                .len(),
+            2,
+            "componer no toca el documento: siguen el resaltado y la casilla"
+        );
+
+        let (tc, ts) = (tinta(&con), tinta(&sin));
+        assert!(
+            tc > ts + 200,
+            "«Documento y marcas» tiene que dejar más tinta que «Solo el documento» \
+             (con marcas {tc}, sin marcas {ts})"
+        );
+
+        for f in [&con, &sin] {
+            std::fs::remove_file(f).ok();
+        }
     }
 
     /// **El orden del folleto**, que es lo que lo hace magia negra: con

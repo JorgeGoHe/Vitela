@@ -1030,6 +1030,16 @@ compila los instaladores a mano o al etiquetar `v*`.
     para destinatarios salía con tres tandas de treinta y tres espacios.
     `los_errores_que_ve_el_usuario_no_llevan_jerga` cubre ahora también ese
     PDF y exige que **ningún error contenga dos espacios seguidos**.
+  - **Las marcas salen en la composición** (C-2, `imprimir.rs`):
+    `OpcionesComposicion` gana `con_anotaciones: Option<bool>` (sin el
+    campo, `true`). Folleto, N-up y póster meten cada página en un Form
+    XObject, que se lleva el `/Contents` y deja fuera el `/Annots`: con
+    «Documento y marcas» se aplana antes una copia en el temporal
+    (`prepara_para_aplanar` + `FPDFPage_Flatten`, el par del Optimizer) y
+    se compone esa; «Solo el documento» se salta el paso, y un documento
+    sin ninguna anotación tampoco lo paga. La copia se borra al terminar y
+    el documento no se toca. El test mide **tinta** —píxeles que no son
+    papel— de la hoja compuesta con marcas y sin ellas.
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (cada uno con su envoltorio en camelCase):
     - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la
