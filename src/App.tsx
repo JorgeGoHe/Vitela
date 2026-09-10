@@ -134,6 +134,7 @@ import {
   type OrdenComentarios,
   adoptSession,
   type DocumentoAbierto,
+  type FirmaGuardada,
 } from "./api";
 import Pestanas from "./components/Pestanas";
 import DialogoComentarios, {
@@ -766,6 +767,11 @@ function App() {
   // la lista de una fila por documento, cuando hay varios que recuperar
   const [sesionesAbiertas, setSesionesAbiertas] = useState(false);
   const [descartarAsk, setDescartarAsk] = useState<Sesion[] | null>(null);
+  /** La imagen de la biblioteca que se va a borrar. Era el único borrado de
+   *  trabajo del usuario que no preguntaba: ⌘Z no lo devuelve y no hay
+   *  papelera, así que se confirma como «No guardar». */
+  const [borrarImagenAsk, setBorrarImagenAsk] =
+    useState<FirmaGuardada | null>(null);
   // «Exportar a Word»: el aviso de lo que no sale va ANTES de elegir destino
   const [wordAsk, setWordAsk] = useState(false);
   const [htmlAsk, setHtmlAsk] = useState(false);
@@ -788,6 +794,7 @@ function App() {
     pickSignature,
     uploadSignature,
     saveDrawnSignature,
+    cambiarRanura,
     removeSignature,
     onSigStamped,
   } = useFirmas({
@@ -5189,7 +5196,8 @@ function App() {
             setGaleriaSellos(false);
           }}
           onSubirImagen={() => uploadSignature("sello")}
-          onBorrarImagen={removeSignature}
+          onCambiarRanura={cambiarRanura}
+          onBorrarImagen={setBorrarImagenAsk}
           onClose={() => setGaleriaSellos(false)}
         />
       )}
@@ -5199,11 +5207,11 @@ function App() {
       {mode === "firmar" && !activeSig && !drawingSig && !herramienta.fillMark && (
         <PanelFirmas
           firmas={firmas}
-          iniciales={iniciales}
           onPick={pickSignature}
           onUpload={uploadSignature}
           onDraw={(ranura) => setDrawingSig(ranura)}
-          onDelete={removeSignature}
+          onCambiarRanura={cambiarRanura}
+          onDelete={setBorrarImagenAsk}
           onClose={() => selectMode("select")}
         />
       )}
@@ -5394,6 +5402,26 @@ function App() {
             descartarSesiones(lista);
           }}
           onClose={() => setDescartarAsk(null)}
+        />
+      )}
+      {borrarImagenAsk && (
+        <DialogoConfirmar
+          titulo={`Borrar «${borrarImagenAsk.name}»`}
+          cuerpo={
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              Se quita de la biblioteca para siempre: no está en ningún
+              documento, {MOD}Z no la devuelve y no hay papelera. Los
+              documentos donde ya la hayas estampado no cambian.
+            </p>
+          }
+          textoConfirmar="Borrar"
+          peligro
+          onConfirm={() => {
+            const f = borrarImagenAsk;
+            setBorrarImagenAsk(null);
+            removeSignature(f.id);
+          }}
+          onClose={() => setBorrarImagenAsk(null)}
         />
       )}
       {etiquetasOpen && (

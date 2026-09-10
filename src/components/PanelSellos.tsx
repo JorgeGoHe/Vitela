@@ -1,10 +1,11 @@
-import type { FirmaGuardada } from "../api";
+import type { FirmaGuardada, RanuraImagen } from "../api";
 import {
   SELLOS_DINAMICOS,
   SELLOS_ESTANDAR,
   type UltimoSello,
 } from "../tipos";
 import Icon from "./Icon";
+import SelectorRanura from "./SelectorRanura";
 
 /** Un sello de texto de la rejilla, con la cara con la que va a quedar. */
 function SelloTexto({
@@ -55,6 +56,7 @@ export default function PanelSellos({
   onElegirTexto,
   onElegirImagen,
   onSubirImagen,
+  onCambiarRanura,
   onBorrarImagen,
   onClose,
 }: {
@@ -67,7 +69,10 @@ export default function PanelSellos({
   onElegirTexto: (texto: string, dinamico: boolean) => void;
   onElegirImagen: (sello: FirmaGuardada) => void;
   onSubirImagen: () => void;
-  onBorrarImagen: (id: string) => void;
+  /** Mover la imagen a otra ranura: un sello que en realidad era la firma
+   *  se corrige aquí en vez de borrarlo y volver a subirlo. */
+  onCambiarRanura: (id: string, ranura: RanuraImagen) => void;
+  onBorrarImagen: (firma: FirmaGuardada) => void;
   onClose: () => void;
 }) {
   const esElegido = (texto: string, dinamico: boolean) =>
@@ -147,11 +152,12 @@ export default function PanelSellos({
                     className="btn btn-icon sign-delete"
                     title="Borrar este sello"
                     aria-label={`Borrar «${f.name}»`}
-                    onClick={() => onBorrarImagen(f.id)}
+                    onClick={() => onBorrarImagen(f)}
                   >
                     <Icon name="close" size={12} />
                   </button>
                 </div>
+                <SelectorRanura firma={f} onCambiar={onCambiarRanura} />
               </div>
             ))}
           </div>

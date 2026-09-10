@@ -1,6 +1,7 @@
 import { useState } from "react";
-import type { FirmaGuardada } from "../api";
+import type { FirmaGuardada, RanuraImagen } from "../api";
 import Icon from "./Icon";
+import SelectorRanura from "./SelectorRanura";
 
 type Ranura = "firma" | "iniciales";
 
@@ -12,27 +13,25 @@ type Ranura = "firma" | "iniciales";
  */
 export default function PanelFirmas({
   firmas,
-  iniciales,
   onPick,
   onUpload,
   onDraw,
+  onCambiarRanura,
   onDelete,
   onClose,
 }: {
   firmas: FirmaGuardada[];
-  /** Ids de las entradas que son iniciales. */
-  iniciales: string[];
   onPick: (firma: FirmaGuardada) => void;
   onUpload: (ranura: Ranura) => void;
   onDraw: (ranura: Ranura) => void;
-  onDelete: (id: string) => void;
+  onCambiarRanura: (id: string, ranura: RanuraImagen) => void;
+  onDelete: (firma: FirmaGuardada) => void;
   onClose: () => void;
 }) {
   const [ranura, setRanura] = useState<Ranura>("firma");
-  const esInicial = (f: FirmaGuardada) => iniciales.includes(f.id);
-  const lista = firmas.filter((f) =>
-    ranura === "iniciales" ? esInicial(f) : !esInicial(f),
-  );
+  // se filtra por la RANURA que trae cada imagen, que es lo que R58 vino a
+  // permitir: con una lista de ids aparte, un sello aparecía en «Tu firma»
+  const lista = firmas.filter((f) => f.ranura === ranura);
 
   return (
     <>
@@ -87,11 +86,12 @@ export default function PanelFirmas({
                     className="btn btn-icon sign-delete"
                     title="Borrar esta imagen"
                     aria-label={`Borrar «${f.name}»`}
-                    onClick={() => onDelete(f.id)}
+                    onClick={() => onDelete(f)}
                   >
                     <Icon name="close" size={12} />
                   </button>
                 </div>
+                <SelectorRanura firma={f} onCambiar={onCambiarRanura} />
               </div>
             ))}
           </div>

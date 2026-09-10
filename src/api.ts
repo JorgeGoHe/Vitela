@@ -38,6 +38,16 @@ export function deleteStoredSignature(id: string): Promise<void> {
   return invoke("delete_stored_signature", { id });
 }
 
+/** Cambia la ranura de una imagen que ya está guardada. La ranura se fijaba
+ *  al guardarla o al importarla y no había forma de corregirla: una firma
+ *  subida como sello había que borrarla y volver a subirla. */
+export function setSignatureSlot(
+  id: string,
+  ranura: RanuraImagen,
+): Promise<void> {
+  return invoke("set_signature_slot", { id, ranura });
+}
+
 /** Busca en todo el documento. `matchCase` y `wholeWord` son las dos
  *  opciones de la búsqueda de Acrobat; por defecto van apagadas. Con
  *  `context` cada coincidencia trae además la frase de alrededor y el

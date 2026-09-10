@@ -2871,6 +2871,15 @@ textarea {
   line-height: 1;
 }
 
+/* «Cambiar la ranura»: para qué sirve la imagen, corregible después de
+   guardarla. Va debajo del nombre porque la fila ya está llena */
+.sign-ranura {
+  width: 100%;
+  margin-top: 3px;
+  font-size: 11px;
+  padding: 2px 4px;
+}
+
 .modal-firma {
   width: auto;
   max-width: calc(100vw - 32px);

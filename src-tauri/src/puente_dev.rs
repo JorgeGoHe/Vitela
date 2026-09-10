@@ -506,14 +506,7 @@ mod tests {
     /// nadie llama es trabajo que no ha llegado al usuario. Se admite una
     /// excepción mientras las dos mitades se escriben en paralelo, y se
     /// quita al integrar.
-    const NADIE_LLAMA: &[(&str, &str)] = &[
-        ("set_signature_slot", "ciclo 10: la UI fija la ranura al guardar/importar; cambiarla después no tiene botón"),
-        (
-            "read_certificate",
-            "pendiente_ui: lo llama la UI en la orden 20 del ciclo 10, para enseñar los \
-             destinatarios de «Cifrar con certificado» por su nombre y no por el del fichero",
-        ),
-    ];
+    const NADIE_LLAMA: &[(&str, &str)] = &[];
 
     /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada
     /// es una función rota que el usuario no puede usar, así que la lista

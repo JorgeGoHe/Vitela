@@ -5,6 +5,7 @@ import {
   importSignatureFile,
   listStoredSignatures,
   saveStoredSignature,
+  setSignatureSlot,
   type FirmaGuardada,
   type RanuraImagen,
 } from "../api";
@@ -105,6 +106,17 @@ export function useFirmas(opts: {
     }
   }
 
+  /** Mueve una imagen ya guardada a otra ranura. Hasta ahora la ranura se
+   *  fijaba al guardarla y equivocarse obligaba a borrarla y repetir. */
+  async function cambiarRanura(id: string, ranura: RanuraImagen) {
+    try {
+      await setSignatureSlot(id, ranura);
+      setFirmas((l) => l.map((f) => (f.id === id ? { ...f, ranura } : f)));
+    } catch (e) {
+      opts.onError(e);
+    }
+  }
+
   async function removeSignature(id: string) {
     try {
       await deleteStoredSignature(id);
@@ -136,6 +148,7 @@ export function useFirmas(opts: {
     pickSignature,
     uploadSignature,
     saveDrawnSignature,
+    cambiarRanura,
     removeSignature,
     onSigStamped,
   };
