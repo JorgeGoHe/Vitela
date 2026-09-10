@@ -46,6 +46,7 @@ const GRUPOS: { titulo: string; atajos: Atajo[] }[] = [
       [atajo("C"), "Copiar la selección"],
       [atajo("A"), "Seleccionar el texto de la página"],
       [atajo("F"), "Buscar"],
+      [atajo("F", "shift cmd"), "Buscar en todos los PDF de una carpeta"],
       [atajo("G"), "Coincidencia siguiente"],
       [atajo("G", "shift cmd"), "Coincidencia anterior"],
       [atajo(","), "Preferencias"],

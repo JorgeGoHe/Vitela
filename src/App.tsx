@@ -24,6 +24,7 @@ import { useHistorial } from "./hooks/useHistorial";
 import { useRenderCache } from "./hooks/useRenderCache";
 import { useMiniaturas } from "./hooks/useMiniaturas";
 import { useBusqueda } from "./hooks/useBusqueda";
+import { useBusquedaCarpeta } from "./hooks/useBusquedaCarpeta";
 import { useReemplazo } from "./hooks/useReemplazo";
 import { useFirmas } from "./hooks/useFirmas";
 import { useHerramienta } from "./hooks/useHerramienta";
@@ -2437,6 +2438,18 @@ function App() {
       } else if (mod && !enCampo && e.key === "d" && pageCount > 0) {
         e.preventDefault();
         openProperties();
+      } else if (
+        mod &&
+        e.shiftKey &&
+        (e.key === "f" || e.key === "F") &&
+        pageCount > 0
+      ) {
+        // ⇧⌘F: la búsqueda avanzada de Acrobat, que aquí es el mismo campo
+        // con el cajón desplegado y el ámbito puesto en «una carpeta»
+        e.preventDefault();
+        busquedaCarpeta.setAmbito("carpeta");
+        setCajonBusqueda(true);
+        (document.querySelector(".search input") as HTMLInputElement)?.focus();
       } else if (mod && e.key === "f" && pageCount > 0) {
         e.preventDefault();
         (document.querySelector(".search input") as HTMLInputElement)?.focus();
@@ -2817,9 +2830,23 @@ function App() {
     gotoPage: saltarA,
     onError: (e) => setError(String(e)),
   });
+  // buscar en una carpeta entera: otra búsqueda, con sus resultados de otros
+  // ficheros, que no se pintan sobre la página y sobreviven a abrir un PDF
+  const busquedaCarpeta = useBusquedaCarpeta({
+    onError: (e) => setError(String(e)),
+  });
   const limpiarBusqueda = busqueda.limpiar;
   const busquedaTrasMutacion = busqueda.trasMutacion;
   hayCoincidenciasRef.current = busqueda.matches.length > 0;
+
+  /** Un resultado de la búsqueda en carpeta: el PDF se abre **en una
+   *  pestaña nueva** —el documento que se está mirando no se toca— y el
+   *  visor salta a la página de la coincidencia en cuanto está montado. */
+  async function abrirCoincidenciaDeCarpeta(path: string, pageIndex: number) {
+    const work = await openPath(path);
+    if (!work) return;
+    requestAnimationFrame(() => saltarA(pageIndex));
+  }
 
   // Seguimiento del scroll: la página cuyo centro queda más cerca del centro
   // del visor es la "actual" (píldora y sidebar), sin provocar scroll.
@@ -4554,6 +4581,8 @@ function App() {
                 cajonAbierto={cajonBusqueda}
                 setCajonAbierto={setCajonBusqueda}
                 reemplazo={reemplazo}
+                carpeta={busquedaCarpeta}
+                onAbrirCoincidencia={abrirCoincidenciaDeCarpeta}
               />
               <button
                 className="btn btn-icon"

@@ -905,6 +905,18 @@ export function selloDinamico(autor: string): string {
   return `${quien ? `${quien} · ` : ""}${fecha} ${hora}`;
 }
 
+const CLAVE_CARPETA = "editorPdf.carpetaBusqueda";
+
+/** La última carpeta en la que se buscó: quien tiene una carpeta de facturas
+ *  la busca todos los días y no tiene por qué volver a señalarla. */
+export function cargaCarpetaBusqueda(): string | null {
+  return localStorage.getItem(CLAVE_CARPETA);
+}
+
+export function guardaCarpetaBusqueda(dir: string): void {
+  localStorage.setItem(CLAVE_CARPETA, dir);
+}
+
 const CLAVE_BUSQUEDA = "editorPdf.opcionesBusqueda";
 
 export type OpcionesBusqueda = { matchCase: boolean; wholeWord: boolean };

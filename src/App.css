@@ -429,6 +429,50 @@ textarea {
   font-weight: 500;
 }
 
+/* el segmentado de dónde se busca, arriba del cajón */
+.search-ambito {
+  align-self: flex-start;
+}
+
+/* un fichero de la búsqueda en carpeta, con sus coincidencias debajo */
+.search-grupo {
+  display: flex;
+  flex-direction: column;
+}
+
+.search-grupo-cab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.search-grupo-cab:hover {
+  background: var(--btn-hover);
+}
+
+.search-grupo-nombre {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+/* las coincidencias de un fichero van sangradas bajo su nombre */
+.search-grupo .search-resultado {
+  padding-left: 24px;
+}
+
 /* lo que no se va a poder reemplazar, dicho antes de pulsar */
 .search-aviso {
   margin: 0;

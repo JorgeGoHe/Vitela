@@ -55,6 +55,47 @@ export function searchPdf(
   return invoke("search_pdf", { path, query, matchCase, wholeWord, context });
 }
 
+/** Lo que sale de buscar en una carpeta: un grupo por fichero, con sus
+ *  coincidencias. Un PDF que no se ha podido abrir —cifrado, roto— **no
+ *  rompe la búsqueda**: viene con `error` y sin coincidencias, y la interfaz
+ *  los cuenta aparte para decirlo al final. */
+export type GrupoCarpeta = {
+  path: string;
+  /** Nombre del fichero, ya sin la carpeta: es lo que se enseña. */
+  nombre: string;
+  coincidencias: SearchMatch[];
+  /** Por qué no se ha podido abrir; vacío o ausente si se abrió bien. */
+  error?: string;
+};
+
+/** Busca en todos los PDF de una carpeta. `recursivo` baja a las
+ *  subcarpetas y va apagado por defecto, como en Acrobat. Va emitiendo el
+ *  progreso por el evento `buscando-carpeta` y se puede parar con
+ *  `cancel_search`, que devuelve lo encontrado hasta ese momento. */
+export function searchFolder(
+  dir: string,
+  query: string,
+  matchCase: boolean,
+  wholeWord: boolean,
+  context: boolean,
+  recursivo: boolean,
+): Promise<GrupoCarpeta[]> {
+  return invoke("search_folder", {
+    dir,
+    query,
+    matchCase,
+    wholeWord,
+    context,
+    recursivo,
+  });
+}
+
+/** Para la búsqueda en carpeta que esté en marcha. Lo encontrado hasta ahí
+ *  se queda en pantalla: cancelar no es tirar el trabajo. */
+export function cancelSearch(): Promise<void> {
+  return invoke("cancel_search");
+}
+
 /** Bloques de texto de una página, tal como están en el content stream. */
 export function getTextBlocks(
   path: string,

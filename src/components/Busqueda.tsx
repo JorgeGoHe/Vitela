@@ -1,4 +1,5 @@
 import { MOD, type OpcionesBusqueda, type SearchMatch } from "../tipos";
+import type { BusquedaCarpeta } from "../hooks/useBusquedaCarpeta";
 import CajonBusqueda from "./CajonBusqueda";
 import Icon from "./Icon";
 import type { Reemplazador } from "../hooks/useReemplazo";
@@ -22,6 +23,8 @@ export default function Busqueda({
   cajonAbierto,
   setCajonAbierto,
   reemplazo,
+  carpeta,
+  onAbrirCoincidencia,
 }: {
   query: string;
   setQuery: (q: string) => void;
@@ -43,7 +46,11 @@ export default function Busqueda({
   cajonAbierto: boolean;
   setCajonAbierto: (v: boolean) => void;
   reemplazo: Reemplazador;
+  /** El otro ámbito: buscar en todos los PDF de una carpeta. */
+  carpeta: BusquedaCarpeta;
+  onAbrirCoincidencia: (path: string, pageIndex: number) => void;
 }) {
+  const enCarpeta = carpeta.ambito === "carpeta";
   const hayCajon = searched && total > 0;
   return (
     <div className="search">
@@ -60,7 +67,10 @@ export default function Busqueda({
             // Esc cierra la búsqueda y devuelve el foco al documento; el
             // atajo no sigue hasta la app (allí sale de la herramienta)
             e.stopPropagation();
-            limpiar(true);
+            // buscando en una carpeta, Esc pliega el cajón y **no** cancela
+            // la búsqueda: lo que está en marcha sigue y se puede volver
+            if (enCarpeta) setCajonAbierto(false);
+            else limpiar(true);
             e.currentTarget.blur();
             return;
           }
@@ -71,6 +81,10 @@ export default function Busqueda({
             return;
           }
           if (e.key !== "Enter") return;
+          if (enCarpeta) {
+            void carpeta.buscar(query, opciones);
+            return;
+          }
           if (searched && total > 0 && query === lastQuery) {
             gotoMatch(e.shiftKey ? -1 : 1);
           } else {
@@ -96,7 +110,20 @@ export default function Busqueda({
       >
         |ab|
       </button>
-      {searched && (
+      <button
+        className={`btn btn-icon${cajonAbierto ? " on" : ""}`}
+        title={
+          cajonAbierto
+            ? "Ocultar la lista de resultados"
+            : `Lista de resultados, buscar en una carpeta y reemplazar (⇧${MOD}F)`
+        }
+        aria-label="Lista de resultados, buscar en una carpeta y reemplazar"
+        aria-expanded={cajonAbierto}
+        onClick={() => setCajonAbierto(!cajonAbierto)}
+      >
+        <Icon name="more" size={13} />
+      </button>
+      {searched && !enCarpeta && (
         <>
           <span className="match-count">
             {total > 0 ? `${matchIdx + 1}/${total}` : "0"}
@@ -119,30 +146,19 @@ export default function Busqueda({
               >
                 <Icon name="down" size={13} />
               </button>
-              <button
-                className={`btn btn-icon${cajonAbierto ? " on" : ""}`}
-                title={
-                  cajonAbierto
-                    ? "Ocultar la lista de resultados"
-                    : "Ver la lista de resultados y reemplazar"
-                }
-                aria-label="Lista de resultados y reemplazar"
-                aria-expanded={cajonAbierto}
-                onClick={() => setCajonAbierto(!cajonAbierto)}
-              >
-                <Icon name="more" size={13} />
-              </button>
             </>
           )}
         </>
       )}
-      {hayCajon && cajonAbierto && (
+      {cajonAbierto && (hayCajon || enCarpeta) && (
         <CajonBusqueda
           matches={matches}
           matchIdx={matchIdx}
           query={lastQuery}
           irAMatch={irAMatch}
           reemplazo={reemplazo}
+          carpeta={carpeta}
+          onAbrirCoincidencia={onAbrirCoincidencia}
         />
       )}
     </div>

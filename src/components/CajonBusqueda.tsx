@@ -1,5 +1,8 @@
+import { useState } from "react";
 import { plural, type SearchMatch } from "../tipos";
 import type { Reemplazador } from "../hooks/useReemplazo";
+import type { BusquedaCarpeta } from "../hooks/useBusquedaCarpeta";
+import Icon from "./Icon";
 
 /**
  * El cajón que se despliega del campo de búsqueda: la lista de coincidencias
@@ -13,6 +16,8 @@ export default function CajonBusqueda({
   query,
   irAMatch,
   reemplazo,
+  carpeta,
+  onAbrirCoincidencia,
 }: {
   matches: SearchMatch[];
   matchIdx: number;
@@ -20,11 +25,152 @@ export default function CajonBusqueda({
   query: string;
   irAMatch: (i: number) => void;
   reemplazo: Reemplazador;
+  /** La búsqueda en carpeta: el otro ámbito del segmentado de arriba. */
+  carpeta: BusquedaCarpeta;
+  /** Abre ese PDF en una pestaña nueva y salta a la coincidencia. */
+  onAbrirCoincidencia: (path: string, pageIndex: number) => void;
 }) {
   const paginas = new Set(matches.map((m) => m.page_index)).size;
+  // qué grupos están plegados: se abren todos y se pliega lo que estorbe
+  const [plegados, setPlegados] = useState<Set<string>>(new Set());
+  const enCarpeta = carpeta.ambito === "carpeta";
 
   return (
     <div className="search-cajon" onMouseDown={(e) => e.stopPropagation()}>
+      {/* dónde se busca, como la búsqueda avanzada de Acrobat: en el
+          documento de delante o en una carpeta entera */}
+      <div className="segmented search-ambito" role="tablist">
+        <button
+          role="tab"
+          className={`btn${enCarpeta ? "" : " on"}`}
+          aria-selected={!enCarpeta}
+          onClick={() => carpeta.setAmbito("documento")}
+        >
+          Este documento
+        </button>
+        <button
+          role="tab"
+          className={`btn${enCarpeta ? " on" : ""}`}
+          aria-selected={enCarpeta}
+          onClick={() => carpeta.setAmbito("carpeta")}
+        >
+          Una carpeta…
+        </button>
+      </div>
+      {enCarpeta ? (
+        <>
+          <div className="card-row">
+            <button
+              className="btn"
+              onClick={() => void carpeta.elegirCarpeta()}
+            >
+              <Icon name="doc" size={14} />
+              {carpeta.carpeta ? "Cambiar de carpeta…" : "Elegir carpeta…"}
+            </button>
+            <span className="dato opt-hint" title={carpeta.carpeta ?? ""}>
+              {carpeta.carpeta
+                ? (carpeta.carpeta.split(/[\\/]/).pop() ?? carpeta.carpeta)
+                : "ninguna elegida"}
+            </span>
+          </div>
+          <label className="opt-check">
+            <input
+              type="checkbox"
+              checked={carpeta.recursivo}
+              onChange={(e) => carpeta.setRecursivo(e.target.checked)}
+            />
+            Incluir las subcarpetas
+          </label>
+          {carpeta.buscando && (
+            <div className="card-row">
+              <span className="dato search-resumen">
+                Buscando… {carpeta.progreso?.hechos ?? 0} /{" "}
+                {carpeta.progreso?.total ?? "…"}
+                {carpeta.progreso?.fichero
+                  ? ` · ${carpeta.progreso.fichero}`
+                  : ""}
+              </span>
+              <button className="btn" onClick={() => void carpeta.cancelar()}>
+                Cancelar
+              </button>
+            </div>
+          )}
+          {!carpeta.buscando && carpeta.hecho && (
+            <span className="dato search-resumen">
+              {carpeta.grupos.length === 0
+                ? `Sin coincidencias en ${plural(carpeta.mirados, "fichero", "ficheros")}`
+                : `${plural(
+                    carpeta.grupos.reduce(
+                      (n, g) => n + g.coincidencias.length,
+                      0,
+                    ),
+                    "coincidencia",
+                    "coincidencias",
+                  )} en ${plural(carpeta.grupos.length, "fichero", "ficheros")}`}
+            </span>
+          )}
+          <div className="search-resultados" role="tree">
+            {carpeta.grupos.map((g) => {
+              const plegado = plegados.has(g.path);
+              return (
+                <div key={g.path} className="search-grupo">
+                  <button
+                    className="search-grupo-cab"
+                    aria-expanded={!plegado}
+                    title={g.path}
+                    onClick={() =>
+                      setPlegados((v) => {
+                        const n = new Set(v);
+                        if (plegado) n.delete(g.path);
+                        else n.add(g.path);
+                        return n;
+                      })
+                    }
+                  >
+                    <Icon name={plegado ? "chevRight" : "down"} size={12} />
+                    <span className="search-grupo-nombre">{g.nombre}</span>
+                    <span className="dato">
+                      {plural(
+                        g.coincidencias.length,
+                        "coincidencia",
+                        "coincidencias",
+                      )}
+                    </span>
+                  </button>
+                  {!plegado &&
+                    g.coincidencias.map((m, i) => (
+                      <button
+                        key={`${g.path}-${i}`}
+                        className="search-resultado"
+                        onClick={() =>
+                          onAbrirCoincidencia(g.path, m.page_index)
+                        }
+                      >
+                        <span className="dato search-pagina">
+                          pág. {m.page_index + 1}
+                        </span>
+                        <span className="search-frase">
+                          {m.before ?? ""}
+                          <mark>{carpeta.termino}</mark>
+                          {m.after ?? ""}
+                        </span>
+                      </button>
+                    ))}
+                </div>
+              );
+            })}
+          </div>
+          {/* un PDF con contraseña no rompe la búsqueda, pero callarlo sería
+              decir que en esos ficheros no hay nada */}
+          {!carpeta.buscando && carpeta.ilegibles.length > 0 && (
+            <p className="search-aviso">
+              {carpeta.ilegibles.length} de {carpeta.mirados} no se han podido
+              abrir (tienen contraseña o están rotos).
+            </p>
+          )}
+        </>
+      ) : (
+        <>
       <span className="dato search-resumen">
         {plural(matches.length, "coincidencia", "coincidencias")} en{" "}
         {plural(paginas, "página", "páginas")}
@@ -91,6 +237,8 @@ export default function CajonBusqueda({
           Reemplazar todo
         </button>
       </div>
+        </>
+      )}
     </div>
   );
 }

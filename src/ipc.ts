@@ -156,6 +156,46 @@ export function onPantallaCompleta(cb: (valor: boolean) => void): () => void {
   };
 }
 
+/** Cómo va la búsqueda en una carpeta: cuántos ficheros lleva, cuántos hay
+ *  y cuál está mirando ahora mismo. */
+export type ProgresoCarpeta = { hechos: number; total: number; fichero: string };
+
+/** Ventana de la app en el navegador de QA: sin eventos de Tauri, el
+ *  progreso se dispara con `window.__vitelaBuscandoCarpeta(3, 210, "a.pdf")`. */
+type VentanaBusqueda = Window & {
+  __vitelaBuscandoCarpeta?: (
+    hechos: number,
+    total: number,
+    fichero: string,
+  ) => void;
+};
+
+/**
+ * Progreso de la búsqueda en carpeta (evento `buscando-carpeta`). Buscar en
+ * trescientos ficheros tarda, y una espera sin contador honesto es lo que
+ * hace que la gente cierre la aplicación.
+ */
+export function onBuscandoCarpeta(
+  cb: (p: ProgresoCarpeta) => void,
+): () => void {
+  if (!hayTauri) {
+    (window as VentanaBusqueda).__vitelaBuscandoCarpeta = (
+      hechos,
+      total,
+      fichero,
+    ) => cb({ hechos, total, fichero });
+    return () => {
+      delete (window as VentanaBusqueda).__vitelaBuscandoCarpeta;
+    };
+  }
+  const pendiente = listen<ProgresoCarpeta>("buscando-carpeta", (e) =>
+    cb(e.payload),
+  );
+  return () => {
+    pendiente.then((quitar) => quitar()).catch(() => {});
+  };
+}
+
 /** Lo que se dice cuando la llamada ni siquiera llega al backend: el motor
  *  se ha caído, el puente de QA no está o el IPC no responde. El usuario
  *  acaba de perder una operación; el peor sitio posible para enseñarle el
