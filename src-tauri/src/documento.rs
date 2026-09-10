@@ -921,3 +921,412 @@ mod tests {
         assert_eq!(m.keywords, "pdf, editor");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Etiquetas de página (`/PageLabels`): «i, ii, iii, 1, 2, 3…»
+// ---------------------------------------------------------------------------
+
+/// Un tramo de numeración, como el diálogo «Numerar páginas» de Acrobat
+/// («Organizar páginas ▸ Más ▸ Numerar páginas»): desde qué página empieza,
+/// con qué estilo se cuenta, qué prefijo lleva y con qué número arranca.
+///
+/// **Las claves van en snake_case** cuando llegan de la interfaz: Tauri solo
+/// pasa a snake_case los argumentos de primer nivel del comando, no las de
+/// una estructura anidada (lo mismo que el `props` de `create_form_field`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct RangoEtiqueta {
+    /// Primera página del tramo, contando desde 0.
+    pub desde: u16,
+    /// `"arabigo"` (1, 2, 3), `"romano"` (I, II, III), `"romano_min"`
+    /// (i, ii, iii), `"letra"` (A, B, … AA), `"letra_min"` (a, b, … aa) o
+    /// `"ninguno"` (solo el prefijo, que es como se marcan las cubiertas y
+    /// las separatas).
+    pub estilo: String,
+    /// Lo que va delante del número («Anexo », «A-»). Puede ir solo.
+    #[serde(default)]
+    pub prefijo: String,
+    /// Con qué número empieza a contar el tramo. Uno por defecto, como el
+    /// spec y como Acrobat.
+    #[serde(default = "una")]
+    pub empieza_en: u32,
+}
+
+fn una() -> u32 {
+    1
+}
+
+/// Lo que sabe el documento de su numeración: los tramos tal como están
+/// escritos y **la etiqueta ya compuesta de cada página**, en orden.
+///
+/// Las dos cosas a la vez a propósito: la píldora y las miniaturas enseñan
+/// la etiqueta, y si la interfaz tuviera que componerla habría dos
+/// implementaciones de los números romanos —una aquí, para escribir, y otra
+/// allí, para enseñar— que tarde o temprano dirían cosas distintas.
+#[derive(Serialize, Debug, Default, PartialEq)]
+pub struct EtiquetasPaginas {
+    pub rangos: Vec<RangoEtiqueta>,
+    /// Una entrada por página. Vacía si el documento no trae
+    /// `/PageLabels`: entonces la página se llama por su número físico y no
+    /// hay nada que enseñar entre paréntesis.
+    pub etiquetas: Vec<String>,
+}
+
+/// El estilo del spec (`/S`) que corresponde a cada nombre nuestro. `None`
+/// es «sin parte numérica», que en el PDF se escribe **no poniendo `/S`**.
+fn estilo_pdf(estilo: &str) -> Option<&'static str> {
+    match estilo {
+        "arabigo" => Some("D"),
+        "romano" => Some("R"),
+        "romano_min" => Some("r"),
+        "letra" => Some("A"),
+        "letra_min" => Some("a"),
+        _ => None,
+    }
+}
+
+/// Y al revés, para leer lo que trae un PDF de fuera.
+fn estilo_nuestro(s: Option<&str>) -> String {
+    match s {
+        Some("D") => "arabigo",
+        Some("R") => "romano",
+        Some("r") => "romano_min",
+        Some("A") => "letra",
+        Some("a") => "letra_min",
+        _ => "ninguno",
+    }
+    .to_string()
+}
+
+/// Números romanos hasta 3999; por encima, el número tal cual (un PDF de
+/// cuatro mil páginas numeradas en romano no existe, y devolver «MMMM…» no
+/// ayudaría a nadie).
+fn romano(mut n: u32) -> String {
+    if n == 0 || n > 3999 {
+        return n.to_string();
+    }
+    const TABLA: [(u32, &str); 13] = [
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
+    ];
+    let mut out = String::new();
+    for (valor, letras) in TABLA {
+        while n >= valor {
+            out.push_str(letras);
+            n -= valor;
+        }
+    }
+    out
+}
+
+/// Letras como las escribe el spec: A…Z, luego AA…ZZ, luego AAA…ZZZ. No es
+/// base 26 (no hay «AB»): la letra se repite.
+fn letras(n: u32) -> String {
+    if n == 0 {
+        return String::new();
+    }
+    let i = (n - 1) % 26;
+    let veces = ((n - 1) / 26 + 1) as usize;
+    let letra = (b'A' + i as u8) as char;
+    std::iter::repeat_n(letra, veces).collect()
+}
+
+/// La etiqueta de la página `pagina` (0-based) según el tramo en el que cae.
+fn etiqueta_de(rango: &RangoEtiqueta, pagina: u16) -> String {
+    let ordinal = rango.empieza_en + (pagina.saturating_sub(rango.desde)) as u32;
+    let numero = match rango.estilo.as_str() {
+        "arabigo" => ordinal.to_string(),
+        "romano" => romano(ordinal),
+        "romano_min" => romano(ordinal).to_lowercase(),
+        "letra" => letras(ordinal),
+        "letra_min" => letras(ordinal).to_lowercase(),
+        _ => String::new(),
+    };
+    format!("{}{}", rango.prefijo, numero)
+}
+
+/// Compone la etiqueta de cada página a partir de los tramos.
+fn etiquetas_de(rangos: &[RangoEtiqueta], paginas: u16) -> Vec<String> {
+    if rangos.is_empty() {
+        return Vec::new();
+    }
+    (0..paginas)
+        .map(|p| match rangos.iter().rev().find(|r| r.desde <= p) {
+            Some(r) => etiqueta_de(r, p),
+            // páginas antes del primer tramo: el spec dice que no tienen
+            // etiqueta, y su número físico es lo único honesto
+            None => (p + 1).to_string(),
+        })
+        .collect()
+}
+
+/// Recorre el árbol de números del `/PageLabels` (normalmente un `/Nums`
+/// plano, pero el spec admite `/Kids`) y devuelve sus pares.
+fn recorre_nums(doc: &LoDoc, nodo: &Dictionary, out: &mut Vec<RangoEtiqueta>, hondo: u8) {
+    if hondo > 16 {
+        return; // un árbol con un ciclo no puede colgar la app
+    }
+    if let Ok(nums) = nodo.get(b"Nums").and_then(|o| resuelve(doc, o).as_array()) {
+        let mut i = 0;
+        while i + 1 < nums.len() {
+            let desde = match resuelve(doc, &nums[i]).as_i64() {
+                Ok(n) if n >= 0 => n as u16,
+                _ => {
+                    i += 2;
+                    continue;
+                }
+            };
+            if let Ok(d) = resuelve(doc, &nums[i + 1]).as_dict() {
+                out.push(RangoEtiqueta {
+                    desde,
+                    estilo: estilo_nuestro(
+                        d.get(b"S")
+                            .and_then(|o| o.as_name())
+                            .ok()
+                            .and_then(|n| std::str::from_utf8(n).ok()),
+                    ),
+                    prefijo: d
+                        .get(b"P")
+                        .and_then(|o| o.as_str())
+                        .map(|s| String::from_utf8_lossy(s).into_owned())
+                        .unwrap_or_default(),
+                    empieza_en: d.get(b"St").and_then(|o| o.as_i64()).unwrap_or(1).max(1) as u32,
+                });
+            }
+            i += 2;
+        }
+    }
+    if let Ok(kids) = nodo.get(b"Kids").and_then(|o| resuelve(doc, o).as_array()) {
+        for kid in kids {
+            if let Ok(d) = resuelve(doc, kid).as_dict() {
+                recorre_nums(doc, &d.clone(), out, hondo + 1);
+            }
+        }
+    }
+}
+
+/// Sigue una referencia hasta el objeto, o devuelve el objeto tal cual.
+fn resuelve<'a>(doc: &'a LoDoc, o: &'a Object) -> &'a Object {
+    match o {
+        Object::Reference(id) => doc.get_object(*id).unwrap_or(o),
+        otro => otro,
+    }
+}
+
+/// La numeración del documento: los tramos y la etiqueta de cada página.
+///
+/// Un documento sin `/PageLabels` devuelve las dos listas vacías, que es lo
+/// que hay que contestar: no es un error, es un PDF que no numera sus
+/// páginas y en el que la página 2 se llama «2».
+#[tauri::command(async)]
+pub fn get_page_labels(path: String) -> Result<EtiquetasPaginas, String> {
+    on_pdfium_thread(move || {
+        let paginas = with_doc(&path, |doc| Ok(doc.pages().len()))?;
+        crate::with_lopdf(&path, |doc| {
+            let mut rangos = Vec::new();
+            if let Ok(catalog) = doc.catalog() {
+                if let Ok(labels) = catalog.get(b"PageLabels") {
+                    if let Ok(d) = resuelve(doc, labels).as_dict() {
+                        recorre_nums(doc, &d.clone(), &mut rangos, 0);
+                    }
+                }
+            }
+            rangos.sort_by_key(|r| r.desde);
+            rangos.dedup_by_key(|r| r.desde);
+            let etiquetas = etiquetas_de(&rangos, paginas);
+            Ok(EtiquetasPaginas { rangos, etiquetas })
+        })
+    })
+}
+
+/// Escribe la numeración: un tramo por cada cambio de estilo, como el
+/// diálogo de Acrobat. Con la lista vacía se quita el `/PageLabels` y el
+/// documento vuelve a llamar a sus páginas por su número físico.
+///
+/// El primer tramo tiene que empezar en la página 0: el spec no sabe qué
+/// hacer con las páginas anteriores al primero, y un visor que se encuentre
+/// una las numera como le parece.
+#[tauri::command(async)]
+pub fn set_page_labels(work_path: String, labels: Vec<RangoEtiqueta>) -> Result<(), String> {
+    let mut rangos = labels;
+    rangos.sort_by_key(|r| r.desde);
+    if let Some(primero) = rangos.first() {
+        if primero.desde != 0 {
+            return Err("La numeración tiene que empezar en la primera página".into());
+        }
+    }
+    if rangos.windows(2).any(|p| p[0].desde == p[1].desde) {
+        return Err("Hay dos tramos que empiezan en la misma página".into());
+    }
+    cirugia(&work_path, move |doc| {
+        let catalog_id = doc
+            .trailer
+            .get(b"Root")
+            .and_then(|o| o.as_reference())
+            .map_err(|e| e.to_string())?;
+        if rangos.is_empty() {
+            doc.get_object_mut(catalog_id)
+                .and_then(|o| o.as_dict_mut())
+                .map_err(|e| e.to_string())?
+                .remove(b"PageLabels");
+            return Ok(());
+        }
+        let paginas = doc.get_pages().len() as u16;
+        if rangos.iter().any(|r| r.desde >= paginas) {
+            return Err("Hay un tramo que empieza fuera del documento".into());
+        }
+        let mut nums: Vec<Object> = Vec::new();
+        for r in &rangos {
+            let mut d = Dictionary::new();
+            if let Some(s) = estilo_pdf(&r.estilo) {
+                d.set("S", Object::Name(s.as_bytes().to_vec()));
+            }
+            if !r.prefijo.is_empty() {
+                d.set("P", cadena_pdf(&r.prefijo));
+            }
+            if r.empieza_en != 1 {
+                d.set("St", Object::Integer(r.empieza_en.max(1) as i64));
+            }
+            nums.push(Object::Integer(r.desde as i64));
+            nums.push(Object::Dictionary(d));
+        }
+        let mut arbol = Dictionary::new();
+        arbol.set("Nums", Object::Array(nums));
+        let arbol_id = doc.add_object(arbol);
+        doc.get_object_mut(catalog_id)
+            .and_then(|o| o.as_dict_mut())
+            .map_err(|e| e.to_string())?
+            .set("PageLabels", Object::Reference(arbol_id));
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+mod tests_etiquetas {
+    use super::*;
+    use crate::tests::crea_pdf;
+
+    /// **Etiquetas de página.** En Acrobat («Organizar páginas ▸ Más ▸
+    /// Numerar páginas») la portada y el índice se numeran en romano y el
+    /// cuerpo empieza otra vez en 1, y lo que se ve es que la píldora dice
+    /// «ii» y no «2». Se escribe, se vuelve a leer y tiene que decir lo
+    /// mismo: es el contrato con la interfaz, que enseña esas etiquetas.
+    #[test]
+    fn dos_tramos_de_numeracion_se_escriben_y_se_vuelven_a_leer() {
+        let pdf = std::env::temp_dir().join("documento-etiquetas.pdf");
+        crea_pdf(&["Portada", "Índice", "Uno", "Dos", "Tres"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+
+        // sin /PageLabels no hay nada que enseñar, y eso no es un error
+        let sin = get_page_labels(work.clone()).expect("leer");
+        assert_eq!(sin, EtiquetasPaginas::default(), "un PDF liso no numera nada");
+
+        let rangos = vec![
+            RangoEtiqueta {
+                desde: 0,
+                estilo: "romano_min".into(),
+                prefijo: String::new(),
+                empieza_en: 1,
+            },
+            RangoEtiqueta {
+                desde: 2,
+                estilo: "arabigo".into(),
+                prefijo: String::new(),
+                empieza_en: 1,
+            },
+        ];
+        set_page_labels(work.clone(), rangos.clone()).expect("numerar");
+        let leidas = get_page_labels(work.clone()).expect("leer");
+        assert_eq!(leidas.rangos, rangos, "vuelve lo mismo que se escribió");
+        assert_eq!(leidas.etiquetas, vec!["i", "ii", "1", "2", "3"]);
+
+        // un prefijo, un arranque distinto y un tramo sin número: los tres
+        // sitios donde Acrobat deja escribir algo raro
+        let rangos = vec![
+            RangoEtiqueta {
+                desde: 0,
+                estilo: "ninguno".into(),
+                prefijo: "Cubierta".into(),
+                empieza_en: 1,
+            },
+            RangoEtiqueta {
+                desde: 1,
+                estilo: "letra".into(),
+                prefijo: "Anexo ".into(),
+                empieza_en: 25,
+            },
+        ];
+        set_page_labels(work.clone(), rangos.clone()).expect("numerar otra vez");
+        let leidas = get_page_labels(work.clone()).expect("leer");
+        assert_eq!(leidas.rangos, rangos);
+        assert_eq!(
+            leidas.etiquetas,
+            vec!["Cubierta", "Anexo Y", "Anexo Z", "Anexo AA", "Anexo BB"],
+            "las letras se repiten al pasar de la Z, como dice el spec"
+        );
+
+        // quitar la numeración devuelve el documento a sus números físicos
+        set_page_labels(work.clone(), Vec::new()).expect("quitar");
+        assert_eq!(get_page_labels(work.clone()).expect("leer"), EtiquetasPaginas::default());
+
+        // y ⌘Z devuelve la que había
+        crate::historial::undo(work.clone()).expect("deshacer");
+        assert_eq!(get_page_labels(work.clone()).expect("leer").rangos, rangos);
+
+        // lo que no se puede escribir se dice antes de escribirlo
+        assert!(set_page_labels(
+            work.clone(),
+            vec![RangoEtiqueta {
+                desde: 1,
+                estilo: "arabigo".into(),
+                prefijo: String::new(),
+                empieza_en: 1,
+            }]
+        )
+        .unwrap_err()
+        .contains("primera página"));
+        assert!(set_page_labels(
+            work.clone(),
+            vec![RangoEtiqueta {
+                desde: 0,
+                estilo: "arabigo".into(),
+                prefijo: String::new(),
+                empieza_en: 1,
+            },
+            RangoEtiqueta {
+                desde: 99,
+                estilo: "romano".into(),
+                prefijo: String::new(),
+                empieza_en: 1,
+            }]
+        )
+        .unwrap_err()
+        .contains("fuera del documento"));
+        std::fs::remove_file(&pdf).ok();
+    }
+
+    /// Los números que se enseñan, uno a uno. Un romano mal escrito no lo
+    /// canta nadie hasta que alguien imprime el índice.
+    #[test]
+    fn los_romanos_y_las_letras_se_escriben_como_dice_el_spec() {
+        for (n, esperado) in [(1, "I"), (4, "IV"), (9, "IX"), (14, "XIV"), (1987, "MCMLXXXVII")] {
+            assert_eq!(romano(n), esperado, "{n}");
+        }
+        // fuera de rango se dice el número, que es lo único que no engaña
+        assert_eq!(romano(0), "0");
+        assert_eq!(romano(4000), "4000");
+        for (n, esperado) in [(1, "A"), (26, "Z"), (27, "AA"), (52, "ZZ"), (53, "AAA")] {
+            assert_eq!(letras(n), esperado, "{n}");
+        }
+    }
+}

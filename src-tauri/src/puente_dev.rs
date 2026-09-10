@@ -235,6 +235,8 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "set_outline" => cmd!(documento::set_outline, { work_path: String, nodes: Vec<documento::OutlineNode> }),
         "pdf_info" => cmd!(documento::pdf_info, { path: String }),
         "get_metadata" => cmd!(documento::get_metadata, { path: String }),
+        "get_page_labels" => cmd!(documento::get_page_labels, { path: String }),
+        "set_page_labels" => cmd!(documento::set_page_labels, { work_path: String, labels: Vec<documento::RangoEtiqueta> }),
         "set_metadata" => cmd!(documento::set_metadata, { work_path: String, meta: documento::Metadata }),
         "get_links" => cmd!(documento::get_links, { path: String, page_index: u16 }),
         "encrypt_pdf" => cmd!(seguridad::encrypt_pdf, { work_path: String, dest_path: Option<String>, user_password: String, owner_password: Option<String>, permisos: Option<seguridad::Permisos> }),
@@ -460,6 +462,8 @@ mod tests {
         ("create_form_fields", "pendiente_ui — R48 del ciclo 8: las propuestas se aceptan en una cirugía, no en N llamadas fundidas"),
         ("add_background", "pendiente_ui — tanda 3 del ciclo 8: «Editar PDF ▸ Fondo», color o imagen debajo del contenido"),
         ("remove_background", "pendiente_ui — tanda 3 del ciclo 8: va con el diálogo del fondo, como «Quitar marca de agua»"),
+        ("get_page_labels", "pendiente_ui — tanda 3 del ciclo 8: la píldora y las miniaturas dirán «ii (2)»"),
+        ("set_page_labels", "pendiente_ui — tanda 3 del ciclo 8: «Organizar páginas ▸ Numerar páginas»"),
     ];
 
     /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada
