@@ -828,6 +828,62 @@ fn firmar_en_hilo(
     })
 }
 
+/// **Certificar el documento**: la misma firma más el `/DocMDP` que dice
+/// qué se puede cambiar después sin romperla. Es lo que distingue
+/// «firmado» de «esta es la versión buena».
+///
+/// `nivel` es el del spec y el del diálogo de Acrobat, y la interfaz tiene
+/// que decir en llano qué permite cada uno, porque «DocMDP nivel 2» no se
+/// lo dice a nadie:
+/// - **1**: no se puede cambiar nada. Cualquier cambio rompe la firma.
+/// - **2**: se pueden rellenar los formularios y firmar los campos que
+///   haya.
+/// - **3**: además se puede comentar.
+///
+/// Solo certifica la primera firma; sobre un documento ya firmado se niega
+/// con un aviso llano en vez de escribir algo que Acrobat marcaría en rojo.
+///
+/// Acepta el certificado en PEM o en un contenedor `.p12`/`.pfx` con su
+/// contraseña, como las dos formas de firmar.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command(async)]
+fn certify_pdf(
+    work_path: String,
+    dest_path: String,
+    nivel: u8,
+    cert_pem_path: Option<String>,
+    key_pem_path: Option<String>,
+    p12_path: Option<String>,
+    password: Option<String>,
+    reason: Option<String>,
+    rect: Option<Rect>,
+    page_index: Option<u16>,
+    signer_name: Option<String>,
+    signature_png: Option<String>,
+) -> Result<(), String> {
+    let cred = match (cert_pem_path, key_pem_path, p12_path) {
+        (Some(cert), Some(key), _) => {
+            let cert_pem = std::fs::read_to_string(&cert)
+                .map_err(|e| mensaje_llano(format!("No se ha podido leer el certificado: {e}")))?;
+            let key_pem = std::fs::read_to_string(&key)
+                .map_err(|e| mensaje_llano(format!("No se ha podido leer la clave: {e}")))?;
+            firma::credenciales_pem(&cert_pem, &key_pem)?
+        }
+        (_, _, Some(p12)) => {
+            let bytes = std::fs::read(&p12)
+                .map_err(|e| mensaje_llano(format!("No se ha podido leer el .p12: {e}")))?;
+            firma::credenciales_p12(&bytes, &password.unwrap_or_default())?
+        }
+        _ => return Err("Elige un certificado para certificar el documento".into()),
+    };
+    let apariencia = firma::Apariencia { rect, page_index, signer_name, signature_png };
+    on_pdfium_thread(move || {
+        invalidate_doc_cache(&work_path);
+        firma::certify(&work_path, &dest_path, &cred, reason, &apariencia, nivel)
+            .map_err(mensaje_llano)
+    })
+}
+
 /// Igual que `sign_pdf` pero con un contenedor PKCS#12 (.p12/.pfx).
 #[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
@@ -1147,6 +1203,7 @@ pub fn run() {
             imagenes::crop_image,
             imagenes::delete_image,
             sign_pdf,
+            certify_pdf,
             firma::verify_signatures,
             sign_pdf_p12,
             firmas_visuales::stamp_signature,

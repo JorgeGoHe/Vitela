@@ -200,6 +200,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "crop_image" => cmd!(imagenes::crop_image, { work_path: String, page_index: u16, object_index: u32, rect: crate::Rect }),
         "delete_image" => cmd!(imagenes::delete_image, { work_path: String, page_index: u16, object_index: u32 }),
         "sign_pdf" => cmd!(crate::sign_pdf, { work_path: String, dest_path: String, cert_pem_path: String, key_pem_path: String, reason: Option<String>, rect: Option<crate::Rect>, page_index: Option<u16>, signer_name: Option<String>, signature_png: Option<String> }),
+        "certify_pdf" => cmd!(crate::certify_pdf, { work_path: String, dest_path: String, nivel: u8, cert_pem_path: Option<String>, key_pem_path: Option<String>, p12_path: Option<String>, password: Option<String>, reason: Option<String>, rect: Option<crate::Rect>, page_index: Option<u16>, signer_name: Option<String>, signature_png: Option<String> }),
         "sign_pdf_p12" => cmd!(crate::sign_pdf_p12, { work_path: String, dest_path: String, p12_path: String, password: String, reason: Option<String>, rect: Option<crate::Rect>, page_index: Option<u16>, signer_name: Option<String>, signature_png: Option<String> }),
         "verify_signatures" => cmd!(firma::verify_signatures, { path: String }),
         "stamp_signature" => cmd!(firmas_visuales::stamp_signature, { work_path: String, page_index: u16, png_base64: String, x: f32, y: f32, w: f32, h: f32 }),
@@ -470,6 +471,7 @@ mod tests {
         ("add_file_attachment_annotation", "pendiente_ui — tanda 4 del ciclo 8: la chincheta de «Comentar ▸ Adjuntar archivo»"),
         ("export_form_data_xfdf", "pendiente_ui — tanda 6 del ciclo 8: «Más ▸ Exportar datos» del formulario"),
         ("import_form_data_xfdf", "pendiente_ui — tanda 6 del ciclo 8: «Más ▸ Importar datos» del formulario"),
+        ("certify_pdf", "pendiente_ui — tanda 6 del ciclo 8: certificar no tiene interfaz este ciclo; el diálogo con los tres niveles en llano va en el 9"),
     ];
 
     /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada

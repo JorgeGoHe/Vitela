@@ -331,6 +331,7 @@ impl Destino<'_> {
 /// destino que se le dé. Deja el `/Contents` en ceros y el `/ByteRange` con
 /// números largos: los dos huecos los rellena [`cose_la_firma`] cuando el
 /// fichero ya está serializado y se sabe dónde ha caído cada cosa.
+#[allow(clippy::too_many_arguments)]
 fn escribe_campo_de_firma(
     destino: &mut Destino,
     page_id: lopdf::ObjectId,
@@ -338,6 +339,7 @@ fn escribe_campo_de_firma(
     reason: Option<String>,
     apariencia: &Apariencia,
     ordinal: usize,
+    certifica: Option<u8>,
 ) -> Result<(), String> {
     // diccionario de firma con huecos para ByteRange y Contents
     let mut sig = Dictionary::new();
@@ -370,6 +372,25 @@ fn escribe_campo_de_firma(
         // como el /Name: en UTF-16 si lleva acentos, que si no un motivo
         // con «también» sale «tambiÃ©n» en la tarjeta de cualquier visor
         sig.set("Reason", crate::documento::cadena_pdf(r));
+    }
+    // **Certificar** (`/DocMDP`): la firma no solo dice quién firmó, dice
+    // **qué se puede cambiar después sin romperla**. Es lo que distingue
+    // «firmado» de «esta es la versión buena». Los tres niveles son los del
+    // spec y los del diálogo de Acrobat: 1 = ningún cambio, 2 = rellenar
+    // formularios y firmar, 3 = además comentar.
+    if let Some(nivel) = certifica {
+        let mut params = Dictionary::new();
+        params.set("Type", Object::Name(b"TransformParams".to_vec()));
+        params.set("P", Object::Integer(nivel as i64));
+        params.set("V", Object::Name(b"1.2".to_vec()));
+        let mut referencia = Dictionary::new();
+        referencia.set("Type", Object::Name(b"SigRef".to_vec()));
+        referencia.set("TransformMethod", Object::Name(b"DocMDP".to_vec()));
+        referencia.set("TransformParams", Object::Dictionary(params));
+        sig.set(
+            "Reference",
+            Object::Array(vec![Object::Dictionary(referencia)]),
+        );
     }
     let sig_id = destino.add_object(sig);
 
@@ -497,9 +518,15 @@ fn escribe_campo_de_firma(
     }
     form.set("SigFlags", 3i64);
     destino.cambia(catalog_id, |o| {
-        o.as_dict_mut()
-            .map_err(|e| e.to_string())?
-            .set("AcroForm", Object::Dictionary(form));
+        let catalog = o.as_dict_mut().map_err(|e| e.to_string())?;
+        catalog.set("AcroForm", Object::Dictionary(form));
+        // el catálogo señala **cuál** es la firma de certificación: sin
+        // esto el `/DocMDP` del diccionario de firma no lo mira nadie
+        if certifica.is_some() {
+            let mut perms = Dictionary::new();
+            perms.set("DocMDP", Object::Reference(sig_id));
+            catalog.set("Perms", Object::Dictionary(perms));
+        }
         Ok(())
     })
 }
@@ -589,6 +616,48 @@ pub fn sign(
     reason: Option<String>,
     apariencia: &Apariencia,
 ) -> Result<(), String> {
+    firma_o_certifica(src_path, dest_path, cred, reason, apariencia, None)
+}
+
+/// **Certificar el documento** (Acrobat: «Certificar con firma visible»).
+/// Es la misma firma más un `/DocMDP` que dice qué se puede cambiar después
+/// sin romperla: `nivel` 1 = ningún cambio, 2 = rellenar formularios y
+/// firmar, 3 = además comentar. Los tres son los del spec y los del diálogo
+/// de Acrobat.
+///
+/// **Solo puede certificar la primera firma**: el `/DocMDP` avala el
+/// documento entero, y detrás de otra firma ya hay bytes que esta no ha
+/// visto. El spec lo dice y los visores lo comprueban; decirlo antes es
+/// mejor que escribir un documento que Acrobat marcará en rojo.
+pub fn certify(
+    src_path: &str,
+    dest_path: &str,
+    cred: &Credenciales,
+    reason: Option<String>,
+    apariencia: &Apariencia,
+    nivel: u8,
+) -> Result<(), String> {
+    if !(1..=3).contains(&nivel) {
+        return Err("El nivel de certificación es 1, 2 o 3".into());
+    }
+    if esta_firmado(src_path) {
+        return Err(
+            "Este documento ya lleva una firma. Certificar avala el documento entero, \
+             así que solo puede hacerlo la primera"
+                .into(),
+        );
+    }
+    firma_o_certifica(src_path, dest_path, cred, reason, apariencia, Some(nivel))
+}
+
+fn firma_o_certifica(
+    src_path: &str,
+    dest_path: &str,
+    cred: &Credenciales,
+    reason: Option<String>,
+    apariencia: &Apariencia,
+    certifica: Option<u8>,
+) -> Result<(), String> {
     let bytes =
         std::fs::read(src_path).map_err(|e| format!("No se ha podido leer el PDF: {e}"))?;
     let doc =
@@ -611,6 +680,7 @@ pub fn sign(
             reason,
             apariencia,
             ordinal,
+            certifica,
         )?;
         let mut out = Vec::new();
         inc.save_to(&mut out)
@@ -625,6 +695,7 @@ pub fn sign(
             reason,
             apariencia,
             ordinal,
+            certifica,
         )?;
         let mut out = Vec::new();
         doc.save_to(&mut out)
@@ -2104,6 +2175,86 @@ mod tests {
         }
     }
     impl rsa::rand_core::CryptoRng for Entropia {}
+    /// **Certificar** (`/DocMDP`). Firmar dice quién firmó; certificar
+    /// dice además **qué se puede cambiar después sin romper la firma**, y
+    /// es lo que distingue «firmado» de «esta es la versión buena».
+    #[test]
+    fn certificar_escribe_el_docmdp_y_solo_la_primera_firma_puede() {
+        let dir = std::env::temp_dir();
+        let src = dir.join("firma-certificar.pdf");
+        let cert = dir.join("firma-certificar-1.pdf");
+        crea_pdf(&["Pliego de condiciones"], &src);
+
+        certify(
+            &src.to_string_lossy(),
+            &cert.to_string_lossy(),
+            &credenciales(),
+            Some("Esta es la versión buena".into()),
+            &Apariencia::default(),
+            2,
+        )
+        .expect("certificar");
+
+        let bytes = std::fs::read(&cert).expect("leer");
+        let texto = String::from_utf8_lossy(&bytes);
+        assert!(texto.contains("/DocMDP"), "la firma tiene que llevar su /DocMDP");
+        assert!(texto.contains("/TransformMethod"), "y su método de transformación");
+        assert!(texto.contains("/Perms"), "y el catálogo tiene que señalarla");
+        assert!(texto.contains("/P 2"), "con el nivel que se pidió");
+
+        // y sigue siendo una firma como las demás: se comprueba igual
+        let firmas = verify_signatures(cert.to_string_lossy().into_owned()).expect("verificar");
+        assert_eq!(firmas.len(), 1);
+        assert_eq!(firmas[0].estado, "ok");
+        assert!(firmas[0].covers_whole_file);
+        assert_eq!(firmas[0].reason, "Esta es la versión buena");
+
+        // certificar detrás de otra firma no vale: el /DocMDP avala el
+        // documento entero y detrás hay bytes que esta firma no ha visto
+        let segunda = dir.join("firma-certificar-2.pdf");
+        let e = certify(
+            &cert.to_string_lossy(),
+            &segunda.to_string_lossy(),
+            &otras_credenciales(),
+            None,
+            &Apariencia::default(),
+            2,
+        )
+        .unwrap_err();
+        assert!(e.contains("ya lleva una firma"), "el aviso en llano: {e}");
+        assert!(!e.contains("DocMDP"), "nada de jerga: {e}");
+
+        // y un nivel que no existe se dice antes de escribir nada
+        assert!(certify(
+            &src.to_string_lossy(),
+            &segunda.to_string_lossy(),
+            &credenciales(),
+            None,
+            &Apariencia::default(),
+            9,
+        )
+        .unwrap_err()
+        .contains("1, 2 o 3"));
+
+        // firmar normal **no** escribe /DocMDP: certificar es otra cosa
+        let normal = dir.join("firma-certificar-normal.pdf");
+        sign(
+            &src.to_string_lossy(),
+            &normal.to_string_lossy(),
+            &credenciales(),
+            None,
+            &Apariencia::default(),
+        )
+        .expect("firmar");
+        assert!(
+            !String::from_utf8_lossy(&std::fs::read(&normal).expect("leer")).contains("/DocMDP")
+        );
+
+        for f in [&src, &cert, &segunda, &normal] {
+            std::fs::remove_file(f).ok();
+        }
+    }
+
     /// **H4.** Dos personas firmando el mismo contrato, que es el caso que
     /// hasta el ciclo 5 mandaba al usuario a Acrobat: firmar encima avisaba
     /// y se plantaba, porque Vitela reescribía el fichero entero.
