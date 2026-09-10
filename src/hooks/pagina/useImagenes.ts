@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
 import { invoke } from "../../ipc";
-import { open } from "../../dialogos";
-import { cropImage, getImageData, reorderImage, transformImage } from "../../api";
+import { open, save } from "../../dialogos";
+import {
+  cropImage,
+  getImageData,
+  reorderImage,
+  saveImageData,
+  transformImage,
+} from "../../api";
 import type { ImageInfo, ImgAction, Mode, PageSize, Rect, ResizeHandle } from "../../tipos";
 import { puntoAPagina, puntoEnCapa, rectAPagina, rectAVista } from "./geometria";
 
@@ -23,6 +29,7 @@ export function useImagenes(ctx: {
   wrapRef: RefObject<HTMLDivElement | null>;
   onPageMutated: (page: number) => void;
   onError: (e: unknown) => void;
+  onNotice: (texto: string) => void;
 }) {
   const {
     workPath,
@@ -37,6 +44,7 @@ export function useImagenes(ctx: {
     wrapRef,
     onPageMutated,
     onError,
+    onNotice,
   } = ctx;
   const [images, setImages] = useState<ImageInfo[]>([]);
   const [imgPreviews, setImgPreviews] = useState<Record<number, string>>({});
@@ -301,6 +309,27 @@ export function useImagenes(ctx: {
     }
   }
 
+  /** «Guardar imagen como…»: el clic derecho de Acrobat sobre una imagen
+   *  de un PDF. Los bytes los escribe el backend, que es el único con
+   *  acceso al disco; el nombre propuesto lleva la página y el ordinal del
+   *  objeto para que dos imágenes de la misma hoja no se pisen. */
+  async function guardarImagen(im: ImageInfo) {
+    if (!workPath) return;
+    const dest = await save({
+      defaultPath: `imagen-${index + 1}-${im.object_index + 1}.png`,
+      filters: [{ name: "PNG", extensions: ["png"] }],
+      title: "Guardar imagen como",
+    });
+    if (!dest) return;
+    try {
+      await saveImageData(workPath, index, im.object_index, dest);
+      setImagePopover(null);
+      onNotice(`Guardado en ${dest}`);
+    } catch (e) {
+      onError(e);
+    }
+  }
+
   async function deleteImage(im: ImageInfo) {
     if (!workPath) return;
     try {
@@ -364,6 +393,7 @@ export function useImagenes(ctx: {
     cropRect,
     setCropRect,
     recortaImagen,
+    guardarImagen,
     deleteImage,
     startImgAction,
   };

@@ -36,6 +36,7 @@ export default function CapaImagenes({
     cropRect,
     setCropRect,
     recortaImagen,
+    guardarImagen,
     deleteImage,
     startImgAction,
   } = imagenes;
@@ -240,6 +241,13 @@ export default function CapaImagenes({
             >
               <Icon name="image" size={13} />
               Reemplazar…
+            </button>
+            <button
+              className="btn"
+              onClick={() => guardarImagen(imagePopover)}
+            >
+              <Icon name="save" size={13} />
+              Guardar como…
             </button>
             <button
               className="btn btn-danger"

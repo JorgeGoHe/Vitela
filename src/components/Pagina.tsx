@@ -283,6 +283,7 @@ function Pagina({
     wrapRef,
     onPageMutated,
     onError,
+    onNotice,
   });
   const seleccion = useSeleccionTexto({
     workPath,

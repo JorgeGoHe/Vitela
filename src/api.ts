@@ -1102,6 +1102,23 @@ export function getImageData(
   return invoke("get_image_data", { path, pageIndex, objectIndex });
 }
 
+/** Escribe el bitmap de un objeto de imagen en un PNG del disco. Es el
+ *  mismo mapa de bits de `getImageData`, pero sin cruzar el canal en
+ *  base64: lo escribe el backend, que es el único que puede. */
+export function saveImageData(
+  workPath: string,
+  pageIndex: number,
+  objectIndex: number,
+  destPath: string,
+): Promise<void> {
+  return invoke("save_image_data", {
+    workPath,
+    pageIndex,
+    objectIndex,
+    destPath,
+  });
+}
+
 export function stampSignature(args: {
   workPath: string;
   pageIndex: number;
