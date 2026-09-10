@@ -1605,6 +1605,94 @@ compila los instaladores a mano o al etiquetar `v*`.
     una cambia el fichero, porque su decisión es del backend (vía nueva o
     techo por escrito); y abrir un PDF cifrado por certificado con la clave
     privada del usuario necesitaría un contrato de apertura que no existe.
+- **La mitad de la UI del ciclo 10** (el de cierre):
+  - **Contratos mal espejados** (R64), que son la clase de fallo del ciclo:
+    `api.ts` declaraba una cosa y el comando devolvía otra, y ni `tsc` ni los
+    seis asertos cruzados lo veían. `composePrint` devuelve `Composicion
+    { path, hojas, caras, paginas }` (se le pasaba el objeto entero a
+    `open_pdf` como ruta, así que folleto, N-up y póster no llegaban a
+    imprimir); `VistaInicial` gana los siete campos de Rust —el modo de
+    encaje va en `ajuste` y `zoom` es **un número**, y meter «ancho» ahí
+    hacía que serde rechazara la llamada entera—; y los tres envoltorios de
+    firma devuelven `InformeFirma`, que se tiraba.
+  - **El sello de tiempo, después y no antes** (AC-079 y F-09): el comando
+    no falla si la autoridad no contesta —devuelve la firma hecha con
+    `sellada: false`—, así que el `catch` que abría la pregunta era código
+    muerto y la banda anunciaba lo que se había pedido, no lo que había.
+    `selloLlano(informe, pedido)` compone la frase con la autoridad y la
+    hora reales, y con el fichero ya escrito se pregunta «Dejarlo sin sello»
+    o «Volver a intentarlo» (`DialogoConfirmar` gana `textoCancelar`, porque
+    ahí «Cancelar» no dice lo que hace). `aplicarFirma` acepta el recuadro
+    por parámetro: al repetir, el diálogo ya está cerrado y `firmaRect` es
+    null.
+  - **Las bandas, por encima del velo** (C-6): `.banner-error` y
+    `.banner-notice` pasan a `position: relative; z-index: 110`; hasta ahora
+    el fallo más probable de firmar, certificar, cifrar y marca de agua se
+    pintaba detrás de `.modal-backdrop` y su botón no se podía pulsar. Esos
+    cuatro caminos escriben además en `errorModal`, que se pinta dentro del
+    diálogo abierto con `modal-error`, al lado del campo que hay que
+    corregir.
+  - **`adoptSession` al recuperar** (C-7): `openPath` gana un modo
+    «adoptar» para cuando la ruta que se le da ya **es** una copia de
+    trabajo. Con `open_pdf` quedaban dos ficheros en el temporal y un apunte
+    indexado por una ruta que nadie iba a borrar.
+  - **La biblioteca de imágenes** (C-10): `PanelFirmas` filtra por
+    `f.ranura` y no por una lista de ids aparte; `SelectorRanura` (los tres
+    destinos en un desplegable) llama a `setSignatureSlot` desde los dos
+    popovers; y borrar una imagen pide confirmación con el diálogo rojo,
+    porque era el único borrado de trabajo del usuario que no preguntaba.
+  - **Buscar en una carpeta** (C-8): el campo de búsqueda se monta
+    **siempre**, y sin documento se pone solo en ese ámbito con la pestaña
+    «Este documento» atenuada; el id `buscar-en-carpeta` (⇧⌘F) se enruta en
+    `accionesMenu`; hay botón primario «Buscar en la carpeta» junto a la
+    casilla de subcarpetas; cancelar dice «Parada en 12 de 200 ficheros»;
+    `recursivo` se recuerda en `localStorage` como la carpeta; y abrir un
+    resultado lleva el término al documento nuevo (`useBusqueda.buscarEn`,
+    que recibe la copia de trabajo por parámetro porque el estado todavía no
+    la tiene).
+  - **Clave privada al abrir** (C-3): con `CERT_KEY_REQUIRED`,
+    `DialogoClavePrivada` pide el .p12 o el .pem con el mismo selector que
+    firmar; `openPath` gana el quinto parámetro y manda `keyPath` y
+    `keyPassword`. «Cifrar con certificado…» avisa antes de que se escribe
+    una copia y de que conviene guardar el original.
+  - **El comparador** (C-4 y R65): dentro de `LimiteError`, con ↑/↓ sobre la
+    lista (roving tabindex), leyenda de los tres colores, «Esc» escrito en
+    su botón y `mode="select"` forzado al empezar. Mientras hay comparación
+    **no se montan `.viewer-wrap` ni el panel lateral** —se pintaba al lado
+    y se llevaba media ventana— y cada hoja se rasteriza al ancho de su
+    panel, medido con `ResizeObserver` y redondeado a 20 px.
+  - **Ocho remates del QA** (R66): Esc cierra el desplegable del andamio y
+    devuelve el foco a su botón; «Color sólido» ofrece 25/50/75/100 % con
+    100 % de fábrica y sin la casilla de «detrás»; un sello dinámico sin
+    autor en Preferencias manda la **plantilla** (`PLANTILLAS_DINAMICAS`) y
+    el nombre lo pone el backend; la fila del panel de comentarios usa
+    `KIND_LABELS`; la auditoría enseña `etiqueta` o, mientras no llegue,
+    `CATEGORIA_LLANA`; al abrir un documento certificado se dice una vez qué
+    permite su nivel; proteger y cifrar se atenúan con motivo si el
+    documento va firmado; las bandas dicen el nombre del fichero y dejan la
+    ruta en el `title` (`setNotice(..., { titulo })` y `nombreDeFichero`); y
+    los destinatarios del cifrado salen por su nombre con
+    `readCertificate`.
+  - **Los remates viejos** (C-12): rango de páginas al exportar imágenes
+    (`exportPagesPng` con `pageIndices`); `DialogoRecortar` con los cuatro
+    márgenes en milímetros o puntos, el tamaño que queda a la vista y la
+    casilla de todas las páginas (`cropPage` con `margenes`, que el backend
+    aplica hoja a hoja porque un rectángulo no vale con tamaños distintos);
+    aviso en la tarjeta de edición cuando `TextBlock.reescribible` es
+    `false`; «solo el anverso» escrito en el pie del folleto y fuera la
+    ternaria muerta; ⌘' en `DialogoAtajos`; «Abrir…» y «Guardar» en el grupo
+    Archivo de «Acciones», y «Quitar la contraseña…» atenuada con motivo en
+    vez de escondida.
+  - **`CHANGELOG.md`** (C-14) en la raíz: una entrada por ciclo hacia atrás,
+    Añadido / Cambiado / Corregido, en lo que se nota al usar la aplicación.
+    Los números de versión se explican en cabecera en vez de disimular que
+    hasta el ciclo 7 no hubo una publicada por ciclo.
+  - **Listas de pendientes que estrena este ciclo** (`puente_dev.rs`):
+    `COMANDOS_PENDIENTES` —un comando que la UI ya llama y que el backend
+    está escribiendo (`read_certificate`)— con su aserto de caducidad, y
+    tres entradas en `ARGUMENTOS_PENDIENTES` (`open_pdf` con la clave,
+    `export_pages_png` con el rango, `crop_page` con los márgenes). **Las
+    cuatro tienen que quedar vacías al integrar.**
 - **Menú nativo** (`menu.rs`): Archivo, Editar, Ver, Documento, Ventana y
   Ayuda en la barra del sistema, espejo del menú «Acciones» de la app —
   con esto la búsqueda de menús de macOS encuentra por fin «Marca de
