@@ -24,6 +24,7 @@ export default function Busqueda({
   setCajonAbierto,
   reemplazo,
   carpeta,
+  hayDocumento,
   onAbrirCoincidencia,
 }: {
   query: string;
@@ -48,18 +49,33 @@ export default function Busqueda({
   reemplazo: Reemplazador;
   /** El otro ámbito: buscar en todos los PDF de una carpeta. */
   carpeta: BusquedaCarpeta;
+  /** Hay documento abierto. Sin él el campo sigue en pie, pero solo para
+   *  buscar en una carpeta: eso se hace antes de abrir nada. */
+  hayDocumento: boolean;
   onAbrirCoincidencia: (path: string, pageIndex: number) => void;
 }) {
-  const enCarpeta = carpeta.ambito === "carpeta";
+  const enCarpeta = carpeta.ambito === "carpeta" || !hayDocumento;
   const hayCajon = searched && total > 0;
+  const lanzarEnCarpeta = () => {
+    setCajonAbierto(true);
+    void carpeta.buscar(query, opciones);
+  };
   return (
     <div className="search">
       <Icon name="search" size={13} />
       <input
         type="text"
-        placeholder="Buscar"
-        title={`Buscar en el documento (${MOD}F)`}
-        aria-label="Buscar en el documento"
+        placeholder={enCarpeta ? "Buscar en una carpeta" : "Buscar"}
+        title={
+          enCarpeta
+            ? `Buscar en todos los PDF de una carpeta (⇧${MOD}F)`
+            : `Buscar en el documento (${MOD}F)`
+        }
+        aria-label={
+          enCarpeta
+            ? "Buscar en todos los PDF de una carpeta"
+            : "Buscar en el documento"
+        }
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => {
@@ -82,7 +98,7 @@ export default function Busqueda({
           }
           if (e.key !== "Enter") return;
           if (enCarpeta) {
-            void carpeta.buscar(query, opciones);
+            lanzarEnCarpeta();
             return;
           }
           if (searched && total > 0 && query === lastQuery) {
@@ -155,9 +171,12 @@ export default function Busqueda({
           matches={matches}
           matchIdx={matchIdx}
           query={lastQuery}
+          termino={query}
+          hayDocumento={hayDocumento}
           irAMatch={irAMatch}
           reemplazo={reemplazo}
           carpeta={carpeta}
+          onBuscarCarpeta={lanzarEnCarpeta}
           onAbrirCoincidencia={onAbrirCoincidencia}
         />
       )}

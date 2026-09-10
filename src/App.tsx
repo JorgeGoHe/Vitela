@@ -2548,18 +2548,13 @@ function App() {
       } else if (mod && !enCampo && e.key === "d" && pageCount > 0) {
         e.preventDefault();
         openProperties();
-      } else if (
-        mod &&
-        e.shiftKey &&
-        (e.key === "f" || e.key === "F") &&
-        pageCount > 0
-      ) {
+      } else if (mod && e.shiftKey && (e.key === "f" || e.key === "F")) {
         // ⇧⌘F: la búsqueda avanzada de Acrobat, que aquí es el mismo campo
-        // con el cajón desplegado y el ámbito puesto en «una carpeta»
+        // con el cajón desplegado y el ámbito puesto en «una carpeta».
+        // **Sin documento también**: buscar en una carpeta es lo que se hace
+        // antes de saber qué fichero se quiere abrir
         e.preventDefault();
-        busquedaCarpeta.setAmbito("carpeta");
-        setCajonBusqueda(true);
-        (document.querySelector(".search input") as HTMLInputElement)?.focus();
+        abrirBusquedaEnCarpeta();
       } else if (mod && e.key === "f" && pageCount > 0) {
         e.preventDefault();
         (document.querySelector(".search input") as HTMLInputElement)?.focus();
@@ -2962,9 +2957,23 @@ function App() {
    *  pestaña nueva** —el documento que se está mirando no se toca— y el
    *  visor salta a la página de la coincidencia en cuanto está montado. */
   async function abrirCoincidenciaDeCarpeta(path: string, pageIndex: number) {
+    const termino = busquedaCarpeta.termino;
     const work = await openPath(path);
     if (!work) return;
+    // el documento llega con el término ya resaltado y situado en la
+    // coincidencia de esa página: abrirlo en la página buena y sin una sola
+    // marca obligaba a volver a buscar lo que se acababa de buscar
+    void busqueda.buscarEn(work, termino, pageIndex);
     requestAnimationFrame(() => saltarA(pageIndex));
+  }
+
+  /** ⇧⌘F y «Editar ▸ Buscar en una carpeta…»: el mismo campo de siempre con
+   *  el cajón desplegado y el ámbito en «una carpeta». **Funciona sin
+   *  documento abierto**, que es cuando más falta hace. */
+  function abrirBusquedaEnCarpeta() {
+    busquedaCarpeta.setAmbito("carpeta");
+    setCajonBusqueda(true);
+    (document.querySelector(".search input") as HTMLInputElement)?.focus();
   }
 
   // Seguimiento del scroll: la página cuyo centro queda más cerca del centro
@@ -4531,10 +4540,7 @@ function App() {
       (document.querySelector(".search input") as HTMLInputElement)?.focus(),
     "buscar-siguiente": () => busqueda.gotoMatch(1),
     "buscar-anterior": () => busqueda.gotoMatch(-1),
-    // pendiente_ui C-8: lo enruta la mitad de la interfaz del ciclo 10, que
-    // abre el cajón de búsqueda en el ámbito «carpeta» también sin
-    // documento. El id ya existe en el menú nativo (menu.rs)
-    "buscar-en-carpeta": () => {},
+    "buscar-en-carpeta": abrirBusquedaEnCarpeta,
     preferencias: () => setPrefsAbiertas(true),
     /* Ver */
     "zoom-mas": () => setZoom(nivelZoom(zoomNum, 1)),
@@ -4876,28 +4882,32 @@ function App() {
         )}
 
         <div className="toolbar-right">
+          {/* el campo de búsqueda está SIEMPRE: sin documento abierto sirve
+              para buscar en una carpeta, que es lo que se hace antes de
+              saber qué fichero se quiere */}
+          <Busqueda
+            query={busqueda.query}
+            setQuery={busqueda.setQuery}
+            lastQuery={busqueda.lastQuery}
+            total={busqueda.matches.length}
+            matchIdx={busqueda.matchIdx}
+            searched={busqueda.searched}
+            runSearch={busqueda.runSearch}
+            limpiar={busqueda.limpiar}
+            opciones={busqueda.opciones}
+            cambiaOpcion={busqueda.cambiaOpcion}
+            gotoMatch={busqueda.gotoMatch}
+            matches={busqueda.matches}
+            irAMatch={busqueda.irAMatch}
+            cajonAbierto={cajonBusqueda}
+            setCajonAbierto={setCajonBusqueda}
+            reemplazo={reemplazo}
+            carpeta={busquedaCarpeta}
+            hayDocumento={pageCount > 0}
+            onAbrirCoincidencia={abrirCoincidenciaDeCarpeta}
+          />
           {pageCount > 0 && (
             <>
-              <Busqueda
-                query={busqueda.query}
-                setQuery={busqueda.setQuery}
-                lastQuery={busqueda.lastQuery}
-                total={busqueda.matches.length}
-                matchIdx={busqueda.matchIdx}
-                searched={busqueda.searched}
-                runSearch={busqueda.runSearch}
-                limpiar={busqueda.limpiar}
-                opciones={busqueda.opciones}
-                cambiaOpcion={busqueda.cambiaOpcion}
-                gotoMatch={busqueda.gotoMatch}
-                matches={busqueda.matches}
-                irAMatch={busqueda.irAMatch}
-                cajonAbierto={cajonBusqueda}
-                setCajonAbierto={setCajonBusqueda}
-                reemplazo={reemplazo}
-                carpeta={busquedaCarpeta}
-                onAbrirCoincidencia={abrirCoincidenciaDeCarpeta}
-              />
               <button
                 className="btn btn-icon"
                 title={`Deshacer (${MOD}Z)`}

@@ -14,26 +14,36 @@ export default function CajonBusqueda({
   matches,
   matchIdx,
   query,
+  termino,
+  hayDocumento,
   irAMatch,
   reemplazo,
   carpeta,
+  onBuscarCarpeta,
   onAbrirCoincidencia,
 }: {
   matches: SearchMatch[];
   matchIdx: number;
+  /** Lo escrito en el campo: es lo que se buscaría en la carpeta. */
+  termino: string;
+  /** Hay un documento abierto. Sin él solo se puede buscar en una carpeta,
+   *  que es justo lo que se hace ANTES de saber qué fichero se quiere. */
+  hayDocumento: boolean;
   /** El término que se buscó, que es el que va resaltado en cada frase. */
   query: string;
   irAMatch: (i: number) => void;
   reemplazo: Reemplazador;
   /** La búsqueda en carpeta: el otro ámbito del segmentado de arriba. */
   carpeta: BusquedaCarpeta;
+  /** Lanza la búsqueda en la carpeta con lo que hay escrito. */
+  onBuscarCarpeta: () => void;
   /** Abre ese PDF en una pestaña nueva y salta a la coincidencia. */
   onAbrirCoincidencia: (path: string, pageIndex: number) => void;
 }) {
   const paginas = new Set(matches.map((m) => m.page_index)).size;
   // qué grupos están plegados: se abren todos y se pliega lo que estorbe
   const [plegados, setPlegados] = useState<Set<string>>(new Set());
-  const enCarpeta = carpeta.ambito === "carpeta";
+  const enCarpeta = carpeta.ambito === "carpeta" || !hayDocumento;
 
   return (
     <div className="search-cajon" onMouseDown={(e) => e.stopPropagation()}>
@@ -44,6 +54,12 @@ export default function CajonBusqueda({
           role="tab"
           className={`btn${enCarpeta ? "" : " on"}`}
           aria-selected={!enCarpeta}
+          disabled={!hayDocumento}
+          title={
+            hayDocumento
+              ? "Buscar en el documento de delante"
+              : "No hay ningún documento abierto"
+          }
           onClick={() => carpeta.setAmbito("documento")}
         >
           Este documento
@@ -73,14 +89,32 @@ export default function CajonBusqueda({
                 : "ninguna elegida"}
             </span>
           </div>
-          <label className="opt-check">
-            <input
-              type="checkbox"
-              checked={carpeta.recursivo}
-              onChange={(e) => carpeta.setRecursivo(e.target.checked)}
-            />
-            Incluir las subcarpetas
-          </label>
+          <div className="card-row search-lanzar">
+            <label className="opt-check">
+              <input
+                type="checkbox"
+                checked={carpeta.recursivo}
+                onChange={(e) => carpeta.setRecursivo(e.target.checked)}
+              />
+              Incluir las subcarpetas
+            </label>
+            {/* hasta ahora la única forma de lanzarla era Enter, y no lo
+                decía nadie */}
+            <button
+              className="btn btn-primary"
+              disabled={carpeta.buscando || !termino.trim()}
+              title={
+                termino.trim()
+                  ? carpeta.carpeta
+                    ? `Buscar «${termino}» en ${carpeta.carpeta}`
+                    : "Se pedirá la carpeta"
+                  : "Escribe primero qué buscar"
+              }
+              onClick={onBuscarCarpeta}
+            >
+              Buscar en la carpeta
+            </button>
+          </div>
           {carpeta.buscando && (
             <div className="card-row">
               <span className="dato search-resumen">
@@ -97,8 +131,18 @@ export default function CajonBusqueda({
           )}
           {!carpeta.buscando && carpeta.hecho && (
             <span className="dato search-resumen">
+              {/* parada a medias: decir «sin coincidencias» sería contestar
+                  a una pregunta que no se ha llegado a hacer entera */}
+              {carpeta.parada &&
+                `Parada en ${carpeta.parada.hechos} de ${plural(
+                  carpeta.parada.total,
+                  "fichero",
+                  "ficheros",
+                )} · `}
               {carpeta.grupos.length === 0
-                ? `Sin coincidencias en ${plural(carpeta.mirados, "fichero", "ficheros")}`
+                ? carpeta.parada
+                  ? "sin coincidencias hasta ahí"
+                  : `Sin coincidencias en ${plural(carpeta.mirados, "fichero", "ficheros")}`
                 : `${plural(
                     carpeta.grupos.reduce(
                       (n, g) => n + g.coincidencias.length,

@@ -143,8 +143,8 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                     Some("Shift+CmdOrCtrl+G"),
                     true,
                 ),
-                // buscar en una carpeta es lo que se hace **antes** de saber
-                // qué fichero quieres: no necesita documento abierto
+                // buscar en una carpeta es lo que se hace ANTES de saber qué
+                // fichero se quiere: no necesita documento abierto
                 e(
                     "buscar-en-carpeta",
                     "Buscar en una carpeta…",

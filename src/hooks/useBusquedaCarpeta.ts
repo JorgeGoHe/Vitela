@@ -4,7 +4,9 @@ import { open } from "../dialogos";
 import { onBuscandoCarpeta, type ProgresoCarpeta } from "../ipc";
 import {
   cargaCarpetaBusqueda,
+  cargaRecursivoBusqueda,
   guardaCarpetaBusqueda,
+  guardaRecursivoBusqueda,
   type OpcionesBusqueda,
 } from "../tipos";
 
@@ -26,12 +28,19 @@ export function useBusquedaCarpeta(opts: { onError: (e: unknown) => void }) {
   const [carpeta, setCarpeta] = useState<string | null>(() =>
     cargaCarpetaBusqueda(),
   );
-  const [recursivo, setRecursivo] = useState(false);
+  const [recursivo, setRecursivo] = useState(cargaRecursivoBusqueda);
   const [buscando, setBuscando] = useState(false);
   const [progreso, setProgreso] = useState<ProgresoCarpeta | null>(null);
   const [grupos, setGrupos] = useState<GrupoCarpeta[]>([]);
   const [termino, setTermino] = useState("");
   const [hecho, setHecho] = useState(false);
+  /** Dónde se paró al cancelar: cuántos ficheros se habían mirado y de
+   *  cuántos. Sin esto, una búsqueda parada a la mitad decía «sin
+   *  coincidencias», que es una respuesta y no lo que ha pasado. */
+  const [parada, setParada] = useState<{
+    hechos: number;
+    total: number;
+  } | null>(null);
   const onErrorRef = useRef(opts.onError);
   onErrorRef.current = opts.onError;
 
@@ -59,6 +68,7 @@ export function useBusquedaCarpeta(opts: { onError: (e: unknown) => void }) {
     setHecho(false);
     setGrupos([]);
     setProgreso(null);
+    setParada(null);
     setTermino(query);
     try {
       // el contexto se pide siempre: la lista de una búsqueda en carpeta es
@@ -81,14 +91,22 @@ export function useBusquedaCarpeta(opts: { onError: (e: unknown) => void }) {
     }
   }
 
-  /** Parar: lo encontrado hasta ahora se queda: cancelar no tira el trabajo. */
+  /** Parar: lo encontrado hasta ahora se queda: cancelar no tira el trabajo.
+   *  Se apunta además por dónde iba, que es lo que hay que decir después. */
   async function cancelar() {
+    if (progreso) setParada({ hechos: progreso.hechos, total: progreso.total });
     try {
       await cancelSearch();
     } catch (e) {
       onErrorRef.current(e);
     }
   }
+
+  /** La casilla de subcarpetas, recordada entre sesiones como la carpeta. */
+  const cambiaRecursivo = useCallback((v: boolean) => {
+    setRecursivo(v);
+    guardaRecursivoBusqueda(v);
+  }, []);
 
   const conCoincidencias = grupos.filter((g) => g.coincidencias.length > 0);
   const ilegibles = grupos.filter((g) => !!g.error);
@@ -99,7 +117,7 @@ export function useBusquedaCarpeta(opts: { onError: (e: unknown) => void }) {
     carpeta,
     elegirCarpeta,
     recursivo,
-    setRecursivo,
+    setRecursivo: cambiaRecursivo,
     buscando,
     progreso,
     /** Solo los ficheros con algo que enseñar. */
@@ -110,6 +128,8 @@ export function useBusquedaCarpeta(opts: { onError: (e: unknown) => void }) {
     mirados: grupos.length,
     termino,
     hecho,
+    /** Si la última búsqueda se paró a medias, por dónde iba. */
+    parada,
     buscar,
     cancelar,
   };

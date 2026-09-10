@@ -434,6 +434,13 @@ textarea {
   align-self: flex-start;
 }
 
+/* la casilla de las subcarpetas y, a la derecha, el botón que lanza: hasta
+   ahora la única forma de buscar en la carpeta era Enter, sin decirlo */
+.search-lanzar {
+  align-items: center;
+  justify-content: space-between;
+}
+
 /* un fichero de la búsqueda en carpeta, con sus coincidencias debajo */
 .search-grupo {
   display: flex;

@@ -88,6 +88,34 @@ export function useBusqueda(opts: {
     await ejecuta(con ?? opciones, false);
   }
 
+  /** Busca un término en un documento **que se acaba de abrir**, cuya ruta
+   *  todavía no ha llegado al estado del hook, y se queda en la coincidencia
+   *  de la página pedida. Es lo que hace que abrir un resultado de la
+   *  búsqueda en carpeta llegue con la palabra ya resaltada: sin esto el
+   *  documento se abría en la página buena y sin una sola marca. */
+  async function buscarEn(work: string, termino: string, pagina: number) {
+    if (!termino.trim()) return;
+    try {
+      const res = await searchPdf(
+        work,
+        termino,
+        opciones.matchCase,
+        opciones.wholeWord,
+        opts.contexto,
+      );
+      setMatches(res);
+      setSearched(true);
+      setQuery(termino);
+      setLastQuery(termino);
+      setUltimoTermino(termino);
+      setConContexto(opts.contexto);
+      const i = res.findIndex((m) => m.page_index === pagina);
+      setMatchIdx(i < 0 ? 0 : i);
+    } catch (e) {
+      opts.onError(e);
+    }
+  }
+
   // Al desplegar el cajón sobre una búsqueda que se hizo sin contexto se
   // repite una vez, ya con él: es el único momento en que hace falta, y sin
   // mover al usuario de donde estaba leyendo.
@@ -165,6 +193,7 @@ export function useBusqueda(opts: {
     matchIdx,
     searched,
     runSearch,
+    buscarEn,
     opciones,
     cambiaOpcion,
     gotoMatch,

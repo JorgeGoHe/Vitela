@@ -1048,6 +1048,19 @@ export function guardaCarpetaBusqueda(dir: string): void {
   localStorage.setItem(CLAVE_CARPETA, dir);
 }
 
+const CLAVE_RECURSIVO = "editorPdf.busquedaRecursiva";
+
+/** Si la última búsqueda en carpeta entró en las subcarpetas. Se recuerda
+ *  igual que la carpeta: quien tiene las facturas por años las busca
+ *  siempre igual. */
+export function cargaRecursivoBusqueda(): boolean {
+  return localStorage.getItem(CLAVE_RECURSIVO) === "1";
+}
+
+export function guardaRecursivoBusqueda(v: boolean): void {
+  localStorage.setItem(CLAVE_RECURSIVO, v ? "1" : "0");
+}
+
 const CLAVE_BUSQUEDA = "editorPdf.opcionesBusqueda";
 
 export type OpcionesBusqueda = { matchCase: boolean; wholeWord: boolean };
