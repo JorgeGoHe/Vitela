@@ -3176,6 +3176,12 @@ textarea {
   flex-shrink: 0;
 }
 
+/* el bloque «Avanzado» de un diálogo: una fila que se pliega, sin ruido */
+.bloque-plegable {
+  align-self: flex-start;
+  gap: 4px;
+}
+
 /* la auditoría de espacio: la barra apilada y su tabla. Un solo acento con
    la tinta más o menos diluida, que la paleta no tiene nueve colores */
 .peso-barra {

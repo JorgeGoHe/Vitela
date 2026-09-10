@@ -104,6 +104,16 @@ export default function PanelFirmasDoc({
             {f.signed_at && (
               <span className="firma-linea dato">{fechaLarga(f.signed_at)}</span>
             )}
+            {/* la fecha de una firma SIN sello de tiempo es la del reloj del
+                que firmó: cuando hay sello se dice quién da fe de ella */}
+            {f.sello_de_tiempo && (
+              <span className="firma-linea">
+                Hora sellada por {f.sello_de_tiempo.autoridad || "un servidor de tiempo"}
+                {f.sello_de_tiempo.fecha
+                  ? ` el ${fechaLarga(f.sello_de_tiempo.fecha)}`
+                  : ""}
+              </span>
+            )}
             {f.reason && <span className="firma-linea">{f.reason}</span>}
             <span className="firma-linea">{quienResponde(f)}</span>
             <span className="firma-linea">

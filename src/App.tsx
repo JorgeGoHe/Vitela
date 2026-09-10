@@ -597,6 +597,12 @@ function App() {
   // certificar es firmar diciendo además qué se puede tocar después, así que
   // comparte el recuadro, el diálogo y el destino: solo cambia el comando
   const [certificando, setCertificando] = useState(false);
+  // el servidor de tiempo no ha contestado: qué firma estaba en marcha y
+  // dónde iba a guardarse, para poder repetirla sin sello sin preguntar más
+  const [selloAsk, setSelloAsk] = useState<{
+    draft: FirmaDraft;
+    dest: string;
+  } | null>(null);
   // la galería de sellos: se abre al entrar en el modo (como la biblioteca
   // de firmas) y al pulsar «Sellos…» en la fila contextual
   const [galeriaSellos, setGaleriaSellos] = useState(false);
@@ -4196,6 +4202,12 @@ function App() {
     );
   }
 
+  /** El fallo es del servidor de tiempo y no de la firma: el backend lo dice
+   *  en llano y aquí se reconoce para poder ofrecer firmar sin sello. */
+  function esFalloDeSello(e: unknown): boolean {
+    return /sello de tiempo|servidor de tiempo|tsa\b/i.test(String(e));
+  }
+
   /** «Certificar documento…»: el mismo gesto que firmar —primero el
    *  recuadro— porque para el usuario es la misma operación con una
    *  promesa más. Con una firma ya puesta no se ofrece: el `/DocMDP` avala
@@ -4227,10 +4239,12 @@ function App() {
   /** Firma con lo recogido en el diálogo y escribe una copia firmada. El
    *  destino se pide al final: nadie elige carpeta para descubrir después
    *  que faltaba el certificado (U-13). */
-  async function aplicarFirma(d: FirmaDraft) {
+  async function aplicarFirma(d: FirmaDraft, dest?: string, sinTsa = false) {
     if (!workPath || !firmaRect) return;
-    const dest = await pickSignedDest();
-    if (!dest) return;
+    // el destino se pide una sola vez: si el sello de tiempo falla y hay que
+    // repetir sin él, no se vuelve a preguntar dónde guardar
+    const destino = dest ?? (await pickSignedDest());
+    if (!destino) return;
     const png = firmas.find((f) => f.id === d.firmaId)?.png_base64 ?? null;
     const apariencia = {
       rect: firmaRect.rect,
@@ -4239,12 +4253,18 @@ function App() {
       signaturePng: png,
     };
     const esP12 = /\.(p12|pfx)$/i.test(d.certPath);
+    // «Avanzado»: sellar la hora y guardar la prueba de validez. Las dos
+    // necesitan red, y por eso la vuelta sin sello es una pregunta
+    const avanzado = {
+      tsaUrl: d.tsa && !sinTsa ? d.tsaUrl.trim() || null : null,
+      ltv: d.ltv,
+    };
     try {
       if (certificando) {
         setNotice("Certificando…", { persistente: true });
         await certifyPdf({
           workPath,
-          destPath: dest,
+          destPath: destino,
           nivel: d.nivel,
           certPemPath: esP12 ? null : d.certPath,
           keyPemPath: esP12 ? null : d.keyPath,
@@ -4252,12 +4272,13 @@ function App() {
           password: esP12 ? d.password : null,
           reason: d.reason.trim() || null,
           ...apariencia,
+          ...avanzado,
         });
         setFirmaRect(null);
         setCertificando(false);
         setFirmaDraft({ ...d, password: "" });
         setNotice(
-          `Certificado y guardado en ${dest} · ${permisosCertificacion(d.nivel)}`,
+          `Certificado y guardado en ${destino} · ${permisosCertificacion(d.nivel)}`,
         );
         return;
       }
@@ -4265,28 +4286,41 @@ function App() {
       if (esP12) {
         await signPdfP12({
           workPath,
-          destPath: dest,
+          destPath: destino,
           p12Path: d.certPath,
           password: d.password,
           reason: d.reason.trim() || null,
           ...apariencia,
+          ...avanzado,
         });
       } else {
         await signPdf({
           workPath,
-          destPath: dest,
+          destPath: destino,
           certPemPath: d.certPath,
           keyPemPath: d.keyPath,
           reason: d.reason.trim() || null,
           ...apariencia,
+          ...avanzado,
         });
       }
       setFirmaRect(null);
       // la contraseña del certificado no se queda en memoria más de lo justo
       setFirmaDraft({ ...d, password: "" });
-      setNotice(`Firmado y guardado en ${dest}`);
+      setNotice(
+        `Firmado y guardado en ${destino}${
+          avanzado.tsaUrl ? " · con sello de tiempo" : ""
+        }`,
+      );
     } catch (e) {
       setNotice(null);
+      // el servidor de tiempo no ha contestado: se pregunta, con las dos
+      // salidas, en vez de tirar la firma entera después de haber elegido
+      // dónde guardarla
+      if (avanzado.tsaUrl && esFalloDeSello(e)) {
+        setSelloAsk({ draft: d, dest: destino });
+        return;
+      }
       setError(String(e));
     }
   }
@@ -5147,6 +5181,25 @@ function App() {
           peligro
           onConfirm={applyQuitarProteccion}
           onClose={() => setQuitarProtAsk(false)}
+        />
+      )}
+      {selloAsk && (
+        <DialogoConfirmar
+          titulo="El servidor de tiempo no ha contestado"
+          cuerpo={
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              La firma se puede hacer igual, pero sin sello de tiempo la fecha
+              que quedará es la del reloj de este ordenador. También puedes
+              cancelar y volver a intentarlo con otro servidor.
+            </p>
+          }
+          textoConfirmar="Firmar sin sello"
+          onConfirm={() => {
+            const pendiente = selloAsk;
+            setSelloAsk(null);
+            void aplicarFirma(pendiente.draft, pendiente.dest, true);
+          }}
+          onClose={() => setSelloAsk(null)}
         />
       )}
       {fondoAsk !== null && (

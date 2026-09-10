@@ -741,6 +741,12 @@ export type FirmaDraft = {
   /** Qué se podrá cambiar después al **certificar** (el `/DocMDP`). El 2 es
    *  el de Acrobat y el que trae puesto el diálogo. */
   nivel: NivelCertificacion;
+  /** Sellar la hora con un servidor de tiempo (apagado por defecto: hace
+   *  falta red) y con cuál. */
+  tsa: boolean;
+  tsaUrl: string;
+  /** Guardar la prueba de validez (LTV) dentro del documento. */
+  ltv: boolean;
 };
 
 export const FIRMA_VACIA: FirmaDraft = {
@@ -751,6 +757,9 @@ export const FIRMA_VACIA: FirmaDraft = {
   signerName: "",
   firmaId: "",
   nivel: 2,
+  tsa: false,
+  tsaUrl: "",
+  ltv: false,
 };
 
 /** Lo que deja hacer un documento certificado, dicho como lo entiende quien

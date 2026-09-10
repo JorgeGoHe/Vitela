@@ -1601,6 +1601,11 @@ export type FirmaInfo = {
   /** Página del recuadro de la firma, si es visible. */
   page_index: number | null;
   rect: { x: number; y: number; w: number; h: number } | null;
+  /** El sello de tiempo (RFC 3161) que acompaña a la firma, si lo lleva.
+   *  Sin él, **la fecha de la firma es la del reloj de quien firmó**, y eso
+   *  cambia lo que la tarjeta puede prometer. Opcional: un backend anterior
+   *  no lo trae. */
+  sello_de_tiempo?: { fecha: string; autoridad: string } | null;
   /** Nivel del `/DocMDP` cuando esta firma **certifica** el documento (1, 2
    *  o 3); sin él, es una firma normal. Certificar dice «esta es la versión
    *  buena» y qué se puede cambiar después sin romper el sello, así que la
@@ -1632,6 +1637,28 @@ const SIN_APARIENCIA: Required<AparienciaFirma> = {
   signaturePng: null,
 };
 
+/** Lo «Avanzado» de firmar, que es lo que convierte una firma que funciona
+ *  en una firma que vale en un expediente. Las dos necesitan red. */
+export type FirmaAvanzada = {
+  /** Servidor RFC 3161 que sella la hora; sin él, la fecha es la del reloj
+   *  del que firma. */
+  tsaUrl?: string | null;
+  /** Empotrar en `/DSS` la cadena y las respuestas OCSP/CRL del momento,
+   *  que es lo que deja comprobar la firma dentro de diez años. */
+  ltv?: boolean | null;
+};
+
+const SIN_AVANZADO: Required<FirmaAvanzada> = { tsaUrl: null, ltv: false };
+
+/** Los servidores de tiempo públicos que se ofrecen en el desplegable. Se
+ *  puede escribir otro: la lista es un atajo, no una jaula. */
+export const TSA_CONOCIDAS: { url: string; nombre: string }[] = [
+  { url: "https://freetsa.org/tsr", nombre: "FreeTSA" },
+  { url: "http://timestamp.digicert.com", nombre: "DigiCert" },
+  { url: "http://timestamp.sectigo.com", nombre: "Sectigo" },
+  { url: "http://tsa.izenpe.com", nombre: "Izenpe (España)" },
+];
+
 /** Firma con certificado y clave en PEM. */
 export function signPdf(
   args: {
@@ -1640,9 +1667,15 @@ export function signPdf(
     certPemPath: string;
     keyPemPath: string;
     reason?: string | null;
-  } & AparienciaFirma,
+  } & AparienciaFirma &
+    FirmaAvanzada,
 ): Promise<void> {
-  return invoke("sign_pdf", { reason: null, ...SIN_APARIENCIA, ...args });
+  return invoke("sign_pdf", {
+    reason: null,
+    ...SIN_APARIENCIA,
+    ...SIN_AVANZADO,
+    ...args,
+  });
 }
 
 /** Los tres niveles del `/DocMDP`, con el número que escribe el PDF. La
@@ -1664,7 +1697,8 @@ export function certifyPdf(
     p12Path?: string | null;
     password?: string | null;
     reason?: string | null;
-  } & AparienciaFirma,
+  } & AparienciaFirma &
+    FirmaAvanzada,
 ): Promise<void> {
   return invoke("certify_pdf", {
     certPemPath: null,
@@ -1673,6 +1707,7 @@ export function certifyPdf(
     password: null,
     reason: null,
     ...SIN_APARIENCIA,
+    ...SIN_AVANZADO,
     ...args,
   });
 }
@@ -1685,9 +1720,15 @@ export function signPdfP12(
     p12Path: string;
     password: string;
     reason?: string | null;
-  } & AparienciaFirma,
+  } & AparienciaFirma &
+    FirmaAvanzada,
 ): Promise<void> {
-  return invoke("sign_pdf_p12", { reason: null, ...SIN_APARIENCIA, ...args });
+  return invoke("sign_pdf_p12", {
+    reason: null,
+    ...SIN_APARIENCIA,
+    ...SIN_AVANZADO,
+    ...args,
+  });
 }
 
 /** Pasos de deshacer/rehacer disponibles y páginas del documento. */

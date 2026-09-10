@@ -9,7 +9,7 @@ import {
   type FirmaDraft,
   type Rect,
 } from "../tipos";
-import type { NivelCertificacion } from "../api";
+import { TSA_CONOCIDAS, type NivelCertificacion } from "../api";
 import Icon from "./Icon";
 
 /** Nombre de fichero de una ruta, para no enseñar la ruta entera. */
@@ -62,6 +62,9 @@ export default function DialogoFirmar({
   onClose: () => void;
 }) {
   const [d, setD] = useState<FirmaDraft>(inicial);
+  // «Avanzado» va plegado: quien firma un albarán no tiene por qué saber
+  // qué es un sello de tiempo, y quien lo necesita lo busca
+  const [avanzado, setAvanzado] = useState(inicial.tsa || inicial.ltv);
   const dibujo = firmas.find((f) => f.id === d.firmaId);
   const esP12 = /\.(p12|pfx)$/i.test(d.certPath);
   const listo = !!d.certPath && (esP12 ? !!d.password : !!d.keyPath);
@@ -215,6 +218,86 @@ export default function DialogoFirmar({
             </span>
           )}
         </label>
+
+        <button
+          className="btn bloque-plegable"
+          aria-expanded={avanzado}
+          onClick={() => setAvanzado((v) => !v)}
+        >
+          <Icon name={avanzado ? "down" : "chevRight"} size={12} />
+          Avanzado
+        </button>
+        {avanzado && (
+          <>
+            <label className="opt-check">
+              <input
+                type="checkbox"
+                checked={d.tsa}
+                onChange={(e) =>
+                  setD({
+                    ...d,
+                    tsa: e.target.checked,
+                    tsaUrl: d.tsaUrl || TSA_CONOCIDAS[0].url,
+                  })
+                }
+              />
+              Sellar la hora con un servidor de tiempo
+            </label>
+            {d.tsa && (
+              <div className="card-row">
+                <select
+                  className="size-select"
+                  aria-label="Servidor de tiempo"
+                  value={
+                    TSA_CONOCIDAS.some((t) => t.url === d.tsaUrl)
+                      ? d.tsaUrl
+                      : "otra"
+                  }
+                  onChange={(e) =>
+                    setD({
+                      ...d,
+                      tsaUrl: e.target.value === "otra" ? "" : e.target.value,
+                    })
+                  }
+                >
+                  {TSA_CONOCIDAS.map((t) => (
+                    <option key={t.url} value={t.url}>
+                      {t.nombre}
+                    </option>
+                  ))}
+                  <option value="otra">Otra…</option>
+                </select>
+                {!TSA_CONOCIDAS.some((t) => t.url === d.tsaUrl) && (
+                  <input
+                    type="text"
+                    placeholder="https://…"
+                    aria-label="Dirección del servidor de tiempo"
+                    value={d.tsaUrl}
+                    onChange={(e) => setD({ ...d, tsaUrl: e.target.value })}
+                  />
+                )}
+              </div>
+            )}
+            <label className="opt-check">
+              <input
+                type="checkbox"
+                checked={d.ltv}
+                onChange={(e) => setD({ ...d, ltv: e.target.checked })}
+              />
+              Guardar la prueba de validez (LTV)
+            </label>
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              {/* las dos necesitan red y se dice ANTES, no después de haber
+                  elegido dónde guardar */}
+              Las dos necesitan conexión: el sello de tiempo da fe de
+              <strong> cuándo</strong> se firmó —sin él, la fecha es la del
+              reloj de tu ordenador— y la prueba de validez guarda dentro del
+              documento lo que hace falta para comprobar la firma dentro de
+              diez años. Si el servidor no contesta, se pregunta antes de
+              seguir.
+            </p>
+          </>
+        )}
 
         {/* lo que va a quedar en el papel, con la proporción del recuadro que
             se ha dibujado: firmar deja de ser a ciegas */}
