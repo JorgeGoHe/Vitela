@@ -2,7 +2,8 @@ import { useState } from "react";
 import type { FirmaGuardada } from "../api";
 import { open } from "../dialogos";
 import { useModal } from "../hooks/useModal";
-import type { FirmaDraft, Rect } from "../tipos";
+import type { FirmaInfo } from "../api";
+import { fechaLarga, type FirmaDraft, type Rect } from "../tipos";
 import Icon from "./Icon";
 
 /** Nombre de fichero de una ruta, para no enseñar la ruta entera. */
@@ -21,6 +22,7 @@ export default function DialogoFirmar({
   pagina,
   rect,
   firmas,
+  firmasPrevias,
   onConfirm,
   onClose,
 }: {
@@ -30,6 +32,9 @@ export default function DialogoFirmar({
   /** El recuadro dibujado, para enseñar la previa con su proporción. */
   rect: Rect;
   firmas: FirmaGuardada[];
+  /** Firmas que ya lleva el documento: firmar encima ya no es un muro, así
+   *  que lo que hace falta es decir qué le pasa a la que ya estaba. */
+  firmasPrevias: FirmaInfo[];
   onConfirm: (d: FirmaDraft) => void;
   onClose: () => void;
 }) {
@@ -86,6 +91,16 @@ export default function DialogoFirmar({
           y no lo guarda.
         </p>
 
+        {firmasPrevias.length > 0 && (
+          <p className="modal-file" style={{ whiteSpace: "normal" }}>
+            {(() => {
+              const f = firmasPrevias[firmasPrevias.length - 1];
+              const quien = f.name || f.cert_subject || "otra persona";
+              const cuando = f.signed_at ? ` el ${fechaLarga(f.signed_at)}` : "";
+              return `Ya lo ha firmado ${quien}${cuando}; tu firma se añadirá detrás sin tocar la suya: el fichero crece por el final y los bytes de antes se quedan donde estaban.`;
+            })()}
+          </p>
+        )}
         <span className="card-label">Certificado</span>
         <div className="card-actions" style={{ justifyContent: "flex-start" }}>
           <button className="btn" onClick={elegirCert}>

@@ -3546,6 +3546,7 @@ function App() {
           pagina={firmaRect.page + 1}
           rect={firmaRect.rect}
           firmas={firmas}
+          firmasPrevias={firmasDoc}
           onConfirm={aplicarFirma}
           onClose={() => setFirmaRect(null)}
         />
