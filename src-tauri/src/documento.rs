@@ -447,8 +447,16 @@ pub fn get_metadata(path: String) -> Result<Metadata, String> {
     })
 }
 
-/// Deja `/Creator (Vitela)` en el `/Info` del documento: quien lo abra
-/// después sabe con qué se escribió, como hace cualquier editor.
+/// Deja constancia de que este fichero lo ha escrito Vitela, como hace
+/// cualquier editor.
+///
+/// **Va en `/Producer`, no en `/Creator`** (AC-095). En el spec `/Producer`
+/// es «quién ha producido este fichero» y `/Creator` «con qué se escribió
+/// el original», que es un dato del usuario: escribir ahí «Vitela»
+/// borraba el «Microsoft Word» del documento que alguien nos había
+/// mandado, y Propiedades pasaba a decir «Aplicación: Vitela» para
+/// cualquier PDF guardado una vez. Solo se pone `/Creator` cuando el
+/// documento no trae ninguno.
 pub(crate) fn marca_creador(doc: &mut lopdf::Document) {
     let mut info = match doc.trailer.get(b"Info") {
         Ok(Object::Reference(rid)) => doc
@@ -460,7 +468,15 @@ pub(crate) fn marca_creador(doc: &mut lopdf::Document) {
         Ok(Object::Dictionary(d)) => d.clone(),
         _ => Dictionary::new(),
     };
-    info.set("Creator", cadena_pdf("Vitela"));
+    info.set("Producer", cadena_pdf(&format!("Vitela {}", env!("CARGO_PKG_VERSION"))));
+    let sin_creador = match info.get(b"Creator") {
+        Ok(Object::String(b, _)) => b.is_empty(),
+        Ok(_) => false,
+        Err(_) => true,
+    };
+    if sin_creador {
+        info.set("Creator", cadena_pdf("Vitela"));
+    }
     let info_id = doc.add_object(info);
     doc.trailer.set("Info", Object::Reference(info_id));
 }

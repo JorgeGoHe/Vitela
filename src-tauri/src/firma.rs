@@ -336,6 +336,13 @@ fn imagen_png(doc: &mut LoDoc, png_base64: &str) -> Result<(lopdf::ObjectId, u32
 
 /// Apariencia del widget de firma: un Form XObject con la firma manuscrita
 /// arriba (si llega) y, debajo, «Firmado por …» y la fecha en Helvetica.
+///
+/// Con `certifica` el sello dice **«Certificado por …»** (AC-082). El
+/// diálogo enseñaba esa previa y en el PDF se escribía «Firmado por …»,
+/// así que quien lo abría fuera de Vitela veía una firma normal donde
+/// había una certificación, que es justo lo que distingue «firmado» de
+/// «esta es la versión buena».
+#[allow(clippy::too_many_arguments)]
 fn apariencia_firma(
     doc: &mut LoDoc,
     w: f32,
@@ -344,6 +351,7 @@ fn apariencia_firma(
     fecha: &str,
     motivo: Option<&str>,
     png: Option<&str>,
+    certifica: bool,
 ) -> Result<lopdf::ObjectId, String> {
     use lopdf::Stream;
     let mut recursos = Dictionary::new();
@@ -397,7 +405,8 @@ fn apariencia_firma(
         .as_bytes(),
     );
     // el sello de Acrobat pone el motivo debajo del nombre y la fecha
-    let mut lineas = vec![format!("Firmado por {nombre}"), fecha.to_string()];
+    let que = if certifica { "Certificado" } else { "Firmado" };
+    let mut lineas = vec![format!("{que} por {nombre}"), fecha.to_string()];
     if let Some(motivo) = motivo.map(str::trim).filter(|m| !m.is_empty()) {
         lineas.push(format!("Motivo: {motivo}"));
     }
@@ -603,6 +612,7 @@ fn escribe_campo_de_firma(
             &chrono::Local::now().format("%d/%m/%Y %H:%M").to_string(),
             reason.as_deref(),
             apariencia.signature_png.as_deref(),
+            certifica.is_some(),
         )?;
         let mut ap = Dictionary::new();
         ap.set("N", Object::Reference(ap_id));
@@ -1082,7 +1092,38 @@ pub const ESTADO_MODIFICADO: &str = "modificado";
 /// No se ha podido comprobar (nunca es una acusación).
 pub const ESTADO_DESCONOCIDO: &str = "desconocido";
 
-/// Comprueba las firmas del documento: por cada campo `/Sig`, si su
+/// La ficha de un certificado suelto, para poder enseñarlo por su nombre.
+#[derive(serde::Serialize, Debug)]
+pub struct FichaCertificado {
+    /// El titular en llano: el `CN` y, si no lo lleva, el `O`.
+    pub nombre: String,
+    /// Quién lo emitió, también en llano.
+    pub emisor: String,
+    /// Hasta cuándo vale, en ISO 8601.
+    pub not_after: String,
+}
+
+/// **Lee un certificado del disco** (`.cer`, `.crt` o `.pem`) y dice de
+/// quién es.
+///
+/// Es lo que hace falta para que «Cifrar con certificado» enseñe a sus
+/// destinatarios por su nombre y no por el nombre del fichero: quien cifra
+/// para tres personas tiene que poder comprobar que son las tres personas.
+/// No abre ningún PDF ni toca el documento.
+#[tauri::command(async)]
+pub fn read_certificate(path: String) -> Result<FichaCertificado, String> {
+    let cert = crate::seguridad::lee_certificado(&path)?;
+    Ok(FichaCertificado {
+        nombre: nombre_llano(&cert.tbs_certificate.subject.to_string()),
+        emisor: nombre_llano(&cert.tbs_certificate.issuer.to_string()),
+        not_after: chrono::DateTime::<chrono::Utc>::from(
+            cert.tbs_certificate.validity.not_after.to_system_time(),
+        )
+        .to_rfc3339(),
+    })
+}
+
+/// Comprueba las firmas del documento: por cada campo `/Sig`, si su/// Comprueba las firmas del documento: por cada campo `/Sig`, si su
 /// `/ByteRange` cubre el fichero entero salvo el hueco de `/Contents`, si el
 /// SHA-256 de esos rangos es el que va firmado dentro, si la firma RSA la
 /// hizo la clave del certificado que viaja en ella, y qué dice ese
@@ -1610,7 +1651,7 @@ fn sello_de(signer: &cms::signed_data::SignerInfo) -> Option<crate::tsa::SelloDe
 /// serie, o el identificador de clave del sujeto). Si no está, se devuelve
 /// el primero del bolso solo para poder enseñar algo, con `false` en el
 /// segundo miembro: con ese no se verifica nada.
-fn certificado_del_firmante(
+pub(crate) fn certificado_del_firmante(
     certificados: &[x509_cert::Certificate],
     sid: &SignerIdentifier,
 ) -> Option<(x509_cert::Certificate, bool)> {
@@ -1632,7 +1673,9 @@ fn certificado_del_firmante(
 /// Todos los certificados que viajan en la firma: el del firmante y, en
 /// una firma cualificada, la cadena hasta la raíz. La cadena es justo lo
 /// que necesita `confianza.rs` para llegar al almacén del sistema.
-fn certificados_del_bolso(sd: &cms::signed_data::SignedData) -> Vec<x509_cert::Certificate> {
+pub(crate) fn certificados_del_bolso(
+    sd: &cms::signed_data::SignedData,
+) -> Vec<x509_cert::Certificate> {
     sd.certificates
         .as_ref()
         .map(|c| {
@@ -3397,6 +3440,164 @@ mod tests {
             }
         }
         panic!("el documento no tiene widget de firma con apariencia");
+    }
+
+    /// **Un certificado se enseña por su nombre** (orden 20). Quien cifra
+    /// un documento para tres personas tiene que poder comprobar que son
+    /// las tres personas, y el nombre del fichero no lo dice.
+    #[test]
+    fn un_certificado_se_lee_por_su_nombre_y_no_por_el_del_fichero() {
+        let ruta = std::env::temp_dir().join("firma-ficha-cert.pem");
+        std::fs::write(&ruta, include_str!("../fixtures/test_hija_cert.pem")).expect("escribir");
+        let ficha = read_certificate(ruta.to_string_lossy().into_owned()).expect("leer");
+        assert_eq!(ficha.nombre, "Firmante de prueba");
+        assert!(!ficha.emisor.is_empty(), "y quién responde por él");
+        assert!(
+            ficha.not_after.starts_with("20"),
+            "hasta cuándo vale, en ISO 8601: {}",
+            ficha.not_after
+        );
+
+        // lo que no es un certificado se dice en llano y sin jerga
+        let basura = std::env::temp_dir().join("firma-ficha-basura.pem");
+        std::fs::write(&basura, b"esto no es un certificado").expect("escribir");
+        let e = read_certificate(basura.to_string_lossy().into_owned()).unwrap_err();
+        assert!(e.contains("no es un certificado"), "{e}");
+
+        std::fs::remove_file(&ruta).ok();
+        std::fs::remove_file(&basura).ok();
+    }
+
+    /// **AC-080.** Un token de sellado de una autoridad de verdad lleva
+    /// tres certificados en el bolso y el primero suele ser la raíz, así
+    /// que la tarjeta decía «DigiCert Trusted Root G4» donde Acrobat dice
+    /// el nombre del respondedor que selló. Quien sella es el que señala
+    /// el `SignerIdentifier`, exactamente igual que quien firma.
+    #[test]
+    fn el_sello_nombra_a_quien_sello_y_no_al_primero_del_bolso() {
+        use der::asn1::{Any, OctetString, SetOfVec};
+        use der::{Decode, DecodePem, Encode, Tag};
+
+        let firmante =
+            x509_cert::Certificate::from_pem(include_str!("../fixtures/test_hija_cert.pem"))
+                .expect("el certificado que sella");
+        let otros = [
+            x509_cert::Certificate::from_pem(include_str!("../fixtures/test_ca_cert.pem"))
+                .expect("la raíz"),
+            x509_cert::Certificate::from_pem(include_str!("../fixtures/test_cert.pem"))
+                .expect("otro más"),
+        ];
+        let alg = |oid| AlgorithmIdentifierOwned { oid, parameters: None };
+        let signer = cms::signed_data::SignerInfo {
+            version: cms::content_info::CmsVersion::V1,
+            sid: SignerIdentifier::IssuerAndSerialNumber(IssuerAndSerialNumber {
+                issuer: firmante.tbs_certificate.issuer.clone(),
+                serial_number: firmante.tbs_certificate.serial_number.clone(),
+            }),
+            digest_alg: alg(const_oid::db::rfc5912::ID_SHA_256),
+            signed_attrs: None,
+            signature_algorithm: alg(const_oid::db::rfc5912::SHA_256_WITH_RSA_ENCRYPTION),
+            signature: OctetString::new(vec![0u8; 32]).expect("firma"),
+            unsigned_attrs: None,
+        };
+        let mut bolso = SetOfVec::new();
+        for c in std::iter::once(&firmante).chain(otros.iter()) {
+            bolso
+                .insert(CertificateChoices::Certificate(c.clone()))
+                .expect("certificado");
+        }
+        let tst = crate::tsa::tst_de_prueba("20260911084500Z");
+        let sd = cms::signed_data::SignedData {
+            version: cms::content_info::CmsVersion::V1,
+            digest_algorithms: {
+                let mut v = SetOfVec::new();
+                v.insert(alg(const_oid::db::rfc5912::ID_SHA_256)).expect("alg");
+                v
+            },
+            encap_content_info: EncapsulatedContentInfo {
+                econtent_type: crate::tsa::OID_TSTINFO,
+                econtent: Some(Any::new(Tag::OctetString, tst.as_slice()).expect("eContent")),
+            },
+            certificates: Some(bolso.into()),
+            crls: None,
+            signer_infos: cms::signed_data::SignerInfos(
+                SetOfVec::from_iter([signer]).expect("signer"),
+            ),
+        };
+        let der = sd.to_der().expect("SignedData");
+        let token = cms::content_info::ContentInfo {
+            content_type: const_oid::db::rfc5911::ID_SIGNED_DATA,
+            content: Any::from_der(&der).expect("any"),
+        }
+        .to_der()
+        .expect("ContentInfo");
+
+        // el bolso no puede empezar por el que sella, o el test no probaría
+        // nada (el orden lo fija el DER del conjunto, no nosotros)
+        let leidos = certificados_del_bolso(&sd);
+        assert_ne!(
+            nombre_llano(&leidos[0].tbs_certificate.subject.to_string()),
+            nombre_llano(&firmante.tbs_certificate.subject.to_string()),
+            "hace falta un bolso cuyo primero no sea el que sella"
+        );
+
+        let sello = crate::tsa::lee_sello(&token).expect("leer el sello");
+        assert_eq!(sello.autoridad, "Firmante de prueba");
+        assert_eq!(sello.fecha, "2026-09-11T08:45:00+00:00");
+    }
+
+    /// **AC-082.** El diálogo enseña la previa «Certificado por Jorge» y en
+    /// el PDF se escribía «Firmado por Jorge»: quien lo abría fuera de
+    /// Vitela veía una firma normal donde había una certificación, que es
+    /// justo lo que distingue «firmado» de «esta es la versión buena».
+    #[test]
+    fn el_sello_visible_de_una_certificacion_dice_que_certifica() {
+        let dir = std::env::temp_dir();
+        let src = dir.join("firma-certifica-ap-src.pdf");
+        let dest = dir.join("firma-certifica-ap-out.pdf");
+        crea_pdf(&["Pliego"], &src);
+        let ap = Apariencia {
+            rect: Some(crate::Rect { x: 60.0, y: 500.0, w: 240.0, h: 90.0 }),
+            page_index: Some(0),
+            signer_name: Some("Jorge Gómez".into()),
+            signature_png: None,
+        };
+        certify(
+            &src.to_string_lossy(),
+            &dest.to_string_lossy(),
+            &credenciales(),
+            None,
+            &ap,
+            2,
+            &Avanzado::default(),
+        )
+        .expect("certificar");
+        let contenido = ap_de_la_firma(&dest.to_string_lossy());
+        assert!(
+            contenido.contains("Certificado por Jorge"),
+            "el sello de una certificación tiene que decirlo: {contenido}"
+        );
+        assert!(
+            !contenido.contains("Firmado por"),
+            "y no puede decir además que es una firma normal: {contenido}"
+        );
+
+        // una firma normal sigue diciendo lo suyo
+        let normal = dir.join("firma-certifica-ap-normal.pdf");
+        sign(
+            &src.to_string_lossy(),
+            &normal.to_string_lossy(),
+            &credenciales(),
+            None,
+            &ap,
+            &Avanzado::default(),
+        )
+        .expect("firmar");
+        assert!(ap_de_la_firma(&normal.to_string_lossy()).contains("Firmado por Jorge"));
+
+        for f in [&src, &dest, &normal] {
+            std::fs::remove_file(f).ok();
+        }
     }
 
     /// El sello de firma de Acrobat pone el motivo debajo del nombre y la

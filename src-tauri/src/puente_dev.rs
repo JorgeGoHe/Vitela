@@ -235,6 +235,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "certify_pdf" => cmd!(crate::certify_pdf, { work_path: String, dest_path: String, nivel: u8, cert_pem_path: Option<String>, key_pem_path: Option<String>, p12_path: Option<String>, password: Option<String>, reason: Option<String>, rect: Option<crate::Rect>, page_index: Option<u16>, signer_name: Option<String>, signature_png: Option<String>, tsa_url: Option<String>, ltv: Option<bool> }),
         "sign_pdf_p12" => cmd!(crate::sign_pdf_p12, { work_path: String, dest_path: String, p12_path: String, password: String, reason: Option<String>, rect: Option<crate::Rect>, page_index: Option<u16>, signer_name: Option<String>, signature_png: Option<String>, tsa_url: Option<String>, ltv: Option<bool> }),
         "verify_signatures" => cmd!(firma::verify_signatures, { path: String }),
+        "read_certificate" => cmd!(firma::read_certificate, { path: String }),
         "stamp_signature" => cmd!(firmas_visuales::stamp_signature, { work_path: String, page_index: u16, png_base64: String, x: f32, y: f32, w: f32, h: f32 }),
         "import_signature_file" => cmd!(firmas_visuales::import_signature_file, { image_path: String, ranura: Option<String> }),
         "save_stored_signature" => cmd!(firmas_visuales::save_stored_signature, { name: String, png_base64: String, ranura: Option<String> }),
@@ -508,6 +509,11 @@ mod tests {
     const NADIE_LLAMA: &[(&str, &str)] = &[
         ("adopt_session", "ciclo 10: la UI recupera con recover_session/borra_sesion; adoptar la copia queda para el cierre"),
         ("set_signature_slot", "ciclo 10: la UI fija la ranura al guardar/importar; cambiarla después no tiene botón"),
+        (
+            "read_certificate",
+            "pendiente_ui: lo llama la UI en la orden 20 del ciclo 10, para enseñar los \
+             destinatarios de «Cifrar con certificado» por su nombre y no por el del fichero",
+        ),
     ];
 
     /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada

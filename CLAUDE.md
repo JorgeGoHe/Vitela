@@ -1091,6 +1091,32 @@ compila los instaladores a mano o al etiquetar `v*`.
     identificadores de Rust con guion bajo y sin tildes. La escribe el
     backend para que no haya dos listas de nombres que puedan separarse, y
     un test exige una por categoría, todas distintas.
+  - **Guardar deja constancia en `/Producer`, no en `/Creator`** (AC-095,
+    `documento.rs`): en el spec `/Producer` es quién ha producido este
+    fichero y `/Creator` con qué se escribió el original, que es un dato
+    del usuario. `marca_creador` escribía «Vitela» en el segundo, así que
+    guardar una vez un PDF hecho con Word borraba el «Microsoft Word» y
+    Propiedades decía «Aplicación: Vitela» para cualquier documento.
+    Ahora pone `/Producer (Vitela <versión>)` y solo escribe `/Creator`
+    cuando el documento no trae ninguno.
+  - **El sello visible de una certificación dice que certifica** (AC-082):
+    `apariencia_firma` acepta si la firma certifica y escribe «Certificado
+    por …». El diálogo enseñaba esa previa y en el PDF quedaba «Firmado
+    por …», así que fuera de Vitela una certificación se veía como una
+    firma normal.
+  - **Quién selló es quien señala el `SignerIdentifier`** (AC-080,
+    `tsa.rs`): el bolso de un token de una autoridad de verdad lleva tres
+    certificados y el primero suele ser la raíz, así que la tarjeta decía
+    el nombre de la raíz donde Acrobat dice el del respondedor. Se resuelve
+    con las mismas dos funciones que ya usaba la firma
+    (`certificados_del_bolso` y `certificado_del_firmante`, ahora
+    `pub(crate)`).
+  - `read_certificate(path)` → `{ nombre, emisor, not_after }`
+    (`firma.rs`): la ficha de un `.cer`/`.crt`/`.pem` suelto, con el
+    titular y el emisor en llano. Es lo que hace falta para que «Cifrar con
+    certificado» enseñe a sus destinatarios por su nombre y no por el del
+    fichero: quien cifra para tres personas tiene que poder comprobar que
+    son las tres personas. No abre ningún PDF.
   - **Un mensaje con carreras de espacios dentro** (C-9): un literal partido
     en varias líneas sin la barra invertida se lleva el sangrado del código
     dentro de la frase, y eso lo lee el usuario. El aviso del PDF cifrado

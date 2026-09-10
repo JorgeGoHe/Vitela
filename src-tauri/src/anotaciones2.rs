@@ -3081,6 +3081,24 @@ mod tests {
         // y una plantilla libre solo sustituye sus variables
         assert_eq!(compone_dinamico("Visto por {autor}", "Ana"), "Visto por Ana");
 
+        // **AC-091b.** Sin `author`, el nombre lo pone el usuario del
+        // sistema: la interfaz componía la línea con el autor de ⌘,, que
+        // de fábrica está vacío, y el sello salía sin nombre. El día y el
+        // mes van con dos dígitos, que es como se lee una fecha
+        let sin_autor = compone_dinamico("revisado", &crate::anotaciones::autor_o_sistema(None));
+        assert!(
+            sin_autor.starts_with("Revisado por ")
+                && sin_autor.split(" · ").next().map(str::len).unwrap_or(0)
+                    > "Revisado por ".len(),
+            "sin autor en preferencias el nombre lo pone el sistema: {sin_autor}"
+        );
+        let fecha = sin_autor.split(" · ").nth(1).unwrap_or_default();
+        assert_eq!(
+            fecha.split('/').next().unwrap_or_default().len(),
+            2,
+            "el día va con dos dígitos: {sin_autor}"
+        );
+
         let pdf = std::env::temp_dir().join("anotaciones2-stamp-dinamico-test.pdf");
         crea_pdf(&["Página"], &pdf);
         let work = pdf.to_string_lossy().to_string();

@@ -174,16 +174,20 @@ pub(crate) fn lee_sello(token: &[u8]) -> Option<SelloDeTiempo> {
     let (_, ini, largo) = cabecera(&econtent)?;
     let tst = econtent.get(ini..ini + largo)?;
     let fecha = hora_del_tst(tst)?;
+    // **quién selló es el que señala el `SignerIdentifier`, no el primero
+    // del bolso** (AC-080): un token de una autoridad de verdad lleva tres
+    // certificados y el primero suele ser la raíz, así que la tarjeta
+    // decía «DigiCert Trusted Root G4» donde Acrobat dice el nombre del
+    // respondedor. Es el mismo error que el ciclo 4 corrigió para el
+    // certificado del firmante, sin aplicar aquí
+    let bolso = crate::firma::certificados_del_bolso(&sd);
     let autoridad = sd
-        .certificates
-        .as_ref()
-        .and_then(|c| c.0.iter().next())
-        .and_then(|c| match c {
-            cms::cert::CertificateChoices::Certificate(cert) => Some(crate::firma::nombre_llano(
-                &cert.tbs_certificate.subject.to_string(),
-            )),
-            _ => None,
-        })
+        .signer_infos
+        .0
+        .iter()
+        .next()
+        .and_then(|si| crate::firma::certificado_del_firmante(&bolso, &si.sid))
+        .map(|(cert, _)| crate::firma::nombre_llano(&cert.tbs_certificate.subject.to_string()))
         .unwrap_or_default();
     Some(SelloDeTiempo { fecha, autoridad })
 }

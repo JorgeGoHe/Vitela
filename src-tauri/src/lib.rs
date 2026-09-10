@@ -1316,6 +1316,7 @@ pub fn run() {
             sign_pdf,
             certify_pdf,
             firma::verify_signatures,
+            firma::read_certificate,
             sign_pdf_p12,
             firmas_visuales::stamp_signature,
             firmas_visuales::import_signature_file,
@@ -2079,37 +2080,86 @@ pub(crate) mod tests {
         assert_eq!(v, 42);
     }
 
-    /// Guardar deja `/Creator (Vitela)` en el documento, como cualquier
-    /// editor con lo que escribe.
+    /// **AC-095.** Guardar deja constancia de que el fichero lo ha escrito
+    /// Vitela **en `/Producer`**, que es la clave del spec para eso, y
+    /// **no toca `/Creator`**, que dice con qué se escribió el original y
+    /// es un dato del usuario. Antes se escribía en `/Creator`, así que
+    /// guardar una vez un PDF hecho con Word borraba el «Microsoft Word» y
+    /// Propiedades pasaba a decir «Aplicación: Vitela».
     #[test]
-    fn guardar_firma_el_documento_como_vitela() {
+    fn guardar_firma_el_documento_como_vitela_sin_borrar_con_que_se_hizo() {
         let dir = std::env::temp_dir();
         let origen = dir.join("editor_pdf_test_creator.pdf");
         let destino = dir.join("editor_pdf_test_creator_dest.pdf");
         crea_pdf(&["Hola"], &origen);
+        let work = origen.to_string_lossy().into_owned();
+        // con qué se hizo el original: lo que traiga el documento, que aquí
+        // es lo que escribe PDFium al crearlo
+        let hecho_con = documento::get_metadata(work.clone()).expect("metadatos").creator;
+        assert!(!hecho_con.is_empty() && hecho_con != "Vitela");
+        documento::set_metadata(
+            work.clone(),
+            documento::Metadata {
+                title: "Contrato".into(),
+                author: "Ana".into(),
+                subject: String::new(),
+                keywords: String::new(),
+                creator: hecho_con.clone(),
+                producer: String::new(),
+            },
+        )
+        .expect("metadatos");
+        save_pdf(work, destino.to_string_lossy().into_owned()).expect("guardar");
+
+        let leido = documento::get_metadata(destino.to_string_lossy().into_owned())
+            .expect("releer los metadatos");
+        assert_eq!(
+            leido.creator, hecho_con,
+            "con qué se hizo el original es del usuario y no se toca"
+        );
+        assert!(
+            leido.producer.starts_with("Vitela"),
+            "quien ha producido el fichero es Vitela: {}",
+            leido.producer
+        );
+        assert_eq!(leido.title, "Contrato");
+        assert_eq!(leido.author, "Ana");
+
+        // un documento que no dice con qué se hizo sí se queda con Vitela:
+        // el hueco lo llena quien lo escribe
+        let pelado = dir.join("editor_pdf_test_creator_pelado.pdf");
+        let pelado_dest = dir.join("editor_pdf_test_creator_pelado_dest.pdf");
+        crea_pdf(&["Hola"], &pelado);
+        cirugia(&pelado.to_string_lossy(), |doc| {
+            let id = match doc.trailer.get(b"Info") {
+                Ok(lopdf::Object::Reference(rid)) => *rid,
+                _ => return Ok(()),
+            };
+            if let Ok(d) = doc.get_object_mut(id).and_then(|o| o.as_dict_mut()) {
+                d.remove(b"Creator");
+            }
+            Ok(())
+        })
+        .expect("quitar el /Creator");
         save_pdf(
-            origen.to_string_lossy().into_owned(),
-            destino.to_string_lossy().into_owned(),
+            pelado.to_string_lossy().into_owned(),
+            pelado_dest.to_string_lossy().into_owned(),
         )
         .expect("guardar");
+        assert_eq!(
+            documento::get_metadata(pelado_dest.to_string_lossy().into_owned())
+                .expect("metadatos")
+                .creator,
+            "Vitela"
+        );
 
-        let doc = lopdf::Document::load(&destino).expect("cargar guardado");
-        let info = match doc.trailer.get(b"Info").expect("/Info") {
-            lopdf::Object::Reference(rid) => doc.get_object(*rid).unwrap().as_dict().unwrap().clone(),
-            lopdf::Object::Dictionary(d) => d.clone(),
-            otro => panic!("/Info inesperado: {otro:?}"),
-        };
-        let creator = match info.get(b"Creator").expect("/Creator") {
-            lopdf::Object::String(b, _) => b.iter().map(|c| *c as char).collect::<String>(),
-            otro => panic!("/Creator inesperado: {otro:?}"),
-        };
-        assert_eq!(creator, "Vitela");
         // y el documento sigue abriéndose y con su texto
-        let info = open_pdf(destino.to_string_lossy().into_owned(), None, None, None).expect("reabrir");
+        let info = open_pdf(destino.to_string_lossy().into_owned(), None, None, None)
+            .expect("reabrir");
         assert_eq!(info.page_count, 1);
         close_document(info.work_path).expect("cerrar");
 
-        for f in [&origen, &destino] {
+        for f in [&origen, &destino, &pelado, &pelado_dest] {
             std::fs::remove_file(f).ok();
         }
     }

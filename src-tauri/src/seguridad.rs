@@ -1799,7 +1799,7 @@ pub fn encrypt_pdf_cert(
 
 /// Lee un certificado en PEM o en DER, que son las dos formas en que la
 /// gente tiene guardado un `.cer`.
-fn lee_certificado(path: &str) -> Result<x509_cert::Certificate, String> {
+pub(crate) fn lee_certificado(path: &str) -> Result<x509_cert::Certificate, String> {
     use der::{Decode, DecodePem};
     let bytes = std::fs::read(path)
         .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer {path}: {e}")))?;
