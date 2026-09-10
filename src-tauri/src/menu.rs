@@ -210,10 +210,13 @@ pub(crate) fn estructura() -> Vec<Grupo> {
             entradas: vec![
                 e("organizar-paginas", "Organizar páginas…", None, true),
                 e("recortar-pagina", "Recortar página…", None, true),
-                e("marca-de-agua", "Marca de agua…", None, true),
+                // el fondo es la otra mitad de este diálogo desde el
+                // ciclo 9, y quien lo busca lo busca por su nombre
+                e("marca-de-agua", "Marca de agua y fondo…", None, true),
                 e("encabezado-pie", "Encabezado, pie y numeración…", None, true),
                 e("quitar-marca-de-agua", "Quitar marca de agua…", None, true),
                 e("quitar-encabezados", "Quitar encabezados y pies…", None, true),
+                ep("quitar-fondo", "Quitar fondo…", None, true),
                 sep(),
                 e("anadir-campo", "Añadir campo de formulario…", None, true),
                 e("reconocer-campos", "Reconocer campos…", None, true),
@@ -657,6 +660,13 @@ mod tests {
     /// sistema el grupo es otro y la etiqueta tiene que decir sola lo que
     /// hace.
     const EQUIVALENTES: &[(&str, &str, &str)] = &[
+        (
+            "marca de agua",
+            "marca de agua y fondo",
+            "ciclo 9: el diálogo pasa a llamarse «Marca de agua y fondo…» \
+             porque el fondo es su otra mitad; la etiqueta de la app llega \
+             con la interfaz y esta excepción se va al integrar",
+        ),
         (
             "word (.docx)",
             "exportar a word (.docx)",

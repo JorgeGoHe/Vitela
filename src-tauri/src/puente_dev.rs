@@ -230,6 +230,8 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "add_watermark" => cmd!(paginas2::add_watermark, { work_path: String, text: String, font_size: f32, color: [u8; 4], diagonal: bool, position: Option<String>, page_indices: Option<Vec<u16>>, image_png: Option<String>, opacity: Option<f32>, rotation: Option<f32>, detras: Option<bool> }),
         "add_bates" => cmd!(paginas2::add_bates, { work_path: String, prefijo: String, sufijo: String, digitos: u8, empieza_en: u32, position: Option<String>, font_size: Option<f32>, page_indices: Option<Vec<u16>> }),
         "remove_marginal_text" => cmd!(paginas2::remove_marginal_text, { work_path: String, zona: String, dry_run: bool }),
+        "add_background" => cmd!(paginas2::add_background, { work_path: String, color: Option<[u8; 4]>, image_png: Option<String>, opacity: Option<f32>, page_indices: Option<Vec<u16>> }),
+        "remove_background" => cmd!(paginas2::remove_background, { work_path: String, dry_run: bool }),
         "add_header_footer" => cmd!(paginas2::add_header_footer, { work_path: String, header_left: Option<String>, header_center: Option<String>, header_right: Option<String>, footer_left: Option<String>, footer_center: Option<String>, footer_right: Option<String>, font_size: f32, page_indices: Option<Vec<u16>> }),
         "get_outline" => cmd!(documento::get_outline, { path: String }),
         "set_outline" => cmd!(documento::set_outline, { work_path: String, nodes: Vec<documento::OutlineNode> }),
@@ -471,6 +473,14 @@ mod tests {
         (
             "save_page_attachment",
             "ciclo 9: «Guardar como…» del popover de la chincheta, ídem",
+        ),
+        (
+            "add_background",
+            "ciclo 9: «Fondo ▸ Color» espera al diálogo de marca de agua y fondo",
+        ),
+        (
+            "remove_background",
+            "ciclo 9: «Quitar fondo…» espera a su entrada de menú en la interfaz",
         ),
     ];
 

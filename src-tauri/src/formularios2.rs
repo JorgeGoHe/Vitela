@@ -102,6 +102,19 @@ pub(crate) fn geo_pagina(doc: &LoDoc, page_id: ObjectId) -> Result<crate::Geo, S
     Ok(crate::Geo::nueva(&mb, 0))
 }
 
+/// La `/MediaBox` de la página, en coordenadas del papel, para lo que
+/// necesita la caja y no el cambio de espacio (el fondo, que se pinta a
+/// sangre sobre ella).
+pub(crate) fn caja_de_pagina(doc: &LoDoc, page_id: ObjectId) -> Result<[f32; 4], String> {
+    let mb = media_box(doc, page_id)?;
+    Ok([
+        mb[0].min(mb[2]),
+        mb[1].min(mb[3]),
+        mb[0].max(mb[2]),
+        mb[1].max(mb[3]),
+    ])
+}
+
 /// Como [`geo_pagina`] pero con el `/Rotate` de la página puesto: es el
 /// espacio de la página VISTA, el que devuelven los comandos que leen
 /// anotaciones.

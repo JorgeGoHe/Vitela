@@ -730,6 +730,110 @@ mod tests {
         })
     }
 
+    /// **El fondo, entero** (orden 1.4 del ciclo 9). Acrobat abre su
+    /// diálogo de fondo con **un color sólido** seleccionado, y junto a
+    /// «Añadir» tiene «Quitar»: lo que se pone se quita. En Vitela el
+    /// fondo era la marca de agua con la casilla «detrás», sin color
+    /// sólido, y un fondo de imagen no se podía quitar —`remove_marginal_text`
+    /// solo borra objetos de texto—: en cuanto ⌘Z dejaba de alcanzar, se
+    /// quedaba puesto para siempre.
+    #[test]
+    fn el_fondo_se_pone_de_color_o_de_imagen_y_se_quita_entero() {
+        let pdf = std::env::temp_dir().join("paginas2-fondo-propio.pdf");
+        crea_pdf(&["Contenido uno", "Contenido dos"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+
+        // ni color ni imagen no es un fondo
+        assert!(add_background(work.clone(), None, None, None, None)
+            .unwrap_err()
+            .contains("color o una imagen"));
+
+        // color sólido, a sangre, en las dos páginas
+        let puestas = add_background(
+            work.clone(),
+            Some([250, 240, 200, 255]),
+            None,
+            None,
+            None,
+        )
+        .expect("fondo de color");
+        assert_eq!(puestas, 2);
+        let con_fondo = render_rgba(&work);
+        let esquina = con_fondo.get_pixel(4, 4).0;
+        assert!(
+            esquina[0] > 230 && esquina[2] < 230,
+            "la esquina tendría que llevar el crema del fondo, hay {esquina:?}"
+        );
+        // y el contenido sigue entero, debajo no se ha comido nada
+        assert!(
+            textos(&work)[0].contains("Contenido uno"),
+            "el fondo se ha llevado el texto de la página"
+        );
+
+        // el ensayo previo cuenta sin tocar
+        assert_eq!(remove_background(work.clone(), true).expect("ensayo"), 2);
+        assert_eq!(remove_background(work.clone(), false).expect("quitar"), 2);
+        assert_eq!(remove_background(work.clone(), true).expect("ensayo"), 0);
+        let sin_fondo = render_rgba(&work);
+        let esquina = sin_fondo.get_pixel(4, 4).0;
+        assert!(
+            esquina[0] > 240 && esquina[1] > 240 && esquina[2] > 240,
+            "el fondo no se ha ido: {esquina:?}"
+        );
+        assert!(textos(&work)[0].contains("Contenido uno"));
+
+        // y ahora una imagen, que es el caso que no se podía deshacer
+        let mut img = image::RgbaImage::new(64, 64);
+        for p in img.pixels_mut() {
+            *p = image::Rgba([40, 90, 200, 255]);
+        }
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .expect("png");
+        let b64 = {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(buf.into_inner())
+        };
+        let pesa_limpio = std::fs::metadata(&work).expect("peso").len();
+        assert_eq!(
+            add_background(work.clone(), None, Some(b64), None, Some(vec![0]))
+                .expect("fondo de imagen"),
+            1
+        );
+        let con_imagen = render_rgba(&work);
+        let centro = con_imagen.get_pixel(
+            con_imagen.width() / 2,
+            con_imagen.height() / 2,
+        ).0;
+        assert!(
+            centro[2] > 150 && centro[0] < 120,
+            "el fondo de imagen no se ve: {centro:?}"
+        );
+        assert_eq!(remove_background(work.clone(), false).expect("quitar"), 1);
+        let centro = render_rgba(&work)
+            .get_pixel(con_imagen.width() / 2, con_imagen.height() / 2)
+            .0;
+        assert!(
+            centro[0] > 200 && centro[2] > 200,
+            "el fondo de imagen se ha quedado puesto: {centro:?}"
+        );
+        // y los bytes de la imagen se han ido con él
+        let pesa_tras = std::fs::metadata(&work).expect("peso").len();
+        assert!(
+            pesa_tras < pesa_limpio + 2_000,
+            "los bytes del fondo siguen dentro: {pesa_limpio} → {pesa_tras}"
+        );
+        assert!(textos(&work)[0].contains("Contenido uno"));
+        std::fs::remove_file(&pdf).ok();
+    }
+
+    /// El render de la copia de trabajo, para mirar píxeles.
+    fn render_rgba(work: &str) -> image::RgbaImage {
+        let png = crate::render_page_png(work.to_string(), 0, 400, true).expect("render");
+        image::load_from_memory(&png).expect("leer render").to_rgba8()
+    }
+
     /// **Numeración Bates.** Un juzgado cita «la 000123» y todo el mundo
     /// tiene que mirar el mismo folio: por eso el número lleva dígitos
     /// fijos, prefijo y sufijo, y por eso el correlativo **cuenta folios
@@ -1596,4 +1700,440 @@ pub fn remove_marginal_text(
     } else {
         mutacion(work_path, cuerpo)
     }
+}
+
+/// **El fondo del documento** (Acrobat: «Editar PDF ▸ Fondo»), que es otra
+/// cosa que la marca de agua aunque las dos vayan detrás del contenido: el
+/// caso por defecto de Acrobat es **un color sólido** a sangre en la
+/// página, y hasta el ciclo 9 en Vitela no se podía hacer sin fabricarse
+/// antes un PNG.
+///
+/// **Lo que se pone se puede quitar.** El fondo se escribe con lopdf como
+/// un Form XObject marcado con la clave privada `/Vitela /Fondo`, invocado
+/// desde un flujo de contenido **propio** que va el primero de la página
+/// (y que lleva la misma marca): así [`remove_background`] sabe qué es
+/// suyo y lo quita entero, en vez de adivinar por posición como
+/// `remove_marginal_text`. Un fondo de imagen puesto y no quitable era un
+/// callejón sin salida en cuanto ⌘Z dejaba de alcanzar.
+mod fondo {
+    use lopdf::{Dictionary, Document as LoDoc, Object, ObjectId, Stream};
+
+    /// El nombre con el que el fondo entra en los recursos de la página.
+    /// Es único a propósito: `remove_background` lo busca tal cual en los
+    /// flujos de contenido para quitar su `Do`.
+    pub(super) const NOMBRE: &[u8] = b"VitelaFondo";
+    /// La clave privada que marca lo que ha puesto Vitela.
+    pub(super) const MARCA: &[u8] = b"Vitela";
+    pub(super) const VALOR: &[u8] = b"Fondo";
+
+    /// ¿Este objeto es un fondo puesto por Vitela?
+    fn es_nuestro(doc: &LoDoc, o: &Object) -> bool {
+        let dict = match o {
+            Object::Reference(id) => doc
+                .get_object(*id)
+                .ok()
+                .and_then(|obj| match obj {
+                    Object::Stream(s) => Some(&s.dict),
+                    Object::Dictionary(d) => Some(d),
+                    _ => None,
+                })
+                .cloned(),
+            Object::Stream(s) => Some(s.dict.clone()),
+            Object::Dictionary(d) => Some(d.clone()),
+            _ => None,
+        };
+        dict.map(|d| d.get(MARCA).and_then(|o| o.as_name()).unwrap_or_default() == VALOR)
+            .unwrap_or(false)
+    }
+
+    /// Los flujos de contenido de una página, como lista de objetos.
+    fn contenidos(doc: &LoDoc, page_id: ObjectId) -> Vec<Object> {
+        let Ok(page) = doc.get_object(page_id).and_then(|o| o.as_dict()) else {
+            return Vec::new();
+        };
+        match page.get(b"Contents") {
+            Ok(Object::Array(a)) => a.clone(),
+            Ok(Object::Reference(id)) => match doc.get_object(*id) {
+                Ok(Object::Array(a)) => a.clone(),
+                _ => vec![Object::Reference(*id)],
+            },
+            Ok(o) => vec![o.clone()],
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// El diccionario de recursos de la página, resuelto si va por
+    /// referencia. Devuelve también su id cuando lo tiene, para escribirlo
+    /// donde vive de verdad.
+    fn recursos(doc: &LoDoc, page_id: ObjectId) -> (Dictionary, Option<ObjectId>) {
+        let Ok(page) = doc.get_object(page_id).and_then(|o| o.as_dict()) else {
+            return (Dictionary::new(), None);
+        };
+        match page.get(b"Resources") {
+            Ok(Object::Reference(id)) => (
+                doc.get_object(*id)
+                    .and_then(|o| o.as_dict())
+                    .cloned()
+                    .unwrap_or_default(),
+                Some(*id),
+            ),
+            Ok(Object::Dictionary(d)) => (d.clone(), None),
+            _ => (Dictionary::new(), None),
+        }
+    }
+
+    fn escribe_recursos(doc: &mut LoDoc, page_id: ObjectId, res: Dictionary, res_id: Option<ObjectId>) {
+        match res_id {
+            Some(id) => {
+                if let Ok(o) = doc.get_object_mut(id) {
+                    *o = Object::Dictionary(res);
+                }
+            }
+            None => {
+                if let Ok(page) = doc.get_object_mut(page_id).and_then(|o| o.as_dict_mut()) {
+                    page.set("Resources", Object::Dictionary(res));
+                }
+            }
+        }
+    }
+
+    /// ¿Esta página lleva un fondo puesto por Vitela? Es la pregunta del
+    /// ensayo previo (`dry_run`), que no puede tocar el documento.
+    pub(super) fn hay_en(doc: &LoDoc, page_id: ObjectId) -> bool {
+        if contenidos(doc, page_id).iter().any(|o| es_nuestro(doc, o)) {
+            return true;
+        }
+        let (res, _) = recursos(doc, page_id);
+        match res.get(b"XObject") {
+            Ok(Object::Reference(id)) => doc
+                .get_object(*id)
+                .and_then(|o| o.as_dict())
+                .map(|d| d.has(NOMBRE))
+                .unwrap_or(false),
+            Ok(Object::Dictionary(d)) => d.has(NOMBRE),
+            _ => false,
+        }
+    }
+
+    /// Quita de una página el fondo que hubiera puesto Vitela: su flujo de
+    /// contenido, su entrada en los recursos y, por si un pase de PDFium
+    /// hubiera refundido los flujos, la invocación `/VitelaFondo Do` que
+    /// quede suelta en los demás. Devuelve si había alguno.
+    pub(super) fn quita_de(doc: &mut LoDoc, page_id: ObjectId) -> bool {
+        let mut habia = false;
+        // 1) los flujos de contenido nuestros
+        let flujos = contenidos(doc, page_id);
+        let quedan: Vec<Object> = flujos
+            .iter()
+            .filter(|o| {
+                let nuestro = es_nuestro(doc, o);
+                habia |= nuestro;
+                !nuestro
+            })
+            .cloned()
+            .collect();
+        if habia {
+            if let Ok(page) = doc.get_object_mut(page_id).and_then(|o| o.as_dict_mut()) {
+                page.set("Contents", Object::Array(quedan.clone()));
+            }
+        }
+        // 2) la entrada de los recursos
+        let (mut res, res_id) = recursos(doc, page_id);
+        if let Ok(Object::Dictionary(xobj)) = res.get(b"XObject").cloned().map(|o| match o {
+            Object::Reference(id) => doc
+                .get_object(id)
+                .cloned()
+                .unwrap_or(Object::Dictionary(Dictionary::new())),
+            otro => otro,
+        }) {
+            let mut xobj = xobj;
+            if xobj.remove(NOMBRE).is_some() {
+                habia = true;
+                res.set("XObject", Object::Dictionary(xobj));
+                escribe_recursos(doc, page_id, res, res_id);
+            }
+        }
+        // 3) el `Do` que pudiera quedar suelto en otro flujo
+        for o in &quedan {
+            let Object::Reference(id) = o else { continue };
+            let Ok(Object::Stream(s)) = doc.get_object(*id) else {
+                continue;
+            };
+            let Ok(contenido) = s.decompressed_content() else {
+                continue;
+            };
+            if let Some(limpio) = sin_invocacion(&contenido) {
+                habia = true;
+                if let Ok(Object::Stream(s)) = doc.get_object_mut(*id) {
+                    s.set_plain_content(limpio);
+                    let _ = s.compress();
+                }
+            }
+        }
+        habia
+    }
+
+    /// Borra del flujo las apariciones de `/VitelaFondo Do`, dejando
+    /// espacios en su sitio (no se recorta el flujo: cualquier otro
+    /// desplazamiento rompería lo que venga detrás). `None` si no había.
+    fn sin_invocacion(contenido: &[u8]) -> Option<Vec<u8>> {
+        let aguja: Vec<u8> = [b"/".as_ref(), NOMBRE].concat();
+        let mut out = contenido.to_vec();
+        let mut i = 0;
+        let mut tocado = false;
+        while i + aguja.len() <= out.len() {
+            if &out[i..i + aguja.len()] != aguja.as_slice() {
+                i += 1;
+                continue;
+            }
+            let mut j = i + aguja.len();
+            while j < out.len() && out[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if out[j..].starts_with(b"Do") {
+                for b in &mut out[i..j + 2] {
+                    *b = b' ';
+                }
+                tocado = true;
+                i = j + 2;
+            } else {
+                i += 1;
+            }
+        }
+        tocado.then_some(out)
+    }
+
+    /// Mete el fondo en una página: el Form XObject en los recursos y su
+    /// flujo de contenido **el primero**, que es lo que hace que se pinte
+    /// debajo de todo lo demás sin tocar el contenido que ya había.
+    pub(super) fn pon_en(
+        doc: &mut LoDoc,
+        page_id: ObjectId,
+        caja: [f32; 4],
+        color: Option<[u8; 4]>,
+        imagen: Option<&image::DynamicImage>,
+        opacidad: f32,
+    ) -> Result<(), String> {
+        let (x0, y0, x1, y1) = (caja[0], caja[1], caja[2], caja[3]);
+        let (w, h) = (x1 - x0, y1 - y0);
+        if w <= 1.0 || h <= 1.0 {
+            return Err("La página no tiene tamaño".into());
+        }
+        let mut recursos_forma = Dictionary::new();
+        let mut estados = Dictionary::new();
+        let mut gs = Dictionary::new();
+        gs.set("Type", Object::Name(b"ExtGState".to_vec()));
+        gs.set("ca", Object::Real(opacidad));
+        gs.set("CA", Object::Real(opacidad));
+        estados.set("VitelaGs", Object::Dictionary(gs));
+        recursos_forma.set("ExtGState", Object::Dictionary(estados));
+
+        let mut dibujo = String::from("/VitelaGs gs\n");
+        if let Some(c) = color {
+            dibujo.push_str(&format!(
+                "{:.4} {:.4} {:.4} rg {x0:.2} {y0:.2} {w:.2} {h:.2} re f\n",
+                c[0] as f32 / 255.0,
+                c[1] as f32 / 255.0,
+                c[2] as f32 / 255.0,
+            ));
+        }
+        if let Some(img) = imagen {
+            let id = incrusta_imagen(doc, img);
+            let mut xobj = Dictionary::new();
+            xobj.set("VitelaImg", Object::Reference(id));
+            recursos_forma.set("XObject", Object::Dictionary(xobj));
+            // la imagen entra entera y sin deformarse, centrada, que es lo
+            // que hace el «ajustar a la página» de Acrobat
+            let (iw, ih) = (img.width() as f32, img.height() as f32);
+            let escala = (w / iw).min(h / ih);
+            let (dw, dh) = (iw * escala, ih * escala);
+            let (tx, ty) = (x0 + (w - dw) / 2.0, y0 + (h - dh) / 2.0);
+            dibujo.push_str(&format!(
+                "q {dw:.2} 0 0 {dh:.2} {tx:.2} {ty:.2} cm /VitelaImg Do Q\n"
+            ));
+        }
+
+        let mut forma = Dictionary::new();
+        forma.set("Type", Object::Name(b"XObject".to_vec()));
+        forma.set("Subtype", Object::Name(b"Form".to_vec()));
+        forma.set(
+            "BBox",
+            Object::Array(vec![x0.into(), y0.into(), x1.into(), y1.into()]),
+        );
+        forma.set("Resources", Object::Dictionary(recursos_forma));
+        forma.set(MARCA, Object::Name(VALOR.to_vec()));
+        let mut stream = Stream::new(forma, dibujo.into_bytes());
+        let _ = stream.compress();
+        let forma_id = doc.add_object(Object::Stream(stream));
+
+        // los recursos de la página apuntan al fondo
+        let (mut res, res_id) = recursos(doc, page_id);
+        let mut xobj = match res.get(b"XObject") {
+            Ok(Object::Reference(id)) => doc
+                .get_object(*id)
+                .and_then(|o| o.as_dict())
+                .cloned()
+                .unwrap_or_default(),
+            Ok(Object::Dictionary(d)) => d.clone(),
+            _ => Dictionary::new(),
+        };
+        xobj.set(NOMBRE, Object::Reference(forma_id));
+        let xobj_id = match res.get(b"XObject") {
+            Ok(Object::Reference(id)) => Some(*id),
+            _ => None,
+        };
+        match xobj_id {
+            Some(id) => {
+                if let Ok(o) = doc.get_object_mut(id) {
+                    *o = Object::Dictionary(xobj);
+                }
+            }
+            None => res.set("XObject", Object::Dictionary(xobj)),
+        }
+        escribe_recursos(doc, page_id, res, res_id);
+
+        // y el flujo propio, el primero de la página: **detrás** de todo
+        let mut dict = Dictionary::new();
+        dict.set(MARCA, Object::Name(VALOR.to_vec()));
+        let mut nuestro = Stream::new(dict, b"q /VitelaFondo Do Q\n".to_vec());
+        let _ = nuestro.compress();
+        let nuestro_id = doc.add_object(Object::Stream(nuestro));
+        let mut flujos = contenidos(doc, page_id);
+        flujos.insert(0, Object::Reference(nuestro_id));
+        if let Ok(page) = doc.get_object_mut(page_id).and_then(|o| o.as_dict_mut()) {
+            page.set("Contents", Object::Array(flujos));
+        }
+        Ok(())
+    }
+
+    /// La imagen como XObject: RGB en Flate y, si tiene transparencia, su
+    /// `/SMask` en gris. Sin JPEG a propósito: recomprimir con pérdida el
+    /// fondo que ha elegido el usuario no es cosa nuestra.
+    fn incrusta_imagen(doc: &mut LoDoc, img: &image::DynamicImage) -> ObjectId {
+        let rgba = img.to_rgba8();
+        let (w, h) = (rgba.width(), rgba.height());
+        let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+        let mut alfa = Vec::with_capacity((w * h) as usize);
+        let mut hay_alfa = false;
+        for p in rgba.pixels() {
+            rgb.extend_from_slice(&p.0[..3]);
+            alfa.push(p.0[3]);
+            hay_alfa |= p.0[3] < 255;
+        }
+        let mask_id = hay_alfa.then(|| {
+            let mut d = Dictionary::new();
+            d.set("Type", Object::Name(b"XObject".to_vec()));
+            d.set("Subtype", Object::Name(b"Image".to_vec()));
+            d.set("Width", Object::Integer(w as i64));
+            d.set("Height", Object::Integer(h as i64));
+            d.set("ColorSpace", Object::Name(b"DeviceGray".to_vec()));
+            d.set("BitsPerComponent", Object::Integer(8));
+            let mut s = Stream::new(d, alfa);
+            let _ = s.compress();
+            doc.add_object(Object::Stream(s))
+        });
+        let mut d = Dictionary::new();
+        d.set("Type", Object::Name(b"XObject".to_vec()));
+        d.set("Subtype", Object::Name(b"Image".to_vec()));
+        d.set("Width", Object::Integer(w as i64));
+        d.set("Height", Object::Integer(h as i64));
+        d.set("ColorSpace", Object::Name(b"DeviceRGB".to_vec()));
+        d.set("BitsPerComponent", Object::Integer(8));
+        if let Some(id) = mask_id {
+            d.set("SMask", Object::Reference(id));
+        }
+        let mut s = Stream::new(d, rgb);
+        let _ = s.compress();
+        doc.add_object(Object::Stream(s))
+    }
+}
+
+/// Pone el fondo del documento: un **color sólido** a sangre en la página
+/// (el caso por defecto de Acrobat) o una **imagen** ajustada a la página
+/// sin deformarla, en todas las páginas o en las que se pidan.
+///
+/// Devuelve cuántas páginas lo llevan. Poner un fondo donde ya había otro
+/// **sustituye** el anterior, que es lo que hace el «Actualizar» del
+/// diálogo de Acrobat.
+#[tauri::command(async)]
+pub fn add_background(
+    work_path: String,
+    color: Option<[u8; 4]>,
+    image_png: Option<String>,
+    opacity: Option<f32>,
+    page_indices: Option<Vec<u16>>,
+) -> Result<u16, String> {
+    let imagen = match image_png.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(b64) => {
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64.split(',').next_back().unwrap_or_default())
+                .map_err(|_| "La imagen del fondo no se ha podido leer")?;
+            Some(
+                image::load_from_memory(&bytes)
+                    .map_err(|e| format!("La imagen del fondo no vale: {e}"))?,
+            )
+        }
+        None => None,
+    };
+    if color.is_none() && imagen.is_none() {
+        return Err("El fondo necesita un color o una imagen".into());
+    }
+    let opacidad = opacity.unwrap_or(1.0).clamp(0.05, 1.0);
+    // el recuento sale de dentro de la cirugía, que se ejecuta en el hilo
+    // de PDFium y no puede prestarse una variable de aquí
+    let puestas = std::sync::Arc::new(std::sync::atomic::AtomicU16::new(0));
+    let contador = puestas.clone();
+    crate::cirugia(&work_path, move |doc| {
+        let paginas: Vec<lopdf::ObjectId> = doc.get_pages().into_values().collect();
+        let total = paginas.len() as u16;
+        for i in paginas_pedidas(total, &page_indices) {
+            let page_id = paginas[i as usize];
+            let caja = crate::formularios2::caja_de_pagina(doc, page_id)?;
+            // sustituir, no apilar: dos fondos no son un fondo
+            fondo::quita_de(doc, page_id);
+            fondo::pon_en(doc, page_id, caja, color, imagen.as_ref(), opacidad)?;
+            contador.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        Ok(())
+    })?;
+    Ok(puestas.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Quita el fondo que puso Vitela, sea color o imagen, de todas las
+/// páginas. Con `dry_run` solo cuenta, para que el diálogo pueda decir qué
+/// ha encontrado antes de tocar nada.
+///
+/// **No adivina**: quita lo que lleva la marca `/Vitela /Fondo`. Un fondo
+/// que venía dentro del PDF de fuera no se toca, porque no hay forma
+/// honesta de distinguirlo del contenido del documento.
+#[tauri::command(async)]
+pub fn remove_background(work_path: String, dry_run: bool) -> Result<u16, String> {
+    if dry_run {
+        return on_pdfium_thread(move || {
+            crate::with_lopdf(&work_path, |doc| {
+                Ok(doc
+                    .get_pages()
+                    .into_values()
+                    .filter(|id| fondo::hay_en(doc, *id))
+                    .count() as u16)
+            })
+        })
+        .map_err(crate::mensaje_llano);
+    }
+    let quitados = std::sync::Arc::new(std::sync::atomic::AtomicU16::new(0));
+    let contador = quitados.clone();
+    crate::cirugia(&work_path, move |doc| {
+        let paginas: Vec<lopdf::ObjectId> = doc.get_pages().into_values().collect();
+        for page_id in paginas {
+            if fondo::quita_de(doc, page_id) {
+                contador.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        // los bytes de la imagen se van con él: dejarlos dentro sería el
+        // mismo defecto que tenía borrar un adjunto
+        doc.prune_objects();
+        Ok(())
+    })?;
+    Ok(quitados.load(std::sync::atomic::Ordering::Relaxed))
 }

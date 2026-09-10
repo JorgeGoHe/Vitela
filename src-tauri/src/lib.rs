@@ -1233,6 +1233,8 @@ pub fn run() {
             paginas2::add_header_footer,
             paginas2::add_bates,
             paginas2::remove_marginal_text,
+            paginas2::add_background,
+            paginas2::remove_background,
             documento::get_outline,
             documento::set_outline,
             documento::pdf_info,

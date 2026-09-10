@@ -1232,6 +1232,7 @@ compila los instaladores a mano o al etiquetar `v*`.
     `modo-nocturno`, `leer-en-voz-alta` (⇧⌘Y, donde lo pone Acrobat).
   - Documento: `organizar-paginas`, `recortar-pagina`, `marca-de-agua`,
     `encabezado-pie`, `quitar-marca-de-agua`, `quitar-encabezados`,
+    `quitar-fondo`,
     `anadir-campo`, `reconocer-campos`, `anadir-enlace`,
     `adjuntar-fichero`, `firmar`, `certificar`, `proteger`,
     `quitar-proteccion`, `aplanar`, `redactar`, `sanitizar`,
