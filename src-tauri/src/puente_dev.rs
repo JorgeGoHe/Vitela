@@ -471,6 +471,22 @@ mod tests {
     /// un ciclo entero. La lista tiene que quedar vacía al cerrar el ciclo.
     const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[];
 
+    /// **R45b.** Parámetros **obligatorios** en Rust que el envoltorio de
+    /// `api.ts` declara opcionales (`workPath?: string`, un tipo que admite
+    /// `null` o un `?? null` en el propio `invoke`). Es la **cuarta** forma
+    /// de que las dos mitades se desencuentren y la única que los otros tres
+    /// asertos no ven: el comando está, la clave está, el nombre casa… y lo
+    /// que llega es `null`, que `String` no sabe deserializar. El comando
+    /// devuelve error, la llamada se lo traga y la función no pasa. Cada
+    /// entrada es (comando, parámetro, motivo) y la lista cierra vacía.
+    const OPCIONALES_INDEBIDOS: &[(&str, &str, &str)] = &[(
+        "borra_sesion",
+        "work_path",
+        "pendiente_ui — R45 del ciclo 8: `borraSesion` pasa a exigir la copia \
+         de trabajo y las tres llamadas que hoy mandan `null` (descartar la \
+         sesión, cerrar el último documento y guardar) mandan la suya",
+    )];
+
     /// Llamadas cuyos argumentos no son un objeto literal y el test no
     /// puede leer (`invoke("render_page", args, opts)`, que arma el objeto
     /// según las opciones). Se enumeran para que no crezcan en silencio.
@@ -695,8 +711,9 @@ mod tests {
         declaracion(texto, nombre)
     }
 
-    /// Las claves del `type X = { … }` o `const X… = { … }` del fichero.
-    fn declaracion(texto: &str, nombre: &str) -> Option<Vec<String>> {
+    /// El cuerpo `{ … }` del `type X = { … }` o `const X… = { … }` del
+    /// fichero, tal cual, para leerle las claves o su opcionalidad.
+    fn bloque_declarado(texto: &str, nombre: &str) -> Option<String> {
         for aguja in [format!("type {nombre} ="), format!("const {nombre}")] {
             let Some(pos) = texto.find(&aguja) else { continue };
             let tras = &texto[pos..];
@@ -706,10 +723,164 @@ mod tests {
                 continue;
             }
             if let Some(bloque) = hasta_cerrar(tras, abre, '{', '}') {
-                return Some(claves_del_bloque(bloque).0);
+                return Some(bloque.to_string());
             }
         }
         None
+    }
+
+    /// Las claves del `type X = { … }` o `const X… = { … }` del fichero.
+    fn declaracion(texto: &str, nombre: &str) -> Option<Vec<String>> {
+        bloque_declarado(texto, nombre).map(|b| claves_del_bloque(&b).0)
+    }
+
+    /// ¿Este tipo o esta expresión pueden llegar **sin valor**? Vale para un
+    /// tipo (`string | null`, `X | undefined`) y para el valor que se escribe
+    /// en el propio `invoke` (`workPath ?? null`).
+    fn admite_nulo(texto: &str) -> bool {
+        let t: String = texto.chars().filter(|c| !c.is_whitespace()).collect();
+        ["|null", "null|", "|undefined", "undefined|", "??null", "??undefined"]
+            .iter()
+            .any(|a| t.contains(a))
+            || t.ends_with("=null")
+            || t.ends_with("=undefined")
+    }
+
+    /// Las parejas clave → valor de un objeto literal (`{ workPath,
+    /// pageIndex: 0, author: author ?? null }`). El valor de una clave
+    /// abreviada es la propia clave, que es lo que significa en JavaScript.
+    fn pares_del_bloque(bloque: &str) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for t in trozos(bloque, &[',', ';']) {
+            let t: String = t
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.starts_with("//") && !l.starts_with('*') && !l.starts_with("/*"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let t = t.trim();
+            if t.starts_with("...") {
+                continue;
+            }
+            let (clave, valor) = match t.split_once(':') {
+                Some((k, v)) => (k.trim(), v.trim().to_string()),
+                None => (t, t.to_string()),
+            };
+            let clave = clave.trim_end_matches('?').trim();
+            if clave.is_empty() || !clave.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                continue;
+            }
+            out.push((clave.to_string(), valor));
+        }
+        out
+    }
+
+    /// Las claves de un **tipo** de TypeScript que pueden faltar: las
+    /// marcadas con `?` y las que admiten `null` o `undefined`.
+    fn opcionales_del_bloque(bloque: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for t in trozos(bloque, &[',', ';']) {
+            let t: String = t
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.starts_with("//") && !l.starts_with('*') && !l.starts_with("/*"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let t = t.trim();
+            let Some((clave, tipo)) = t.split_once(':') else { continue };
+            let opcional = clave.trim_end().ends_with('?') || admite_nulo(tipo);
+            let clave = clave.trim().trim_end_matches('?').trim();
+            if !opcional
+                || clave.is_empty()
+                || !clave.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                continue;
+            }
+            out.push(clave.to_string());
+        }
+        out
+    }
+
+    /// Como [`resuelve_spread`], pero devolviendo las claves que **pueden
+    /// faltar** en vez de todas.
+    fn opcionales_del_spread(texto: &str, antes_de: usize, nombre: &str) -> Vec<String> {
+        let aguja = format!("{nombre}: {{");
+        if let Some(pos) = texto[..antes_de].rfind(&aguja) {
+            let abre = pos + aguja.len() - 1;
+            if let Some(bloque) = hasta_cerrar(texto, abre, '{', '}') {
+                let mut out = opcionales_del_bloque(bloque);
+                let tras = &texto[abre + bloque.len() + 2..];
+                let mut resto = tras.trim_start();
+                while let Some(r) = resto.strip_prefix('&') {
+                    let r = r.trim_start();
+                    let fin = r
+                        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                        .unwrap_or(r.len());
+                    if let Some(mas) = bloque_declarado(texto, &r[..fin]) {
+                        out.extend(opcionales_del_bloque(&mas));
+                    }
+                    resto = r[fin..].trim_start();
+                }
+                return out;
+            }
+        }
+        bloque_declarado(texto, nombre)
+            .map(|b| opcionales_del_bloque(&b))
+            .unwrap_or_default()
+    }
+
+    /// Los parámetros de la función que envuelve al `invoke`, con si pueden
+    /// llegar sin valor. Se busca hacia atrás el paréntesis más cercano que
+    /// **abarca** la llamada y que sea una lista de parámetros —detrás de su
+    /// cierre va el cuerpo (`{`) o la flecha (`=>`), con el tipo de retorno
+    /// por medio si lo hay—: eso vale igual para `export function
+    /// borraSesion(workPath?: string)` y para `useCallback((x?: T) => …)`.
+    fn params_del_envoltorio(texto: &str, antes_de: usize) -> Vec<(String, bool)> {
+        let bytes = texto.as_bytes();
+        let tope = antes_de.saturating_sub(3000);
+        let mut i = antes_de;
+        while i > tope {
+            i -= 1;
+            if bytes[i] != b'(' || !texto.is_char_boundary(i) {
+                continue;
+            }
+            let Some(dentro) = hasta_cerrar(texto, i, '(', ')') else { continue };
+            let cierra = i + 1 + dentro.len();
+            if cierra < antes_de {
+                continue; // ese paréntesis se cierra antes de la llamada
+            }
+            let tras = texto[cierra + 1..].trim_start();
+            let cuerpo = match tras.strip_prefix(':') {
+                // el tipo de retorno de TypeScript va entre el cierre y el cuerpo
+                Some(t) => {
+                    let hasta = t.len().min(120);
+                    let corte = t[..hasta].find(['{', '=']);
+                    match corte {
+                        Some(c) if !t[..c].contains(['(', ')', ';']) => &t[c..],
+                        _ => continue,
+                    }
+                }
+                None => tras,
+            };
+            if !cuerpo.starts_with('{') && !cuerpo.starts_with("=>") {
+                continue;
+            }
+            return trozos(dentro, &[','])
+                .into_iter()
+                .filter_map(|p| {
+                    let (nombre, tipo) = match p.split_once(':') {
+                        Some((n, t)) => (n.trim().to_string(), t.to_string()),
+                        None => (p.trim().to_string(), String::new()),
+                    };
+                    let opcional = nombre.ends_with('?') || admite_nulo(&tipo);
+                    let nombre = nombre.trim_end_matches('?').trim().to_string();
+                    (!nombre.is_empty()
+                        && nombre.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+                    .then_some((nombre, opcional))
+                })
+                .collect();
+        }
+        Vec::new()
     }
 
     /// De `pageIndex` a `page_index`: es lo que hace Tauri con los
@@ -727,6 +898,29 @@ mod tests {
         out
     }
 
+    /// Las claves de un `invoke` que pueden llegar sin valor: las que se
+    /// escriben con un `?? null` y las que copian un parámetro que la
+    /// función de alrededor declara opcional (`{ workPath }` dentro de
+    /// `function borraSesion(workPath?: string)`).
+    fn opcionales_del_invoke(texto: &str, abre: usize, bloque: &str) -> Vec<String> {
+        let params = params_del_envoltorio(texto, abre);
+        let mut out = Vec::new();
+        for (clave, valor) in pares_del_bloque(bloque) {
+            let v = valor.trim();
+            if admite_nulo(v) {
+                out.push(clave);
+                continue;
+            }
+            let identificador = !v.is_empty()
+                && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && !v.chars().next().is_some_and(|c| c.is_ascii_digit());
+            if identificador && params.iter().any(|(n, o)| *o && n == v) {
+                out.push(clave);
+            }
+        }
+        out
+    }
+
     /// Una llamada `invoke("cmd", { … })` de la UI, con las claves que
     /// manda. `completa` es falso cuando hay un `...spread` que el test no
     /// ha sabido resolver: entonces se comprueba lo que se ve, pero no se
@@ -736,6 +930,9 @@ mod tests {
         fichero: String,
         claves: Vec<String>,
         completa: bool,
+        /// Las claves que pueden llegar `null` o `undefined`: el envoltorio
+        /// las declara opcionales o el valor sale de un `?? null` (R45b).
+        opcionales: Vec<String>,
     }
 
     /// Los `invoke("…", { … })` de la UI con sus argumentos.
@@ -769,28 +966,30 @@ mod tests {
                 let pos_nombre = texto.len() - tras.len();
                 let tras_nombre = &texto[pos_nombre + comando.len() + 1..];
                 let despues = tras_nombre.trim_start();
-                let (claves, completa) = match despues.strip_prefix(',') {
-                    None => (Vec::new(), true),
+                let (claves, completa, opcionales) = match despues.strip_prefix(',') {
+                    None => (Vec::new(), true, Vec::new()),
                     Some(d) => {
                         let d = d.trim_start();
                         if !d.starts_with('{') {
                             // argumentos que no son un objeto literal: no se
                             // pueden leer, pero tampoco los hay en la UI
-                            (Vec::new(), false)
+                            (Vec::new(), false, Vec::new())
                         } else {
                             let abre = texto.len() - d.len();
                             match hasta_cerrar(texto, abre, '{', '}') {
-                                None => (Vec::new(), false),
+                                None => (Vec::new(), false, Vec::new()),
                                 Some(bloque) => {
                                     let (mut claves, spreads) = claves_del_bloque(bloque);
                                     let mut completa = true;
+                                    let mut opcionales = opcionales_del_invoke(texto, abre, bloque);
                                     for s in spreads {
+                                        opcionales.extend(opcionales_del_spread(texto, abre, &s));
                                         match resuelve_spread(texto, abre, &s) {
                                             Some(mas) => claves.extend(mas),
                                             None => completa = false,
                                         }
                                     }
-                                    (claves, completa)
+                                    (claves, completa, opcionales)
                                 }
                             }
                         }
@@ -801,6 +1000,7 @@ mod tests {
                     fichero: fichero.clone(),
                     claves,
                     completa,
+                    opcionales,
                 });
             }
         }
@@ -1000,6 +1200,66 @@ mod tests {
         assert!(
             sobra.is_empty(),
             "la UI ya manda estos parámetros: fuera de PARAMETROS_PENDIENTES {sobra:?}"
+        );
+
+        // **R45b.** La cuarta forma de desencontrarse, y la única que los
+        // tres asertos de arriba no ven: el comando existe, la UI lo llama,
+        // la clave se llama igual… y llega `null`, porque el envoltorio de
+        // `api.ts` declara opcional un parámetro que en Rust no lo es. Tauri
+        // no sabe deserializar `String` desde `null`, el comando devuelve
+        // error y la llamada se lo traga: la función no pasa y nadie se
+        // entera. Fue el estado de `borra_sesion` durante el ciclo 7, con el
+        // apunte de recuperación quedándose puesto después de guardar.
+        let mut indebidos: Vec<String> = Vec::new();
+        for l in &llamadas {
+            let Some(params) = comandos.get(&l.comando) else { continue };
+            for clave in &l.opcionales {
+                let snake = a_snake(clave);
+                if !params.iter().any(|p| p.nombre == snake && p.obligatorio) {
+                    continue;
+                }
+                if OPCIONALES_INDEBIDOS
+                    .iter()
+                    .any(|(c, n, _)| *c == l.comando && *n == snake)
+                {
+                    continue;
+                }
+                indebidos.push(format!("{}.{snake} — {}", l.comando, l.fichero));
+            }
+        }
+        indebidos.sort();
+        indebidos.dedup();
+        assert!(
+            indebidos.is_empty(),
+            "estos parámetros son obligatorios en el comando y la UI los \
+             declara opcionales o los manda con `?? null`, así que el \
+             comando devuelve error y la llamada se lo traga: {indebidos:?}. \
+             Si el arreglo vive en la otra mitad, van en \
+             OPCIONALES_INDEBIDOS con su motivo"
+        );
+        let curados: Vec<&str> = OPCIONALES_INDEBIDOS
+            .iter()
+            .filter(|(c, n, _)| {
+                !llamadas
+                    .iter()
+                    .filter(|l| &l.comando == c)
+                    .any(|l| l.opcionales.iter().any(|k| a_snake(k) == *n))
+            })
+            .map(|(_, n, _)| *n)
+            .collect();
+        assert!(
+            curados.is_empty(),
+            "la UI ya manda estos parámetros con valor: fuera de \
+             OPCIONALES_INDEBIDOS {curados:?}"
+        );
+        let inventados: Vec<&str> = OPCIONALES_INDEBIDOS
+            .iter()
+            .filter(|(c, n, _)| !comandos.get(*c).is_some_and(|p| p.iter().any(|x| x.nombre == *n)))
+            .map(|(_, n, _)| *n)
+            .collect();
+        assert!(
+            inventados.is_empty(),
+            "OPCIONALES_INDEBIDOS nombra parámetros que no existen: {inventados:?}"
         );
     }
 }

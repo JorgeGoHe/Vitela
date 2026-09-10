@@ -117,6 +117,14 @@ pub fn autosave_state(
 /// puede llevarse el trabajo sin guardar de otro, y «bórrame el apunte que
 /// haya» deja de ser una orden que alguien pueda querer dar.
 ///
+/// Obligatorio quiere decir **que no admite `null`**: Tauri no sabe
+/// deserializar un `String` desde `null`, así que una llamada sin la copia
+/// de trabajo no borra nada y devuelve error. Eso lo vigila desde el ciclo 8
+/// el cuarto aserto del test cruzado (`OPCIONALES_INDEBIDOS`, en
+/// `puente_dev`), porque un envoltorio que declare este parámetro opcional
+/// deja el apunte puesto después de guardar y la app ofrece recuperar un
+/// documento que ya estaba a salvo.
+///
 /// Nunca falla: si no hay apunte, no hay nada que hacer.
 #[tauri::command(async)]
 pub fn borra_sesion(work_path: String) -> Result<(), String> {
