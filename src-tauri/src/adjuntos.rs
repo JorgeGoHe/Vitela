@@ -944,21 +944,20 @@ fn apariencia_chincheta(doc: &mut LoDoc, color: [f32; 3]) -> ObjectId {
 /// y se abre desde el panel de adjuntos. Este está *en* la página, donde
 /// alguien lo puso, y es parte de la revisión.
 ///
-/// `x` e `y` van en el espacio propio de la página, como el resto de
-/// comandos que escriben. El icono no se redimensiona: `transform_annotation`
-/// lo mueve, como al post-it.
+/// `punto` es la esquina de la chincheta en el espacio propio de la página,
+/// como el resto de comandos que escriben. El icono no se redimensiona:
+/// `transform_annotation` lo mueve, como al post-it.
 #[tauri::command(async)]
 pub fn add_file_attachment_annotation(
     work_path: String,
     page_index: u16,
-    x: f32,
-    y: f32,
-    file_path: String,
+    punto: [f32; 2],
+    src_path: String,
     author: Option<String>,
 ) -> Result<(), String> {
-    let bytes = std::fs::read(&file_path)
-        .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer {file_path}: {e}")))?;
-    let nombre = std::path::Path::new(&file_path)
+    let bytes = std::fs::read(&src_path)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer {src_path}: {e}")))?;
+    let nombre = std::path::Path::new(&src_path)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .ok_or("Ese fichero no tiene nombre")?;
@@ -971,8 +970,8 @@ pub fn add_file_attachment_annotation(
             .ok_or("Página fuera de rango")?;
         let geo = crate::formularios2::geo_pagina(doc, page_id)?;
         let caja = geo.ui_rect_a_pdf(&crate::Rect {
-            x,
-            y,
+            x: punto[0],
+            y: punto[1],
             w: LADO_CHINCHETA,
             h: LADO_CHINCHETA,
         });
@@ -1066,8 +1065,7 @@ mod tests_chincheta {
         add_file_attachment_annotation(
             work.clone(),
             0,
-            120.0,
-            200.0,
+            [120.0, 200.0],
             factura.to_string_lossy().into_owned(),
             Some("Jorge".into()),
         )
@@ -1106,8 +1104,7 @@ mod tests_chincheta {
         assert!(add_file_attachment_annotation(
             work.clone(),
             0,
-            120.0,
-            200.0,
+            [120.0, 200.0],
             "/no/existe/factura.xml".into(),
             None,
         )

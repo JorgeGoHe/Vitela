@@ -110,7 +110,12 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 sep(),
                 e("guardar", "Guardar", Some("CmdOrCtrl+S"), true),
                 e("guardar-como", "Guardar como…", Some("Shift+CmdOrCtrl+S"), true),
-                e("cerrar-documento", "Cerrar documento", None, true),
+                // ⌘W cierra la **pestaña**, como en Acrobat; con la última,
+                // el documento. La ventana solo se cierra con el botón rojo
+                // o ⌘Q: `cerrar-solicitado` no dice quién lo disparó, así
+                // que ⌘W se resuelve del lado de la interfaz, que sí sabe
+                // cuántas pestañas hay abiertas.
+                e("cerrar-documento", "Cerrar documento", Some("CmdOrCtrl+W"), true),
                 sep(),
                 e("anadir-pdf", "Añadir PDF…", None, true),
                 e("insertar-pdf", "Insertar PDF aquí…", None, true),

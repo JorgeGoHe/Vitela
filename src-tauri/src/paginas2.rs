@@ -548,166 +548,6 @@ fn manda_al_fondo(page: &mut PdfPage, habia: usize) -> Result<(), String> {
     Ok(())
 }
 
-/// **El fondo del documento** (Acrobat: «Editar PDF ▸ Fondo»): un color o
-/// una imagen **debajo** del contenido, no encima. Es lo que distingue un
-/// fondo de una marca de agua, y es la razón de que hasta ahora no se
-/// pudiera hacer con `add_watermark`: todo objeto añadido a una página va
-/// al final de su lista, que es lo que se pinta último y, por tanto,
-/// encima.
-///
-/// El color se pinta como un rectángulo del tamaño de la caja de la
-/// página; la imagen se ajusta sin deformarla y se centra, como hace
-/// Acrobat con «Ajustar a la página». `opacity` va de 0,05 a 1 (por
-/// defecto, opaco: un fondo translúcido sobre papel blanco no se ve).
-///
-/// Una sola mutación para el rango entero, así que un ⌘Z quita el fondo de
-/// todas las páginas.
-#[tauri::command(async)]
-pub fn add_background(
-    work_path: String,
-    color: Option<[u8; 4]>,
-    image_png: Option<String>,
-    opacity: Option<f32>,
-    page_indices: Option<Vec<u16>>,
-) -> Result<(), String> {
-    let imagen = match image_png {
-        Some(b64) => {
-            use base64::Engine;
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(b64.split(',').next_back().unwrap_or_default())
-                .map_err(|_| "La imagen del fondo no se ha podido leer")?;
-            Some(
-                image::load_from_memory(&bytes)
-                    .map_err(|e| format!("La imagen del fondo no vale: {e}"))?,
-            )
-        }
-        None => None,
-    };
-    if color.is_none() && imagen.is_none() {
-        return Err("Elige un color o una imagen para el fondo".into());
-    }
-    let opacidad = opacity.unwrap_or(1.0).clamp(0.05, 1.0);
-    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(crate::mensaje_llano)?;
-        // la imagen lleva la opacidad en su propio alfa, que es lo que deja
-        // el /SMask escrito y se ve igual en cualquier visor
-        let imagen = imagen.as_ref().map(|img| {
-            let mut rgba = img.to_rgba8();
-            for p in rgba.pixels_mut() {
-                p.0[3] = (p.0[3] as f32 * opacidad).round() as u8;
-            }
-            image::DynamicImage::ImageRgba8(rgba)
-        });
-        let alpha = (opacidad * 255.0).round().clamp(1.0, 255.0) as u8;
-        for i in paginas_pedidas(doc.pages().len(), &page_indices) {
-            let mut page = doc.pages().get(i).map_err(crate::mensaje_llano)?;
-            let (page_w, page_h) = (page.width().value, page.height().value);
-            let habia = page.objects().len();
-            match (&imagen, color) {
-                (Some(img), _) => {
-                    let (iw, ih) = (img.width() as f32, img.height() as f32);
-                    let escala = (page_w / iw).min(page_h / ih);
-                    let (w, h) = (iw * escala, ih * escala);
-                    let mut obj = PdfPageImageObject::new_with_size(
-                        &doc,
-                        img,
-                        PdfPoints::new(w),
-                        PdfPoints::new(h),
-                    )
-                    .map_err(crate::mensaje_llano)?;
-                    obj.translate(
-                        PdfPoints::new((page_w - w) / 2.0),
-                        PdfPoints::new((page_h - h) / 2.0),
-                    )
-                    .map_err(crate::mensaje_llano)?;
-                    page.objects_mut()
-                        .add_image_object(obj)
-                        .map_err(crate::mensaje_llano)?;
-                }
-                (None, Some(c)) => {
-                    let obj = PdfPagePathObject::new_rect(
-                        &doc,
-                        PdfRect::new_from_values(0.0, 0.0, page_h, page_w),
-                        None,
-                        None,
-                        Some(PdfColor::new(c[0], c[1], c[2], alpha)),
-                    )
-                    .map_err(crate::mensaje_llano)?;
-                    page.objects_mut()
-                        .add_path_object(obj)
-                        .map_err(crate::mensaje_llano)?;
-                }
-                (None, None) => unreachable!("se comprueba arriba"),
-            }
-            manda_al_fondo(&mut page, habia)?;
-            page.regenerate_content().map_err(crate::mensaje_llano)?;
-        }
-        save_and_close(doc, &work_path)?;
-        Ok(())
-    }))
-}
-
-/// Quita el fondo: el **primer** objeto de cada página cuando ocupa la
-/// página entera —un rectángulo relleno o una imagen—, que es exactamente
-/// lo que deja [`add_background`]. Devuelve de cuántas páginas lo ha
-/// quitado.
-///
-/// Es la misma clase de criba que `remove_marginal_text`: un PDF no marca
-/// sus objetos como «fondo», así que se reconoce por dónde está (el
-/// primero, debajo de todo) y por lo que ocupa (la página entera). Un
-/// documento escaneado —una sola imagen a página completa— es justo el caso
-/// límite, y por eso la interfaz tiene que preguntar antes.
-#[tauri::command(async)]
-pub fn remove_background(work_path: String) -> Result<u16, String> {
-    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(crate::mensaje_llano)?;
-        let mut quitados = 0u16;
-        for i in 0..doc.pages().len() {
-            let mut page = doc.pages().get(i).map_err(crate::mensaje_llano)?;
-            let (page_w, page_h) = (page.width().value, page.height().value);
-            let es_fondo = {
-                let objects = page.objects();
-                match objects.get(0) {
-                    Err(_) => false,
-                    Ok(obj) => {
-                        let cabe = obj.as_path_object().is_some() || obj.as_image_object().is_some();
-                        let toda = obj
-                            .bounds()
-                            .map(|b| {
-                                b.width().value >= page_w - 1.0 && b.height().value >= page_h - 1.0
-                            })
-                            .unwrap_or(false);
-                        cabe && toda
-                    }
-                }
-            };
-            if !es_fondo {
-                continue;
-            }
-            // el objeto sacado NO se suelta: su Drop lo destruiría en PDFium
-            let fuera = page
-                .objects_mut()
-                .remove_object_at_index(0)
-                .map_err(crate::mensaje_llano)?;
-            std::mem::forget(fuera);
-            page.regenerate_content().map_err(crate::mensaje_llano)?;
-            quitados += 1;
-        }
-        if quitados == 0 {
-            crate::historial::retira_paso(&work_path);
-            return Ok(0);
-        }
-        save_and_close(doc, &work_path)?;
-        Ok(quitados)
-    }))
-}
-
 /// Encabezado y pie en todas las páginas, con tres huecos por zona
 /// (izquierda/centro/derecha). Plantillas: `{n}` número de página, `{total}`
 /// total, `{fecha}` fecha de hoy. Numerar páginas = pie centro con `{n}`.
@@ -802,64 +642,93 @@ pub fn add_header_footer(
 /// poder citar «la 000123» y que todo el mundo mire lo mismo.
 ///
 /// Los defectos son los de Acrobat: **seis dígitos** (`digitos` se acota
-/// entre 1 y 15, que es el tope del diálogo) y empezar en 1. La cifra va
-/// **abajo a la derecha**, que es también donde la pone Acrobat; para otras
-/// posiciones está `add_header_footer`, que es el diálogo de al lado.
+/// entre 1 y 15, que es el tope del diálogo), empezar en 1 y abajo a la
+/// derecha. `position` usa los mismos códigos que la marca de agua
+/// (`"nw"`, `"n"`, `"ne"`, `"w"`, `"c"`, `"e"`, `"sw"`, `"s"`, `"se"`).
 ///
 /// Con `page_indices`, solo esas páginas —pero **el correlativo sigue
 /// contando por el orden en que se numeran**, no por el número de página:
 /// numerar las páginas 3, 7 y 8 escribe 000001, 000002 y 000003. Un número
 /// Bates es un contador de folios, no la página en la que cae.
 ///
-/// Una sola mutación para el documento entero.
+/// Devuelve cuántas páginas ha numerado, y es una sola mutación.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 pub fn add_bates(
     work_path: String,
     prefijo: String,
     sufijo: String,
-    inicio: u32,
     digitos: u8,
+    empieza_en: u32,
+    position: Option<String>,
+    font_size: Option<f32>,
     page_indices: Option<Vec<u16>>,
-) -> Result<(), String> {
+) -> Result<u16, String> {
     let digitos = digitos.clamp(1, 15) as usize;
-    let inicio = inicio.max(1);
+    let empieza_en = empieza_en.max(1);
+    let pos = position.unwrap_or_else(|| "se".into());
+    let size = font_size.unwrap_or(9.0).clamp(6.0, 24.0);
     mutacion(work_path, move |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
             .map_err(crate::mensaje_llano)?;
         let font = doc.fonts_mut().helvetica();
-        const TAMANO: f32 = 9.0;
         const MARGEN_X: f32 = 36.0;
         const MARGEN_Y: f32 = 20.0;
         let total = doc.pages().len();
-        for (n, i) in paginas_pedidas(total, &page_indices).into_iter().enumerate() {
-            let numero = inicio as u64 + n as u64;
+        let paginas = paginas_pedidas(total, &page_indices);
+        if paginas.is_empty() {
+            crate::historial::retira_paso(&work_path);
+            return Ok(0);
+        }
+        let cuantas = paginas.len() as u16;
+        for (n, i) in paginas.into_iter().enumerate() {
+            let numero = empieza_en as u64 + n as u64;
             let texto = format!("{prefijo}{numero:0>ancho$}{sufijo}", ancho = digitos);
             let mut page = doc.pages().get(i).map_err(crate::mensaje_llano)?;
-            let page_w = page.width().value;
-            let mut obj = PdfPageTextObject::new(&doc, &texto, font, PdfPoints::new(TAMANO))
+            let (page_w, page_h) = (page.width().value, page.height().value);
+            let ancho = ancho_estimado(&texto, size);
+            // el sello se coloca por su esquina, con el margen de Acrobat;
+            // `centro_en_celda` da el centro de la celda que toque
+            let (cx, cy) = centro_en_celda(&pos, page_w, page_h, ancho / 2.0, size / 2.0);
+            let x = cx - ancho / 2.0;
+            let x = x.clamp(MARGEN_X, (page_w - MARGEN_X - ancho).max(MARGEN_X));
+            let y = (cy - size / 2.0).clamp(MARGEN_Y, (page_h - MARGEN_Y - size).max(MARGEN_Y));
+            let mut obj = PdfPageTextObject::new(&doc, &texto, font, PdfPoints::new(size))
                 .map_err(crate::mensaje_llano)?;
             obj.set_fill_color(PdfColor::new(60, 60, 60, 255))
                 .map_err(crate::mensaje_llano)?;
-            let ancho = ancho_estimado(&texto, TAMANO);
-            obj.translate(
-                PdfPoints::new(page_w - MARGEN_X - ancho),
-                PdfPoints::new(MARGEN_Y),
-            )
-            .map_err(crate::mensaje_llano)?;
+            obj.translate(PdfPoints::new(x), PdfPoints::new(y))
+                .map_err(crate::mensaje_llano)?;
             page.objects_mut()
                 .add_text_object(obj)
                 .map_err(crate::mensaje_llano)?;
             page.regenerate_content().map_err(crate::mensaje_llano)?;
         }
         save_and_close(doc, &work_path)?;
-        Ok(())
+        Ok(cuantas)
     }))
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::tests::crea_pdf;
+
+    fn textos(path: &str) -> Vec<String> {
+        on_pdfium_thread({
+            let path = path.to_string();
+            move || {
+                let pdfium = pdfium().expect("pdfium");
+                let doc = pdfium.load_pdf_from_file(&path, None).expect("abrir");
+                doc.pages()
+                    .iter()
+                    .map(|p| p.text().map(|t| t.all()).unwrap_or_default())
+                    .collect()
+            }
+        })
+    }
 
     /// **Numeración Bates.** Un juzgado cita «la 000123» y todo el mundo
     /// tiene que mirar el mismo folio: por eso el número lleva dígitos
@@ -873,7 +742,12 @@ mod tests {
         let work = pdf.to_string_lossy().to_string();
         let antes = pasos(&work);
 
-        add_bates(work.clone(), "ABC-".into(), "-2026".into(), 1, 6, None).expect("numerar");
+        assert_eq!(
+            add_bates(work.clone(), "ABC-".into(), "-2026".into(), 6, 1, None, None, None)
+                .expect("numerar"),
+            4,
+            "dice cuántas páginas ha numerado"
+        );
         assert_eq!(pasos(&work), antes + 1, "el documento entero es UN paso");
         let t = textos(&work);
         assert!(t[0].contains("ABC-000001-2026"), "{:?}", t[0]);
@@ -882,8 +756,20 @@ mod tests {
         assert!(!textos(&work)[0].contains("ABC-"), "un ⌘Z lo quita entero");
 
         // un rango: el correlativo cuenta los folios que se numeran
-        add_bates(work.clone(), String::new(), String::new(), 100, 4, Some(vec![1, 3]))
-            .expect("numerar dos");
+        assert_eq!(
+            add_bates(
+                work.clone(),
+                String::new(),
+                String::new(),
+                4,
+                100,
+                None,
+                None,
+                Some(vec![1, 3])
+            )
+            .expect("numerar dos"),
+            2
+        );
         let t = textos(&work);
         assert!(!t[0].contains("0100"), "la primera no se numera: {:?}", t[0]);
         assert!(t[1].contains("0100"), "{:?}", t[1]);
@@ -891,24 +777,43 @@ mod tests {
 
         // los dígitos no recortan un número que no cabe: perder una cifra
         // sería citar mal el folio
-        add_bates(work.clone(), String::new(), String::new(), 12345, 2, Some(vec![0]))
-            .expect("numerar corto");
+        add_bates(
+            work.clone(),
+            String::new(),
+            String::new(),
+            2,
+            12345,
+            None,
+            None,
+            Some(vec![0]),
+        )
+        .expect("numerar corto");
         assert!(textos(&work)[0].contains("12345"));
+
+        // y arriba a la izquierda, que es la otra esquina del diálogo
+        add_bates(
+            work.clone(),
+            "N.º ".into(),
+            String::new(),
+            3,
+            1,
+            Some("nw".into()),
+            Some(12.0),
+            Some(vec![2]),
+        )
+        .expect("numerar arriba");
+        assert!(textos(&work)[2].contains("N.º 001"));
         std::fs::remove_file(&pdf).ok();
     }
 
-    /// **Fondo.** Acrobat separa el fondo de la marca de agua por dónde se
-    /// pinta: el fondo **debajo** del contenido y la marca encima. En un PDF
-    /// eso es el orden de los objetos de la página, y todo lo que se añade
-    /// va al final —o sea, encima—, que es por lo que esto no se podía
-    /// hacer con `add_watermark`.
-    ///
-    /// Se comprueba en el render, que es lo único que no miente: con el
-    /// fondo puesto, el texto de la página **se sigue leyendo** (queda
-    /// tinta oscura encima del color), y el objeto que se ha añadido es el
-    /// primero de la página.
+    /// **El fondo del documento**, que en Acrobat es «Editar PDF ▸ Fondo»
+    /// y aquí es la marca de agua **debajo** del contenido. La diferencia
+    /// con la marca de agua de siempre es solo dónde se pinta, y en un PDF
+    /// eso es el orden de los objetos de la página: todo lo que se añade va
+    /// al final de la lista —o sea, encima—, que es por lo que hasta ahora
+    /// no se podía hacer.
     #[test]
-    fn el_fondo_va_debajo_del_texto_y_la_marca_de_agua_puede_ir_debajo_tambien() {
+    fn la_marca_de_agua_puede_ir_debajo_del_contenido() {
         let pdf = std::env::temp_dir().join("paginas2-fondo.pdf");
         crea_pdf(&["Contenido uno", "Contenido dos"], &pdf);
         let work = pdf.to_string_lossy().to_string();
@@ -929,34 +834,6 @@ mod tests {
         };
         let antes = objetos(0).len();
 
-        add_background(work.clone(), Some([250, 240, 180, 255]), None, None, None)
-            .expect("fondo de color");
-        let ahora = objetos(0);
-        assert_eq!(ahora.len(), antes + 1, "un objeto más: {ahora:?}");
-        assert_eq!(ahora[0], "Path", "y va el primero, debajo de todo: {ahora:?}");
-
-        // el color se ve y el texto se sigue leyendo encima
-        let png = crate::render_page_png(work.clone(), 0, 300, true).expect("render");
-        let img = image::load_from_memory(&png).expect("PNG").to_rgba8();
-        assert!(
-            img.pixels().any(|x| x.0[0] > 230 && x.0[1] > 220 && x.0[2] < 220),
-            "el color del fondo tiene que verse"
-        );
-        assert!(
-            img.pixels().any(|x| x.0[0] < 100 && x.0[1] < 100),
-            "y el texto tiene que seguir encima"
-        );
-        assert!(textos(&work)[0].contains("Contenido uno"));
-
-        // quitarlo lo quita de las dos páginas, y quitarlo dos veces no es
-        // un error ni gasta un paso de deshacer
-        assert_eq!(remove_background(work.clone()).expect("quitar"), 2);
-        assert_eq!(objetos(0).len(), antes);
-        let pasos_antes = pasos(&work);
-        assert_eq!(remove_background(work.clone()).expect("quitar de nuevo"), 0);
-        assert_eq!(pasos(&work), pasos_antes, "sin fondo que quitar, sin paso");
-
-        // y la marca de agua «detrás del contenido» hace lo mismo con su texto
         add_watermark(
             work.clone(),
             "BORRADOR".into(),
@@ -972,204 +849,33 @@ mod tests {
         )
         .expect("marca detrás");
         let ahora = objetos(0);
-        assert_eq!(ahora[0], "Text", "la marca de agua detrás va la primera: {ahora:?}");
+        assert_eq!(ahora.len(), antes + 1, "un objeto más: {ahora:?}");
+        assert_eq!(ahora[0], "Text", "y va el primero, debajo de todo: {ahora:?}");
+        // el texto del documento se sigue leyendo, que es lo que distingue
+        // un fondo de una marca encima
+        assert!(textos(&work)[0].contains("Contenido uno"));
         assert!(textos(&work)[0].contains("BORRADOR"));
-        std::fs::remove_file(&pdf).ok();
-    }
+        crate::render_page_png(work.clone(), 0, 200, true).expect("render con el fondo");
 
-    /// **G6.** Un PDF desde unas fotos: una página por imagen, ajustada sin
-    /// deformarla y centrada, con el margen de media pulgada de Acrobat.
-    #[test]
-    fn un_pdf_desde_tres_imagenes_sale_con_tres_paginas_con_tinta() {
-        let dir = std::env::temp_dir();
-        let dest = dir.join("pdf-desde-imagenes.pdf");
-        let mut rutas = Vec::new();
-        for (n, color) in [[220u8, 40, 40], [40, 200, 40], [40, 40, 220]].iter().enumerate() {
-            let ruta = dir.join(format!("pdf-desde-imagenes-{n}.png"));
-            image::RgbaImage::from_pixel(120, 60, image::Rgba([color[0], color[1], color[2], 255]))
-                .save(&ruta)
-                .expect("crear png");
-            rutas.push(ruta.to_string_lossy().into_owned());
-        }
-
-        let hecho = pdf_from_images(rutas.clone(), dest.to_string_lossy().into_owned(), "a4".into())
-            .expect("crear el PDF");
-        assert_eq!(hecho.paginas, 3, "una página por imagen");
-        assert!(hecho.saltadas.is_empty(), "no se ha quedado ninguna fuera");
-        let d = dest.to_string_lossy().into_owned();
-        let sizes = crate::get_page_sizes(d.clone()).expect("tamaños");
-        assert_eq!(sizes.len(), 3);
-        assert!((sizes[0].width - 595.0).abs() < 2.0, "A4: {}", sizes[0].width);
-        for p in 0..3u16 {
-            let png = crate::render_page_png(d.clone(), p, 300, true).expect("render");
-            let img = image::load_from_memory(&png).expect("PNG").to_rgba8();
-            assert!(
-                img.pixels().any(|x| x.0[0] < 200 || x.0[1] < 200 || x.0[2] < 200),
-                "la página {p} tiene que llevar su foto"
-            );
-        }
-        // la imagen no se deforma: 120x60 sigue siendo el doble de ancha
-        let imagenes = crate::imagenes::get_images(d.clone(), 0).expect("imágenes");
-        assert_eq!(imagenes.len(), 1);
-        assert!(
-            (imagenes[0].w / imagenes[0].h - 2.0).abs() < 0.05,
-            "proporción {:.2}",
-            imagenes[0].w / imagenes[0].h
-        );
-
-        // con «imagen», la página mide lo que la foto
-        let dest2 = dir.join("pdf-desde-imagenes-natural.pdf");
-        let d2 = dest2.to_string_lossy().into_owned();
-        pdf_from_images(rutas.clone(), d2.clone(), "imagen".into()).expect("tamaño imagen");
-        let sizes = crate::get_page_sizes(d2.clone()).expect("tamaños");
-        assert!(
-            (sizes[0].width - 120.0).abs() < 1.0 && (sizes[0].height - 60.0).abs() < 1.0,
-            "la página mide {:.1}x{:.1}",
-            sizes[0].width,
-            sizes[0].height
-        );
-        std::fs::remove_file(&dest2).ok();
-
-        // sin imágenes no hay PDF, y se dice
-        assert!(pdf_from_images(vec![], d.clone(), "a4".into()).is_err());
-
-        // **R26 y R35b.** Una imagen que no se deja leer se salta y el lote
-        // sigue; y el informe dice **cuál** se ha quedado fuera y por qué,
-        // que es lo que la UI necesita para decir «2 de 3 · *X* no se ha
-        // podido leer» en vez de callarse la que falta.
-        let rota = std::env::temp_dir().join("pdf-imagenes-rota.png");
-        std::fs::write(&rota, b"esto no es un png").expect("escribir la rota");
-        let que_no_esta = std::env::temp_dir().join("pdf-imagenes-fantasma.png");
-        std::fs::remove_file(&que_no_esta).ok();
-        let dest3 = std::env::temp_dir().join("pdf-imagenes-con-rota.pdf");
-        let mezcla = vec![
-            rutas[0].clone(),
-            rota.to_string_lossy().into_owned(),
-            rutas[1].clone(),
-            que_no_esta.to_string_lossy().into_owned(),
-        ];
-        let hecho = pdf_from_images(
-            mezcla,
-            dest3.to_string_lossy().into_owned(),
-            "a4".into(),
-        )
-        .expect("el lote sigue con las que sí se leen");
-        assert_eq!(hecho.paginas, 2, "dos páginas de cuatro imágenes");
-        assert_eq!(hecho.saltadas.len(), 2, "y dos que se han quedado fuera");
-        assert_eq!(hecho.motivos.len(), 2, "un motivo por saltada, en su orden");
-        // las rutas vuelven **tal como llegaron**: es lo que la UI compara
-        // con su lista para marcar esas filas del diálogo
-        assert_eq!(hecho.saltadas[0], rota.to_string_lossy());
-        assert!(
-            hecho.motivos[0].contains("dañado") || hecho.motivos[0].contains("formato"),
-            "el motivo: {}",
-            hecho.motivos[0]
-        );
-        assert_eq!(hecho.saltadas[1], que_no_esta.to_string_lossy());
-        assert!(
-            hecho.motivos[1].contains("ya no está"),
-            "el motivo: {}",
-            hecho.motivos[1]
-        );
-        // y ningún motivo habla en inglés ni en la jerga del crate `image`
-        for m in &hecho.motivos {
-            assert!(
-                !m.contains("format") && !m.contains("Error") && !m.contains("os error"),
-                "el motivo tiene que estar en llano: {m}"
-            );
-        }
-        // y si no se lee ninguna, sigue siendo un error y se dice cuál
-        let err = pdf_from_images(
-            vec![rota.to_string_lossy().into_owned()],
-            dest3.to_string_lossy().into_owned(),
-            "a4".into(),
-        )
-        .unwrap_err();
-        assert!(err.contains("pdf-imagenes-rota.png"), "el aviso: {err}");
-        std::fs::remove_file(&rota).ok();
-        std::fs::remove_file(&dest3).ok();
-
-        std::fs::remove_file(&dest).ok();
-        for r in rutas {
-            std::fs::remove_file(r).ok();
-        }
-    }
-    use super::*;
-    use crate::tests::crea_pdf;
-
-    fn textos(path: &str) -> Vec<String> {
-        on_pdfium_thread({
-            let path = path.to_string();
-            move || {
-                let pdfium = pdfium().expect("pdfium");
-                let doc = pdfium.load_pdf_from_file(&path, None).expect("abrir");
-                doc.pages()
-                    .iter()
-                    .map(|p| p.text().map(|t| t.all()).unwrap_or_default())
-                    .collect()
-            }
-        })
-    }
-
-    #[test]
-    fn pagina_en_blanco_duplicar_e_insertar() {
-        let dir = std::env::temp_dir();
-        let pdf = dir.join("paginas2-gestion-test.pdf");
-        let otro = dir.join("paginas2-otro-test.pdf");
-        crea_pdf(&["Uno", "Dos"], &pdf);
-        crea_pdf(&["Extra"], &otro);
-        let work = pdf.to_string_lossy().to_string();
-
-        assert_eq!(add_blank_page(work.clone(), 1).expect("en blanco"), 3);
-        // ahora: Uno, (blanco), Dos
-        assert_eq!(textos(&work)[1].trim(), "");
-
-        assert_eq!(duplicate_page(work.clone(), 0).expect("duplicar"), 4);
-        // ahora: Uno, Uno, (blanco), Dos
-        let t = textos(&work);
-        assert!(t[0].contains("Uno") && t[1].contains("Uno"), "{t:?}");
-
-        let total = insert_pdf_at(work.clone(), otro.to_string_lossy().to_string(), 1)
-            .expect("insertar");
-        assert_eq!(total, 5);
-        // ahora: Uno, Extra, Uno, (blanco), Dos
-        let t = textos(&work);
-        assert!(t[1].contains("Extra"), "{t:?}");
-        assert!(t[4].contains("Dos"), "{t:?}");
-    }
-
-    #[test]
-    fn recorte_normaliza_el_origen() {
-        let pdf = std::env::temp_dir().join("paginas2-crop-test.pdf");
-        crea_pdf(&["Hola"], &pdf);
-        let work = pdf.to_string_lossy().to_string();
-        // el texto de crea_pdf está en (50, 700) coords PDF → UI y ≈ 92-106
-        crop_page(
+        // y sin la casilla, la marca sigue yendo encima
+        crate::historial::undo(work.clone()).expect("deshacer");
+        add_watermark(
             work.clone(),
-            0,
-            Rect {
-                x: 30.0,
-                y: 60.0,
-                w: 300.0,
-                h: 120.0,
-            },
-            false,
+            "BORRADOR".into(),
+            60.0,
+            [200, 30, 30, 90],
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
-        .expect("recortar");
-        let pt = crate::busqueda::get_page_text(work.clone(), 0).expect("texto");
-        assert!((pt.width - 300.0).abs() < 1.0, "ancho {}", pt.width);
-        assert!((pt.height - 120.0).abs() < 1.0, "alto {}", pt.height);
-        // el primer glifo se movió con el recorte: x ≈ 50-30 = 20
-        let c = pt.chars.first().expect("glifos");
-        assert!((c.x - 20.0).abs() < 3.0, "x del glifo {}", c.x);
-        assert!(
-            c.y > 0.0 && c.y < 120.0,
-            "y del glifo fuera del área: {}",
-            c.y
-        );
-        // y el render respeta el área nueva
-        let png_b64 = crate::render_page_b64(work, 0, 300, None).expect("render");
-        assert!(!png_b64.is_empty());
+        .expect("marca encima");
+        let ahora = objetos(0);
+        assert_eq!(ahora[ahora.len() - 1], "Text", "la última: {ahora:?}");
+        std::fs::remove_file(&pdf).ok();
     }
 
     #[test]

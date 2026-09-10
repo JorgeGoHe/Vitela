@@ -1173,8 +1173,6 @@ pub fn run() {
             paginas2::merge_many,
             paginas2::crop_page,
             paginas2::add_watermark,
-            paginas2::add_background,
-            paginas2::remove_background,
             paginas2::add_header_footer,
             paginas2::add_bates,
             paginas2::remove_marginal_text,

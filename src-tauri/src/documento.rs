@@ -1157,8 +1157,8 @@ pub fn get_page_labels(path: String) -> Result<EtiquetasPaginas, String> {
 /// hacer con las páginas anteriores al primero, y un visor que se encuentre
 /// una las numera como le parece.
 #[tauri::command(async)]
-pub fn set_page_labels(work_path: String, labels: Vec<RangoEtiqueta>) -> Result<(), String> {
-    let mut rangos = labels;
+pub fn set_page_labels(work_path: String, rangos: Vec<RangoEtiqueta>) -> Result<(), String> {
+    let mut rangos = rangos;
     rangos.sort_by_key(|r| r.desde);
     if let Some(primero) = rangos.first() {
         if primero.desde != 0 {
@@ -1331,7 +1331,7 @@ mod tests_etiquetas {
         assert!(ficha.version.starts_with("1."), "versión del PDF: {}", ficha.version);
         assert!((ficha.page_width - 595.0).abs() < 2.0, "A4: {}", ficha.page_width);
         assert!(ficha.paginas_iguales, "las dos páginas miden lo mismo");
-        assert!(!ficha.tiene_formulario);
+        assert!(!ficha.formulario);
         assert_eq!(ficha.firmas, 0);
         assert!(!ficha.fuentes.is_empty(), "el texto tiene que usar alguna fuente");
         assert!(
@@ -1340,16 +1340,8 @@ mod tests_etiquetas {
             ficha.fuentes
         );
         // sin cifrar y sin protección puesta, el documento lo deja todo
-        assert_eq!(
-            ficha.seguridad,
-            SeguridadInfo {
-                cifrado: false,
-                pendiente: false,
-                imprimir: true,
-                copiar: true,
-                editar: true,
-            }
-        );
+        assert!(!ficha.cifrado && !ficha.proteccion_pendiente);
+        assert_eq!(ficha.permisos, crate::seguridad::Permisos::default());
 
         // un campo y una firma se cuentan aparte: un PDF que solo lleva una
         // firma no es «un documento que se puede rellenar»
@@ -1366,7 +1358,7 @@ mod tests_etiquetas {
         )
         .expect("campo");
         let ficha = get_document_info(work.clone()).expect("ficha");
-        assert!(ficha.tiene_formulario, "ahora sí se puede rellenar");
+        assert!(ficha.formulario, "ahora sí se puede rellenar");
 
         // y la protección puesta esperando a Guardar se cuenta como lo que
         // es: todavía no cifrado, pero lo estará
@@ -1382,9 +1374,13 @@ mod tests_etiquetas {
             }),
         )
         .expect("proteger al guardar");
-        let s = get_document_info(work.clone()).expect("ficha").seguridad;
-        assert!(s.pendiente && !s.cifrado, "todavía no está cifrado: {s:?}");
-        assert!(s.imprimir && !s.copiar && !s.editar, "{s:?}");
+        let ficha = get_document_info(work.clone()).expect("ficha");
+        assert!(
+            ficha.cifrado && ficha.proteccion_pendiente,
+            "protegido, aunque el fichero todavía no lo esté: {ficha:?}"
+        );
+        let p = ficha.permisos;
+        assert!(p.imprimir && !p.copiar && !p.editar, "{p:?}");
         std::fs::remove_file(&pdf).ok();
     }
 
@@ -1434,9 +1430,8 @@ pub struct SeguridadInfo {
     /// Hay protección puesta esperando a Guardar (ver «Protección»): el
     /// documento todavía no está cifrado, pero lo estará.
     pub pendiente: bool,
-    pub imprimir: bool,
-    pub copiar: bool,
-    pub editar: bool,
+    /// Qué deja hacer la máscara `/P`.
+    pub permisos: crate::seguridad::Permisos,
 }
 
 /// La ficha entera de un documento: lo que Acrobat reparte por las cuatro
@@ -1454,11 +1449,21 @@ pub struct DocumentoInfo {
     /// Con `false`, el documento mezcla tamaños de página y la interfaz lo
     /// dice: «210 × 297 mm (la primera; hay más tamaños)».
     pub paginas_iguales: bool,
-    pub tiene_formulario: bool,
-    /// Cuántos campos de firma hay, que no son campos de formulario.
+    /// El documento se puede rellenar. Los campos `/Sig` no cuentan: un PDF
+    /// que solo lleva una firma no es un formulario.
+    pub formulario: bool,
+    /// Cuántos campos de firma hay.
     pub firmas: u16,
+    /// El documento está protegido: o el fichero lleva `/Encrypt` en el
+    /// disco, o hay protección puesta esperando a Guardar. Las dos cosas se
+    /// cuentan igual porque para quien lo lee significan lo mismo; cuál de
+    /// las dos es lo dice `proteccion_pendiente`.
+    pub cifrado: bool,
+    /// Todavía no está cifrado en el disco, pero lo estará al guardar.
+    pub proteccion_pendiente: bool,
+    /// Qué deja hacer: la máscara `/P` del spec, en llano.
+    pub permisos: crate::seguridad::Permisos,
     pub fuentes: Vec<FuenteInfo>,
-    pub seguridad: SeguridadInfo,
 }
 
 /// El nombre de una fuente sin el prefijo de subconjunto (`ABCDEF+Arial`),
@@ -1613,10 +1618,12 @@ pub fn get_document_info(path: String) -> Result<DocumentoInfo, String> {
                 page_width,
                 page_height,
                 paginas_iguales,
-                tiene_formulario: otros > 0,
+                formulario: otros > 0,
                 firmas,
+                cifrado: proteccion.cifrado || proteccion.pendiente,
+                proteccion_pendiente: proteccion.pendiente,
+                permisos: proteccion.permisos,
                 fuentes: fuentes_del_documento(doc),
-                seguridad: proteccion,
             })
         })
     })

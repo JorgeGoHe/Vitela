@@ -110,7 +110,7 @@ fn cifra_objeto(obj: &mut Object, fek: &[u8]) -> Result<(), String> {
 
 /// Lo que el diálogo de protección deja marcado; los tres van marcados por
 /// defecto, como en Acrobat.
-#[derive(serde::Deserialize, Clone, Copy, Debug)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Permisos {
     #[serde(default = "si")]
     pub imprimir: bool,
@@ -210,9 +210,7 @@ pub(crate) fn permisos_puestos(path: &str) -> crate::documento::SeguridadInfo {
     crate::documento::SeguridadInfo {
         cifrado: crate::documento::trae_encrypt(path),
         pendiente: puesta.is_some(),
-        imprimir: permisos.imprimir,
-        copiar: permisos.copiar,
-        editar: permisos.editar,
+        permisos,
     }
 }
 
