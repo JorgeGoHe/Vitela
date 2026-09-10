@@ -199,7 +199,38 @@ fn barre_huerfanos(dir: &std::path::Path, edad_minima: std::time::Duration) -> u
     borrados += barre_ficheros(&dir.join("vitela-historial"), edad_minima, |n| {
         n.contains(".snap") && !salvada(n)
     });
+    // y las carpetas de los adjuntos que se abrieron con el visor del
+    // sistema (`open_attachment`): una por adjunto, con su nombre dentro
+    borrados += barre_carpetas(dir, edad_minima, |n| n.starts_with("vitela-adjunto-"));
     borrados
+}
+
+/// Como [`barre_ficheros`] pero con carpetas enteras.
+fn barre_carpetas(
+    dir: &std::path::Path,
+    edad_minima: std::time::Duration,
+    es_nuestra: impl Fn(&str) -> bool,
+) -> usize {
+    let Ok(entradas) = std::fs::read_dir(dir) else { return 0 };
+    let ahora = std::time::SystemTime::now();
+    let mut borradas = 0;
+    for e in entradas.flatten() {
+        let nombre = e.file_name().to_string_lossy().to_string();
+        if !es_nuestra(&nombre) || !e.path().is_dir() {
+            continue;
+        }
+        let vieja = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|m| ahora.duration_since(m).ok())
+            .map(|d| d >= edad_minima)
+            .unwrap_or(false);
+        if vieja && std::fs::remove_dir_all(e.path()).is_ok() {
+            borradas += 1;
+        }
+    }
+    borradas
 }
 
 fn barre_ficheros(
@@ -1114,6 +1145,8 @@ pub fn run() {
             adjuntos::list_attachments,
             adjuntos::save_attachment,
             adjuntos::add_attachment,
+            adjuntos::delete_attachment,
+            adjuntos::open_attachment,
             adjuntos::list_layers,
             adjuntos::set_layer_visible,
             exportar::export_pages_png,
@@ -1395,10 +1428,19 @@ pub(crate) mod tests {
             std::fs::write(dir.join(n), b"x").unwrap();
         }
         std::fs::write(dir.join("vitela-historial").join("x.pdf.snap3"), b"x").unwrap();
+        // una carpeta de adjunto abierto (open_attachment) y otra ajena
+        std::fs::create_dir_all(dir.join("vitela-adjunto-123")).unwrap();
+        std::fs::write(dir.join("vitela-adjunto-123").join("factura.xml"), b"x").unwrap();
+        std::fs::create_dir_all(dir.join("carpeta-ajena")).unwrap();
         // con edad mínima cero se borran los nuestros; los ajenos se quedan
-        assert_eq!(barre_huerfanos(&dir, std::time::Duration::ZERO), 3);
+        assert_eq!(barre_huerfanos(&dir, std::time::Duration::ZERO), 4);
         assert!(dir.join("otro.pdf").exists());
         assert!(dir.join("vitela-notas.txt").exists());
+        assert!(dir.join("carpeta-ajena").exists());
+        assert!(
+            !dir.join("vitela-adjunto-123").exists(),
+            "la carpeta del adjunto abierto se va con su fichero dentro"
+        );
         std::fs::write(dir.join("vitela-c-3.pdf"), b"x").unwrap();
         // recién creado: con 24 h de margen no se toca
         assert_eq!(barre_huerfanos(&dir, std::time::Duration::from_secs(24 * 3600)), 0);

@@ -147,6 +147,98 @@ pub fn add_attachment(
     })
 }
 
+/// Quita un adjunto del documento, como «Eliminar» del panel de adjuntos
+/// de Acrobat. `index` es la posición en la lista de `list_attachments`.
+///
+/// No basta con sacar la entrada del árbol de nombres: el `/Filespec` y el
+/// stream con los bytes seguirían dentro del fichero, sin nadie que
+/// apuntara a ellos —justo lo que `sanitize_pdf` aprendió a no hacer—. Por
+/// eso se poda el documento al final. Pasa por `cirugia`, así que deja su
+/// paso de deshacer.
+#[tauri::command(async)]
+pub fn delete_attachment(work_path: String, index: u16) -> Result<(), String> {
+    cirugia(&work_path, move |doc| {
+        let mut pares = entradas(doc);
+        if index as usize >= pares.len() {
+            return Err("Ese adjunto ya no está en el documento".into());
+        }
+        pares.remove(index as usize);
+        reescribe_arbol(doc, pares)?;
+        // los bytes se van de verdad: quitar la referencia dejaría el
+        // fichero incrustado dentro del PDF
+        doc.prune_objects();
+        Ok(())
+    })
+}
+
+/// Deja un adjunto en un fichero temporal y devuelve su ruta, para que la
+/// UI lo abra con el visor del sistema. Es la acción principal de la fila:
+/// el XML de una factura se quiere **ver**, no guardar en el escritorio.
+///
+/// Cada uno va en su propia carpeta (`vitela-adjunto-…`) para conservar el
+/// nombre y la extensión de verdad, que es lo que mira el sistema para
+/// elegir con qué programa abrirlo. El barrido de huérfanos del arranque se
+/// lleva las de más de 24 h.
+#[tauri::command(async)]
+pub fn open_attachment(path: String, index: u16) -> Result<String, String> {
+    let (nombre, bytes) = on_pdfium_thread(move || {
+        with_lopdf(&path, |doc| {
+            let entradas = entradas(doc);
+            let (clave, id) = entradas
+                .get(index as usize)
+                .ok_or("Ese adjunto ya no está en el documento")?;
+            let spec = doc
+                .get_object(*id)
+                .and_then(|o| o.as_dict())
+                .map_err(|e| e.to_string())?
+                .clone();
+            let stream_id = stream_de(doc, &spec).ok_or("Ese adjunto no lleva fichero dentro")?;
+            let stream = doc
+                .get_object(stream_id)
+                .and_then(|o| o.as_stream())
+                .map_err(|e| e.to_string())?;
+            Ok((
+                nombre_visible(doc, &spec, clave),
+                stream
+                    .decompressed_content()
+                    .unwrap_or_else(|_| stream.content.clone()),
+            ))
+        })
+    })?;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!("vitela-adjunto-{nanos}"));
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        crate::mensaje_llano(format!("No se ha podido preparar el adjunto: {e}"))
+    })?;
+    let destino = dir.join(nombre_seguro(&nombre));
+    std::fs::write(&destino, bytes).map_err(|e| {
+        crate::mensaje_llano(format!("No se ha podido preparar el adjunto: {e}"))
+    })?;
+    Ok(destino.to_string_lossy().into_owned())
+}
+
+/// El nombre de un adjunto, limpio para usarlo como nombre de fichero: el
+/// `/F` de un `/Filespec` lo escribe quien hizo el PDF y puede traer barras
+/// o `..`, que fuera de su carpeta escribirían donde no deben.
+fn nombre_seguro(nombre: &str) -> String {
+    let limpio: String = nombre
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(nombre)
+        .chars()
+        .filter(|c| !matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0'))
+        .collect();
+    let limpio = limpio.trim().trim_matches('.').to_string();
+    if limpio.is_empty() {
+        "adjunto".into()
+    } else {
+        limpio
+    }
+}
+
 /// Una capa del documento (un grupo de contenido opcional, `/OCG`).
 #[derive(Serialize, Debug)]
 pub struct Capa {
@@ -408,15 +500,25 @@ fn anade_al_arbol(
     nombre: &str,
     spec_id: lopdf::ObjectId,
 ) -> Result<(), String> {
+    // las que ya había (aplanadas: si el árbol venía con /Kids, se queda
+    // en uno solo, que es igual de válido y mucho más simple)
+    let mut pares: Vec<(String, lopdf::ObjectId)> = entradas(doc);
+    pares.push((nombre.to_string(), spec_id));
+    reescribe_arbol(doc, pares)
+}
+
+/// Deja el árbol `/EmbeddedFiles` con exactamente estas entradas, ordenadas
+/// por clave (el spec lo exige y hay visores que buscan por bisección). Lo
+/// usan añadir y borrar.
+fn reescribe_arbol(
+    doc: &mut lopdf::Document,
+    mut pares: Vec<(String, lopdf::ObjectId)>,
+) -> Result<(), String> {
     let root = doc
         .trailer
         .get(b"Root")
         .and_then(|o| o.as_reference())
         .map_err(|e| e.to_string())?;
-    // las que ya había (aplanadas: si el árbol venía con /Kids, se queda
-    // en uno solo, que es igual de válido y mucho más simple)
-    let mut pares: Vec<(String, lopdf::ObjectId)> = entradas(doc);
-    pares.push((nombre.to_string(), spec_id));
     pares.sort_by(|a, b| a.0.cmp(&b.0));
     let names: Vec<Object> = pares
         .into_iter()
@@ -519,6 +621,116 @@ mod tests {
         for f in [&pdf, &xml, &vuelta] {
             std::fs::remove_file(f).ok();
         }
+    }
+
+    /// **R27.** Los adjuntos se abren y se borran. Hasta ahora Vitela
+    /// sabía **añadir** un adjunto y no sabía quitar uno: el que se
+    /// equivocaba de fichero tenía que sanitizar el documento entero
+    /// —perdiendo metadatos, scripts, capas y formulario— para deshacerlo.
+    ///
+    /// Borrar el primero tiene que dejar el segundo **entero byte a byte**,
+    /// y los bytes del borrado tienen que irse del fichero de verdad.
+    #[test]
+    fn borrar_un_adjunto_deja_el_otro_entero_y_se_lleva_sus_bytes() {
+        let dir = std::env::temp_dir();
+        let pdf = dir.join("adjuntos-borrar.pdf");
+        let uno = dir.join("adjuntos-uno.xml");
+        let dos = dir.join("adjuntos-dos.txt");
+        let vuelta = dir.join("adjuntos-borrar-vuelta.txt");
+        crea_pdf(&["Con dos adjuntos"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        let bytes_uno = b"<uno>este se va</uno>".repeat(40);
+        let bytes_dos = b"el segundo se queda igual".to_vec();
+        std::fs::write(&uno, &bytes_uno).expect("escribir uno");
+        std::fs::write(&dos, &bytes_dos).expect("escribir dos");
+        add_attachment(work.clone(), uno.to_string_lossy().into_owned(), None).expect("uno");
+        add_attachment(work.clone(), dos.to_string_lossy().into_owned(), None).expect("dos");
+        let lista = list_attachments(work.clone()).expect("listar");
+        assert_eq!(lista.len(), 2, "{lista:?}");
+        assert_eq!(lista[0].name, "adjuntos-dos.txt", "van en orden alfabético");
+
+        // se borra el XML (el segundo de la lista, por el orden del árbol)
+        delete_attachment(work.clone(), 1).expect("borrar");
+        let lista = list_attachments(work.clone()).expect("listar");
+        assert_eq!(lista.len(), 1, "queda uno: {lista:?}");
+        assert_eq!(lista[0].name, "adjuntos-dos.txt");
+
+        // el que queda sale byte a byte igual que entró
+        let n = save_attachment(work.clone(), 0, vuelta.to_string_lossy().into_owned())
+            .expect("guardar el que queda");
+        assert_eq!(n as usize, bytes_dos.len());
+        assert_eq!(std::fs::read(&vuelta).expect("leer"), bytes_dos);
+
+        // y sanitizar cuenta uno, no dos
+        let informe = crate::seguridad2::sanitize_pdf(work.clone(), true).expect("ensayo");
+        assert_eq!(informe.adjuntos, 1, "{informe:?}");
+
+        // los bytes del borrado ya no están en el fichero
+        let crudo = std::fs::read(&work).expect("leer el pdf");
+        assert!(
+            !crudo.windows(9).any(|w| w == b"este se v"),
+            "quitar la referencia no basta: hay que podar el objeto"
+        );
+
+        // ⌘Z lo devuelve
+        crate::historial::undo(work.clone()).expect("deshacer");
+        assert_eq!(list_attachments(work.clone()).expect("listar").len(), 2);
+
+        // y un índice que no existe se dice, no se traga
+        assert!(delete_attachment(work.clone(), 9).is_err());
+
+        for f in [&pdf, &uno, &dos, &vuelta] {
+            std::fs::remove_file(f).ok();
+        }
+    }
+
+    /// **R27.** «Abrir» deja el adjunto en un temporal **con su nombre y su
+    /// extensión**, que es lo que mira el sistema para elegir programa.
+    #[test]
+    fn abrir_un_adjunto_lo_deja_en_un_temporal_con_su_nombre() {
+        let dir = std::env::temp_dir();
+        let pdf = dir.join("adjuntos-abrir.pdf");
+        let xml = dir.join("adjuntos-abrir-factura.xml");
+        crea_pdf(&["Factura"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        let contenido = b"<factura><total>42</total></factura>".to_vec();
+        std::fs::write(&xml, &contenido).expect("escribir xml");
+        add_attachment(work.clone(), xml.to_string_lossy().into_owned(), None).expect("adjuntar");
+
+        let ruta = open_attachment(work.clone(), 0).expect("abrir");
+        let ruta = std::path::PathBuf::from(ruta);
+        assert_eq!(
+            ruta.file_name().unwrap().to_string_lossy(),
+            "adjuntos-abrir-factura.xml",
+            "el nombre y la extensión son los del adjunto"
+        );
+        assert_eq!(std::fs::read(&ruta).expect("leer"), contenido);
+        assert!(
+            ruta.parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("vitela-adjunto-"),
+            "cada uno en su carpeta, para que el barrido se las lleve"
+        );
+        assert!(open_attachment(work.clone(), 7).is_err(), "un índice que no existe");
+
+        std::fs::remove_dir_all(ruta.parent().unwrap()).ok();
+        for f in [&pdf, &xml] {
+            std::fs::remove_file(f).ok();
+        }
+    }
+
+    /// Un nombre de adjunto lo escribe quien hizo el PDF: puede traer
+    /// barras o `..` y escribiría fuera de su carpeta.
+    #[test]
+    fn el_nombre_del_adjunto_no_se_sale_de_su_carpeta() {
+        assert_eq!(nombre_seguro("factura.xml"), "factura.xml");
+        assert_eq!(nombre_seguro("../../etc/passwd"), "passwd");
+        assert_eq!(nombre_seguro("C:\\Windows\\system32\\a.dll"), "a.dll");
+        assert_eq!(nombre_seguro("  ..  "), "adjunto");
+        assert_eq!(nombre_seguro(""), "adjunto");
     }
 
     /// **G4.** Apagar una capa cambia lo que se ve. Ojo: **cambia el

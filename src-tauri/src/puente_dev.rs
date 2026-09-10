@@ -241,6 +241,8 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "list_attachments" => cmd!(crate::adjuntos::list_attachments, { path: String }),
         "save_attachment" => cmd!(crate::adjuntos::save_attachment, { path: String, index: u16, dest_path: String }),
         "add_attachment" => cmd!(crate::adjuntos::add_attachment, { work_path: String, file_path: String, description: Option<String> }),
+        "delete_attachment" => cmd!(crate::adjuntos::delete_attachment, { work_path: String, index: u16 }),
+        "open_attachment" => cmd!(crate::adjuntos::open_attachment, { path: String, index: u16 }),
         "list_layers" => cmd!(crate::adjuntos::list_layers, { path: String }),
         "set_layer_visible" => cmd!(crate::adjuntos::set_layer_visible, { work_path: String, index: u16, visible: bool }),
         "export_pages_png" => cmd!(exportar::export_pages_png, { path: String, dest_dir: String, dpi: u16, format: String }),
@@ -443,6 +445,8 @@ mod tests {
     /// quita al integrar.
     const NADIE_LLAMA: &[(&str, &str)] = &[
         ("pdf_from_images", "pendiente_ui: R26 lo lleva a Archivo y al estado vacío"),
+        ("delete_attachment", "pendiente_ui: R27 lo pone en el panel de adjuntos (Supr con confirmación)"),
+        ("open_attachment", "pendiente_ui: R27 lo pone en el panel de adjuntos («Abrir», la acción principal de la fila)"),
     ];
 
     /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada
