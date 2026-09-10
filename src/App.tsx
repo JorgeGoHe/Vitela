@@ -731,6 +731,8 @@ function App() {
   // de la barra: obligaba a decidir sobre trabajo perdido en el peor momento
   // y ocupaba una fila sobre el documento durante toda la sesión
   const [sesionPlegada, setSesionPlegada] = useState(false);
+  // la lista de una fila por documento, cuando hay varios que recuperar
+  const [sesionesAbiertas, setSesionesAbiertas] = useState(false);
   const [descartarAsk, setDescartarAsk] = useState<Sesion[] | null>(null);
   // «Exportar a Word»: el aviso de lo que no sale va ANTES de elegir destino
   const [wordAsk, setWordAsk] = useState(false);
@@ -1082,7 +1084,9 @@ function App() {
    *  no en el temporal. Todas quedan marcadas con cambios sin guardar, que
    *  es lo que son: si no, cambiar de pestaña las daría por guardadas. */
   async function recuperarSesiones(lista: Sesion[]) {
-    setSesionesRotas([]);
+    // se quitan de la banda **solo las elegidas**: con varios documentos se
+    // puede recuperar uno y seguir decidiendo sobre los demás
+    setSesionesRotas((v) => v.filter((s) => !lista.includes(s)));
     const abiertas: string[] = [];
     for (const s of lista) {
       const work = await openPath(s.work_path, undefined, s.original_path);
@@ -1119,7 +1123,7 @@ function App() {
    *  pregunta antes —una sola vez, aunque sean varios—, como el diálogo de
    *  cierre, y se llama igual que allí, que es lo que hace que se reconozca. */
   function descartarSesiones(lista: Sesion[]) {
-    setSesionesRotas([]);
+    setSesionesRotas((v) => v.filter((s) => !lista.includes(s)));
     for (const s of lista) {
       invoke("close_document", { workPath: s.work_path }).catch(() => {});
       borraSesion(s.work_path).catch((e) =>
@@ -2175,6 +2179,10 @@ function App() {
     const lote = propuestas;
     setPropuestas([]);
     setPropuestaActual(null);
+    // los campos los acaba de crear el usuario: decirle a continuación que
+    // «este documento se puede rellenar» tapaba el recuento con una
+    // obviedad, que es lo que vio el QA del ciclo 8
+    avisoFormRef.current = workPath;
     try {
       setNotice("Creando los campos…", { persistente: true });
       const hechos = await createFormFields(
@@ -4506,6 +4514,9 @@ function App() {
     (error ? 1 : 0) +
     (bandaFirmas && firmasDoc.length > 0 ? 1 : 0) +
     (sesionesRotas.length > 0 && !sesionPlegada ? 1 : 0) +
+    (sesionesRotas.length > 1 && !sesionPlegada && sesionesAbiertas
+      ? sesionesRotas.length
+      : 0) +
     (propuestas.length > 0 ? 1 : 0) +
     (notice ? 1 : 0);
 
@@ -4831,6 +4842,39 @@ function App() {
           <button className="btn" onClick={() => setDescartarAsk(sesionesRotas)}>
             No guardar
           </button>
+          {/* con varios documentos, «todo o nada» obliga a recuperar lo que
+              no se quiere para poder cerrarlo: cada uno con su fila */}
+          {sesionesRotas.length > 1 && (
+            <button
+              className="btn"
+              aria-expanded={sesionesAbiertas}
+              onClick={() => setSesionesAbiertas((v) => !v)}
+            >
+              {sesionesAbiertas ? "Ocultar la lista" : "Elegir uno a uno"}
+            </button>
+          )}
+        </div>
+      )}
+      {sesionesRotas.length > 1 && !sesionPlegada && sesionesAbiertas && (
+        <div className="banner-recuperar recuperar-lista">
+          {sesionesRotas.map((s) => (
+            <div className="recuperar-fila" key={s.work_path}>
+              <span className="recuperar-nombre" title={s.original_path ?? ""}>
+                {s.original_path?.split(/[\\/]/).pop() ??
+                  "un documento sin fichero"}
+              </span>
+              <span className="dato">{cuandoLlano(s.cuando)}</span>
+              <button
+                className="btn"
+                onClick={() => recuperarSesiones([s])}
+              >
+                Recuperar
+              </button>
+              <button className="btn" onClick={() => setDescartarAsk([s])}>
+                Descartar
+              </button>
+            </div>
+          ))}
         </div>
       )}
       {propuestas.length > 0 && (

@@ -5,6 +5,33 @@ import { useModal } from "../hooks/useModal";
 import { plural } from "../tipos";
 import Icon from "./Icon";
 
+/** Los formatos que el backend sabe leer. Un `.heic` del iPhone **no** está
+ *  —el crate de imágenes no lo abre—, y decirlo al añadirlo es mejor que
+ *  decirlo después de elegir dónde guardar y de escribir el PDF a medias. */
+const FORMATOS = [
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "bmp",
+  "webp",
+  "tif",
+  "tiff",
+  "ico",
+  "tga",
+  "qoi",
+  "pnm",
+  "pbm",
+  "pgm",
+  "ppm",
+];
+
+/** ¿Este fichero se va a poder leer, por su extensión? */
+function formatoConocido(ruta: string): boolean {
+  const ext = ruta.split(".").pop()?.toLowerCase() ?? "";
+  return FORMATOS.includes(ext);
+}
+
 /** Nombre y carpeta de una ruta, para distinguir dos ficheros iguales. */
 function partesDe(ruta: string): { nombre: string; dir: string } {
   const trozos = ruta.split(/[\\/]/);
@@ -42,17 +69,18 @@ export default function DialogoImagenes({
   const [tamano, setTamano] = useState<TamanoImagenes>("a4");
   // las filas marcadas como ilegibles no van a salir en el PDF: el pie
   // cuenta lo que de verdad se va a escribir, no lo que hay en la lista
-  const marcadas = rutas.filter((r) => fallos.includes(r)).length;
+  const esMala = (r: string) => fallos.includes(r) || !formatoConocido(r);
+  const marcadas = rutas.filter(esMala).length;
   const utiles = rutas.length - marcadas;
   const confirmar = () => {
-    if (rutas.length > 0) onConfirm({ rutas, tamano });
+    if (utiles > 0) onConfirm({ rutas: rutas.filter((r) => !esMala(r)), tamano });
   };
   const { ref, onKeyDown } = useModal({ onClose, onConfirm: confirmar });
 
   async function anadir() {
     const sel = await open({
       filters: [
-        { name: "Imágenes", extensions: ["png", "jpg", "jpeg"] },
+        { name: "Imágenes", extensions: FORMATOS },
         { name: "PNG", extensions: ["png"] },
         { name: "JPEG", extensions: ["jpg", "jpeg"] },
       ],
@@ -118,7 +146,8 @@ export default function DialogoImagenes({
           <div className="combinar-lista">
             {rutas.map((r, i) => {
               const { nombre, dir } = partesDe(r);
-              const mala = fallos.includes(r);
+              const mala = esMala(r);
+              const formato = !formatoConocido(r);
               return (
                 <div
                   key={`${r}-${i}`}
@@ -151,7 +180,9 @@ export default function DialogoImagenes({
                     <span className="reciente-dir">{dir}</span>
                     {mala && (
                       <span className="dato combinar-info mal">
-                        no se ha podido leer: quítala y vuelve a intentarlo
+                        {formato
+                          ? "este formato no se puede leer: quítala de la lista"
+                          : "no se ha podido leer: quítala y vuelve a intentarlo"}
                       </span>
                     )}
                   </span>
@@ -216,9 +247,13 @@ export default function DialogoImagenes({
           </button>
           <button
             className="btn btn-primary"
-            disabled={rutas.length === 0}
+            disabled={utiles === 0}
             title={
-              rutas.length === 0 ? "Elige antes alguna imagen" : undefined
+              rutas.length === 0
+                ? "Elige antes alguna imagen"
+                : utiles === 0
+                  ? "Ninguna de las imágenes de la lista se puede leer"
+                  : undefined
             }
             onClick={confirmar}
           >

@@ -3176,6 +3176,28 @@ textarea {
   flex-shrink: 0;
 }
 
+/* la lista de «elegir uno a uno» de la recuperación: una fila por
+   documento, con su fecha y sus dos salidas */
+.recuperar-lista {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.recuperar-fila {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.recuperar-nombre {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* la red de seguridad: lo que se ve cuando un trozo de la interfaz falla.
    Papel, no alarma: el documento sigue entero y hay dos salidas */
 .limite-error {
