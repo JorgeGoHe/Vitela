@@ -95,6 +95,14 @@ export default function DialogoCifrarCert({
           es una contraseña que puedas decir por teléfono, usa «Proteger con
           contraseña…».
         </p>
+        {/* no hay callejón sin salida sin avisar antes de entrar: la copia
+            cifrada la abrirán ellos, y la tuya es el original */}
+        <p className="modal-file" style={{ whiteSpace: "normal" }}>
+          Se escribe una <strong>copia</strong> cifrada y el documento abierto
+          se queda como está: guarda también el original, porque una vez
+          cifrada solo la abrirá quien tenga la clave privada de alguno de
+          estos certificados.
+        </p>
         {firmado && (
           <p className="modal-error" role="alert">
             Este documento lleva firma digital: cifrarlo reescribe el fichero y

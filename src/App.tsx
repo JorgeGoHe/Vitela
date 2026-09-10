@@ -221,6 +221,9 @@ import PanelComentarios from "./components/PanelComentarios";
 import DialogoExtraer from "./components/DialogoExtraer";
 import DialogoPropiedades from "./components/DialogoPropiedades";
 import DialogoContrasena from "./components/DialogoContrasena";
+import DialogoClavePrivada, {
+  type ClaveDraft,
+} from "./components/DialogoClavePrivada";
 import Comparador from "./components/Comparador";
 import DialogoCifrarCert from "./components/DialogoCifrarCert";
 import DialogoProteger, {
@@ -671,6 +674,12 @@ function App() {
     path: string;
     password: string;
   } | null>(null);
+  /** Un PDF cifrado **por certificado** no se abre con una contraseña: hace
+   *  falta la clave privada de uno de sus destinatarios. Hasta ahora salía
+   *  un muro y ahí se acababa el camino. */
+  const [claveDraft, setClaveDraft] = useState<ClaveDraft | null>(null);
+  /** Lo que ha contestado el último intento con clave, dentro del diálogo. */
+  const [claveError, setClaveError] = useState<string | null>(null);
   const [protectDraft, setProtectDraft] = useState<ProtegerDraft | null>(null);
   // «Cifrar con certificado…»: la lista de destinatarios vive en su diálogo
   const [cifrarCertAbierto, setCifrarCertAbierto] = useState(false);
@@ -904,6 +913,10 @@ function App() {
      *  copia dejaba dos ficheros en el temporal y el apunte de la sesión
      *  indexado por una ruta que ya nadie iba a borrar. */
     adoptar?: boolean,
+    /** El certificado con clave privada, para un PDF cifrado por
+     *  certificado (`Adobe.PubSec`). El backend prueba el sobre de cada
+     *  destinatario hasta dar con el del usuario. */
+    clave?: { keyPath: string; password: string } | null,
   ): Promise<string | null> {
     try {
       // los avisos son del documento que se deja atrás: no deben sobrevivir
@@ -927,6 +940,8 @@ function App() {
         : await invoke<DocumentoAbierto>("open_pdf", {
             path,
             password: password ?? null,
+            keyPath: clave?.keyPath ?? null,
+            keyPassword: clave?.password ?? null,
           });
       // el documento anterior NO se cierra: se queda en su pestaña, con su
       // copia de trabajo, su historial y el punto por el que se iba
@@ -942,6 +957,8 @@ function App() {
       busqueda.limpiar(true);
       setModified(false);
       setPwdDraft(null);
+      setClaveDraft(null);
+      setClaveError(null);
       setProtegido(info.had_password);
       setProtPendiente(false);
       setHadPassword(info.had_password);
@@ -1025,11 +1042,20 @@ function App() {
       }
       return info.work_path;
     } catch (e) {
-      if (String(e) === "PASSWORD_REQUIRED") {
+      const msg = String(e);
+      if (msg === "PASSWORD_REQUIRED") {
         setPwdDraft({ path, password: "" });
         if (password !== undefined) setError("Contraseña incorrecta");
+      } else if (msg === "CERT_KEY_REQUIRED") {
+        // cifrado por certificado: no hay contraseña que pedir, hay que
+        // señalar la clave privada. El diálogo se queda abierto si el
+        // certificado que se ha dado no es de ninguno de los destinatarios
+        setClaveDraft({ path, keyPath: clave?.keyPath ?? "", password: "" });
+        setClaveError(null);
+      } else if (clave) {
+        setClaveError(msg);
       } else {
-        setError(String(e));
+        setError(msg);
       }
       return null;
     }
@@ -5314,6 +5340,23 @@ function App() {
           onClose={() => setPwdDraft(null)}
           etiqueta="Abrir"
           placeholder="Contraseña del documento"
+        />
+      )}
+      {claveDraft && (
+        <DialogoClavePrivada
+          draft={claveDraft}
+          error={claveError}
+          onChange={setClaveDraft}
+          onConfirm={() =>
+            openPath(claveDraft.path, undefined, undefined, false, {
+              keyPath: claveDraft.keyPath,
+              password: claveDraft.password,
+            })
+          }
+          onClose={() => {
+            setClaveDraft(null);
+            setClaveError(null);
+          }}
         />
       )}
       {cifrarCertAbierto && (
