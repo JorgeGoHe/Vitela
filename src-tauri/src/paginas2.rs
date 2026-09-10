@@ -796,8 +796,106 @@ pub fn add_header_footer(
     }))
 }
 
+/// **Numeración Bates** (Acrobat: «Más ▸ Numeración Bates»): un sello
+/// correlativo por página, con prefijo, sufijo y un número de dígitos fijo
+/// —`ABC-000001-2026`—. Es lo que pide un juzgado o una auditoría para
+/// poder citar «la 000123» y que todo el mundo mire lo mismo.
+///
+/// Los defectos son los de Acrobat: **seis dígitos** (`digitos` se acota
+/// entre 1 y 15, que es el tope del diálogo) y empezar en 1. La cifra va
+/// **abajo a la derecha**, que es también donde la pone Acrobat; para otras
+/// posiciones está `add_header_footer`, que es el diálogo de al lado.
+///
+/// Con `page_indices`, solo esas páginas —pero **el correlativo sigue
+/// contando por el orden en que se numeran**, no por el número de página:
+/// numerar las páginas 3, 7 y 8 escribe 000001, 000002 y 000003. Un número
+/// Bates es un contador de folios, no la página en la que cae.
+///
+/// Una sola mutación para el documento entero.
+#[tauri::command(async)]
+pub fn add_bates(
+    work_path: String,
+    prefijo: String,
+    sufijo: String,
+    inicio: u32,
+    digitos: u8,
+    page_indices: Option<Vec<u16>>,
+) -> Result<(), String> {
+    let digitos = digitos.clamp(1, 15) as usize;
+    let inicio = inicio.max(1);
+    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let mut doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(crate::mensaje_llano)?;
+        let font = doc.fonts_mut().helvetica();
+        const TAMANO: f32 = 9.0;
+        const MARGEN_X: f32 = 36.0;
+        const MARGEN_Y: f32 = 20.0;
+        let total = doc.pages().len();
+        for (n, i) in paginas_pedidas(total, &page_indices).into_iter().enumerate() {
+            let numero = inicio as u64 + n as u64;
+            let texto = format!("{prefijo}{numero:0>ancho$}{sufijo}", ancho = digitos);
+            let mut page = doc.pages().get(i).map_err(crate::mensaje_llano)?;
+            let page_w = page.width().value;
+            let mut obj = PdfPageTextObject::new(&doc, &texto, font, PdfPoints::new(TAMANO))
+                .map_err(crate::mensaje_llano)?;
+            obj.set_fill_color(PdfColor::new(60, 60, 60, 255))
+                .map_err(crate::mensaje_llano)?;
+            let ancho = ancho_estimado(&texto, TAMANO);
+            obj.translate(
+                PdfPoints::new(page_w - MARGEN_X - ancho),
+                PdfPoints::new(MARGEN_Y),
+            )
+            .map_err(crate::mensaje_llano)?;
+            page.objects_mut()
+                .add_text_object(obj)
+                .map_err(crate::mensaje_llano)?;
+            page.regenerate_content().map_err(crate::mensaje_llano)?;
+        }
+        save_and_close(doc, &work_path)?;
+        Ok(())
+    }))
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// **Numeración Bates.** Un juzgado cita «la 000123» y todo el mundo
+    /// tiene que mirar el mismo folio: por eso el número lleva dígitos
+    /// fijos, prefijo y sufijo, y por eso el correlativo **cuenta folios
+    /// numerados, no páginas del documento**. Numerar solo tres páginas de
+    /// cinco escribe 1, 2 y 3, no 3, 7 y 8.
+    #[test]
+    fn el_numero_bates_es_correlativo_y_lleva_sus_digitos() {
+        let pdf = std::env::temp_dir().join("paginas2-bates.pdf");
+        crea_pdf(&["Uno", "Dos", "Tres", "Cuatro"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+        let antes = pasos(&work);
+
+        add_bates(work.clone(), "ABC-".into(), "-2026".into(), 1, 6, None).expect("numerar");
+        assert_eq!(pasos(&work), antes + 1, "el documento entero es UN paso");
+        let t = textos(&work);
+        assert!(t[0].contains("ABC-000001-2026"), "{:?}", t[0]);
+        assert!(t[3].contains("ABC-000004-2026"), "{:?}", t[3]);
+        crate::historial::undo(work.clone()).expect("deshacer");
+        assert!(!textos(&work)[0].contains("ABC-"), "un ⌘Z lo quita entero");
+
+        // un rango: el correlativo cuenta los folios que se numeran
+        add_bates(work.clone(), String::new(), String::new(), 100, 4, Some(vec![1, 3]))
+            .expect("numerar dos");
+        let t = textos(&work);
+        assert!(!t[0].contains("0100"), "la primera no se numera: {:?}", t[0]);
+        assert!(t[1].contains("0100"), "{:?}", t[1]);
+        assert!(t[3].contains("0101"), "el siguiente folio, no la página: {:?}", t[3]);
+
+        // los dígitos no recortan un número que no cabe: perder una cifra
+        // sería citar mal el folio
+        add_bates(work.clone(), String::new(), String::new(), 12345, 2, Some(vec![0]))
+            .expect("numerar corto");
+        assert!(textos(&work)[0].contains("12345"));
+        std::fs::remove_file(&pdf).ok();
+    }
 
     /// **Fondo.** Acrobat separa el fondo de la marca de agua por dónde se
     /// pinta: el fondo **debajo** del contenido y la marca encima. En un PDF

@@ -229,6 +229,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "add_watermark" => cmd!(paginas2::add_watermark, { work_path: String, text: String, font_size: f32, color: [u8; 4], diagonal: bool, position: Option<String>, page_indices: Option<Vec<u16>>, image_png: Option<String>, opacity: Option<f32>, rotation: Option<f32>, detras: Option<bool> }),
         "add_background" => cmd!(paginas2::add_background, { work_path: String, color: Option<[u8; 4]>, image_png: Option<String>, opacity: Option<f32>, page_indices: Option<Vec<u16>> }),
         "remove_background" => cmd!(paginas2::remove_background, { work_path: String }),
+        "add_bates" => cmd!(paginas2::add_bates, { work_path: String, prefijo: String, sufijo: String, inicio: u32, digitos: u8, page_indices: Option<Vec<u16>> }),
         "remove_marginal_text" => cmd!(paginas2::remove_marginal_text, { work_path: String, zona: String, dry_run: bool }),
         "add_header_footer" => cmd!(paginas2::add_header_footer, { work_path: String, header_left: Option<String>, header_center: Option<String>, header_right: Option<String>, footer_left: Option<String>, footer_center: Option<String>, footer_right: Option<String>, font_size: f32, page_indices: Option<Vec<u16>> }),
         "get_outline" => cmd!(documento::get_outline, { path: String }),
@@ -464,6 +465,7 @@ mod tests {
         ("remove_background", "pendiente_ui — tanda 3 del ciclo 8: va con el diálogo del fondo, como «Quitar marca de agua»"),
         ("get_page_labels", "pendiente_ui — tanda 3 del ciclo 8: la píldora y las miniaturas dirán «ii (2)»"),
         ("set_page_labels", "pendiente_ui — tanda 3 del ciclo 8: «Organizar páginas ▸ Numerar páginas»"),
+        ("add_bates", "pendiente_ui — tanda 3 del ciclo 8: el diálogo de Bates completo (prefijo, sufijo, dígitos, inicio y rango)"),
     ];
 
     /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada
