@@ -2067,6 +2067,16 @@ textarea {
   margin-left: 6px;
 }
 
+.paginas-acciones {
+  display: flex;
+  gap: 14px;
+  margin-top: 2px;
+}
+
+.paginas-acciones .btn-link {
+  margin-left: 0;
+}
+
 .com-panel:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;

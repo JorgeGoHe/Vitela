@@ -35,6 +35,7 @@ import {
   addBlankPage,
   removeMarginalText,
   addHeaderFooter,
+  addBates,
   addWatermark,
   duplicatePage,
   insertPdfAt,
@@ -203,6 +204,7 @@ import DialogoImagenes from "./components/DialogoImagenes";
 import DialogoAtajos from "./components/DialogoAtajos";
 import DialogoWord from "./components/DialogoWord";
 import DialogoEtiquetas from "./components/DialogoEtiquetas";
+import DialogoBates, { type BatesOpts } from "./components/DialogoBates";
 import "./App.css";
 
 const BASE_WIDTH = 900;
@@ -505,6 +507,7 @@ function App() {
   // `/PageLabels` la lista viene vacía y todo se llama por su número
   const [etiquetas, setEtiquetas] = useState<RangoEtiquetas[]>([]);
   const [etiquetasOpen, setEtiquetasOpen] = useState(false);
+  const [batesOpen, setBatesOpen] = useState(false);
   const [wmOpen, setWmOpen] = useState(false);
   const [marginalAsk, setMarginalAsk] = useState<{
     zona: "watermark" | "header" | "footer";
@@ -2988,6 +2991,30 @@ function App() {
     }
   }
 
+  /** «Numeración Bates»: el sello corrido de los expedientes, una sola
+   *  mutación para todas las páginas. */
+  async function aplicarBates(opts: BatesOpts) {
+    if (!workPath) return;
+    setBatesOpen(false);
+    try {
+      const cuantas = await addBates({
+        workPath,
+        prefijo: opts.prefijo,
+        sufijo: opts.sufijo,
+        digitos: opts.digitos,
+        empiezaEn: opts.empiezaEn,
+        position: opts.position,
+        pageIndices: opts.pageIndices,
+      });
+      afterMutation(pageCount);
+      setNotice(
+        `${plural(cuantas, "página numerada", "páginas numeradas")} · ${MOD}Z para deshacer`,
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function applyHeaderFooter(
     zonas: HeaderFooter,
     fontSize: number,
@@ -4513,6 +4540,13 @@ function App() {
           onClose={() => setEtiquetasOpen(false)}
         />
       )}
+      {batesOpen && (
+        <DialogoBates
+          pageCount={pageCount}
+          onConfirm={aplicarBates}
+          onClose={() => setBatesOpen(false)}
+        />
+      )}
       {wordAsk && (
         <DialogoWord
           pageCount={pageCount}
@@ -5013,6 +5047,7 @@ function App() {
                 deletePage={deletePage}
                 nombreDePagina={nombreDePagina}
                 onNumerar={() => setEtiquetasOpen(true)}
+                onBates={() => setBatesOpen(true)}
               />
             )}
           </aside>

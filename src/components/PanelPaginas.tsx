@@ -26,6 +26,7 @@ export default function PanelPaginas({
   extraerLote,
   nombreDePagina,
   onNumerar,
+  onBates,
 }: {
   thumbs: (string | null)[];
   pageIndex: number;
@@ -46,6 +47,8 @@ export default function PanelPaginas({
   nombreDePagina: (i: number) => string;
   /** «Numerar páginas…», donde Acrobat lo pone: en Organizar páginas. */
   onNumerar: () => void;
+  /** «Numeración Bates…», el vecino de la anterior en Acrobat. */
+  onBates: () => void;
 }) {
   // arrastre para reordenar: la página que se lleva y el hueco donde caería
   const arrastreRef = useRef<number | null>(null);
@@ -121,12 +124,25 @@ export default function PanelPaginas({
       {seleccion.size === 0 && pageCount > 1 && (
         <p className="opt-hint paginas-pista">
           Clic selecciona la página · ⌘ o ⇧ para varias
+        </p>
+      )}
+      {/* lo que Acrobat esconde en «Organizar páginas ▸ Más»: la numeración
+          del papel y el sello de los expedientes */}
+      {pageCount > 0 && (
+        <p className="opt-hint paginas-pista paginas-acciones">
           <button
             className="btn btn-link"
             title="Poner a este documento la numeración que se lee en la portada (i, ii, A-1…)"
             onClick={onNumerar}
           >
             Numerar páginas…
+          </button>
+          <button
+            className="btn btn-link"
+            title="El sello corrido de los expedientes: EXP-000123 en cada página"
+            onClick={onBates}
+          >
+            Numeración Bates…
           </button>
         </p>
       )}

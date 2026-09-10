@@ -689,6 +689,31 @@ export function deleteFormField(workPath: string, name: string): Promise<void> {
   return invoke("delete_form_field", { workPath, name });
 }
 
+/** Numeración Bates: el sello legal que lleva cada página de un expediente
+ *  —prefijo, número corrido con ceros delante y sufijo— en una esquina.
+ *  Devuelve cuántas páginas ha numerado. */
+export function addBates(args: {
+  workPath: string;
+  prefijo: string;
+  sufijo: string;
+  /** Cuántos dígitos ocupa el número, rellenando con ceros. Acrobat: 6. */
+  digitos: number;
+  /** Número de la primera página numerada. Acrobat: 1. */
+  empiezaEn: number;
+  /** Celda de un grid 3×3 ("nw".."se"); Acrobat: abajo a la derecha. */
+  position?: string;
+  fontSize?: number;
+  /** Índices de página; sin ellos (null), todas. */
+  pageIndices?: number[] | null;
+}): Promise<number> {
+  return invoke("add_bates", {
+    position: "se",
+    fontSize: 9,
+    pageIndices: null,
+    ...args,
+  });
+}
+
 export type HeaderFooter = {
   headerLeft?: string;
   headerCenter?: string;
