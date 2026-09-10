@@ -1218,7 +1218,7 @@ mod tests {
             "text".into(),
             Rect { x: 60.0, y: 200.0, w: 250.0, h: 28.0 },
             "nombre".into(),
-        )
+        None, None, None, None)
         .expect("campo de texto");
         crate::formularios2::create_form_field(
             work.clone(),
@@ -1226,7 +1226,7 @@ mod tests {
             "checkbox".into(),
             Rect { x: 60.0, y: 250.0, w: 20.0, h: 20.0 },
             "acepto".into(),
-        )
+        None, None, None, None)
         .expect("casilla");
         let campos = crate::formularios::get_form_fields(work.clone(), 0).expect("campos");
         let texto = campos.iter().find(|c| c.name == "nombre").unwrap().annot_index;
@@ -1331,7 +1331,7 @@ mod tests {
                 "checkbox".into(),
                 Rect { x: 60.0, y: 250.0, w: 20.0, h: 20.0 },
                 "acepto".into(),
-            )
+            None, None, None, None)
             .expect("casilla");
             if sin_ap {
                 // como los PDFs de fuera que dejan el marco en manos del

@@ -5,7 +5,7 @@ use crate::historial::mutacion;
 use pdfium_render::prelude::*;
 use serde::Serialize;
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct FormFieldInfo {
     pub annot_index: u16,
     pub name: String,
@@ -14,6 +14,9 @@ pub struct FormFieldInfo {
     pub checked: bool,
     /// Opciones de un desplegable o una lista (`/Opt`); vacío en el resto.
     pub options: Vec<String>,
+    /// Campo obligatorio (`/Ff` bit 2, heredado del padre si el widget no
+    /// lo lleva): la UI le pinta el borde del acento, como Acrobat.
+    pub required: bool,
     pub x: f32,
     pub y: f32,
     pub w: f32,
@@ -25,6 +28,11 @@ pub struct FormFieldInfo {
 #[tauri::command(async)]
 pub fn get_form_fields(path: String, page_index: u16) -> Result<Vec<FormFieldInfo>, String> {
     on_pdfium_thread(move || {
+        // el bit de «obligatorio» lo lee lopdf: pdfium-render 0.8 no expone
+        // el /Ff del campo, y sin él la UI no puede resaltar lo que hay que
+        // rellenar antes de enviar
+        let obligatorios = crate::with_lopdf(&path, |doc| Ok(banderas_de_annots(doc, page_index)))
+            .unwrap_or_default();
         with_doc(&path, |doc| {
             let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
             let geo = crate::Geo::de_pagina(&page);
@@ -107,6 +115,9 @@ pub fn get_form_fields(path: String, page_index: u16) -> Result<Vec<FormFieldInf
                     value,
                     checked,
                     options,
+                    required: obligatorios
+                        .get(i)
+                        .is_some_and(|f| f & crate::formularios2::OBLIGATORIO != 0),
                     x: caja.x,
                     y: caja.y,
                     w: caja.w,
@@ -150,6 +161,34 @@ pub fn set_form_text(
     }))
 }
 
+/// El `/Ff` de cada anotación de la página, en el orden de `/Annots` (el
+/// mismo `annot_index` que devuelve `get_form_fields`), heredándolo del
+/// `/Parent` cuando el widget no lo lleva —que es justo el caso de los
+/// grupos de radios, donde el campo es el padre—.
+fn banderas_de_annots(doc: &lopdf::Document, page_index: u16) -> Vec<i64> {
+    use lopdf::Object;
+    let Some(lista) = crate::anotaciones::lista_annots(doc, page_index) else {
+        return Vec::new();
+    };
+    lista
+        .iter()
+        .map(|o| {
+            let Object::Reference(id) = o else { return 0 };
+            let Ok(d) = doc.get_object(*id).and_then(|o| o.as_dict()) else {
+                return 0;
+            };
+            if let Ok(ff) = d.get(b"Ff").and_then(|o| o.as_i64()) {
+                return ff;
+            }
+            d.get(b"Parent")
+                .and_then(|o| o.as_reference())
+                .ok()
+                .and_then(|p| doc.get_object(p).ok()?.as_dict().ok()?.get(b"Ff").ok()?.as_i64().ok())
+                .unwrap_or(0)
+        })
+        .collect()
+}
+
 /// Etiquetas de las opciones de un desplegable o una lista, en su orden.
 fn etiquetas(opciones: &PdfFormFieldOptions) -> Vec<String> {
     opciones
@@ -158,7 +197,14 @@ fn etiquetas(opciones: &PdfFormFieldOptions) -> Vec<String> {
         .collect()
 }
 
-/// Marca o desmarca una casilla (o selecciona un radio button).
+/// Marca o desmarca una casilla, o elige un botón de radio.
+///
+/// **Los radios van por lopdf**, no por PDFium: un grupo de radios es un
+/// solo campo con un `/Kids` por opción, y elegir uno es escribir el `/V`
+/// del padre y el `/AS` de cada hijo (el elegido con su valor de
+/// exportación, los hermanos a `/Off`). Dejárselo a PDFium hacía que
+/// desmarcar los hermanos dependiera de cómo estuviera armado el
+/// documento; así es explícito y se ve en los bytes.
 #[tauri::command(async)]
 pub fn set_form_checked(
     work_path: String,
@@ -166,6 +212,15 @@ pub fn set_form_checked(
     annot_index: u16,
     checked: bool,
 ) -> Result<(), String> {
+    let radio = {
+        let w = work_path.clone();
+        on_pdfium_thread(move || {
+            crate::with_lopdf(&w, |doc| Ok(padre_de_radio(doc, page_index, annot_index)))
+        })?
+    };
+    if let Some((widget_id, padre_id)) = radio {
+        return elige_radio(work_path, widget_id, padre_id, checked);
+    }
     mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let doc = pdfium
@@ -194,6 +249,104 @@ pub fn set_form_checked(
         save_and_close(doc, &work_path)?;
         Ok(())
     }))
+}
+
+/// Si el widget de esa posición es una opción de un grupo de radios,
+/// devuelve `(widget, campo del grupo)`. El campo es el `/Parent` (los
+/// hermanos comparten uno) o el propio widget cuando el grupo tiene una
+/// sola opción y va todo en el mismo diccionario.
+fn padre_de_radio(
+    doc: &lopdf::Document,
+    page_index: u16,
+    annot_index: u16,
+) -> Option<(lopdf::ObjectId, lopdf::ObjectId)> {
+    use lopdf::Object;
+    let lista = crate::anotaciones::lista_annots(doc, page_index)?;
+    let Object::Reference(widget_id) = lista.get(annot_index as usize)? else {
+        return None;
+    };
+    let w = doc.get_object(*widget_id).ok()?.as_dict().ok()?;
+    let campo_id = match w.get(b"Parent") {
+        Ok(Object::Reference(rid)) => *rid,
+        _ => *widget_id,
+    };
+    let campo = doc.get_object(campo_id).ok()?.as_dict().ok()?;
+    let es_radio = campo.get(b"FT").and_then(|o| o.as_name()).ok()? == b"Btn"
+        && campo.get(b"Ff").and_then(|o| o.as_i64()).unwrap_or(0)
+            & crate::formularios2::RADIO_FF
+            != 0;
+    es_radio.then_some((*widget_id, campo_id))
+}
+
+/// Escribe la elección de un grupo de radios: el `/V` del campo y el `/AS`
+/// de cada hijo.
+fn elige_radio(
+    work_path: String,
+    widget_id: lopdf::ObjectId,
+    padre_id: lopdf::ObjectId,
+    checked: bool,
+) -> Result<(), String> {
+    crate::cirugia(&work_path, move |doc| {
+        use lopdf::Object;
+        // el valor de exportación de esta opción: el estado de su /AP que
+        // no es «Off»
+        let export = doc
+            .get_object(widget_id)
+            .and_then(|o| o.as_dict())
+            .ok()
+            .and_then(|w| w.get(b"AP").ok().cloned())
+            .and_then(|ap| match ap {
+                Object::Dictionary(d) => d.get(b"N").ok().cloned(),
+                Object::Reference(rid) => doc
+                    .get_object(rid)
+                    .ok()?
+                    .as_dict()
+                    .ok()?
+                    .get(b"N")
+                    .ok()
+                    .cloned(),
+                _ => None,
+            })
+            .and_then(|n| match n {
+                Object::Dictionary(d) => d
+                    .iter()
+                    .map(|(k, _)| String::from_utf8_lossy(k).into_owned())
+                    .find(|k| k != "Off"),
+                _ => None,
+            })
+            .ok_or("Esa opción no tiene valor de exportación")?;
+
+        let kids: Vec<lopdf::ObjectId> = doc
+            .get_object(padre_id)
+            .and_then(|o| o.as_dict())
+            .ok()
+            .and_then(|d| d.get(b"Kids").ok().cloned())
+            .and_then(|k| match k {
+                Object::Array(a) => Some(
+                    a.iter()
+                        .filter_map(|o| o.as_reference().ok())
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+            .unwrap_or_else(|| vec![widget_id]);
+
+        // los hermanos se apagan: es lo que distingue un grupo de radios de
+        // tres casillas sueltas
+        for kid in kids {
+            let encendido = checked && kid == widget_id;
+            let estado = if encendido { export.as_bytes().to_vec() } else { b"Off".to_vec() };
+            if let Ok(d) = doc.get_object_mut(kid).and_then(|o| o.as_dict_mut()) {
+                d.set("AS", Object::Name(estado));
+            }
+        }
+        let v = if checked { export.as_bytes().to_vec() } else { b"Off".to_vec() };
+        doc.get_object_mut(padre_id)
+            .and_then(|o| o.as_dict_mut())
+            .map_err(|e| e.to_string())?
+            .set("V", Object::Name(v));
+        crate::formularios2::pide_apariencias(doc)
+    })
 }
 
 /// Elige una opción de un desplegable o una lista. `field_index` es el

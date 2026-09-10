@@ -341,7 +341,7 @@ mod tests {
     fn cirugia_y_metadatos_pasan_por_historial() {
         let work = fixture("cirugia", &["Página"]);
         let r = crate::Rect { x: 50.0, y: 50.0, w: 120.0, h: 20.0 };
-        crate::formularios2::create_form_field(work.clone(), 0, "text".into(), r, "campo".into())
+        crate::formularios2::create_form_field(work.clone(), 0, "text".into(), r, "campo".into(), None, None, None, None)
             .unwrap();
         assert_eq!(crate::formularios::get_form_fields(work.clone(), 0).unwrap().len(), 1);
         crate::documento::set_metadata(
