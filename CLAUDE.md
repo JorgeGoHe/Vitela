@@ -465,11 +465,9 @@ compila los instaladores a mano o al etiquetar `v*`.
     2..n **heredan el color** del bloque cuando no se pide ninguno.
     El espaciado entre caracteres (`Tc`) se conectó en el ciclo 6 (ver
     abajo): pdfium-render 0.8 no lo expone, así que lo escribe un segundo
-    pase con lopdf.
-    Queda fuera el espaciado entre caracteres (`Tc`): pdfium-render 0.8 no
-    lo expone y falsearlo con espacios sería mentir. **El mando de la UI se
-    retiró en el ciclo 6** (R24): existía, viajaba hasta el `invoke` y
-    moría ahí, y un mando que no hace nada es peor que no tenerlo.
+    pase con lopdf. El mando de la UI se retiró ese mismo ciclo por un
+    desencuentro entre las dos mitades (R24) y vuelve en el 7 (R32); desde
+    R32b el operador sobrevive a mover y a estirar el bloque.
   - `crop_image(work, page, object_index, rect)` (`imagenes.rs`): recorta
     el **bitmap**, no la caja, por el camino de `replace_image`, así que
     lo que queda fuera desaparece del fichero en vez de esconderse detrás.
@@ -1208,8 +1206,6 @@ compila los instaladores a mano o al etiquetar `v*`.
    contextual lleva interlineado y espaciado: el interlineado se resuelve
    **colocando los objetos** (en un PDF no hay `TL` que valga entre objetos
    distintos) y el espaciado sí es el operador `Tc`, escrito con lopdf.
-   contextual lleva interlineado (que no es `TL`: es dónde se coloca el
-   objeto de la línea siguiente).
    Imágenes: insertar, mover,
    redimensionar, girar, voltear, ordenar, recortar (`crop_image`, desde el
    popover), reemplazar y borrar objetos de imagen

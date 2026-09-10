@@ -1238,6 +1238,43 @@ pub(crate) mod tests {
         assert_eq!(mensaje_llano(mensaje_llano(llano)), llano);
     }
 
+    /// **R44b (AC-070).** CLAUDE.md se escribe a dos manos —cada ciclo lo
+    /// tocan la rama de backend y la de interfaz sobre los mismos
+    /// párrafos— y dos veces seguidas se ha colado la misma línea pegada
+    /// detrás de su versión nueva (AC-059 y AC-070). Un párrafo que se
+    /// contradice se lee peor que uno que falta.
+    ///
+    /// Igual que hay test cruzado para los comandos y para el menú, aquí
+    /// hay uno tonto para el documento: **ninguna línea larga repetida**.
+    /// Cuarenta caracteres es el corte: por debajo son títulos, cierres de
+    /// bloque y viñetas que se repiten con razón.
+    #[test]
+    fn claude_md_no_arrastra_lineas_repetidas() {
+        let ruta = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../CLAUDE.md");
+        let texto = std::fs::read_to_string(&ruta)
+            .unwrap_or_else(|e| panic!("no se ha podido leer {ruta:?}: {e}"));
+        let mut vistas: std::collections::HashMap<&str, Vec<usize>> = Default::default();
+        for (n, linea) in texto.lines().enumerate() {
+            let l = linea.trim();
+            if l.chars().count() <= 40 {
+                continue;
+            }
+            vistas.entry(l).or_default().push(n + 1);
+        }
+        let mut repetidas: Vec<String> = vistas
+            .into_iter()
+            .filter(|(_, donde)| donde.len() > 1)
+            .map(|(l, donde)| format!("líneas {donde:?}: {l}"))
+            .collect();
+        repetidas.sort();
+        assert!(
+            repetidas.is_empty(),
+            "CLAUDE.md arrastra líneas repetidas —casi siempre un párrafo \
+             de una versión anterior pegado detrás de la nueva—:\n  {}",
+            repetidas.join("\n  ")
+        );
+    }
+
     /// Ningún error que llegue a la UI puede llevar jerga de Rust, de
     /// PDFium ni del sistema: quien lo lee no sabe qué es un content stream.
     #[test]
