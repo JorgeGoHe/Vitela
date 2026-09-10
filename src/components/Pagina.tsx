@@ -230,6 +230,7 @@ function Pagina({
     tool,
     onPageMutated,
     onError,
+    onNotice,
   });
   const formularios = useFormularios({
     workPath,

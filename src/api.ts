@@ -83,7 +83,12 @@ export function addTextBlock(args: {
 }
 
 /** Reescribe un bloque del content stream. Sin `color` ni `align` se queda
- *  con los que tuviera: editar no debe recolorear sin querer. */
+ *  con los que tuviera: editar no debe recolorear sin querer.
+ *
+ *  Con `reflow` el párrafo entero se reparte de nuevo al ancho que tenía y
+ *  las líneas de abajo suben o bajan, en vez de dejar la primera larga y
+ *  meter las sobras como objetos nuevos debajo. La UI lo pide cuando el
+ *  bloque ocupa más de una línea, que es cuando hay algo que recolocar. */
 export function editTextBlock(args: {
   workPath: string;
   pageIndex: number;
@@ -92,11 +97,13 @@ export function editTextBlock(args: {
   color?: Rgba | null;
   align?: Alineacion | null;
   lineHeight?: number | null;
+  reflow?: boolean | null;
 }): Promise<void> {
   return invoke("edit_text_block", {
     color: null,
     align: null,
     lineHeight: null,
+    reflow: null,
     ...args,
   });
 }

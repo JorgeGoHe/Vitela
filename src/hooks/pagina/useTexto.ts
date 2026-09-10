@@ -7,6 +7,8 @@ import {
   resizeTextBlock,
 } from "../../api";
 import {
+  ajustaLineas,
+  altoCuadro,
   hexToRgba,
   rgbaToHex,
   type Mode,
@@ -35,6 +37,7 @@ export function useTexto(ctx: {
   tool: ToolProps;
   onPageMutated: (page: number) => void;
   onError: (e: unknown) => void;
+  onNotice: (texto: string) => void;
 }) {
   const {
     workPath,
@@ -49,6 +52,7 @@ export function useTexto(ctx: {
     tool,
     onPageMutated,
     onError,
+    onNotice,
   } = ctx;
   // color y alineación de la fila contextual; `null` es «como esté», que es
   // lo que hace falta para que editar un párrafo no lo recoloree sin querer
@@ -188,18 +192,44 @@ export function useTexto(ctx: {
     }
   }
 
+  /** El bloque ocupa más de una línea: entonces hay párrafo que recolocar y
+   *  el reflujo tiene sentido. Un rótulo de una línea se reescribe como
+   *  siempre. */
+  function esParrafo(b: TextBlock, texto: string): boolean {
+    return b.h > b.font_size * 1.5 || b.text.includes("\n") || texto.includes("\n");
+  }
+
   async function submitBlockDraft() {
     if (!workPath || !blockDraft) return;
+    const parrafo = esParrafo(blockDraft.block, blockDraft.text);
     try {
       await editTextBlock({
         workPath,
         pageIndex: index,
         objectIndex: blockDraft.block.object_index,
         newText: blockDraft.text,
+        // el párrafo se reparte de nuevo al ancho que tenía; una línea
+        // suelta se reescribe como siempre
+        reflow: parrafo,
         ...formato,
       });
       setBlockDraft(null);
       onPageMutated(index);
+      // el párrafo puede crecer más de lo que queda de papel: se dice, en
+      // vez de escribir fuera de la página en silencio
+      if (parrafo) {
+        const lineas = ajustaLineas(
+          blockDraft.text,
+          blockDraft.block.w,
+          blockDraft.block.font_size,
+        ).length;
+        const alto = altoCuadro(lineas, blockDraft.block.font_size);
+        if (blockDraft.block.y + alto > size.height) {
+          onNotice(
+            "El párrafo no cabe en la página; el texto que sobra queda fuera del papel",
+          );
+        }
+      }
     } catch (e) {
       onError(e);
     }
