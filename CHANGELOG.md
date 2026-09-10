@@ -12,6 +12,62 @@ aquí abajo es un ciclo, tenga versión propia o no.
 
 ---
 
+## 0.5.0 — ciclo 10 (cierre)
+
+El ciclo que lleva la tabla de paridad a su techo: no abre funciones
+nuevas, arregla lo que estaba a medias y se somete a la regresión completa.
+
+### Añadido
+
+- Un PDF cifrado para unos destinatarios se abre con tu certificado y su
+  clave privada (.p12 o PEM), con el mismo selector que firmar.
+- Al firmar con LTV se consulta si el certificado seguía vigente (OCSP) y la
+  prueba viaja dentro del PDF; al abrir se lee de ahí, sin salir a la red.
+- Comparar mira también las imágenes, no solo el texto, y ocupa la ventana
+  entera con las hojas al ancho de su panel, recorrible con el teclado.
+- Buscar en una carpeta tiene su entrada en el menú Editar (⇧⌘F), funciona
+  sin ningún documento abierto, tiene botón, recuerda la carpeta y si mira
+  las subcarpetas, y al cancelar dice hasta dónde llegó.
+- Exportar imágenes acepta un rango de páginas; recortar acepta márgenes
+  numéricos; al corregir un texto se avisa antes si va a cambiar de letra.
+- Los destinatarios del cifrado se enseñan por su nombre, no por el del
+  fichero del certificado.
+- Este registro de cambios.
+
+### Cambiado
+
+- Los comentarios y los campos rellenados salen también en el folleto, en
+  varias páginas por hoja y en el póster; «Solo el documento» los quita.
+- Recuperar un documento tras un cierre inesperado ya no lo copia otra vez.
+- La biblioteca de imágenes distingue de verdad firma, iniciales y sello, se
+  puede cambiar la ranura y borrar pide confirmación.
+- El fondo de color sólido puede ser opaco, y lo es por defecto.
+- Guardar respeta con qué programa se hizo el original.
+- «Abrir…» y «Guardar» están en el grupo Archivo del menú Acciones, y
+  «Quitar la contraseña…» se atenúa con su motivo en vez de esconderse.
+- Los mensajes dicen el nombre del fichero y dejan la ruta completa para el
+  título; el sello dinámico pone tu nombre aunque no lo hayas escrito en
+  preferencias.
+
+### Corregido
+
+- Subir o bajar una página borraba los marcadores, la numeración, los
+  adjuntos, la vista inicial y el formulario entero.
+- El póster se componía en miles de hojas: el porcentaje se leía como
+  factor.
+- Imprimir en folleto, N-up o póster no imprimía nada; «Vista inicial» no
+  se guardaba nunca; la banda decía «con sello de tiempo» aunque el servidor
+  no hubiera contestado.
+- Un PDF firmado y luego modificado se decía «no comprobado» en vez de
+  «modificado».
+- Los avisos de progreso y de error quedaban escondidos detrás del velo de
+  un diálogo abierto.
+- El Optimizer no contaba la imagen del fondo y enseñaba sus categorías en
+  la jerga del motor.
+- Esc no cerraba el desplegable de reglas, guías y cuadrícula.
+
+---
+
 ## 0.4.0 — ciclo 9
 
 ### Añadido
