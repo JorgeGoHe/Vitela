@@ -1103,7 +1103,15 @@ fn mueve_la_llamada(
     Ok(())
 }
 
-/// La goma de borrar del modo Dibujar: quita del trazo los tramos que caen
+/// La goma de borrar del modo Dibujar, **trazo a trazo**.
+///
+/// Lo sustituye [`erase_ink_area`], que busca él los trazos que toca la
+/// goma y los hace todos en una sola mutación (R34b). Este se queda
+/// mientras la interfaz de esta rama siga llamándolo; **se retira al
+/// integrar**, como se retiró `add_highlight` cuando `add_markup` pasó a
+/// hacer las tres marcas.
+///
+/// Quita del trazo los tramos que caen
 /// dentro del rectángulo y deja el resto, en vez de llevarse la anotación
 /// entera. `rect` va en el espacio propio de la página.
 ///

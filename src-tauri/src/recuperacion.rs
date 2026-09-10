@@ -110,13 +110,18 @@ pub fn autosave_state(
 
 /// Se cerró bien: no hay nada que recuperar. Lo llama la UI al cerrar el
 /// documento y al salir después de guardar o de descartar, y también
-/// «Descartar» en la banda de recuperación. `work_path` es opcional y solo
-/// sirve para no borrar el apunte de otro documento: sin él se borra el que
-/// haya. Nunca falla: si no hay apunte, no hay nada que hacer.
+/// «Descartar» en la banda de recuperación.
+///
+/// `work_path` es **obligatorio** desde el ciclo 7: el apunte se borra solo
+/// si es de ese documento. Con varios documentos abiertos, cerrar uno no
+/// puede llevarse el trabajo sin guardar de otro, y «bórrame el apunte que
+/// haya» deja de ser una orden que alguien pueda querer dar.
+///
+/// Nunca falla: si no hay apunte, no hay nada que hacer.
 #[tauri::command(async)]
-pub fn borra_sesion(work_path: Option<String>) -> Result<(), String> {
+pub fn borra_sesion(work_path: String) -> Result<(), String> {
     let Some(f) = fichero() else { return Ok(()) };
-    borra_en(&f, work_path.as_deref());
+    borra_en(&f, Some(&work_path));
     Ok(())
 }
 

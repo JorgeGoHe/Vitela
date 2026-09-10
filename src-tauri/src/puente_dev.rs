@@ -264,7 +264,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "history_state" => cmd!(historial::history_state, { work_path: String }),
         "squash_history" => cmd!(historial::squash_history, { work_path: String, steps: u16 }),
         "autosave_state" => cmd!(crate::recuperacion::autosave_state, { work_path: String, original_path: Option<String>, modified: bool }),
-        "borra_sesion" => cmd!(crate::recuperacion::borra_sesion, { work_path: Option<String> }),
+        "borra_sesion" => cmd!(crate::recuperacion::borra_sesion, { work_path: String }),
         "recover_session" => crate::recuperacion::recover_session()
             .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
         "list_recent" => crate::recientes::list_recent()
@@ -479,7 +479,13 @@ mod tests {
     /// es una función rota que el usuario no puede usar, así que la lista
     /// tiene que quedar vacía: está aquí solo mientras el arreglo vive en
     /// la otra mitad.
-    const ARGUMENTOS_PENDIENTES: &[(&str, &str)] = &[];
+    const ARGUMENTOS_PENDIENTES: &[(&str, &str)] = &[(
+        "borra_sesion",
+        "pendiente_ui — `work_path` pasa a ser obligatorio (con varios \
+         documentos abiertos, cerrar uno no puede llevarse el apunte de \
+         otro). La UI del ciclo 7 lo manda; esta rama trae la del 6, que \
+         llama sin argumentos",
+    )];
 
     /// Parámetros opcionales de un comando que **ninguna** llamada de la UI
     /// manda, con su motivo. Un `Option<T>` que nadie manda es una capacidad
@@ -507,13 +513,6 @@ mod tests {
              seis comandos que crean anotaciones y no en este, así que el \
              estado de revisión se firma con el usuario del sistema. Es una \
              línea en el hook del panel de comentarios",
-        ),
-        (
-            "borra_sesion",
-            "work_path",
-            "pendiente_ui — H6: con un solo documento abierto basta borrar el \
-             apunte de sesión sin decir cuál; en cuanto haya varios, cerrar \
-             uno solo puede llevarse el suyo",
         ),
     ];
 

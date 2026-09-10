@@ -65,7 +65,7 @@ pub fn pdf_from_images(
         let pdfium = pdfium()?;
         let mut doc = pdfium.create_new_pdf().map_err(crate::mensaje_llano)?;
         const MARGEN: f32 = 36.0;
-        let mut saltadas: Vec<ImagenSaltada> = Vec::new();
+        let mut informe = InformeImagenes::default();
         for ruta in &image_paths {
             // una foto que no se deja leer no se lleva por delante el lote:
             // se salta, se apunta con su motivo y el recuento lo dice
@@ -74,13 +74,13 @@ pub fn pdf_from_images(
             let img = match image::open(ruta) {
                 Ok(img) => img,
                 Err(e) => {
-                    saltadas.push(ImagenSaltada::nueva(ruta, motivo_de_imagen(&e)));
+                    informe.salta(ruta, motivo_de_imagen(&e));
                     continue;
                 }
             };
             let (iw, ih) = (img.width() as f32, img.height() as f32);
             if iw < 1.0 || ih < 1.0 {
-                saltadas.push(ImagenSaltada::nueva(ruta, "La imagen no tiene tamaño".into()));
+                informe.salta(ruta, "La imagen no tiene tamaño".into());
                 continue;
             }
             let papel = match tamano.as_str() {
@@ -118,9 +118,8 @@ pub fn pdf_from_images(
         }
         let total = doc.pages().len();
         if total == 0 {
-            let cuales = saltadas
-                .iter()
-                .map(|s| format!("{} ({})", s.nombre, s.motivo))
+            let cuales = (0..informe.saltadas.len())
+                .map(|i| format!("{} ({})", informe.nombre(i), informe.motivos[i]))
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(format!("No se ha podido leer ninguna de las imágenes: {cuales}"));
@@ -128,35 +127,40 @@ pub fn pdf_from_images(
         doc.save_to_file(&dest_path).map_err(|e| {
             crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}"))
         })?;
-        Ok(InformeImagenes { paginas: total, saltadas })
+        informe.paginas = total;
+        Ok(informe)
     })
 }
 
 /// Lo que ha salido de «Crear PDF desde imágenes»: las páginas escritas y
 /// las imágenes que se han quedado fuera, con su motivo.
+///
+/// `saltadas` son **las rutas tal como llegaron**, para que la UI pueda
+/// compararlas con su lista y marcar esas filas del diálogo, que es donde
+/// el usuario las eligió. `motivos` va en paralelo, una frase en llano por
+/// ruta y en el mismo orden: sin ella, «no se ha podido leer» es lo único
+/// que se puede decir de una foto corrupta, de una que ya no está y de un
+/// formato que Vitela no entiende.
 #[derive(serde::Serialize, Debug, Default)]
 pub struct InformeImagenes {
     pub paginas: u16,
-    pub saltadas: Vec<ImagenSaltada>,
+    pub saltadas: Vec<String>,
+    pub motivos: Vec<String>,
 }
 
-/// Una imagen que no ha llegado a ser página. Lleva la ruta —para que la UI
-/// marque su fila en el diálogo, que es donde el usuario la eligió— y el
-/// nombre suelto, que es lo que se enseña.
-#[derive(serde::Serialize, Debug)]
-pub struct ImagenSaltada {
-    pub ruta: String,
-    pub nombre: String,
-    pub motivo: String,
-}
+impl InformeImagenes {
+    fn salta(&mut self, ruta: &str, motivo: String) {
+        self.saltadas.push(ruta.to_string());
+        self.motivos.push(motivo);
+    }
 
-impl ImagenSaltada {
-    fn nueva(ruta: &str, motivo: String) -> Self {
-        let nombre = std::path::Path::new(ruta)
+    /// El nombre suelto de la saltada `i`, que es lo que se enseña.
+    fn nombre(&self, i: usize) -> String {
+        let ruta = &self.saltadas[i];
+        std::path::Path::new(ruta)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| ruta.to_string());
-        Self { ruta: ruta.to_string(), nombre, motivo }
+            .unwrap_or_else(|| ruta.clone())
     }
 }
 
@@ -689,28 +693,26 @@ mod tests {
         .expect("el lote sigue con las que sí se leen");
         assert_eq!(hecho.paginas, 2, "dos páginas de cuatro imágenes");
         assert_eq!(hecho.saltadas.len(), 2, "y dos que se han quedado fuera");
-        assert_eq!(hecho.saltadas[0].nombre, "pdf-imagenes-rota.png");
-        assert_eq!(hecho.saltadas[0].ruta, rota.to_string_lossy());
+        assert_eq!(hecho.motivos.len(), 2, "un motivo por saltada, en su orden");
+        // las rutas vuelven **tal como llegaron**: es lo que la UI compara
+        // con su lista para marcar esas filas del diálogo
+        assert_eq!(hecho.saltadas[0], rota.to_string_lossy());
         assert!(
-            hecho.saltadas[0].motivo.contains("dañado")
-                || hecho.saltadas[0].motivo.contains("formato"),
+            hecho.motivos[0].contains("dañado") || hecho.motivos[0].contains("formato"),
             "el motivo: {}",
-            hecho.saltadas[0].motivo
+            hecho.motivos[0]
         );
-        assert_eq!(hecho.saltadas[1].nombre, "pdf-imagenes-fantasma.png");
+        assert_eq!(hecho.saltadas[1], que_no_esta.to_string_lossy());
         assert!(
-            hecho.saltadas[1].motivo.contains("ya no está"),
+            hecho.motivos[1].contains("ya no está"),
             "el motivo: {}",
-            hecho.saltadas[1].motivo
+            hecho.motivos[1]
         );
         // y ningún motivo habla en inglés ni en la jerga del crate `image`
-        for s in &hecho.saltadas {
+        for m in &hecho.motivos {
             assert!(
-                !s.motivo.contains("format")
-                    && !s.motivo.contains("Error")
-                    && !s.motivo.contains("os error"),
-                "el motivo tiene que estar en llano: {}",
-                s.motivo
+                !m.contains("format") && !m.contains("Error") && !m.contains("os error"),
+                "el motivo tiene que estar en llano: {m}"
             );
         }
         // y si no se lee ninguna, sigue siendo un error y se dice cuál
