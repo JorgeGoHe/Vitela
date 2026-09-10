@@ -87,7 +87,36 @@ pub fn credenciales_p12(p12_bytes: &[u8], password: &str) -> Result<Credenciales
     Ok(Credenciales { cert, key, cadena })
 }
 
-/// Lo que sale de firmar, para que la interfaz pueda contarlo: si la
+/// **La clave privada del usuario**, en los dos formatos que ya acepta
+/// firmar y con el mismo selector: un `.p12`/`.pfx` con su contraseña o un
+/// PEM sin cifrar. Es lo que hace falta para abrir un PDF cifrado para tu
+/// certificado, donde el certificado en sí no pinta nada: quien abre el
+/// sobre es la clave.
+pub(crate) fn clave_privada(
+    key_path: &str,
+    password: Option<&str>,
+) -> Result<rsa::RsaPrivateKey, String> {
+    let bytes = std::fs::read(key_path).map_err(|e| {
+        crate::mensaje_llano(format!("No se ha podido leer {key_path}: {e}"))
+    })?;
+    let minus = key_path.to_lowercase();
+    if minus.ends_with(".p12") || minus.ends_with(".pfx") {
+        return credenciales_p12(&bytes, password.unwrap_or("")).map(|c| c.key);
+    }
+    let pem = String::from_utf8_lossy(&bytes);
+    rsa::RsaPrivateKey::from_pkcs8_pem(&pem)
+        .or_else(|_| {
+            use rsa::pkcs1::DecodeRsaPrivateKey;
+            rsa::RsaPrivateKey::from_pkcs1_pem(&pem)
+        })
+        .map_err(|_| {
+            "Ese fichero no lleva una clave privada que Vitela sepa leer: hace falta un \
+             .p12 con su contraseña o un PEM sin cifrar"
+                .to_string()
+        })
+}
+
+/// Lo que sale de firmar, para que la interfaz pueda contarlo: si la/// Lo que sale de firmar, para que la interfaz pueda contarlo: si la
 /// firma lleva sello de tiempo, cuál, y —si se pidió y no se pudo— por
 /// qué se ha firmado sin él.
 ///

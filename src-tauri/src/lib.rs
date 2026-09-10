@@ -501,7 +501,12 @@ fn mensaje_apertura(e: &PdfiumError, path: &str) -> String {
 }
 
 #[tauri::command(async)]
-fn open_pdf(path: String, password: Option<String>) -> Result<DocumentInfo, String> {
+fn open_pdf(
+    path: String,
+    password: Option<String>,
+    key_path: Option<String>,
+    key_password: Option<String>,
+) -> Result<DocumentInfo, String> {
     let work = work_copy_path(&path);
     let work_path = work.to_string_lossy().into_owned();
     on_pdfium_thread(move || {
@@ -512,20 +517,35 @@ fn open_pdf(path: String, password: Option<String>) -> Result<DocumentInfo, Stri
                 PdfiumInternalError::PasswordError,
             )) => return Err("PASSWORD_REQUIRED".into()),
             Err(e) => {
-                // un PDF cifrado **por certificado** no se abre con
-                // contraseña ninguna: hay que decir qué es en vez de
-                // dejar al usuario probando claves. Vitela sabe
-                // escribirlos (`encrypt_pdf_cert`) y todavía no abrirlos:
-                // haría falta la clave privada del destinatario, que hoy
-                // no tiene por dónde entrar
-                if std::fs::read(&path)
-                    .map(|b| b.windows(12).any(|v| v == b"Adobe.PubSec"))
-                    .unwrap_or(false)
-                {
-                    return Err("Este PDF está cifrado para unos destinatarios \
-concretos, no con contraseña. Vitela todavía no sabe abrir estos: ábrelo con \
-el programa donde tengas instalado tu certificado"
-                        .into());
+                // un PDF cifrado **para unos destinatarios** no se abre con
+                // contraseña ninguna: lo que hace falta es la clave privada
+                // del destinatario. Sin ella se contesta `CERT_KEY_REQUIRED`,
+                // que es lo que hace que la interfaz pida el certificado en
+                // vez de dejar al usuario probando contraseñas que no existen
+                if seguridad::es_pubsec(&path) {
+                    let Some(kp) = key_path.as_deref() else {
+                        return Err("CERT_KEY_REQUIRED".into());
+                    };
+                    seguridad::descifra_pubsec(
+                        &path,
+                        &work_path,
+                        kp,
+                        key_password.as_deref(),
+                    )?;
+                    let doc = pdfium
+                        .load_pdf_from_file(&work_path, None)
+                        .map_err(|e| mensaje_apertura(&e, &path))?;
+                    let page_count = doc.pages().len();
+                    drop(doc);
+                    copias_abiertas().insert(work_path.clone());
+                    menu::refleja_documento(true);
+                    return Ok(DocumentInfo {
+                        page_count,
+                        work_path,
+                        // el original va cifrado y la copia de trabajo no:
+                        // lo mismo que con una contraseña
+                        had_password: true,
+                    });
                 }
                 return Err(mensaje_apertura(&e, &path));
             }
@@ -1466,8 +1486,8 @@ pub(crate) mod tests {
         crea_pdf(&["Uno A", "Uno B", "Uno C"], &uno);
         crea_pdf(&["Otro A", "Otro B"], &otro);
 
-        let a = open_pdf(uno.to_string_lossy().into_owned(), None).expect("abrir el primero");
-        let b = open_pdf(otro.to_string_lossy().into_owned(), None).expect("abrir el segundo");
+        let a = open_pdf(uno.to_string_lossy().into_owned(), None, None, None).expect("abrir el primero");
+        let b = open_pdf(otro.to_string_lossy().into_owned(), None, None, None).expect("abrir el segundo");
         assert_eq!(a.page_count, 3);
         assert_eq!(b.page_count, 2);
 
@@ -1761,18 +1781,19 @@ pub(crate) mod tests {
         )
         .expect("escribir");
         let ps = pubsec.to_string_lossy().into_owned();
-        assert!(
-            open_pdf(ps.clone(), None)
-                .unwrap_err()
-                .contains("destinatarios"),
-            "un PDF /Adobe.PubSec se reconoce y se explica, no se trata como dañado"
+        // sin clave privada la respuesta es un código, no una frase: es lo
+        // que hace que la interfaz pida el certificado en vez de enseñar un
+        // muro (`CERT_KEY_REQUIRED`, como `PASSWORD_REQUIRED`)
+        assert_eq!(
+            open_pdf(ps.clone(), None, None, None).unwrap_err(),
+            "CERT_KEY_REQUIRED"
         );
 
         let casos: Vec<(&str, String)> = vec![
-            ("abrir un fichero dañado", open_pdf(d.clone(), None).unwrap_err()),
+            ("abrir un fichero dañado", open_pdf(d.clone(), None, None, None).unwrap_err()),
             (
-                "abrir un PDF cifrado para unos destinatarios",
-                open_pdf(ps.clone(), None).unwrap_err(),
+                "abrir un PDF cifrado para destinatarios con algo que no es una clave",
+                open_pdf(ps.clone(), None, Some(d.clone()), None).unwrap_err(),
             ),
             ("renderizar un fichero dañado", render_page_b64(d.clone(), 0, 100, None).unwrap_err()),
             (
@@ -1941,7 +1962,7 @@ pub(crate) mod tests {
     fn close_document_borra_copia_e_instantaneas() {
         let pdf = std::env::temp_dir().join("editor_pdf_test_cerrar.pdf");
         crea_pdf(&["Uno", "Dos"], &pdf);
-        let info = open_pdf(pdf.to_string_lossy().into_owned(), None).expect("abrir");
+        let info = open_pdf(pdf.to_string_lossy().into_owned(), None, None, None).expect("abrir");
         let work = info.work_path.clone();
         assert!(copias_abiertas().contains(&work));
         paginas::rotate_page(work.clone(), 0).expect("rotar (deja instantánea)");
@@ -2083,7 +2104,7 @@ pub(crate) mod tests {
         };
         assert_eq!(creator, "Vitela");
         // y el documento sigue abriéndose y con su texto
-        let info = open_pdf(destino.to_string_lossy().into_owned(), None).expect("reabrir");
+        let info = open_pdf(destino.to_string_lossy().into_owned(), None, None, None).expect("reabrir");
         assert_eq!(info.page_count, 1);
         close_document(info.work_path).expect("cerrar");
 
@@ -2094,14 +2115,14 @@ pub(crate) mod tests {
 
     #[test]
     fn errores_de_apertura_en_castellano() {
-        let e = open_pdf("/no/existe/de-verdad.pdf".into(), None).unwrap_err();
+        let e = open_pdf("/no/existe/de-verdad.pdf".into(), None, None, None).unwrap_err();
         assert_eq!(
             e,
             "No se encuentra «de-verdad.pdf»: puede que se haya movido, cambiado de nombre o borrado"
         );
         let txt = std::env::temp_dir().join("vitela-no-soy-un-pdf.txt");
         std::fs::write(&txt, b"esto no es un PDF").expect("escribir txt");
-        let e = open_pdf(txt.to_string_lossy().to_string(), None).unwrap_err();
+        let e = open_pdf(txt.to_string_lossy().to_string(), None, None, None).unwrap_err();
         assert_eq!(e, "El fichero no es un PDF válido o está dañado");
         std::fs::remove_file(&txt).ok();
     }

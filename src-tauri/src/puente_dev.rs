@@ -183,7 +183,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         imagenes, paginas, paginas2, seguridad, seguridad2, texto,
     };
     match cmd {
-        "open_pdf" => cmd!(crate::open_pdf, { path: String, password: Option<String> }),
+        "open_pdf" => cmd!(crate::open_pdf, { path: String, password: Option<String>, key_path: Option<String>, key_password: Option<String> }),
         "render_page" => cmd!(crate::render_page_b64, { path: String, page_index: u16, width: i32, with_annotations: Option<bool> }),
         "get_page_text" => cmd!(busqueda::get_page_text, { path: String, page_index: u16 }),
         "get_page_sizes" => cmd!(crate::get_page_sizes, { path: String }),
@@ -521,7 +521,19 @@ mod tests {
     /// del backend sin vía de acceso: existe, está probada y el usuario no
     /// puede llegar a ella. Fue el estado exacto de `char_spacing` durante
     /// un ciclo entero. La lista tiene que quedar vacía al cerrar el ciclo.
-    const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[];
+    const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[
+        (
+            "open_pdf",
+            "key_path",
+            "pendiente_ui: lo manda la UI en C-3 del ciclo 10, cuando `CERT_KEY_REQUIRED` \
+             abre el diálogo que pide tu certificado con clave privada",
+        ),
+        (
+            "open_pdf",
+            "key_password",
+            "pendiente_ui: lo manda la UI en C-3 del ciclo 10, la contraseña del .p12",
+        ),
+    ];
 
     /// **R45b.** Parámetros **obligatorios** en Rust que el envoltorio de
     /// `api.ts` declara opcionales (`workPath?: string`, un tipo que admite

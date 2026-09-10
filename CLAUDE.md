@@ -1045,6 +1045,20 @@ compila los instaladores a mano o al etiquetar `v*`.
     documento abierto**, que es justo cuando se usa: antes de saber qué
     fichero quieres. Hasta ahora la función solo se descubría por el atajo
     o pasando el ratón por un botón «…».
+  - **Abrir un PDF cifrado para unos destinatarios** (C-3, `seguridad.rs`):
+    `open_pdf` gana `key_path: Option<String>` y `key_password:
+    Option<String>`. Al reconocer el `/Adobe.PubSec` en los bytes
+    (`es_pubsec`) sin clave se contesta el código **`CERT_KEY_REQUIRED`**
+    —como `PASSWORD_REQUIRED`—, para que la interfaz pida el certificado
+    con clave privada en vez de dejar probando contraseñas que no existen.
+    Con clave, `descifra_pubsec` prueba el sobre de cada destinatario
+    (`abre_sobre`, que sale de los tests a producción), rehace la clave del
+    fichero como al cifrarlo y escribe la copia de trabajo **en claro**; si
+    ninguno casa, «Este PDF no está cifrado para ese certificado». La clave
+    llega en `.p12`/`.pfx` con contraseña o en PEM, los dos formatos de
+    firmar (`firma::clave_privada`). Fixture nueva: `test_tercero_key.pem`,
+    la clave de nadie, para probar que no abre. Se cierra así el callejón
+    sin salida de escribir lo que no se sabía leer.
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (cada uno con su envoltorio en camelCase):
     - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la

@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256, Sha384, Sha512};
 
 type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
 type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
 fn aleatorio<const N: usize>() -> Result<[u8; N], String> {
     let mut buf = [0u8; N];
@@ -108,7 +109,177 @@ fn cifra_objeto(obj: &mut Object, fek: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Lo contrario de `cifra_contenido`: AES-256-CBC con el IV delante y
+/// padding PKCS#7, que es el formato AESV3.
+fn descifra_contenido(fek: &[u8], data: &[u8]) -> Result<Vec<u8>, String> {
+    use aes::cipher::BlockDecryptMut;
+    if data.len() <= 16 {
+        return Err(AVISO_PUBSEC_ROTO.into());
+    }
+    let (iv, cuerpo) = data.split_at(16);
+    Aes256CbcDec::new_from_slices(fek, iv)
+        .map_err(|_| AVISO_PUBSEC_ROTO.to_string())?
+        .decrypt_padded_vec_mut::<Pkcs7>(cuerpo)
+        .map_err(|_| AVISO_PUBSEC_ROTO.to_string())
+}
+
+/// Recorre un objeto descifrando todas las cadenas y streams.
+fn descifra_objeto(obj: &mut Object, fek: &[u8]) -> Result<(), String> {
+    match obj {
+        Object::String(bytes, fmt) => {
+            *bytes = descifra_contenido(fek, bytes)?;
+            *fmt = StringFormat::Literal;
+        }
+        Object::Array(items) => {
+            for item in items {
+                descifra_objeto(item, fek)?;
+            }
+        }
+        Object::Dictionary(d) => {
+            for (_, v) in d.iter_mut() {
+                descifra_objeto(v, fek)?;
+            }
+        }
+        Object::Stream(s) => {
+            for (_, v) in s.dict.iter_mut() {
+                descifra_objeto(v, fek)?;
+            }
+            let claro = descifra_contenido(fek, &s.content)?;
+            s.dict.set("Length", claro.len() as i64);
+            s.set_content(claro);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Lo que se le dice al usuario cuando el documento dice ir cifrado por
+/// certificado y por dentro no cuadra: no es culpa suya y no hay tecla que
+/// probar.
+const AVISO_PUBSEC_ROTO: &str =
+    "Este PDF dice ir cifrado para unos destinatarios, pero su cifrado no se \
+     deja leer: pide el documento otra vez a quien te lo mandó";
+
+/// ¿El fichero va cifrado **para unos destinatarios** (`/Adobe.PubSec`) en
+/// vez de con contraseña? Se mira en los bytes, que es lo único que se
+/// puede hacer con un documento que todavía no se ha podido abrir.
+pub(crate) fn es_pubsec(path: &str) -> bool {
+    std::fs::read(path)
+        .map(|b| b.windows(12).any(|v| v == b"Adobe.PubSec"))
+        .unwrap_or(false)
+}
+
+/// Abre el sobre CMS de un destinatario con su clave privada y devuelve la
+/// semilla del documento y los permisos que lleva dentro. Es exactamente
+/// lo que hace el visor de quien recibe el PDF; con la clave que no toca,
+/// `None`.
+pub(crate) fn abre_sobre(sobre: &[u8], clave: &rsa::RsaPrivateKey) -> Option<(Vec<u8>, i32)> {
+    use aes::cipher::BlockDecryptMut;
+    use der::{Encode, Reader};
+    use rsa::pkcs1v15::Pkcs1v15Encrypt;
+
+    let ci: cms::content_info::ContentInfo = {
+        let mut r = der::SliceReader::new(sobre).ok()?;
+        r.decode().ok()?
+    };
+    let ed: cms::enveloped_data::EnvelopedData = ci.content.decode_as().ok()?;
+    let cms::enveloped_data::RecipientInfo::Ktri(ktri) = ed.recip_infos.0.iter().next()? else {
+        return None;
+    };
+    let cek = clave.decrypt(Pkcs1v15Encrypt, ktri.enc_key.as_bytes()).ok()?;
+    let iv_der = ed.encrypted_content.content_enc_alg.parameters.as_ref()?.to_der().ok()?;
+    let iv = &iv_der[2..];
+    let cifrado = ed.encrypted_content.encrypted_content.as_ref()?.as_bytes();
+    let claro = Aes256CbcDec::new_from_slices(&cek, iv)
+        .ok()?
+        .decrypt_padded_vec_mut::<Pkcs7>(cifrado)
+        .ok()?;
+    let p = i32::from_le_bytes(claro.get(20..24)?.try_into().ok()?);
+    Some((claro[..20].to_vec(), p))
+}
+
+/// **Abrir un PDF cifrado para unos destinatarios**: se prueba el sobre de
+/// cada uno con la clave privada del usuario hasta dar con el suyo, se
+/// rehace la clave del fichero —SHA-256 de la semilla seguida de los
+/// sobres, como al cifrarlo— y se escribe en `dest_path` el documento en
+/// claro, que es la copia de trabajo con la que trabaja el resto de la
+/// aplicación.
+///
+/// `key_path` es un `.p12`/`.pfx` con su contraseña o un PEM con la clave
+/// privada: los dos formatos que ya acepta firmar, con el mismo selector.
+pub(crate) fn descifra_pubsec(
+    src_path: &str,
+    dest_path: &str,
+    key_path: &str,
+    key_password: Option<&str>,
+) -> Result<(), String> {
+    let clave = crate::firma::clave_privada(key_path, key_password)?;
+    let mut doc = LoDoc::load(src_path)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer el documento: {e}")))?;
+    let (enc_id, enc) = match doc.trailer.get(b"Encrypt") {
+        Ok(Object::Reference(id)) => (
+            Some(*id),
+            doc.get_object(*id)
+                .and_then(|o| o.as_dict())
+                .map_err(|_| AVISO_PUBSEC_ROTO.to_string())?
+                .clone(),
+        ),
+        Ok(Object::Dictionary(d)) => (None, d.clone()),
+        _ => return Err(AVISO_PUBSEC_ROTO.into()),
+    };
+    let sobres: Vec<Vec<u8>> = enc
+        .get(b"CF")
+        .and_then(|o| o.as_dict())
+        .and_then(|d| d.get(b"DefaultCryptFilter"))
+        .and_then(|o| o.as_dict())
+        .and_then(|d| d.get(b"Recipients"))
+        .and_then(|o| o.as_array())
+        .map_err(|_| AVISO_PUBSEC_ROTO.to_string())?
+        .iter()
+        .filter_map(|o| match o {
+            Object::String(b, _) => Some(b.clone()),
+            _ => None,
+        })
+        .collect();
+    if sobres.is_empty() {
+        return Err(AVISO_PUBSEC_ROTO.into());
+    }
+    let semilla = sobres
+        .iter()
+        .find_map(|s| abre_sobre(s, &clave).map(|(semilla, _)| semilla))
+        .ok_or(
+            "Este PDF no está cifrado para ese certificado: prueba con otro de los tuyos, \
+             o pídeselo a quien lo cifró",
+        )?;
+    let mut hasher = Sha256::new();
+    hasher.update(&semilla);
+    for s in &sobres {
+        hasher.update(s);
+    }
+    let fek = hasher.finalize().to_vec();
+
+    let ids: Vec<ObjectId> = doc.objects.keys().copied().collect();
+    for id in ids {
+        // el diccionario de cifrado nunca va cifrado: descifrarlo sería
+        // machacar los sobres con basura
+        if Some(id) == enc_id {
+            continue;
+        }
+        if let Some(obj) = doc.objects.get_mut(&id) {
+            descifra_objeto(obj, &fek)?;
+        }
+    }
+    doc.trailer.remove(b"Encrypt");
+    if let Some(id) = enc_id {
+        doc.objects.remove(&id);
+    }
+    doc.save(dest_path)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido preparar el documento: {e}")))?;
+    Ok(())
+}
+
 /// Lo que el diálogo de protección deja marcado; los tres van marcados por
+/// defecto, como en Acrobat./// Lo que el diálogo de protección deja marcado; los tres van marcados por
 /// defecto, como en Acrobat.
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Permisos {
@@ -1075,12 +1246,14 @@ mod tests {
         )
         .expect("cifrar");
         assert_eq!(
-            crate::open_pdf(out.to_string_lossy().to_string(), None).unwrap_err(),
+            crate::open_pdf(out.to_string_lossy().to_string(), None, None, None).unwrap_err(),
             "PASSWORD_REQUIRED"
         );
         let info = crate::open_pdf(
             out.to_string_lossy().to_string(),
             Some("abc".into()),
+            None,
+            None,
         )
         .expect("abrir con contraseña");
         assert!(info.had_password);
@@ -1166,7 +1339,7 @@ mod tests {
         let pdf = dir.join("seguridad-proteger-abierto.pdf");
         let guardado = dir.join("seguridad-proteger-abierto-guardado.pdf");
         crea_pdf(&["Documento abierto"], &pdf);
-        let info = crate::open_pdf(pdf.to_string_lossy().to_string(), None).expect("abrir");
+        let info = crate::open_pdf(pdf.to_string_lossy().to_string(), None, None, None).expect("abrir");
         let work = info.work_path.clone();
 
         encrypt_pdf(work.clone(), None, "clave123".into(), None, None).expect("proteger");
@@ -1179,19 +1352,19 @@ mod tests {
 
         crate::save_pdf(work.clone(), guardado.to_string_lossy().to_string()).expect("guardar");
         assert_eq!(
-            crate::open_pdf(guardado.to_string_lossy().to_string(), None).unwrap_err(),
+            crate::open_pdf(guardado.to_string_lossy().to_string(), None, None, None).unwrap_err(),
             "PASSWORD_REQUIRED",
             "lo guardado tiene que pedir la contraseña"
         );
         let protegido =
-            crate::open_pdf(guardado.to_string_lossy().to_string(), Some("clave123".into()))
+            crate::open_pdf(guardado.to_string_lossy().to_string(), Some("clave123".into()), None, None)
                 .expect("abrir con contraseña");
         crate::close_document(protegido.work_path).expect("cerrar");
 
         // quitar la contraseña: lo guardado ya abre sin ella
         remove_encryption(work.clone()).expect("quitar la contraseña");
         crate::save_pdf(work.clone(), guardado.to_string_lossy().to_string()).expect("reguardar");
-        let claro = crate::open_pdf(guardado.to_string_lossy().to_string(), None)
+        let claro = crate::open_pdf(guardado.to_string_lossy().to_string(), None, None, None)
             .expect("abrir sin contraseña");
         crate::close_document(claro.work_path).expect("cerrar");
 
@@ -1204,14 +1377,14 @@ mod tests {
         crate::save_pdf(work.clone(), guardado.to_string_lossy().to_string())
             .expect("guardar tras deshacer");
         assert_eq!(
-            crate::open_pdf(guardado.to_string_lossy().to_string(), None).unwrap_err(),
+            crate::open_pdf(guardado.to_string_lossy().to_string(), None, None, None).unwrap_err(),
             "PASSWORD_REQUIRED",
             "deshacer «Quitar la contraseña…» tiene que devolver la contraseña"
         );
         // y rehacer la vuelve a quitar
         crate::historial::redo(work.clone()).expect("rehacer");
         crate::save_pdf(work.clone(), guardado.to_string_lossy().to_string()).expect("reguardar");
-        let claro = crate::open_pdf(guardado.to_string_lossy().to_string(), None)
+        let claro = crate::open_pdf(guardado.to_string_lossy().to_string(), None, None, None)
             .expect("rehacer la deja abrir sin contraseña");
         crate::close_document(claro.work_path).expect("cerrar");
 
@@ -1731,35 +1904,14 @@ mod tests_pubsec {
         ruta
     }
 
-    /// Abre el sobre de un destinatario con su clave privada y devuelve la
-    /// semilla y sus permisos. Es lo que haría su visor.
+    /// El sobre de un destinatario abierto con su clave privada, que es lo
+    /// que hace el visor de quien recibe el PDF. Desde el ciclo 10 el
+    /// camino es el de producción (`super::abre_sobre`): aquí solo se le
+    /// pone delante la clave en PEM.
     fn abre_sobre(sobre: &[u8], key_pem: &str) -> Option<(Vec<u8>, i32)> {
-        use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
-        use der::{Encode, Reader};
-        use rsa::pkcs1v15::Pkcs1v15Encrypt;
         use rsa::pkcs8::DecodePrivateKey;
-        type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
-
-        let ci: cms::content_info::ContentInfo = {
-            let mut r = der::SliceReader::new(sobre).ok()?;
-            r.decode().ok()?
-        };
-        let ed: cms::enveloped_data::EnvelopedData = ci.content.decode_as().ok()?;
-        let cms::enveloped_data::RecipientInfo::Ktri(ktri) = ed.recip_infos.0.iter().next()?
-        else {
-            return None;
-        };
         let clave = rsa::RsaPrivateKey::from_pkcs8_pem(key_pem).ok()?;
-        let cek = clave.decrypt(Pkcs1v15Encrypt, ktri.enc_key.as_bytes()).ok()?;
-        let iv_der = ed.encrypted_content.content_enc_alg.parameters.as_ref()?.to_der().ok()?;
-        let iv = &iv_der[2..];
-        let cifrado = ed.encrypted_content.encrypted_content.as_ref()?.as_bytes();
-        let claro = Aes256CbcDec::new_from_slices(&cek, iv)
-            .ok()?
-            .decrypt_padded_vec_mut::<Pkcs7>(cifrado)
-            .ok()?;
-        let p = i32::from_le_bytes(claro.get(20..24)?.try_into().ok()?);
-        Some((claro[..20].to_vec(), p))
+        super::abre_sobre(sobre, &clave)
     }
 
     /// **Cifrado por certificado** (orden 4.2 del ciclo 9). En vez de una
@@ -1893,5 +2045,130 @@ mod tests_pubsec {
         std::fs::remove_file(&pdf).ok();
         std::fs::remove_file(&uno).ok();
         std::fs::remove_file(&dos).ok();
+    }
+
+    /// **Abrir lo que se cifra** (C-3 del ciclo 10). Hasta aquí Vitela
+    /// escribía PDF cifrados para unos destinatarios y no sabía abrirlos:
+    /// se cifraba para otros y el que lo hacía se quedaba sin su propio
+    /// documento. Ahora `open_pdf` acepta la clave privada —un `.p12` con
+    /// su contraseña o un PEM—, prueba el sobre de cada destinatario hasta
+    /// dar con el suyo y deja la copia de trabajo en claro.
+    ///
+    /// Tres cosas: **sin clave** se contesta el código que hace que la
+    /// interfaz pida el certificado; **con la de cada destinatario** se
+    /// abre y el texto vuelve a leerse; **con una tercera** se dice en
+    /// llano que ese PDF no es para ese certificado.
+    #[test]
+    fn abrir_un_pdf_cifrado_para_destinatarios_con_la_clave_de_cada_uno() {
+        let pdf = std::env::temp_dir().join("seguridad-pubsec-abrir.pdf");
+        let dest = std::env::temp_dir().join("seguridad-pubsec-abrir-cifrado.pdf");
+        crea_pdf(&["Expediente reservado"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        let uno = cert_en_disco(
+            "seguridad-pubsec-abrir-uno.pem",
+            include_str!("../fixtures/test_cert.pem"),
+        );
+        let dos = cert_en_disco(
+            "seguridad-pubsec-abrir-dos.pem",
+            include_str!("../fixtures/test_hija_cert.pem"),
+        );
+        let clave_uno = cert_en_disco(
+            "seguridad-pubsec-abrir-uno-key.pem",
+            include_str!("../fixtures/test_key.pem"),
+        );
+        let clave_dos = cert_en_disco(
+            "seguridad-pubsec-abrir-dos-key.pem",
+            include_str!("../fixtures/test_hija_key.pem"),
+        );
+        let clave_tres = cert_en_disco(
+            "seguridad-pubsec-abrir-tres-key.pem",
+            include_str!("../fixtures/test_tercero_key.pem"),
+        );
+        let destino = dest.to_string_lossy().into_owned();
+        encrypt_pdf_cert(
+            work.clone(),
+            destino.clone(),
+            vec![
+                Destinatario {
+                    cert_path: uno.to_string_lossy().into_owned(),
+                    permisos: Permisos::default(),
+                },
+                Destinatario {
+                    cert_path: dos.to_string_lossy().into_owned(),
+                    permisos: Permisos::default(),
+                },
+            ],
+        )
+        .expect("cifrar por certificado");
+
+        // sin clave, el código que abre el diálogo del certificado
+        assert_eq!(
+            crate::open_pdf(destino.clone(), None, None, None).unwrap_err(),
+            "CERT_KEY_REQUIRED"
+        );
+        // y una contraseña no sirve de nada aquí
+        assert_eq!(
+            crate::open_pdf(destino.clone(), Some("loquesea".into()), None, None).unwrap_err(),
+            "CERT_KEY_REQUIRED"
+        );
+
+        // cada destinatario abre el documento con su clave
+        for clave in [&clave_uno, &clave_dos] {
+            let info = crate::open_pdf(
+                destino.clone(),
+                None,
+                Some(clave.to_string_lossy().into_owned()),
+                None,
+            )
+            .expect("abrir con la clave del destinatario");
+            assert_eq!(info.page_count, 1);
+            assert!(
+                info.had_password,
+                "el original va cifrado, aunque la copia de trabajo esté en claro"
+            );
+            let texto =
+                crate::busqueda::get_page_text(info.work_path.clone(), 0).expect("texto");
+            assert!(
+                texto
+                    .chars
+                    .iter()
+                    .map(|c| c.ch.as_str())
+                    .collect::<String>()
+                    .contains("Expediente"),
+                "la copia de trabajo tiene que quedar en claro"
+            );
+            crate::close_document(info.work_path).ok();
+        }
+
+        // el mismo camino con un .p12, que es como lo tiene guardado casi
+        // todo el mundo (el del bolso lleva la clave del primer certificado)
+        let p12 = std::env::temp_dir().join("seguridad-pubsec-abrir.p12");
+        std::fs::write(&p12, include_bytes!("../fixtures/test_bundle.p12")).expect("p12");
+        let info = crate::open_pdf(
+            destino.clone(),
+            None,
+            Some(p12.to_string_lossy().into_owned()),
+            Some("test1234".into()),
+        )
+        .expect("abrir con el .p12");
+        assert_eq!(info.page_count, 1);
+        crate::close_document(info.work_path).ok();
+
+        // con una tercera clave, en llano y sin dejar probar contraseñas
+        let e = crate::open_pdf(
+            destino.clone(),
+            None,
+            Some(clave_tres.to_string_lossy().into_owned()),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            e.contains("no está cifrado para ese certificado"),
+            "con la clave que no toca hay que decirlo en llano: {e}"
+        );
+
+        for f in [&pdf, &dest, &uno, &dos, &clave_uno, &clave_dos, &clave_tres, &p12] {
+            std::fs::remove_file(f).ok();
+        }
     }
 }
