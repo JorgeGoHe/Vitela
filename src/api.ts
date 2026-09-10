@@ -1266,6 +1266,19 @@ export type DocxReport = {
  *  texto, con su fuente y su color, las imágenes en su posición aproximada y
  *  un salto de página por página. No se intentan tablas ni columnas. Sin
  *  `pageIndices`, el documento entero. */
+/** Un `.html` por documento: una `<div class="pagina">` por página con cada
+ *  bloque de texto en su sitio, las imágenes en una carpeta al lado y los
+ *  enlaces como `<a>`. Sin JavaScript y sin dependencias, que es lo que
+ *  hace que se pueda abrir dentro de diez años. `rango` son los índices de
+ *  página, o null para el documento entero. */
+export function exportHtml(
+  workPath: string,
+  destPath: string,
+  rango: number[] | null,
+): Promise<void> {
+  return invoke("export_html", { workPath, destPath, rango });
+}
+
 export function exportDocx(
   workPath: string,
   destPath: string,

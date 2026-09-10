@@ -82,6 +82,7 @@ export default function MenuAcciones({
   abrirExportar,
   exportPlainText,
   exportarWord,
+  exportarHtml,
   exportarComentarios,
   importarComentarios,
   abrirComprimir,
@@ -145,6 +146,8 @@ export default function MenuAcciones({
   abrirExportar: () => void;
   exportPlainText: () => void;
   exportarWord: () => void;
+  /** «Página web (.html)…»: el documento como HTML plano, sin JavaScript. */
+  exportarHtml: () => void;
   exportarComentarios: () => void;
   /** «Importar comentarios…»: la revisión que devuelve otro revisor en un
    *  `.xfdf` sobre su copia del documento. */
@@ -419,6 +422,11 @@ export default function MenuAcciones({
               icon="doc"
               texto="Word (.docx)…"
               onSelect={ejecutar(exportarWord)}
+            />
+            <Entrada
+              icon="link"
+              texto="Página web (.html)…"
+              onSelect={ejecutar(exportarHtml)}
             />
             <Entrada
               icon="note"

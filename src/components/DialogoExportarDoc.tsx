@@ -4,23 +4,30 @@ import { indicesDeRango } from "../tipos";
 import RangoPaginas from "./RangoPaginas";
 
 /**
- * «Word (.docx)…»: el aviso de lo que no sale va ANTES de elegir destino,
- * porque es una función que promete mucho y da menos, y descubrirlo con el
- * fichero ya escrito es tarde.
+ * «Word (.docx)…» y «Página web (.html)…»: el aviso de lo que no sale va
+ * ANTES de elegir destino, porque las dos prometen mucho y dan menos, y
+ * descubrirlo con el fichero ya escrito es tarde. Es **el mismo diálogo**
+ * porque es el mismo trato: el texto y las imágenes salen en su sitio; las
+ * columnas y las tablas, no.
  *
  * Y con el rango de páginas de Acrobat: exportar un contrato de 200 páginas
  * para quedarse con dos era el camino largo a un fichero que no se quería.
  */
-export default function DialogoWord({
+export default function DialogoExportarDoc({
+  formato,
   pageCount,
   onConfirm,
   onClose,
 }: {
+  /** A qué se exporta: cambia los textos, no el trato. */
+  formato: "docx" | "html";
   pageCount: number;
   /** Índices de página, o null para el documento entero. */
   onConfirm: (paginas: number[] | null) => void;
   onClose: () => void;
 }) {
+  const titulo =
+    formato === "html" ? "Exportar a página web" : "Exportar a Word";
   const [todas, setTodas] = useState(true);
   const [rango, setRango] = useState("");
   const indices = indicesDeRango(todas, rango, pageCount);
@@ -36,16 +43,18 @@ export default function DialogoWord({
         className="modal"
         role="dialog"
         aria-modal="true"
-        aria-label="Exportar a Word"
+        aria-label={titulo}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
         ref={ref}
         tabIndex={-1}
       >
-        <h3>Exportar a Word</h3>
+        <h3>{titulo}</h3>
         <p className="modal-file" style={{ whiteSpace: "normal" }}>
-          El texto y las imágenes salen; la maquetación de columnas y tablas,
-          no. Para un documento sencillo suele bastar.
+          El texto y las imágenes salen en su sitio; las columnas y las
+          tablas, no. Para un documento sencillo suele bastar.
+          {formato === "html" &&
+            " Las imágenes van a una carpeta al lado, y el .html no lleva JavaScript ni depende de nada."}
         </p>
         <RangoPaginas
           pageCount={pageCount}

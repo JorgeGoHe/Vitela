@@ -90,6 +90,7 @@ import {
   exportPagesPng,
   exportText,
   exportDocx,
+  exportHtml,
   exportComments,
   listAttachments,
   saveAttachment,
@@ -229,7 +230,7 @@ import DialogoDividir from "./components/DialogoDividir";
 import DialogoCombinar from "./components/DialogoCombinar";
 import DialogoImagenes from "./components/DialogoImagenes";
 import DialogoAtajos from "./components/DialogoAtajos";
-import DialogoWord from "./components/DialogoWord";
+import DialogoExportarDoc from "./components/DialogoExportarDoc";
 import DialogoEtiquetas from "./components/DialogoEtiquetas";
 import DialogoBates, { type BatesOpts } from "./components/DialogoBates";
 import DialogoInsertar from "./components/DialogoInsertar";
@@ -755,6 +756,7 @@ function App() {
   const [descartarAsk, setDescartarAsk] = useState<Sesion[] | null>(null);
   // «Exportar a Word»: el aviso de lo que no sale va ANTES de elegir destino
   const [wordAsk, setWordAsk] = useState(false);
+  const [htmlAsk, setHtmlAsk] = useState(false);
   // «Crear PDF desde imágenes…»: se ofrece también sin documento, que es
   // donde está el usuario cuando todavía no tiene ninguno
   const [imagenesOpen, setImagenesOpen] = useState(false);
@@ -3860,6 +3862,34 @@ function App() {
     }
   }
 
+  /** «Página web (.html)…»: el mismo trato que el .docx —el texto y las
+   *  imágenes en su sitio, la maquetación no— y se dice antes de elegir
+   *  destino, no con el fichero ya escrito. */
+  async function exportarHtml(paginas: number[] | null) {
+    if (!workPath) return;
+    setHtmlAsk(false);
+    const dest = await save({
+      filters: [{ name: "Página web", extensions: ["html"] }],
+      defaultPath: (originalPath ?? "documento.pdf").replace(/\.pdf$/i, ".html"),
+      title: "Exportar a página web",
+    });
+    if (!dest) return;
+    const cuantas = paginas?.length ?? pageCount;
+    try {
+      setNotice("Exportando a página web… no se puede cancelar a mitad", {
+        persistente: true,
+        dato: plural(cuantas, "página", "páginas"),
+      });
+      await exportHtml(workPath, dest, paginas);
+      setNotice(
+        `${plural(cuantas, "página exportada", "páginas exportadas")} en ${dest} · las imágenes, en la carpeta de al lado`,
+      );
+    } catch (e) {
+      setNotice(null);
+      setError(String(e));
+    }
+  }
+
   /** «Crear PDF desde imágenes…»: escribe un fichero nuevo (no toca el
    *  documento abierto) y lo abre al terminar, que es lo que se quiere hacer
    *  con él a continuación. Si una imagen no se puede leer, el diálogo sigue
@@ -4523,6 +4553,7 @@ function App() {
     "exportar-imagenes": () => setExportOpen(true),
     "exportar-texto": exportPlainText,
     "exportar-word": () => setWordAsk(true),
+    "exportar-html": () => setHtmlAsk(true),
     "exportar-comentarios": exportarComentarios,
     "importar-comentarios": importarComentarios,
     "crear-desde-imagenes": () => setImagenesOpen(true),
@@ -4904,6 +4935,7 @@ function App() {
                 abrirExportar={() => setExportOpen(true)}
                 exportPlainText={exportPlainText}
                 exportarWord={() => setWordAsk(true)}
+                exportarHtml={() => setHtmlAsk(true)}
                 exportarComentarios={exportarComentarios}
                 importarComentarios={importarComentarios}
                 abrirComprimir={abrirComprimir}
@@ -5332,8 +5364,17 @@ function App() {
           onClose={() => setBatesOpen(false)}
         />
       )}
+      {htmlAsk && (
+        <DialogoExportarDoc
+          formato="html"
+          pageCount={pageCount}
+          onConfirm={exportarHtml}
+          onClose={() => setHtmlAsk(false)}
+        />
+      )}
       {wordAsk && (
-        <DialogoWord
+        <DialogoExportarDoc
+          formato="docx"
           pageCount={pageCount}
           onConfirm={exportarWord}
           onClose={() => setWordAsk(false)}
