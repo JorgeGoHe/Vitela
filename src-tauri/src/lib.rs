@@ -1382,21 +1382,39 @@ pub(crate) mod tests {
         assert!(nombres.contains(&"otro"), "y el nuevo ha entrado: {nombres:?}");
     }
 
-    /// **R44b (AC-070).** CLAUDE.md se escribe a dos manos —cada ciclo lo
-    /// tocan la rama de backend y la de interfaz sobre los mismos
-    /// párrafos— y dos veces seguidas se ha colado la misma línea pegada
-    /// detrás de su versión nueva (AC-059 y AC-070). Un párrafo que se
-    /// contradice se lee peor que uno que falta.
+    /// **R44b (AC-070) y R50b (AC-073).** CLAUDE.md se escribe a dos manos
+    /// —cada ciclo lo tocan la rama de backend y la de interfaz sobre los
+    /// mismos párrafos— y tres veces seguidas se ha colado el resto de una
+    /// versión anterior pegado detrás de la nueva (AC-059, AC-070 y
+    /// AC-073). Un párrafo que se contradice se lee peor que uno que falta,
+    /// y esto no lo sufre el usuario: lo sufre el ciclo siguiente, que lee
+    /// el contrato y encuentra dos.
     ///
     /// Igual que hay test cruzado para los comandos y para el menú, aquí
-    /// hay uno tonto para el documento: **ninguna línea larga repetida**.
-    /// Cuarenta caracteres es el corte: por debajo son títulos, cierres de
-    /// bloque y viñetas que se repiten con razón.
+    /// hay uno para el documento, con tres cribas:
+    ///
+    /// 1. **Ninguna línea larga repetida.** Cuarenta caracteres es el
+    ///    corte: por debajo son títulos, cierres de bloque y viñetas que se
+    ///    repiten con razón. Es la de AC-070 y se queda porque señala la
+    ///    línea exacta.
+    /// 2. **Ninguna decena de palabras seguidas repetida**, con el texto
+    ///    normalizado (minúsculas, sin tildes y sin puntuación) y los
+    ///    bloques de código fuera. AC-073 se coló porque el duplicado
+    ///    estaba **parafraseado** y empezaba a mitad de frase, así que ni
+    ///    la línea ni el párrafo coincidían; diez palabras seguidas iguales
+    ///    no son una coincidencia, son un párrafo copiado. Lo que de verdad
+    ///    haya que decir dos veces se dice una y se referencia.
+    /// 3. **La lista de ids del menú dice lo que dice
+    ///    [`menu::estructura`]**, sin repetir ninguno. Esa lista **es el
+    ///    contrato con la interfaz** —CLAUDE.md se declara «la única
+    ///    lista»— y en el ciclo 7 acabó con cinco ids escritos dos veces.
     #[test]
     fn claude_md_no_arrastra_lineas_repetidas() {
         let ruta = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../CLAUDE.md");
         let texto = std::fs::read_to_string(&ruta)
             .unwrap_or_else(|e| panic!("no se ha podido leer {ruta:?}: {e}"));
+
+        // 1) la línea larga repetida, que es la que se puede señalar
         let mut vistas: std::collections::HashMap<&str, Vec<usize>> = Default::default();
         for (n, linea) in texto.lines().enumerate() {
             let l = linea.trim();
@@ -1417,6 +1435,136 @@ pub(crate) mod tests {
              de una versión anterior pegado detrás de la nueva—:\n  {}",
             repetidas.join("\n  ")
         );
+
+        // 2) el párrafo parafraseado: doce palabras seguidas iguales
+        let palabras = palabras_normalizadas(&texto);
+        const SEGUIDAS: usize = 10;
+        let mut donde: std::collections::HashMap<&[String], usize> = Default::default();
+        let mut calcadas: Vec<String> = Vec::new();
+        if palabras.len() >= SEGUIDAS {
+            for i in 0..=palabras.len() - SEGUIDAS {
+                let trozo = &palabras[i..i + SEGUIDAS];
+                match donde.get(trozo) {
+                    Some(_) => calcadas.push(trozo.join(" ")),
+                    None => {
+                        donde.insert(trozo, i);
+                    }
+                }
+            }
+        }
+        // los solapes de un mismo duplicado dicen todos lo mismo
+        calcadas.dedup_by(|a, b| a.split(' ').skip(1).eq(b.split(' ').take(SEGUIDAS - 1)));
+        assert!(
+            calcadas.is_empty(),
+            "CLAUDE.md repite estas decenas de palabras, así que hay un \
+             párrafo dicho dos veces (lo que haya que decir dos veces se \
+             dice una y se referencia):\n  {}",
+            calcadas.join("\n  ")
+        );
+
+        // 3) la lista de ids del menú, que es el contrato con la interfaz
+        let mut escritos: Vec<String> = Vec::new();
+        let mut en_lista = false;
+        for linea in texto.lines() {
+            let l = linea.trim_start();
+            let grupo = ["Archivo:", "Editar:", "Ver:", "Documento:", "Ayuda:"]
+                .iter()
+                .find_map(|g| l.strip_prefix("- ").and_then(|r| r.strip_prefix(*g)));
+            let mut resto = match grupo {
+                Some(r) => {
+                    en_lista = true;
+                    r
+                }
+                // la lista sigue mientras la viñeta no cambie: sin esto,
+                // cualquier `codigo` del resto del documento entraría
+                None if en_lista && !l.starts_with('-') && !l.is_empty() => l,
+                None => {
+                    en_lista = false;
+                    continue;
+                }
+            };
+            while let Some((_, tras)) = resto.split_once('`') {
+                let Some((id, mas)) = tras.split_once('`') else { break };
+                if !id.is_empty() && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+                {
+                    escritos.push(id.to_string());
+                }
+                resto = mas;
+            }
+        }
+        assert!(escritos.len() > 40, "la lista de ids se ha leído a medias: {escritos:?}");
+        let mut repes: Vec<&String> = Vec::new();
+        for (i, id) in escritos.iter().enumerate() {
+            if escritos[..i].contains(id) {
+                repes.push(id);
+            }
+        }
+        repes.sort();
+        repes.dedup();
+        assert!(
+            repes.is_empty(),
+            "CLAUDE.md escribe estos ids del menú dos veces, y esa lista es \
+             el contrato con la interfaz: {repes:?}"
+        );
+        let reales: Vec<&str> = menu::estructura()
+            .iter()
+            .flat_map(|g| g.entradas.iter())
+            .filter_map(|e| match e {
+                menu::Elemento::Accion(a) => Some(a.id),
+                _ => None,
+            })
+            .collect();
+        let inventados: Vec<&String> =
+            escritos.iter().filter(|id| !reales.contains(&id.as_str())).collect();
+        assert!(
+            inventados.is_empty(),
+            "CLAUDE.md nombra ids del menú que no existen en menu::estructura(): {inventados:?}"
+        );
+        let sin_escribir: Vec<&&str> =
+            reales.iter().filter(|id| !escritos.iter().any(|e| e == *id)).collect();
+        assert!(
+            sin_escribir.is_empty(),
+            "estos ids del menú no están en la lista de CLAUDE.md, que es \
+             donde la interfaz los busca: {sin_escribir:?}"
+        );
+    }
+
+    /// El texto de CLAUDE.md en palabras comparables: sin los bloques de
+    /// código (que sí repiten líneas con razón), en minúsculas, sin tildes
+    /// y sin puntuación. Dos párrafos que dicen lo mismo con otra
+    /// puntuación tienen que salir iguales.
+    fn palabras_normalizadas(texto: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut en_codigo = false;
+        for linea in texto.lines() {
+            if linea.trim_start().starts_with("```") {
+                en_codigo = !en_codigo;
+                continue;
+            }
+            if en_codigo {
+                continue;
+            }
+            for palabra in linea.split_whitespace() {
+                let limpia: String = palabra
+                    .chars()
+                    .filter_map(|c| match c {
+                        'á' | 'à' | 'ä' | 'â' => Some('a'),
+                        'é' | 'è' | 'ë' | 'ê' => Some('e'),
+                        'í' | 'ì' | 'ï' | 'î' => Some('i'),
+                        'ó' | 'ò' | 'ö' | 'ô' => Some('o'),
+                        'ú' | 'ù' | 'ü' | 'û' => Some('u'),
+                        'ñ' => Some('n'),
+                        c if c.is_ascii_alphanumeric() => Some(c.to_ascii_lowercase()),
+                        '_' | '-' => Some(c),
+                        _ => None,
+                    })
+                    .collect();
+                if !limpia.is_empty() {
+                    out.push(limpia);
+                }
+            }
+        }
+        out
     }
 
     /// Ningún error que llegue a la UI puede llevar jerga de Rust, de

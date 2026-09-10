@@ -134,7 +134,8 @@ compila los instaladores a mano o al etiquetar `v*`.
     `add_free_text`, `transform_annotation`, `create_link`,
     `create_form_field`, `redact_area`, `crop_page`, `add_image`,
     `transform_image`, `add_text_block`, `stamp_signature`.
-  - **Leen en el espacio propio de la página** (la UI convierte al leer):
+  - **Leen en el espacio propio de la página** (la UI los trae a la vista
+    al leer):
     `get_page_text`, `get_text_blocks`, `get_images`, `search_pdf`. Los
     cuatro voltean la `y` con `Geo::de_pagina(&page).propia()`, nunca con
     `page.height()`: su respuesta no depende del `/Rotate` (AC-014,
@@ -476,9 +477,6 @@ compila los instaladores a mano o al etiquetar `v*`.
     pase con lopdf. El mando de la UI se retiró ese mismo ciclo por un
     desencuentro entre las dos mitades (R24) y vuelve en el 7 (R32); desde
     R32b el operador sobrevive a mover y a estirar el bloque.
-    pase con lopdf. El mando de la UI se retiró en ese mismo ciclo y
-    **volvió en el 7** (R32), que es cuando las dos mitades se
-    encontraron.
   - `crop_image(work, page, object_index, rect)` (`imagenes.rs`): recorta
     el **bitmap**, no la caja, por el camino de `replace_image`, así que
     lo que queda fuera desaparece del fichero en vez de esconderse detrás.
@@ -767,8 +765,7 @@ compila los instaladores a mano o al etiquetar `v*`.
     las dos ramas sobre los mismos párrafos, y dos veces seguidas se coló
     la misma línea pegada detrás de su versión nueva.
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
-  - Comandos del ciclo 5 (los envoltorios, en `src/api.ts`, con el mismo
-    nombre en camelCase):
+  - Comandos del ciclo 5 (cada uno con su envoltorio en camelCase):
     - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la
       UI** («Quitar todas las marcas»): era el comando escrito y sin usar que
       cazó el test cruzado.
@@ -803,8 +800,8 @@ compila los instaladores a mano o al etiquetar `v*`.
       llamadas se rechazaban con un 400 y la recuperación no tenía nada que
       recuperar (AC-047). El fallo ya no se traga en silencio.
 - **La mitad de la UI del ciclo 6** (según el desarrollador de interfaz):
-  - Comandos nuevos que llama la UI, con los nombres de argumento en
-    camelCase que exige el test cruzado de R25:
+  - Lo que la UI estrena en el ciclo 6, con los nombres de argumento que
+    cruza R25:
     - `pdf_from_images(imagePaths, destPath, tamano)` — «Crear PDF desde
       imágenes…», en el estado vacío y en Archivo del menú «Acciones»
       (`DialogoImagenes`). Devuelve cuántas páginas ha escrito y el PDF se
@@ -883,8 +880,7 @@ compila los instaladores a mano o al etiquetar `v*`.
     recuperación se pliega a un botón «Recuperar…» de la barra en cuanto se
     abre otro documento.
 - **La mitad de la UI del ciclo 7** (según el desarrollador de interfaz):
-  - Comandos nuevos que llama la UI en el ciclo 7, con los nombres de argumento en
-    camelCase que exige el test cruzado:
+  - Comandos que la interfaz empieza a llamar, con sus argumentos:
     - `add_text_block` y `edit_text_block` **vuelven a mandar
       `charSpacing`** (R32): el desplegable «Espaciado entre caracteres»
       está otra vez en la fila contextual del modo Editar, con 0 («Normal»,
@@ -939,8 +935,8 @@ compila los instaladores a mano o al etiquetar `v*`.
       (R41/AC-064): con varias firmas y ninguna modificada, la banda dice
       «N firmas válidas · el documento no ha cambiado desde la última». Una
       revisión que solo añade una firma no es una manipulación.
-    - `borra_sesion` manda `workPath`: con varios documentos abiertos,
-      cerrar uno no puede llevarse el apunte de sesión de otro.
+    - `borra_sesion` manda `workPath` (el motivo, arriba, en el ciclo 7
+      del backend).
   - **Ids del menú nativo que enruta la UI y que tienen que existir en
     `menu::estructura()`**: `leer-en-voz-alta` (Ver) y
     `exportar-comentarios` (Documento), que son los de R36, más tres que
@@ -1046,8 +1042,6 @@ compila los instaladores a mano o al etiquetar `v*`.
     `encabezado-pie`, `quitar-marca-de-agua`, `quitar-encabezados`,
     `anadir-campo`, `reconocer-campos`, `anadir-enlace`,
     `adjuntar-fichero`, `firmar`, `proteger`,
-    `reconocer-campos`, `anadir-campo`, `anadir-enlace`,
-    `adjuntar-fichero`, `importar-comentarios`, `firmar`, `proteger`,
     `quitar-proteccion`, `aplanar`, `redactar`, `sanitizar`,
     `propiedades`, `exportar-imagenes`, `exportar-texto`, `exportar-word`,
     `exportar-comentarios`, `importar-comentarios`, `comprimir`.
@@ -1166,10 +1160,10 @@ compila los instaladores a mano o al etiquetar `v*`.
   sidebar tiene tres pestañas fijas —Páginas, Marcadores y Comentarios— y
   tres que solo salen cuando el documento tiene qué enseñar: Firmas,
   Adjuntos (`list_attachments`) y Capas (`list_layers`). Por eso mide
-  200 px y las deja envolver a dos líneas: seis fijas no cabrían. **Apagar
-  una capa cambia el fichero** (PDFium respeta el `/OFF` del documento al
-  renderizar y pdfium-render 0.8 no expone el contexto OCG), así que deja
-  su paso de deshacer y el panel lo dice en una línea bajo la lista. `PanelFirmas` (sin «Doc») es otra cosa: la
+  200 px y las deja envolver a dos líneas: seis fijas no cabrían. El panel
+  de capas dice en una línea bajo la lista que apagar una cambia el
+  fichero (ver «Adjuntos y capas», arriba), porque desde el panel parece
+  una vista. `PanelFirmas` (sin «Doc») es otra cosa: la
   biblioteca de firmas manuscritas del modo Firma.
   **Todo modal usa `useModal`** (Esc cierra —también con el foco fuera del
   diálogo, gracias a un listener en fase de captura—, Enter confirma, foco
@@ -1478,13 +1472,6 @@ compila los instaladores a mano o al etiquetar `v*`.
    con la síntesis del webview. Reflujo del párrafo al corregir texto
    (`edit_text_block` con `reflow`).
 
-9. ✅ Revisión que sale del programa: resumen de comentarios **en PDF** y
-   **XFDF** de ida y vuelta (`comentarios2.rs`), marcadores con destino
-   fino (zoom y posición), reconocimiento de campos de formulario que
-   **propone y no escribe**, medida puesta como comentario y varios
-   documentos abiertos a la vez en el caché del hilo de PDFium. Queda
-   fuera de esta rama la fila de pestañas y la lista de sesiones de
-   recuperación, que son la mitad de interfaz de esa función.
 9. ✅ Varios documentos a la vez (pestañas, solo a partir del segundo),
    reconocer campos de formulario proponiendo y sin escribir, marcadores
    con destino fino y ⌘B, comentarios que salen en tres formatos (texto,
