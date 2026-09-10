@@ -1343,6 +1343,82 @@ compila los instaladores a mano o al etiquetar `v*`.
     con `/DocMDP` y el doble clic que abre el adjunto de una página (haría
     falta un comando que saque sus bytes; `open_attachment` es el del
     documento).
+- **La mitad de la UI del ciclo 9** (según el desarrollador de interfaz):
+  - Contratos que estrena esta mitad, con los nombres de argumento en
+    camelCase que cruza el test (los anidados, en snake_case):
+    - `certify_pdf(workPath, destPath, nivel, certPemPath, keyPemPath,
+      p12Path, password, reason, rect, pageIndex, signerName,
+      signaturePng, tsaUrl, ltv)` — sale de `NADIE_LLAMA` (R59). El
+      diálogo de firmar se reutiliza entero con un control más y
+      `FirmaInfo.certifica` compone la banda y la tarjeta.
+    - `add_stamp` gana `dinamico`: la **segunda línea ya resuelta** de un
+      sello dinámico (autor · fecha y hora, compuesta por `selloDinamico`
+      en `tipos.ts`); `text` sigue siendo la palabra del sello.
+    - `save_stored_signature(name, pngBase64, ranura)` e
+      `import_signature_file(imagePath, ranura)`, con `ranura`
+      (`firma` | `iniciales` | `sello`) también en `FirmaGuardada`: R58,
+      la ranura deja `localStorage` y pasa a la biblioteca del backend.
+    - `open_page_attachment(path, pageIndex, annotIndex)` →ruta, y
+      `save_page_attachment(path, pageIndex, annotIndex, destPath)`.
+    - `add_background(workPath, color, imagePng, opacity, pageIndices)` y
+      `remove_background(workPath, dryRun)` → `{ objetos, textos }`.
+    - `search_folder(dir, query, matchCase, wholeWord, context, recursivo)`
+      → un grupo por fichero, y `cancel_search()` sin argumentos.
+    - `compose_print(workPath, modo, opciones)` → PDF temporal;
+      `audit_pdf(path)` → categorías con sus bytes; `compress_pdf` gana
+      `quitarAdjuntos`, `quitarMetadatos` y `aplanarFormularios`.
+    - `get_open_action(path)` / `set_open_action(workPath, vista)` (R56),
+      `insert_pdf_at` gana `pageIndices` (R57), `encrypt_pdf_cert(workPath,
+      destPath, destinatarios)`, `export_html(workPath, destPath, rango)` y
+      `compare_pdf(a, b)`.
+    - `verify_signatures` se lee además `sello_de_tiempo` y `certifica`,
+      los dos declarados opcionales en `api.ts` porque un motor anterior no
+      los trae, como `required` en su día.
+  - **Ids de menú que estrena esta mitad** y que el backend registra:
+    `certificar`, `quitar-fondo`, `mostrar-reglas`, `mostrar-guias`,
+    `mostrar-cuadricula`, `ajustar-cuadricula`, `cifrar-certificado`,
+    `exportar-html` y `comparar`. Cambia además la etiqueta de
+    `marca-de-agua`, que pasa a «Marca de agua y fondo…».
+  - **Certificar** entra en el bloque de seguridad con el mismo gesto que
+    firmar (primero el recuadro) y el diálogo suma las tres opciones del
+    `/DocMDP` escritas en llano. Con una firma puesta, la entrada se enseña
+    apagada con su motivo: `Entrada` de `MenuAcciones` acepta `motivo`, que
+    es lo que la deshabilita y lo que sale al pasar el ratón.
+  - **Galería de sellos** (`PanelSellos`): rejilla con la cara de cada uno,
+    agrupada en Estándar, Dinámicos y Mis sellos, que se abre al entrar en
+    el modo. Un sello de imagen se arma como la firma manuscrita y se
+    coloca por su mismo camino: la rama de `firmar` de los despachadores
+    acepta `mode === "stamp" && activeSig` en vez de duplicarse.
+  - **La chincheta** de un `/FileAttachment` estrena zona sensible propia
+    en `CapaAnotaciones`: doble clic la abre con el visor del sistema
+    —`abrirRuta` en `dialogos.ts`, que es de la UI porque el permiso del
+    opener es suyo— y su popover suma «Guardar como…».
+  - **Buscar en una carpeta** (`useBusquedaCarpeta`, ⇧⌘F): el cajón gana el
+    segmentado de ámbito, la carpeta elegida se recuerda por
+    `localStorage`, el progreso llega por el evento **`buscando-carpeta`**
+    (`onBuscandoCarpeta` en `ipc.ts`, con el gancho de QA
+    `window.__vitelaBuscandoCarpeta(hechos, total, fichero)`) y Cancelar
+    conserva lo hallado. Un resultado abre ese PDF en otra pestaña.
+  - **Composición al imprimir**: `OpcionesImprimir` suma `composicion` y
+    `comp`; las hojas las compone el backend y se rasterizan por el camino
+    del resumen de comentarios. La previa dibuja la hoja con los números
+    donde van a caer y el pie cuenta hojas de papel (`hojasDeComposicion`).
+  - **Red de seguridad** (`LimiteError`, R60): el visor y el panel lateral
+    van cada uno dentro del suyo; «Recargar el documento» sube `docVersion`
+    y todo lo derivado se relee sin abrir nada.
+  - **Andamio** (R54, R61): el desplegable de la píldora enseña el estado de
+    reglas, guías y cuadrícula con sus atajos; la cuadrícula pasa a ⌘U con
+    ⌘' de alias y ⇧⌘U ajusta a ella lo que se coloca (`ajustaACuadricula`,
+    aplicado en `punto()` de `Pagina.tsx` solo con herramienta en la mano).
+    Las guías son de su hoja, con ⌥ al soltar para todas
+    (`guiasDePagina`).
+  - **Comparar** (`Comparador.tsx`): componente aparte que ocupa el sitio
+    del visor, con su propio par de paneles y sin pasar por `Pagina`. Abre
+    el otro documento con `open_pdf`, lo suelta al salir y no muta nada.
+  - **Lo que se queda fuera**: el panel de capas sigue diciendo que apagar
+    una cambia el fichero, porque su decisión es del backend (vía nueva o
+    techo por escrito); y abrir un PDF cifrado por certificado con la clave
+    privada del usuario necesitaría un contrato de apertura que no existe.
 - **Menú nativo** (`menu.rs`): Archivo, Editar, Ver, Documento, Ventana y
   Ayuda en la barra del sistema, espejo del menú «Acciones» de la app —
   con esto la búsqueda de menús de macOS encuentra por fin «Marca de
@@ -1386,6 +1462,9 @@ compila los instaladores a mano o al etiquetar `v*`.
     `modo-nocturno`, `mostrar-reglas`, `mostrar-guias`,
     `mostrar-cuadricula`, `ajustar-cuadricula`,
     `leer-en-voz-alta` (⇧⌘Y, donde lo pone Acrobat).
+    `modo-nocturno`, `leer-en-voz-alta` (⇧⌘Y, donde lo pone Acrobat),
+    `mostrar-reglas`, `mostrar-guias`, `mostrar-cuadricula` y
+    `ajustar-cuadricula` (el «Mostrar u ocultar» de Acrobat).
   - Documento: `organizar-paginas`, `recortar-pagina`, `marca-de-agua`,
     `encabezado-pie`, `quitar-marca-de-agua`, `quitar-encabezados`,
     `quitar-fondo`,
@@ -1397,6 +1476,9 @@ compila los instaladores a mano o al etiquetar `v*`.
     `exportar-html`,
     `exportar-comentarios`, `importar-comentarios`, `comprimir`,
     `comparar`.
+    `quitar-proteccion`, `aplanar`, `redactar`, `sanitizar`, `comparar`,
+    `exportar-html`,
+    `quitar-fondo`.
   - Ayuda: `atajos` (⌘/ y F1) (y Acerca de, nativa).
 - **Protección** (`seguridad.rs`): `encrypt_pdf` compone la máscara `/P`
   del spec a partir de `permisos { imprimir, copiar, editar }` (los tres a
@@ -1731,7 +1813,8 @@ compila los instaladores a mano o al etiquetar `v*`.
   lectura · barra espaciadora mantenida, la Mano · ⌃Tab y ⇧⌃Tab, el
   documento siguiente y el anterior ·
   ⌘W cierra la pestaña de delante (con su pregunta de cambios) · ⌘R las
-  reglas, ⌘; las guías y ⌘' la cuadrícula ·
+  reglas, ⌘; las guías, ⌘U la cuadrícula (⌘' sigue valiendo) y ⇧⌘U el
+  ajuste a ella · ⇧⌘F buscar en una carpeta ·
   ⇧⌘N ir a la página · ⌘/ y F1 abren los atajos (la pantalla se lista a sí
   misma) · ←/→ página anterior y siguiente · Esc para la lectura, quita las
   coincidencias de búsqueda y, si no hay, sale de la herramienta · Supr
@@ -1851,6 +1934,15 @@ compila los instaladores a mano o al etiquetar `v*`.
    datos de un formulario que salen y vuelven en XFDF. Certificar con
    `/DocMDP`, que es lo que distingue «firmado» de «esta es la versión
    buena»
+
+11. ✅ Lo que sale y lo que entra: certificar con su nivel a la vista,
+   sellos dinámicos con galería, el adjunto de una página que vuelve a
+   salir, el fondo entero (color sólido incluido) y con su forma de
+   quitarlo. Buscar en todos los PDF de una carpeta con progreso y
+   cancelación, imprimir en folleto, N-up o póster con la hoja dibujada, el
+   Optimizer contando de qué está hecho el fichero, sello de tiempo y LTV
+   al firmar, cifrado para destinatarios, exportar a página web y comparar
+   dos documentos lado a lado
 
 ## Convenciones
 
