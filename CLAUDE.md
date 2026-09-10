@@ -293,10 +293,13 @@ compila los instaladores a mano o al etiquetar `v*`.
     embebido (las dos cosas juntas son `digest_ok`), y saca del
     certificado `cert_subject`, `cert_issuer`, `not_before`, `not_after`,
     `expired` y `self_signed`, más `page_index` y `rect` del widget (en el
-    espacio de la página vista). **No hay cadena de confianza**: no se
-    consulta el llavero del sistema, así que la UI no puede decir
-    «válida», solo «firmado por X, el documento no ha cambiado desde la
-    firma» y, si no hay raíz, «certificado no verificado».
+    espacio de la página vista). Desde el ciclo 5 **sí** hay cadena de
+    confianza (`confianza`, más abajo) y desde el ciclo 6 el sujeto y el
+    emisor salen en llano (`nombre_llano`, con el DN entero en
+    `cert_subject_dn` / `cert_issuer_dn`). Aun así la UI **no puede decir
+    «válida»**: no se comprueba la revocación, solo «firmado por X, el
+    documento no ha cambiado desde la firma» y quién responde por el
+    certificado.
   - `sign_pdf` / `sign_pdf_p12` con `rect`, `page_index`, `signer_name` y
     `signature_png` (base64): con `rect` el widget deja de ser `[0 0 0 0]`
     y lleva su `/AP` —un Form XObject con el PNG de la firma manuscrita
@@ -409,10 +412,11 @@ compila los instaladores a mano o al etiquetar `v*`.
     `"desconocido"`) y `algoritmo` («ECDSA P-256 / SHA-384»): lo que no se
     sabe leer sale como «no se ha podido comprobar» y **nunca** en rojo,
     porque acusar en falso a un contrato firmado es peor que no verificar.
-  - `sign` se niega con un aviso llano (`firma::AVISO_YA_FIRMADO`) si el
-    documento ya lleva firma: se reescribe el fichero entero y la anterior
-    quedaría rota. La apariencia visible añade «Motivo: …» debajo del
-    nombre y la fecha, como el sello de Acrobat.
+  - `sign` se negaba con un aviso llano si el documento ya llevaba firma:
+    se reescribía el fichero entero y la anterior quedaba rota. **Desde el
+    ciclo 6 la segunda firma va en una actualización incremental** (ver
+    abajo) y el aviso desapareció. La apariencia visible añade «Motivo: …»
+    debajo del nombre y la fecha, como el sello de Acrobat.
 - Comandos del ciclo 5:
   - **El segundo test cruzado**
     (`puente_dev::los_comandos_estan_en_el_handler_en_el_puente_y_en_la_ui`):
@@ -420,10 +424,9 @@ compila los instaladores a mano o al etiquetar `v*`.
     listas digan lo mismo. Falla si un comando está registrado y no
     despachado (QA en el navegador se queda sin esa función), si está
     despachado y no registrado (en la app no existe) o si la UI llama a
-    algo que no existe. Los comandos que nadie llama **avisan por stderr y
-    no fallan**: alguno se registra un ciclo antes de que la UI lo use.
-    Con él se retiró `add_highlight`, muerto desde que `add_markup` hace
-    resaltado, subrayado y tachado.
+    algo que no existe. Desde el ciclo 6, un comando que **nadie llama
+    falla** (ver abajo). Con él se retiró `add_highlight`, muerto desde que
+    `add_markup` hace resaltado, subrayado y tachado.
   - **Cadena de confianza** (`confianza.rs`): `FirmaInfo` gana `confianza`
     con `"raiz_conocida"` / `"autofirmado"` / `"desconocida"`, evaluada en
     el momento de la firma (el atributo `signingTime`), porque un
@@ -460,8 +463,9 @@ compila los instaladores a mano o al etiquetar `v*`.
     no hay párrafos, las líneas son objetos, así que el interlineado es la
     distancia a la que se coloca cada uno (1,2 por defecto). Las líneas
     2..n **heredan el color** del bloque cuando no se pide ninguno.
-    Queda fuera el espaciado entre caracteres (`Tc`): pdfium-render 0.8 no
-    lo expone y falsearlo con espacios sería mentir.
+    El espaciado entre caracteres (`Tc`) se conectó en el ciclo 6 (ver
+    abajo): pdfium-render 0.8 no lo expone, así que lo escribe un segundo
+    pase con lopdf.
   - `crop_image(work, page, object_index, rect)` (`imagenes.rs`): recorta
     el **bitmap**, no la caja, por el camino de `replace_image`, así que
     lo que queda fuera desaparece del fichero en vez de esconderse detrás.
@@ -472,7 +476,8 @@ compila los instaladores a mano o al etiquetar `v*`.
     (`Accepted`, `Rejected`, `Cancelled`, `Completed`; `""` o `"None"` lo
     quitan), guardado en una anotación hija con `/RT /StateModel` y
     `/StateModel /Review` **como lo guarda Acrobat**, para que el revisor
-    lo vea allí; y `export_comments(path, dest_path, "txt")` → cuántos, el
+    lo vea allí; y `export_comments` (desde el ciclo 6,
+    `(work_path, dest_path, document_name?)`) → cuántos, el
     resumen en llano con el tipo y el estado en español (el FDF/XFDF se
     deja para otro ciclo). `get_annotations` y `get_document_annotations`
     devuelven `in_reply_to` y `state`; las anotaciones de estado **no son
@@ -509,6 +514,124 @@ compila los instaladores a mano o al etiquetar `v*`.
   - `fixtures/firmado_ecdsa.pdf`: un PDF firmado con ECDSA P-256 de
     verdad, para probar la verificación de un documento que llega de fuera
     sin fabricar el CMS en el test.
+- Comandos del ciclo 6:
+  - **El test cruzado, un nivel más abajo** (`puente_dev`,
+    `los_argumentos_de_cada_invoke_son_los_del_comando`): compara los
+    **nombres de argumento** de cada `invoke("cmd", { … })` de `src/**`
+    con los parámetros del comando en Rust, pasados a snake_case como hace
+    Tauri. Falla con lo que la UI manda y el comando no conoce (que Tauri
+    descarta en silencio: así se coló media función de espaciado en el
+    ciclo 5) y con lo obligatorio que la UI no manda; los `Option<T>` no
+    son obligatorios y lo que inyecta Tauri (`AppHandle`) no cuenta. Para
+    leer las claves sigue el rastro de los `...spread` de `api.ts` (el
+    parámetro de la función que envuelve, con sus intersecciones `& Tipo`,
+    los `type X = { … }` y los `const X = { … }` del fichero), sobre el
+    fuente **sin comentarios**. Lo que no sabe leer va en `SIN_LEER`.
+    Y el aviso de «comandos que la UI no llama» pasó de `eprintln!` a
+    **fallo**, con `NADIE_LLAMA` para lo que está a medio integrar
+    (marcado «pendiente_ui» con su motivo) y `ARGUMENTOS_PENDIENTES` para
+    un desencuentro de nombres que se arregla en la otra mitad. **Las dos
+    listas tienen que quedar vacías al cerrar un ciclo.**
+  - **Espaciado entre caracteres** (`texto.rs`): `edit_text_block` y
+    `add_text_block` aceptan `char_spacing`. pdfium-render 0.8 no expone el
+    estado de texto del objeto, así que el operador `Tc` lo escribe un
+    segundo pase con lopdf dentro de la misma mutación (`escribe_espaciado`):
+    `<tc> Tc` detrás del `BT` del bloque y `0 Tc` antes de su `ET`, para que
+    no se escape al resto de la página. El recorrido del content stream se
+    hace **sobre los bytes** —saltando cadenas, hexadecimales y
+    comentarios—, no con `Content::decode`: el analizador de lopdf 0.34 no
+    entiende las imágenes en línea. Los bloques se localizan por su ordinal
+    entre los objetos de texto de la página, que es el orden en el que
+    PDFium escribe los `BT … ET`. **Ojo**: `FPDF_GenerateContent` no vuelve
+    a escribir el `Tc`, así que mover o estirar después ese bloque se lo
+    lleva por delante.
+  - **Reflujo del párrafo** (`texto.rs`): `edit_text_block` gana `reflow`
+    (encendido por defecto cuando el bloque tiene párrafo debajo) y
+    devuelve `{ lineas, se_sale, reflujo }`. `parrafo_de` reconoce el
+    párrafo bajando desde el bloque tocado por las líneas que comparten
+    columna (borde izquierdo, centro o borde derecho), cuerpo de letra y
+    distancia de interlineado (más de 2,6 cuerpos ya es otro párrafo).
+    El texto se mide con los AFM de `parte_lineas`, se reparte al ancho de
+    la columna, se reescriben las líneas que había y se crean o **se
+    borran** las que sobren (nunca soltando el objeto sacado). Las líneas
+    se colocan por su **línea base** (`get_translation`), no por la caja de
+    los glifos, que sube y baja con las mayúsculas y los rabos; y el ancho
+    de la columna es el de la caja **o el que midan los AFM de las líneas
+    que ya hay**, el que sea mayor, para que una línea sin cambios no se
+    parta por un error de medida. Sin pedir interlineado se respeta el del
+    párrafo. **No cruza bloques ni páginas**, como Acrobat.
+  - **Adjuntos** (`adjuntos.rs`): `delete_attachment(work_path, index)`
+    saca la entrada del árbol `/EmbeddedFiles` y **poda los objetos** (sin
+    eso, los bytes del fichero seguirían dentro del PDF), y
+    `open_attachment(path, index)` deja el adjunto en una carpeta
+    `vitela-adjunto-…` del temporal —con su nombre y su extensión de
+    verdad, limpiados de barras y `..`— y devuelve la ruta para que la UI
+    lo abra con el visor del sistema (`opener:allow-open-path` acotado al
+    temporal en `capabilities/default.json`). El barrido de huérfanos del
+    arranque se lleva esas carpetas enteras. Añadir y borrar comparten
+    `reescribe_arbol`.
+  - **Capas con `/OCProperties` en línea** (AC-056): un catálogo puede
+    llevarlo como diccionario en línea y entonces no hay objeto que
+    modificar; `set_layer_visible` lo **promueve a objeto propio** en vez
+    de contestar «no se pueden apagar desde aquí».
+  - **Firmas en llano** (`firma.rs`): `nombre_llano(dn)` devuelve el `CN`
+    y, si no, el `O`, partiendo el DN por sus comas de verdad (en RFC 4514
+    una coma dentro de un valor va escapada). `FirmaInfo` gana
+    `cert_subject_dn` y `cert_issuer_dn` con el DN completo, y
+    `self_signed` pasa a usar `confianza::es_autofirmado` (nombre **y**
+    firma), que es la definición buena.
+  - **La segunda firma** (`firma.rs`): si el documento ya lleva firma,
+    `sign` hace **actualización incremental** con
+    `lopdf::IncrementalDocument`: los bytes de antes se quedan exactamente
+    donde estaban y el fichero crece por el final con el campo nuevo, el
+    `/Annots` de su página, el `/AcroForm` actualizado, una tabla de
+    referencias cruzadas con `/Prev` y su `%%EOF`. La primera firma deja de
+    cubrir el fichero entero y **sigue en `ok`**: una revisión detrás es lo
+    normal, no una manipulación. Por dentro: `Destino` (documento entero o
+    revisión nueva; sabe traerse un objeto de atrás antes de cambiarlo),
+    `escribe_campo_de_firma` y `cose_la_firma` (el `/ByteRange` y el PKCS#7
+    sobre los bytes ya serializados, **buscando desde el principio de la
+    revisión nueva**, que delante hay otra firma con su propio hueco). Los
+    campos se llaman `Firma1`, `Firma2`… porque dos `/T` iguales son el
+    mismo campo para cualquier visor.
+  - **Campos de formulario** (`formularios2.rs`): `create_form_field`
+    acepta `radio` (con `group` y `export_value`), `combo` y `list` (con
+    `options`) y un `props` anidado **en snake_case** (Tauri solo traduce
+    el camelCase de los argumentos de primer nivel): `tooltip` (`/TU`),
+    `obligatorio` y `solo_lectura` (`/Ff` bits 2 y 1), `valor_defecto`
+    (`/DV`) y `orden_tab` (la posición dentro del `/Annots`, con `/Tabs
+    /S`). **Un grupo de radios es un solo campo**: `/FT /Btn`, `/Ff` con el
+    bit 16 y un `/Kids` por opción, y el segundo radio del mismo grupo se
+    engancha al campo que ya existe. `set_form_checked` tiene su rama de
+    radio en lopdf (`/V` del campo y `/AS` de cada hijo, los hermanos a
+    `/Off`), y `get_form_fields` devuelve `required` (el bit 2 de `/Ff`,
+    heredado del padre), leído con lopdf porque pdfium-render no lo expone.
+    El marco y la marca van dentro del `/AP`, en sus dos estados, para que
+    aplanar tenga qué copiar.
+  - **Llamada y goma** (`anotaciones2.rs`): `add_callout(work_path,
+    page_index, rect, punta, text, color, author?)` escribe un `/FreeText`
+    con `/IT /FreeTextCallout`, `/CL` de la punta a la caja, `/LE
+    /OpenArrow` y un `/Rect` que abarca las dos cosas, con `/RD` diciendo
+    dónde queda la caja dentro de él; la línea sale por el centro del lado
+    que mira a la punta y la flecha la dibuja el `/AP`.
+    `transform_annotation` le aplica al `/CL` y al `/RD` la misma
+    transformación que al `/Rect`, así que arrastrar el cuadro arrastra la
+    punta. `erase_ink(work_path, page_index, annot_index, rect)` quita del
+    trazo los tramos que **tocan** el rectángulo (recorte de
+    Liang-Barsky) trabajando sobre el `/AP`, que es donde vive el dibujo
+    del Ink (PDFium no escribe `/InkList`), y devuelve si ha quedado algo;
+    si no queda nada, el comentario se va.
+  - **Resumen de comentarios** (`comentarios.rs`):
+    `export_comments(work_path, dest_path, document_name?)` —sin `formato`,
+    que solo admitía `"txt"`—. La cabecera lleva el nombre que mande la UI
+    y, si no manda ninguno, el que lleva dentro la copia de trabajo
+    (`vitela-<nombre>-<nanos>.pdf` → `<nombre>.pdf`): **el nombre del
+    temporal no se enseña nunca**. Las respuestas no repiten la página ni
+    el tipo del comentario al que contestan, y la fecha va en español
+    («10/09/2026 00:25»), no en ISO 8601.
+  - `pdf_from_images` **salta las imágenes que no se dejan leer** en vez de
+    tirar el lote: devuelve cuántas páginas ha hecho, para que la UI pueda
+    decir «2 de 3»; si no se lee ninguna, el error dice cuáles.
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (los envoltorios, en `src/api.ts`, con el mismo
     nombre en camelCase):
@@ -532,11 +655,11 @@ compila los instaladores a mano o al etiquetar `v*`.
     - `reply_annotation` (hilos `/IRT`), `set_annotation_state` (los cuatro
       estados de revisión de Acrobat, con el nombre que se escribe en el PDF:
       `Accepted`, `Rejected`, `Cancelled`, `Completed`) y
-      `export_comments(path, dest, "txt")`. `AnnotationInfo` gana
+      `export_comments`. `AnnotationInfo` gana
       `in_reply_to` (para anidar) y `state`.
     - `list_attachments` / `save_attachment` / `add_attachment` y
-      `list_layers` / `set_layer_visible`. **No hay borrar adjuntos**: no
-      está en el contrato y la UI no lo ofrece.
+      `list_layers` / `set_layer_visible`. (Borrar y abrir adjuntos llegan
+      en el ciclo 6.)
     - `verify_signatures` devuelve `confianza` (`raiz_conocida`,
       `autofirmado`, `desconocida`): una línea más en la tarjeta del panel,
       que **no cambia el color de la banda** —la confianza es del
@@ -573,7 +696,8 @@ compila los instaladores a mano o al etiquetar `v*`.
   ese id llega en otra rama: el test cruzado avisa por stderr en vez de
   fallar, y **se le quita al integrar**. Los ids —**la única lista**, la
   que enruta la UI, cruzada por un test— son:
-  - Archivo: `abrir`, `abrir-reciente`, `guardar`, `guardar-como`,
+  - Archivo: `abrir`, `abrir-reciente`, `crear-desde-imagenes`,
+    `guardar`, `guardar-como`,
     `cerrar-documento`, `anadir-pdf`, `insertar-pdf`, `combinar-ficheros`,
     `reemplazar-paginas`, `extraer-paginas`, `dividir-documento`,
     `imprimir`.
@@ -977,8 +1101,9 @@ compila los instaladores a mano o al etiquetar `v*`.
 4. ✅ Anotaciones: resaltado, dibujo, notas (`FPDFPage_CreateAnnot`)
 5. ✅ Formularios AcroForm (leer/rellenar texto y casillas)
 6. ✅ Edición de texto real: reescribir el objeto de texto del content stream
-   (por bloque, misma fuente, sin reflujo entre páginas). Multilínea: las
-   líneas extra se insertan como objetos nuevos con fuente estándar
+   (por bloque, misma fuente; **con reflujo del párrafo desde el ciclo 6**,
+   pero nunca entre bloques ni entre páginas, como Acrobat). Sin reflujo,
+   las líneas extra se insertan como objetos nuevos con fuente estándar
    aproximada por familia/estilo, colocados debajo (no se reutiliza el handle
    de `FPDFTextObj_GetFont`: queda ligado a la página y PDFium casca con
    handles colgantes). Fuentes (`fuente_por_nombre`): estándar aproximada →
@@ -990,7 +1115,9 @@ compila los instaladores a mano o al etiquetar `v*`.
    Un bloque se **coloca y se estira** con los mismos ocho tiradores que
    los sellos y las imágenes (`move_text_block`, `resize_text_block`;
    estirar escala el cuerpo de la fuente, no deforma los glifos), y la fila
-   contextual lleva interlineado y espaciado (`TL` y `Tc`).
+   contextual lleva interlineado y espaciado: el interlineado se resuelve
+   **colocando los objetos** (en un PDF no hay `TL` que valga entre objetos
+   distintos) y el espaciado sí es el operador `Tc`, escrito con lopdf.
    Imágenes: insertar, mover,
    redimensionar, girar, voltear, ordenar, recortar (`crop_image`, desde el
    popover), reemplazar y borrar objetos de imagen
@@ -1003,6 +1130,8 @@ compila los instaladores a mano o al etiquetar `v*`.
    (certificado en PEM o contenedor .p12/.pfx con contraseña —
    `p12-keystore`) y **verifica** además RSA-PSS y ECDSA P-256/P-384 con
    SHA-256/384/512, con tres estados («ok», «modificado», «desconocido»).
+   **Varias firmas**: sobre un documento ya firmado, la nueva va en una
+   actualización incremental que no toca un byte de las anteriores.
    PDFium no firma: cirugía con lopdf y criptografía con RustCrypto
 
 ## Convenciones
