@@ -3105,6 +3105,12 @@ function App() {
     "pagina-dos-continua": () => cambiaVista({ modoPagina: "dos-continuo" }),
     "girar-vista-derecha": () => setViewRotation((r) => (r + 90) % 360),
     "girar-vista-izquierda": () => setViewRotation((r) => (r + 270) % 360),
+    // el conmutador de la lectura: la misma función que el botón de
+    // «Acciones» y que ⇧⌘Y, para que no haya dos caminos que se separen
+    "leer-en-voz-alta": () => {
+      if (lectura.leyendo) lectura.parar();
+      else if (pageCount > 0) lectura.leer(pageIndex, true);
+    },
     "vista-atras": () => atrasVista(),
     "vista-adelante": () => adelanteVista(),
     "panel-lateral": () => setSidebarVisible((v) => !v),
@@ -3144,6 +3150,7 @@ function App() {
     "exportar-imagenes": () => setExportOpen(true),
     "exportar-texto": exportPlainText,
     "exportar-word": () => setWordAsk(true),
+    "exportar-comentarios": exportarComentarios,
     "crear-desde-imagenes": () => setImagenesOpen(true),
     // Copiar y Seleccionar todo: el menú nativo se queda con ⌘C y ⌘A antes
     // que el webview, así que las dos entradas actúan donde esté mirando el
