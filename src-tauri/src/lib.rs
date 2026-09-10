@@ -1259,6 +1259,8 @@ pub fn run() {
             adjuntos::add_file_attachment_annotation,
             adjuntos::delete_attachment,
             adjuntos::open_attachment,
+            adjuntos::open_page_attachment,
+            adjuntos::save_page_attachment,
             adjuntos::list_layers,
             adjuntos::set_layer_visible,
             exportar::export_pages_png,

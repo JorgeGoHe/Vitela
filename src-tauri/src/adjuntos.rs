@@ -1030,6 +1030,96 @@ pub fn add_file_attachment_annotation(
     })
 }
 
+/// El nombre y los bytes del fichero que lleva dentro una anotación
+/// `/FileAttachment` (la chincheta de «Comentar ▸ Adjuntar archivo»).
+///
+/// Es **otro** camino que el del adjunto del documento: aquel cuelga del
+/// árbol `/Names → /EmbeddedFiles` y este del `/FS` de una anotación de una
+/// página. Hasta el ciclo 9 se sabía poner y no se sabía sacar, que es un
+/// callejón sin salida con el fichero del usuario dentro.
+fn fichero_de_la_chincheta(
+    path: &str,
+    page_index: u16,
+    annot_index: u16,
+) -> Result<(String, Vec<u8>), String> {
+    let path = path.to_string();
+    on_pdfium_thread(move || {
+        with_lopdf(&path, |doc| {
+            let annots = crate::anotaciones::lista_annots(doc, page_index)
+                .ok_or("Esa página no tiene comentarios")?;
+            let objeto = annots
+                .get(annot_index as usize)
+                .ok_or("Ese adjunto ya no está en la página")?;
+            let annot = dict_de(doc, objeto).ok_or("Ese comentario ya no está en la página")?;
+            if annot.get(b"Subtype").and_then(|o| o.as_name()).unwrap_or_default()
+                != b"FileAttachment"
+            {
+                return Err("Ese comentario no lleva ningún fichero adjunto".into());
+            }
+            let spec = annot
+                .get(b"FS")
+                .ok()
+                .and_then(|o| dict_de(doc, o))
+                .ok_or("Ese adjunto no lleva fichero dentro")?;
+            let stream_id = stream_de(doc, &spec).ok_or("Ese adjunto no lleva fichero dentro")?;
+            let stream = doc
+                .get_object(stream_id)
+                .and_then(|o| o.as_stream())
+                .map_err(|e| e.to_string())?;
+            Ok((
+                nombre_visible(doc, &spec, "adjunto"),
+                stream
+                    .decompressed_content()
+                    .unwrap_or_else(|_| stream.content.clone()),
+            ))
+        })
+    })
+}
+
+/// Deja en el temporal el fichero de una chincheta y devuelve su ruta, para
+/// que la UI lo abra con el visor del sistema: es lo que hace el doble clic
+/// en Acrobat. Mismo saneado de nombre y misma carpeta acotada que
+/// [`open_attachment`], que es lo que el permiso del opener deja abrir.
+#[tauri::command(async)]
+pub fn open_page_attachment(
+    path: String,
+    page_index: u16,
+    annot_index: u16,
+) -> Result<String, String> {
+    let (nombre, bytes) = fichero_de_la_chincheta(&path, page_index, annot_index)?;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!("vitela-adjunto-{nanos}"));
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        crate::mensaje_llano(format!("No se ha podido preparar el adjunto: {e}"))
+    })?;
+    let destino = dir.join(nombre_seguro(&nombre));
+    std::fs::write(&destino, bytes).map_err(|e| {
+        crate::mensaje_llano(format!("No se ha podido preparar el adjunto: {e}"))
+    })?;
+    Ok(destino.to_string_lossy().into_owned())
+}
+
+/// Escribe donde diga la UI el fichero de una chincheta («Guardar
+/// adjunto como…» del menú contextual de Acrobat) y devuelve cuántos
+/// bytes ha dejado, como [`save_attachment`].
+#[tauri::command(async)]
+pub fn save_page_attachment(
+    path: String,
+    page_index: u16,
+    annot_index: u16,
+    dest_path: String,
+) -> Result<u64, String> {
+    let (_, bytes) = fichero_de_la_chincheta(&path, page_index, annot_index)?;
+    let n = bytes.len() as u64;
+    std::fs::write(&dest_path, bytes).map_err(|e| {
+        crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}"))
+    })?;
+    Ok(n)
+}
+
 #[cfg(test)]
 mod tests_chincheta {
     use super::*;
@@ -1111,6 +1201,78 @@ mod tests_chincheta {
         .unwrap_err()
         .contains("factura.xml"));
         std::fs::remove_file(&factura).ok();
+        std::fs::remove_file(&pdf).ok();
+    }
+
+    /// **La vuelta de la chincheta.** Hasta el ciclo 9 se sabía meter un
+    /// fichero en una página y no se sabía sacarlo: el usuario creía
+    /// haberlo guardado dentro —lo había hecho— y no podía recuperarlo sin
+    /// abrir el PDF en Acrobat. Es el callejón sin salida más literal que
+    /// ha tenido la aplicación.
+    #[test]
+    fn el_fichero_de_una_chincheta_se_abre_y_se_guarda() {
+        let pdf = std::env::temp_dir().join("adjuntos-chincheta-sacar.pdf");
+        crea_pdf(&["Contrato"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        let origen = std::env::temp_dir().join("adjuntos-chincheta-sacar-factura.xml");
+        let contenido = b"<factura><total>1234,56</total></factura>".to_vec();
+        std::fs::write(&origen, &contenido).expect("escribir el adjunto");
+
+        add_file_attachment_annotation(
+            work.clone(),
+            0,
+            [120.0, 200.0],
+            origen.to_string_lossy().into_owned(),
+            None,
+        )
+        .expect("adjuntar");
+
+        // abrir deja el fichero en el temporal, con su nombre y su
+        // extensión de verdad (es lo que mira el sistema para elegir con
+        // qué programa abrirlo) y con los bytes del original
+        let ruta = open_page_attachment(work.clone(), 0, 0).expect("abrir");
+        let abierto = std::path::Path::new(&ruta);
+        assert!(abierto.exists(), "la ruta que se devuelve no existe: {ruta}");
+        assert_eq!(
+            abierto.file_name().and_then(|n| n.to_str()),
+            Some("adjuntos-chincheta-sacar-factura.xml")
+        );
+        assert_eq!(std::fs::read(abierto).expect("leer"), contenido);
+
+        // y guardar lo escribe donde diga la UI, diciendo cuántos bytes
+        let destino = std::env::temp_dir().join("adjuntos-chincheta-guardada.xml");
+        let n = save_page_attachment(
+            work.clone(),
+            0,
+            0,
+            destino.to_string_lossy().into_owned(),
+        )
+        .expect("guardar");
+        assert_eq!(n as usize, contenido.len());
+        assert_eq!(std::fs::read(&destino).expect("leer"), contenido);
+
+        // un comentario que no lleva fichero lo dice en llano, no falla
+        // con jerga ni devuelve una ruta vacía
+        crate::anotaciones::add_note(
+            work.clone(),
+            0,
+            300.0,
+            300.0,
+            "Una nota".into(),
+            None,
+        )
+        .expect("nota");
+        let e = open_page_attachment(work.clone(), 0, 1).unwrap_err();
+        assert!(e.contains("no lleva ningún fichero"), "aviso en llano: {e}");
+        let e = save_page_attachment(work.clone(), 0, 9, destino.to_string_lossy().into_owned())
+            .unwrap_err();
+        assert!(e.contains("ya no está en la página"), "aviso en llano: {e}");
+
+        if let Some(dir) = abierto.parent() {
+            std::fs::remove_dir_all(dir).ok();
+        }
+        std::fs::remove_file(&destino).ok();
+        std::fs::remove_file(&origen).ok();
         std::fs::remove_file(&pdf).ok();
     }
 }

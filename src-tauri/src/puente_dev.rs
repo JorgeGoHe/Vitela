@@ -256,6 +256,8 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "add_file_attachment_annotation" => cmd!(crate::adjuntos::add_file_attachment_annotation, { work_path: String, page_index: u16, punto: [f32; 2], src_path: String, author: Option<String> }),
         "delete_attachment" => cmd!(crate::adjuntos::delete_attachment, { work_path: String, index: u16 }),
         "open_attachment" => cmd!(crate::adjuntos::open_attachment, { path: String, index: u16 }),
+        "open_page_attachment" => cmd!(crate::adjuntos::open_page_attachment, { path: String, page_index: u16, annot_index: u16 }),
+        "save_page_attachment" => cmd!(crate::adjuntos::save_page_attachment, { path: String, page_index: u16, annot_index: u16, dest_path: String }),
         "list_layers" => cmd!(crate::adjuntos::list_layers, { path: String }),
         "set_layer_visible" => cmd!(crate::adjuntos::set_layer_visible, { work_path: String, index: u16, visible: bool }),
         "export_pages_png" => cmd!(exportar::export_pages_png, { path: String, dest_dir: String, dpi: u16, format: String }),
@@ -462,6 +464,14 @@ mod tests {
     /// quita al integrar.
     const NADIE_LLAMA: &[(&str, &str)] = &[
         ("certify_pdf", "ciclo 9: certificar con /DocMDP necesita su diálogo y su id de menú"),
+        (
+            "open_page_attachment",
+            "ciclo 9: el doble clic en la chincheta llega con la mitad de la interfaz",
+        ),
+        (
+            "save_page_attachment",
+            "ciclo 9: «Guardar como…» del popover de la chincheta, ídem",
+        ),
     ];
 
     /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada
