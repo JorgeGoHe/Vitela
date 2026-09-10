@@ -21,6 +21,9 @@ y firma digital.
   `aws-lc-rs`, que en x86_64-msvc piden NASM en el runner de Windows, y su
   API exige además un EKU de TLS que un certificado de firma de documentos
   no tiene.
+- **`quick-xml`** — leer el XFDF de los comentarios (escribirlo se hace a
+  mano). Ya venía en el árbol con `docx-rs`, así que no trae nada nuevo al
+  build.
 - **`docx-rs`** — exportar a Word (`export_docx`), crate puro. El test lo
   vuelve a abrir con `zip` (dev-dependency) y lee su `word/document.xml`.
 - **PDFium** — motor PDF (render, texto, páginas, formularios), vía el crate
@@ -208,9 +211,14 @@ compila los instaladores a mano o al etiquetar `v*`.
   mismo proceso (la segunda inicialización se cuelga con deadlock, sin error)
   y sus tipos no son `Send`. Todo acceso pasa por `on_pdfium_thread(f)`, que
   envía el trabajo por canal a un único hilo propietario de la instancia
-  (única y viva todo el proceso) y de los cachés del documento abierto
-  (`with_doc` para PDFium, `with_lopdf` para lopdf; invalidar con
-  `invalidate_doc_cache` tras cada mutación). **Es reentrante**: dentro del
+  (única y viva todo el proceso) y de los cachés de documentos abiertos
+  (`with_doc` para PDFium, `with_lopdf` para lopdf). Desde el ciclo 7 son
+  **mapas por copia de trabajo** con un tope (`DOCUMENTOS_EN_CACHE`, cuatro)
+  y expulsión del que lleva más tiempo sin tocarse (`coloca`): con el caché
+  de uno solo, abrir el segundo documento echaba al primero y trabajar con
+  los dos recargaba el otro en cada comando. `invalidate_doc_cache(path)`
+  suelta **ese** documento y hay que llamarla tras cada mutación (soltarlo
+  no lo cierra: se recarga en milisegundos). **Es reentrante**: dentro del
   hilo, una llamada anidada se ejecuta en línea. Nunca llamar a
   `pdfium()`/`with_doc` fuera de ese hilo.
 - **Concurrencia**: los comandos son `#[tauri::command(async)]` (siguen
@@ -640,8 +648,121 @@ compila los instaladores a mano o al etiquetar `v*`.
     el tipo del comentario al que contestan, y la fecha va en español
     («10/09/2026 00:25»), no en ISO 8601.
   - `pdf_from_images` **salta las imágenes que no se dejan leer** en vez de
-    tirar el lote: devuelve cuántas páginas ha hecho, para que la UI pueda
-    decir «2 de 3»; si no se lee ninguna, el error dice cuáles.
+    tirar el lote; desde el ciclo 7 devuelve además cuáles y por qué (ver
+    abajo). Si no se lee ninguna, sigue siendo un error y dice cuáles.
+- Comandos del ciclo 7:
+  - **El espaciado sobrevive a mover y a estirar** (`texto.rs`):
+    `FPDF_GenerateContent` no vuelve a escribir el `Tc` al regenerar el
+    content stream, así que `move_text_block` y `resize_text_block` leían
+    el operador del bloque antes de tocarlo (`lee_espaciado`) y lo reponen
+    al terminar, dentro de la misma mutación. El recorrido del content
+    stream sobre los bytes pasa a `recorre_stream`, que comparten el que
+    escribe el `Tc` y el que lo lee.
+  - **La goma, de una pasada** (`anotaciones2.rs`):
+    `erase_ink_area(work_path, page_index, rect)` busca él los `Ink` cuya
+    caja toca la zona, los recorta todos en una cirugía y quita del
+    `/Annots` —de mayor a menor índice— los que se quedan sin nada.
+    Devuelve `{ tocados, borrados }`. Pasar la goma por donde no hay trazo
+    no es un error y **no deja paso de deshacer**
+    (`historial::retira_paso`). Sustituye a `erase_ink`, que se retira en
+    cuanto la interfaz deje de llamarlo.
+  - `pdf_from_images` devuelve `{ paginas, saltadas, motivos }`: `saltadas`
+    son las rutas **tal como llegaron** (la UI las compara con su lista para
+    marcar esas filas del diálogo) y `motivos` va en paralelo, con la frase
+    en llano de por qué se quedó fuera cada una. El `Display` del crate
+    `image` va en inglés y en su jerga, y esto lo lee el usuario.
+  - **El menú nativo, espejo en las dos direcciones** (`menu.rs`): el test
+    cruzado probaba que todo id del menú del sistema estaba enrutado y nada
+    probaba lo contrario, y por eso «Leer en voz alta» y «Exportar
+    comentarios…» llevaban un ciclo entero fuera de la barra.
+    `el_menu_nativo_es_un_espejo_del_menu_de_la_app` exige que cada
+    `<Entrada>` del menú «Acciones» tenga su **etiqueta** en `estructura()`
+    (las entradas de la app no llevan id), con dos listas de excepciones
+    —`NO_VAN_EN_LA_BARRA` y `EQUIVALENTES`— que fallan también cuando
+    envejecen. `Entrada::ep` marca `pendiente_ui`.
+  - **R37, la tercera forma de desencontrarse** (`puente_dev.rs`): un
+    `Option<T>` que ningún `invoke` manda jamás es una función escrita,
+    probada y sin camino hasta el usuario (fue el estado de `char_spacing`
+    durante un ciclo). Ahora falla, con `PARAMETROS_PENDIENTES` (comando,
+    parámetro, motivo) para lo que esté a medio integrar; la lista se queja
+    también cuando la UI ya manda el parámetro.
+  - **Marcadores con destino fino** (`documento.rs`): `OutlineNode` gana
+    `top` y `zoom` (`/XYZ left top zoom`), así que volver a un marcador
+    devuelve la vista donde se puso y no el principio de la página. `top`
+    va en el espacio propio de la página con el origen arriba-izquierda,
+    como todo lo que la UI lee y escribe; sin `top` ni `zoom` se escribe
+    `null`, que en el spec es «déjalo como está», y los dos llevan
+    `serde(default)`. **Leer el árbol pasa de PDFium a lopdf**:
+    pdfium-render 0.8 da la página del destino pero no los parámetros de
+    vista. De paso se resuelven los destinos ajenos (`/Fit`, `/FitH`,
+    `/FitR`, el `/A` con `/S /GoTo` y los nombres del árbol
+    `/Names /Dests` o del `/Dests` viejo), y los recorridos cortan ciclos.
+  - **Reconocer campos** (`formularios2.rs`):
+    `detect_form_fields(work_path, page_indices?)` →
+    `CampoPropuesto { page_index, rect, kind, name, group, confianza }`,
+    que **solo propone**. La heurística va sobre los bloques de texto y la
+    **caja** de los objetos de camino (pdfium-render 0.8 no expone los
+    segmentos): raya larga y fina —o corrida de «_»— es campo de texto
+    encima, cuadro pequeño suelto es casilla, cuadros alineados del mismo
+    tamaño son las opciones de un grupo (el grupo lo encabeza el texto que
+    va delante de la fila). El nombre sale del texto más cercano, sin
+    tildes (el `/T` lo leen otros programas) y desempatado con un número;
+    donde ya hay un widget no se propone nada. `confianza` baja cuando no
+    había texto del que sacar el nombre: una heurística no acierta siempre
+    y no puede fingir que sí. Aceptar el lote es
+    `create_form_fields(work_path, fields)`, **una sola cirugía** (el
+    cuerpo de `create_form_field` pasa a `crea_campo`, que comparten).
+  - **El contrato del reflujo** (AC-061, arriba en el ciclo 6): `new_text`
+    es siempre la línea, `reflow` por defecto `false`.
+  - **El estado de una casilla lo lee lopdf** (`formularios.rs`, AC-063):
+    `is_checked()` de pdfium-render 0.8 devuelve `true` para **todas** las
+    opciones de un grupo de radios cuando el campo está en `/V /Off`, y con
+    eso el formulario no se podía rellenar (la UI conmutaba `!checked`, que
+    siempre era `false`). Se lee el `/AS` del widget —el estado del `/AP`
+    que el visor pinta— y, sin él, el `/V` heredado contra el valor de
+    exportación. El estado llega a veces como cadena en vez de nombre
+    (PDFium escribe «/Yes» así), y las dos formas se entienden.
+  - **Solo lectura y ayuda** (AC-065 y AC-066): `FormFieldInfo` gana
+    `read_only` (bit 1 del `/Ff`, heredado) y `tooltip` (`/TU`, heredado), y
+    `set_form_text`, `set_form_checked` y `set_form_choice` se niegan con
+    un aviso en llano sobre un campo bloqueado: quien decide qué se escribe
+    en el documento es el backend.
+  - **El documento intacto** (`firma.rs`, AC-064): `FirmaInfo` gana
+    `documento_intacto`, que es **del documento** y vale lo mismo en todas
+    —cierto cuando todas están en «ok» y alguna cubre el fichero entero, que
+    solo puede ser la última—. Con dos firmas, componer la banda con la
+    primera `FirmaInfo` decía «hay cambios posteriores» y el cambio era la
+    otra firma.
+  - **La medida puesta es un comentario** (`anotaciones2.rs`, AC-069):
+    `add_measure(work_path, page_index, points, text, color, closed?,
+    author?)` escribe `/Line` (dos puntos), `/PolyLine` (perímetro) o
+    `/Polygon` (área) con `/IT` de medida, `/LE` en los extremos y la cifra
+    en el `/Contents`; el `/AP` lo dibujamos nosotros. Una sola mutación, y
+    ya no ensucia el texto del documento. **No se escribe `/Measure`**: la
+    escala la fija el usuario por documento en la interfaz, y uno sin escala
+    de verdad diría que el PDF trae una que no trae.
+  - **El resumen y el XFDF** (`comentarios2.rs`):
+    `export_comments_pdf(work_path, dest_path, orden, document_name?)` con
+    `orden` `"pagina"`/`"autor"`/`"fecha"`/`"tipo"` compone con PDFium un
+    PDF de una fila por comentario, respuestas sangradas y **siempre pegadas
+    a su comentario**. Las páginas enfrentadas de Acrobat quedan fuera y se
+    argumenta en el código. `export_comments_xfdf` e
+    `import_comments_xfdf` leen y escriben los diccionarios con lopdf, así
+    que viaja todo lo escrito (autor, fechas, `/IRT`, estado, quads,
+    vértices); el dibujo de un `Ink` sale de su `/AP`, que es donde PDFium
+    lo guarda, como el `<inklist>` del formato. Importar **añade**, en una
+    sola mutación, engancha las respuestas por `name`/`inreplyto` y
+    redibuja la apariencia de las marcas. `quick-xml` ya venía en el árbol
+    con `docx-rs`.
+  - `borra_sesion(work_path)` exige la copia de trabajo: con varios
+    documentos abiertos, cerrar uno no puede llevarse el apunte de otro.
+  - `save_image_data(work_path, page_index, object_index, dest_path)`
+    (`imagenes.rs`): el mismo bitmap de `get_image_data` escrito
+    directamente en un PNG, sin cruzar el canal en base64.
+  - **Un test para CLAUDE.md** (AC-070): ninguna línea de más de cuarenta
+    caracteres puede aparecer dos veces. El documento lo tocan cada ciclo
+    las dos ramas sobre los mismos párrafos, y dos veces seguidas se coló
+    la misma línea pegada detrás de su versión nueva.
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (los envoltorios, en `src/api.ts`, con el mismo
     nombre en camelCase):
@@ -798,13 +919,14 @@ compila los instaladores a mano o al etiquetar `v*`.
     `zoom-ancho`, `pagina-una`, `pagina-continua`, `pagina-dos`,
     `pagina-dos-continua`, `girar-vista-derecha`, `girar-vista-izquierda`,
     `vista-atras`, `vista-adelante`, `panel-lateral`, `pantalla-completa`,
-    `modo-nocturno`.
+    `modo-nocturno`, `leer-en-voz-alta` (⇧⌘Y, donde lo pone Acrobat).
   - Documento: `organizar-paginas`, `recortar-pagina`, `marca-de-agua`,
     `encabezado-pie`, `quitar-marca-de-agua`, `quitar-encabezados`,
-    `anadir-campo`, `anadir-enlace`, `firmar`, `proteger`,
+    `anadir-campo`, `reconocer-campos`, `anadir-enlace`,
+    `adjuntar-fichero`, `firmar`, `proteger`,
     `quitar-proteccion`, `aplanar`, `redactar`, `sanitizar`,
     `propiedades`, `exportar-imagenes`, `exportar-texto`, `exportar-word`,
-    `comprimir`.
+    `exportar-comentarios`, `importar-comentarios`, `comprimir`.
   - Ayuda: `atajos` (⌘/ y F1) (y Acerca de, nativa).
 - **Protección** (`seguridad.rs`): `encrypt_pdf` compone la máscara `/P`
   del spec a partir de `permisos { imprimir, copiar, editar }` (los tres a
@@ -904,7 +1026,7 @@ compila los instaladores a mano o al etiquetar `v*`.
   `anotaciones.rs`/`anotaciones2.rs`, `formularios.rs`/`formularios2.rs`,
   `texto.rs`, `imagenes.rs`, `documento.rs`, `seguridad.rs`/`seguridad2.rs`,
   `exportar.rs`, `firma.rs`, `confianza.rs`, `firmas_visuales.rs`,
-  `comentarios.rs`, `adjuntos.rs`, `historial.rs`,
+  `comentarios.rs`/`comentarios2.rs`, `adjuntos.rs`, `historial.rs`,
   `recientes.rs`, `recuperacion.rs`, `menu.rs`, `puente_dev.rs`.
   `generate_handler!` y `despachar` referencian los comandos por ruta de
   módulo (con re-exports no funciona el macro).
@@ -1228,6 +1350,14 @@ compila los instaladores a mano o al etiquetar `v*`.
    Medir distancias y áreas con escala por documento, y leer en voz alta
    con la síntesis del webview. Reflujo del párrafo al corregir texto
    (`edit_text_block` con `reflow`).
+
+9. ✅ Revisión que sale del programa: resumen de comentarios **en PDF** y
+   **XFDF** de ida y vuelta (`comentarios2.rs`), marcadores con destino
+   fino (zoom y posición), reconocimiento de campos de formulario que
+   **propone y no escribe**, medida puesta como comentario y varios
+   documentos abiertos a la vez en el caché del hilo de PDFium. Queda
+   fuera de esta rama la fila de pestañas y la lista de sesiones de
+   recuperación, que son la mitad de interfaz de esa función.
 
 ## Convenciones
 
