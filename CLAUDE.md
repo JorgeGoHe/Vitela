@@ -1071,6 +1071,22 @@ compila los instaladores a mano o al etiquetar `v*`.
     imagen)», porque un PDF no guarda de qué fichero salió. Dos versiones
     de un folleto con la foto cambiada decían «sin diferencias», que es
     peor que no comparar.
+  - **LTV con revocación de verdad** (C-5, `ocsp.rs`): al firmar con LTV se
+    le pregunta al respondedor OCSP que el propio certificado lleva escrito
+    en su AIA (`url_de`) si sigue vigente, y **la respuesta se archiva en el
+    `/DSS /OCSPs`**; `verify_signatures` la lee de ahí y devuelve
+    `ltv_archivado: bool` y `ltv_fecha` (el `producedAt`, ISO 8601), los dos
+    del documento como `documento_intacto`. **Al abrir no se llama a
+    nadie**, que es la postura del proyecto: la prueba viaja dentro del
+    fichero. Si el respondedor no contesta —o el certificado no dice dónde
+    preguntar— **se firma igual** y el aviso lo explica en llano: tirar la
+    firma porque un servidor de un tercero está caído sería lo peor que
+    podría pasar después de elegir destino. Sin crates nuevas salvo `sha1`,
+    que no es una elección: el `CertID` del RFC 6960 lo exige. El formato
+    binario va otra vez a mano, y la conexión la presta `tsa::post`, que
+    ahora recibe cómo llamar en llano al servidor en sus avisos. Fixtures:
+    `test_ocsp_cert.pem` / `test_ocsp_key.pem`, con su AIA a un puerto de
+    loopback donde el test levanta el respondedor.
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (cada uno con su envoltorio en camelCase):
     - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la

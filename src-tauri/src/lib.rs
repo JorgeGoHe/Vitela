@@ -874,6 +874,7 @@ pub mod puente_dev;
 mod seguridad;
 mod seguridad2;
 mod texto;
+mod ocsp;
 mod tsa;
 
 /// Firma digitalmente la copia de trabajo y escribe el PDF firmado en

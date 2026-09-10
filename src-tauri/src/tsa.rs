@@ -41,7 +41,7 @@ pub(crate) const OID_TOKEN: const_oid::ObjectIdentifier =
 
 /// Un TLV en DER: etiqueta, longitud (en forma larga si hace falta) y
 /// contenido.
-fn tlv(etiqueta: u8, contenido: &[u8]) -> Vec<u8> {
+pub(crate) fn tlv(etiqueta: u8, contenido: &[u8]) -> Vec<u8> {
     let mut out = vec![etiqueta];
     let n = contenido.len();
     if n < 0x80 {
@@ -59,7 +59,7 @@ fn tlv(etiqueta: u8, contenido: &[u8]) -> Vec<u8> {
 
 /// Un entero DER sin signo (con el 0x00 delante si el bit alto está
 /// puesto, que si no sería negativo).
-fn entero(n: u64) -> Vec<u8> {
+pub(crate) fn entero(n: u64) -> Vec<u8> {
     let bytes = n.to_be_bytes();
     let primero = bytes.iter().position(|b| *b != 0).unwrap_or(bytes.len() - 1);
     let mut v = bytes[primero..].to_vec();
@@ -96,7 +96,7 @@ fn peticion(hash: &[u8], nonce: u64) -> Vec<u8> {
 }
 
 /// Cabecera de un TLV: (etiqueta, dónde empieza el contenido, cuánto mide).
-fn cabecera(der: &[u8]) -> Option<(u8, usize, usize)> {
+pub(crate) fn cabecera(der: &[u8]) -> Option<(u8, usize, usize)> {
     let etiqueta = *der.first()?;
     let primera = *der.get(1)? as usize;
     if primera < 0x80 {
@@ -144,6 +144,9 @@ fn token_de(respuesta: &[u8]) -> Result<Vec<u8>, String> {
         .to_vec())
 }
 
+/// Cómo se llama en llano el servidor de sellado en todos los avisos.
+const SERVICIO: &str = "servidor de tiempo";
+
 /// Pide el sello a la autoridad. Devuelve el `ContentInfo` del token, tal
 /// cual, para meterlo como atributo no firmado del CMS.
 pub(crate) fn pide_token(url: &str, firma: &[u8]) -> Result<Vec<u8>, String> {
@@ -154,7 +157,7 @@ pub(crate) fn pide_token(url: &str, firma: &[u8]) -> Result<Vec<u8>, String> {
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(1);
     let cuerpo = peticion(&hash, nonce);
-    let respuesta = post(url, "application/timestamp-query", &cuerpo)?;
+    let respuesta = post(url, "application/timestamp-query", &cuerpo, SERVICIO)?;
     token_de(&respuesta)
 }
 
@@ -203,7 +206,7 @@ fn hora_del_tst(tst: &[u8]) -> Option<String> {
 }
 
 /// `20260910194012Z` → `2026-09-10T19:40:12+00:00`.
-fn iso_de_generalized(t: &str) -> Option<String> {
+pub(crate) fn iso_de_generalized(t: &str) -> Option<String> {
     let t = t.trim_end_matches('Z');
     let n = |a: usize, b: usize| t.get(a..b)?.parse::<u32>().ok();
     let fecha = chrono::NaiveDate::from_ymd_opt(n(0, 4)? as i32, n(4, 6)?, n(6, 8)?)?;
@@ -215,17 +218,28 @@ fn iso_de_generalized(t: &str) -> Option<String> {
 }
 
 /// Un POST de HTTP 1.1 con `std::net`, que es todo lo que necesita el
-/// RFC 3161. Solo `http://`: ver el comentario de arriba.
-fn post(url: &str, tipo: &str, cuerpo: &[u8]) -> Result<Vec<u8>, String> {
+/// RFC 3161 —y también el RFC 6960, que es por lo que lo comparte el OCSP—.
+/// Solo `http://`: ver el comentario de arriba.
+///
+/// `servicio` es cómo se llama en llano lo que hay al otro lado («servidor
+/// de tiempo», «servidor de comprobación del certificado»): sale en todos
+/// los avisos y quien los lee no sabe qué es un respondedor.
+pub(crate) fn post(
+    url: &str,
+    tipo: &str,
+    cuerpo: &[u8],
+    servicio: &str,
+) -> Result<Vec<u8>, String> {
     use std::io::{Read, Write};
     let sin_esquema = url.strip_prefix("http://").ok_or_else(|| {
         if url.starts_with("https://") {
-            "Esa dirección de sello de tiempo va por https y Vitela habla con el servidor por http, \
-             que es como está pensado el protocolo: el sello viene firmado. Prueba con la \
-             dirección http:// del mismo servicio"
-                .to_string()
+            format!(
+                "Esa dirección del {servicio} va por https y Vitela habla con él por http, que \
+                 es como está pensado el protocolo: la respuesta viene firmada. Prueba con la \
+                 dirección http:// del mismo servicio"
+            )
         } else {
-            format!("«{url}» no es la dirección de un servidor de tiempo")
+            format!("«{url}» no es la dirección de un {servicio}")
         }
     })?;
     let (autoridad, ruta) = match sin_esquema.find('/') {
@@ -238,11 +252,11 @@ fn post(url: &str, tipo: &str, cuerpo: &[u8]) -> Result<Vec<u8>, String> {
         format!("{autoridad}:80")
     };
     let destino = std::net::ToSocketAddrs::to_socket_addrs(&con_puerto)
-        .map_err(|_| format!("No se encuentra el servidor de tiempo «{autoridad}»"))?
+        .map_err(|_| format!("No se encuentra el {servicio} «{autoridad}»"))?
         .next()
-        .ok_or_else(|| format!("No se encuentra el servidor de tiempo «{autoridad}»"))?;
+        .ok_or_else(|| format!("No se encuentra el {servicio} «{autoridad}»"))?;
     let mut conexion = std::net::TcpStream::connect_timeout(&destino, ESPERA)
-        .map_err(|_| format!("No se ha podido hablar con el servidor de tiempo «{autoridad}»"))?;
+        .map_err(|_| format!("No se ha podido hablar con el {servicio} «{autoridad}»"))?;
     conexion.set_read_timeout(Some(ESPERA)).ok();
     conexion.set_write_timeout(Some(ESPERA)).ok();
     let cabeceras = format!(
@@ -253,7 +267,7 @@ fn post(url: &str, tipo: &str, cuerpo: &[u8]) -> Result<Vec<u8>, String> {
     conexion
         .write_all(cabeceras.as_bytes())
         .and_then(|_| conexion.write_all(cuerpo))
-        .map_err(|_| format!("No se ha podido hablar con el servidor de tiempo «{autoridad}»"))?;
+        .map_err(|_| format!("No se ha podido hablar con el {servicio} «{autoridad}»"))?;
     // se lee hasta que el servidor cierra. Un corte por su parte **con la
     // respuesta ya entera** no es un fallo: hay servidores que cierran a
     // lo bruto en cuanto han escrito, y tirar lo que ya ha llegado sería
@@ -266,18 +280,16 @@ fn post(url: &str, tipo: &str, cuerpo: &[u8]) -> Result<Vec<u8>, String> {
             Ok(n) => respuesta.extend_from_slice(&trozo[..n]),
             Err(_) if !respuesta.is_empty() => break,
             Err(_) => {
-                return Err(format!(
-                    "El servidor de tiempo «{autoridad}» no ha contestado a tiempo"
-                ))
+                return Err(format!("El {servicio} «{autoridad}» no ha contestado a tiempo"))
             }
         }
     }
     let corte = buscar(&respuesta, b"\r\n\r\n")
-        .ok_or_else(|| format!("El servidor de tiempo «{autoridad}» ha contestado algo que no es HTTP"))?;
+        .ok_or_else(|| format!("El {servicio} «{autoridad}» ha contestado algo que no es HTTP"))?;
     let cabecera = String::from_utf8_lossy(&respuesta[..corte]).to_string();
     let primera = cabecera.lines().next().unwrap_or_default();
     if !primera.contains(" 200") {
-        return Err(format!("El servidor de tiempo ha contestado «{}»", primera.trim()));
+        return Err(format!("El {servicio} ha contestado «{}»", primera.trim()));
     }
     let cuerpo = respuesta[corte + 4..].to_vec();
     if cabecera.to_lowercase().contains("transfer-encoding: chunked") {

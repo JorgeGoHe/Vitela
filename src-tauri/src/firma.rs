@@ -490,6 +490,7 @@ fn escribe_campo_de_firma(
     ordinal: usize,
     certifica: Option<u8>,
     ltv: bool,
+    ocsp: Option<Vec<u8>>,
 ) -> Result<(), String> {
     // diccionario de firma con huecos para ByteRange y Contents
     let mut sig = Dictionary::new();
@@ -556,6 +557,12 @@ fn escribe_campo_de_firma(
                 Object::Reference(destino.add_object(Object::Stream(s)))
             })
             .collect()
+    });
+    // y la prueba de revocación, si el respondedor ha contestado
+    let ocsp_id: Option<Object> = ocsp.map(|der| {
+        let mut s = lopdf::Stream::new(Dictionary::new(), der);
+        let _ = s.compress();
+        Object::Reference(destino.add_object(Object::Stream(s)))
     });
 
     // widget de firma: invisible sin `rect`, y con su propia apariencia si
@@ -694,10 +701,16 @@ fn escribe_campo_de_firma(
         if let Some(dss) = dss_id {
             // **LTV**: los certificados de la cadena archivados en el
             // documento, para poder seguir comprobando la firma dentro de
-            // años sin ir a buscarlos a ninguna parte
+            // años sin ir a buscarlos a ninguna parte, y con ellos la
+            // respuesta OCSP —la prueba de que el certificado seguía
+            // vigente el día que se firmó—, que es lo que convierte
+            // «tenemos los papeles» en «tenemos la prueba»
             let mut d = Dictionary::new();
             d.set("Type", Object::Name(b"DSS".to_vec()));
             d.set("Certs", Object::Array(dss));
+            if let Some(o) = ocsp_id {
+                d.set("OCSPs", Object::Array(vec![o]));
+            }
             catalog.set("DSS", Object::Dictionary(d));
         }
         Ok(())
@@ -845,6 +858,28 @@ pub fn certify(
     firma_o_certifica(src_path, dest_path, cred, reason, apariencia, Some(nivel), avanzado)
 }
 
+/// Pregunta al respondedor OCSP del certificado si sigue vigente, para
+/// archivar la respuesta con la firma. Devuelve la respuesta en DER y,
+/// cuando no ha podido ser, la frase en llano que va al aviso: quien la
+/// lee no sabe qué es un respondedor ni le hace falta.
+fn pide_ocsp(cred: &Credenciales) -> (Option<Vec<u8>>, String) {
+    let Some(url) = crate::ocsp::url_de(&cred.cert) else {
+        return (
+            None,
+            "El certificado no dice dónde comprobar si sigue vigente, así que dentro del \
+             documento van los certificados pero no esa prueba"
+                .to_string(),
+        );
+    };
+    // quien responde por el certificado es su emisor; en uno autofirmado,
+    // él mismo
+    let emisor = cred.cadena.first().unwrap_or(&cred.cert);
+    match crate::ocsp::pide(&url, &cred.cert, emisor) {
+        Ok(der) => (Some(der), String::new()),
+        Err(e) => (None, e),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn firma_o_certifica(
     src_path: &str,
@@ -867,6 +902,17 @@ fn firma_o_certifica(
     // el `/ByteRange` es lo que distingue a un PDF firmado
     let ordinal = cuenta_subslices(&bytes, b"/ByteRange") + 1;
 
+    // **La prueba de que el certificado seguía vigente**, pedida aquí y
+    // archivada dentro del documento: preguntar al abrir sería llamar por
+    // teléfono a un tercero cada vez que alguien mira un PDF. Si el
+    // respondedor no está, la firma sale igual y el aviso lo dice: la
+    // revocación acompaña a la firma, no es una condición para hacerla
+    let (ocsp, aviso_ocsp) = if avanzado.ltv {
+        pide_ocsp(cred)
+    } else {
+        (None, String::new())
+    };
+
     let (mut out, desde) = if ordinal > 1 {
         let anteriores = bytes.len();
         let mut inc = lopdf::IncrementalDocument::create_from(bytes, doc);
@@ -879,6 +925,7 @@ fn firma_o_certifica(
             ordinal,
             certifica,
             avanzado.ltv,
+            ocsp.clone(),
         )?;
         let mut out = Vec::new();
         inc.save_to(&mut out)
@@ -895,6 +942,7 @@ fn firma_o_certifica(
             ordinal,
             certifica,
             avanzado.ltv,
+            ocsp.clone(),
         )?;
         let mut out = Vec::new();
         doc.save_to(&mut out)
@@ -903,6 +951,13 @@ fn firma_o_certifica(
     };
     let mut informe = cose_la_firma(&mut out, desde, cred, avanzado.tsa_url.as_deref())?;
     informe.ltv = avanzado.ltv;
+    if !aviso_ocsp.is_empty() {
+        if informe.aviso.is_empty() {
+            informe.aviso = aviso_ocsp;
+        } else {
+            informe.aviso = format!("{} {aviso_ocsp}", informe.aviso);
+        }
+    }
     std::fs::write(dest_path, &out)
         .map_err(|e| format!("No se ha podido escribir: {e}"))?;
     Ok(informe)
@@ -1004,6 +1059,17 @@ pub struct FirmaInfo {
     /// 10 de septiembre según el reloj del que firmó»: sin sello, la fecha
     /// la pone quien firma y Vitela la enseñaba como si fuera un hecho.
     pub sello_de_tiempo: Option<crate::tsa::SelloDeTiempo>,
+    /// **Del documento, como `documento_intacto`**: dentro del PDF está
+    /// archivada la prueba de que el certificado seguía vigente cuando se
+    /// firmó (la respuesta OCSP del `/DSS /OCSPs`). Leerla **no toca la
+    /// red**: Vitela no llama a nadie al abrir un documento.
+    ///
+    /// Sin esto, «LTV» prometía comprobar la revocación y solo guardaba
+    /// los certificados, que es media promesa.
+    pub ltv_archivado: bool,
+    /// Cuándo se hizo esa comprobación (`producedAt`), en ISO 8601. Vacía
+    /// si no hay prueba archivada o si no se sabe leer su fecha.
+    pub ltv_fecha: String,
 }
 
 /// Firma comprobada y documento intacto.
@@ -1047,11 +1113,52 @@ pub fn verify_signatures(path: String) -> Result<Vec<FirmaInfo>, String> {
         let intacto = !firmas.is_empty()
             && firmas.iter().all(|f| f.estado == ESTADO_OK)
             && firmas.iter().any(|f| f.covers_whole_file);
+        // y la prueba de revocación archivada, que también es del
+        // documento: vive en el `/DSS` del catálogo, no en cada firma
+        let (archivado, fecha) = prueba_archivada(&doc);
         for f in &mut firmas {
             f.documento_intacto = intacto;
+            f.ltv_archivado = archivado;
+            f.ltv_fecha = fecha.clone();
         }
         Ok(firmas)
     })
+}
+
+/// La respuesta OCSP archivada en el `/DSS /OCSPs` del catálogo y la fecha
+/// en que se hizo. Es lo único que hace falta mirar para poder decir «el
+/// certificado seguía vigente el 10 de septiembre», y se mira **dentro del
+/// fichero**: al abrir un documento no se llama a nadie.
+fn prueba_archivada(doc: &LoDoc) -> (bool, String) {
+    let Some(dss) = doc
+        .catalog()
+        .ok()
+        .and_then(|c| c.get(b"DSS").ok())
+        .and_then(|o| match o {
+            Object::Reference(id) => doc.get_object(*id).ok(),
+            otro => Some(otro),
+        })
+        .and_then(|o| o.as_dict().ok())
+    else {
+        return (false, String::new());
+    };
+    let Ok(Object::Array(lista)) = dss.get(b"OCSPs") else {
+        return (false, String::new());
+    };
+    for entrada in lista {
+        let obj = match entrada {
+            Object::Reference(id) => doc.get_object(*id).ok(),
+            otro => Some(otro),
+        };
+        let Some(Ok(stream)) = obj.map(|o| o.as_stream()) else {
+            continue;
+        };
+        let der = stream
+            .decompressed_content()
+            .unwrap_or_else(|_| stream.content.clone());
+        return (true, crate::ocsp::fecha_de(&der).unwrap_or_default());
+    }
+    (false, String::new())
 }
 
 /// Los campos de firma del documento, con la página y el rect de su widget.
@@ -1238,6 +1345,8 @@ fn lee_firma(
         // lo pone `verify_signatures` cuando ya están todas leídas: es del
         // documento, no de esta firma
         documento_intacto: false,
+        ltv_archivado: false,
+        ltv_fecha: String::new(),
         certifica,
         sello_de_tiempo: None,
     };
@@ -2202,6 +2311,148 @@ mod tests {
         .expect("ContentInfo")
     }
 
+    /// Un respondedor OCSP de mentira en el puerto que dice el certificado
+    /// de prueba (`test_ocsp_cert.pem` lleva su AIA apuntando ahí). Como el
+    /// servidor de tiempo: se lee la petición entera antes de contestar y
+    /// se apaga.
+    fn ocsp_de_mentira(cuando: &str) -> std::thread::JoinHandle<()> {
+        use std::io::{Read, Write};
+        let escucha =
+            std::net::TcpListener::bind("127.0.0.1:41960").expect("el puerto del respondedor");
+        let cuerpo = crate::ocsp::prueba::respuesta_de_prueba(cuando);
+        std::thread::spawn(move || {
+            let Ok((mut cliente, _)) = escucha.accept() else { return };
+            let mut peticion = Vec::new();
+            let mut buf = [0u8; 1024];
+            while let Ok(n) = cliente.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                peticion.extend_from_slice(&buf[..n]);
+                let entera = peticion
+                    .windows(4)
+                    .position(|v| v == b"\r\n\r\n")
+                    .map(|corte| {
+                        let cabecera = String::from_utf8_lossy(&peticion[..corte]).to_lowercase();
+                        let largo = cabecera
+                            .split("content-length:")
+                            .nth(1)
+                            .and_then(|t| t.split(['\r', '\n']).next())
+                            .and_then(|t| t.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        peticion.len() >= corte + 4 + largo
+                    })
+                    .unwrap_or(false);
+                if entera {
+                    break;
+                }
+            }
+            let cabeceras = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/ocsp-response\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n",
+                cuerpo.len()
+            );
+            let _ = cliente.write_all(cabeceras.as_bytes());
+            let _ = cliente.write_all(&cuerpo);
+            let _ = cliente.flush();
+        })
+    }
+
+    /// **LTV de verdad** (C-5 del ciclo 10). Hasta aquí «LTV» archivaba los
+    /// certificados y prometía comprobar la revocación, que es media
+    /// promesa. Ahora, al firmar, se le pregunta al respondedor OCSP que
+    /// dice el propio certificado si sigue vigente y **la respuesta se
+    /// guarda dentro del documento**; al abrirlo, la prueba se lee del
+    /// `/DSS` y **no se llama a nadie**.
+    #[test]
+    fn firmar_con_ltv_archiva_la_prueba_de_que_el_certificado_seguia_vigente() {
+        let dir = std::env::temp_dir();
+        let src = dir.join("firma-ocsp-src.pdf");
+        let dest = dir.join("firma-ocsp-firmado.pdf");
+        crea_pdf(&["Contrato con prueba"], &src);
+        let cred = credenciales_pem(
+            include_str!("../fixtures/test_ocsp_cert.pem"),
+            include_str!("../fixtures/test_ocsp_key.pem"),
+        )
+        .expect("credenciales con AIA");
+        let hilo = ocsp_de_mentira("20260910194012Z");
+
+        let informe = sign(
+            &src.to_string_lossy(),
+            &dest.to_string_lossy(),
+            &cred,
+            None,
+            &Apariencia::default(),
+            &Avanzado { tsa_url: None, ltv: true },
+        )
+        .expect("firmar con LTV");
+        let _ = hilo.join();
+        assert!(informe.ltv);
+        assert!(
+            informe.aviso.is_empty(),
+            "con el respondedor contestando no hay nada que avisar: {}",
+            informe.aviso
+        );
+
+        // la prueba está dentro del documento y se lee sin red
+        let firmas = verify_signatures(dest.to_string_lossy().into_owned()).expect("verificar");
+        assert_eq!(firmas.len(), 1);
+        assert_eq!(firmas[0].estado, "ok", "archivar la prueba no rompe la firma");
+        assert!(
+            firmas[0].ltv_archivado,
+            "el /DSS tiene que llevar la respuesta del respondedor"
+        );
+        assert_eq!(
+            firmas[0].ltv_fecha, "2026-09-10T19:40:12+00:00",
+            "y con ella, cuándo se comprobó"
+        );
+
+        // **sin respondedor la firma sale igual y se dice por qué**: la
+        // revocación acompaña a la firma, no es una condición para hacerla
+        let sin_red = dir.join("firma-ocsp-sin-red.pdf");
+        let informe = sign(
+            &src.to_string_lossy(),
+            &sin_red.to_string_lossy(),
+            &cred,
+            None,
+            &Apariencia::default(),
+            &Avanzado { tsa_url: None, ltv: true },
+        )
+        .expect("firmar sin respondedor no es un fallo");
+        assert!(!informe.aviso.is_empty(), "hay que decir que falta la prueba");
+        assert!(
+            !informe.aviso.contains("OCSP") && !informe.aviso.contains("respondedor"),
+            "el aviso lo lee una persona: {}",
+            informe.aviso
+        );
+        let firmas = verify_signatures(sin_red.to_string_lossy().into_owned()).expect("verificar");
+        assert_eq!(firmas[0].estado, "ok");
+        assert!(!firmas[0].ltv_archivado);
+        assert!(firmas[0].ltv_fecha.is_empty());
+
+        // y un certificado que no dice dónde preguntar no manda a nadie a
+        // ninguna parte: se firma, se archivan los certificados y se dice
+        let sin_aia = dir.join("firma-ocsp-sin-aia.pdf");
+        let informe = sign(
+            &src.to_string_lossy(),
+            &sin_aia.to_string_lossy(),
+            &credenciales(),
+            None,
+            &Apariencia::default(),
+            &Avanzado { tsa_url: None, ltv: true },
+        )
+        .expect("firmar");
+        assert!(informe.aviso.contains("no dice dónde"), "{}", informe.aviso);
+        assert!(
+            !verify_signatures(sin_aia.to_string_lossy().into_owned()).expect("verificar")[0]
+                .ltv_archivado
+        );
+
+        for f in [&src, &dest, &sin_red, &sin_aia] {
+            std::fs::remove_file(f).ok();
+        }
+    }
+
     /// **El sello de tiempo, de punta a punta** (orden 4.1 del ciclo 9).
     /// La fecha de una firma sin sello es la del reloj del que firmó, y
     /// Vitela la enseñaba como si fuera un hecho. Con sello, quien
@@ -2227,7 +2478,15 @@ mod tests {
         let _ = hilo.join();
 
         assert!(informe.sellada, "el informe tiene que decir que va sellada: {}", informe.aviso);
-        assert!(informe.aviso.is_empty(), "sin aviso: {}", informe.aviso);
+        // el aviso no puede nombrar el servidor de tiempo: es lo que la
+        // interfaz reconoce para preguntar «¿firmar sin sello?», y aquí el
+        // sello ha llegado. (Lo que sí dice es que este certificado no
+        // lleva dónde comprobar su revocación, que es otra cosa.)
+        assert!(
+            !informe.aviso.contains("servidor de tiempo"),
+            "el sello ha llegado: {}",
+            informe.aviso
+        );
         let sello = informe.sello.expect("el sello");
         assert_eq!(sello.fecha, "2026-09-10T19:40:12+00:00");
         assert!(!sello.autoridad.is_empty(), "quién ha sellado");
