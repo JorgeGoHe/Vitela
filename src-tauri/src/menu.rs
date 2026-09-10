@@ -92,6 +92,23 @@ fn e(
     })
 }
 
+/// Igual que [`e`] pero con la marca temporal `pendiente_ui`: la mitad de
+/// la UI de este id llega en otra rama. Se le quita al integrar.
+fn ep(
+    id: &'static str,
+    etiqueta: &'static str,
+    atajo: Option<&'static str>,
+    necesita_documento: bool,
+) -> Elemento {
+    Elemento::Accion(Entrada {
+        id,
+        etiqueta,
+        atajo,
+        necesita_documento,
+        pendiente_ui: true,
+    })
+}
+
 fn sep() -> Elemento {
     Elemento::Separador
 }
@@ -175,6 +192,11 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 e("panel-lateral", "Panel lateral", Some("Alt+CmdOrCtrl+1"), false),
                 e("pantalla-completa", "Pantalla completa", Some("CmdOrCtrl+L"), false),
                 e("modo-nocturno", "Modo nocturno del documento", None, false),
+                sep(),
+                // en Acrobat «Leer en voz alta» vive en Ver, que es donde lo
+                // busca quien ya lo ha usado. La etiqueta conmuta en la app
+                // mientras suena; aquí se queda la de encenderlo
+                ep("leer-en-voz-alta", "Leer en voz alta", Some("Shift+CmdOrCtrl+Y"), true),
             ],
         },
         Grupo {
@@ -202,6 +224,7 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 e("exportar-imagenes", "Exportar como imágenes…", None, true),
                 e("exportar-texto", "Exportar texto…", None, true),
                 e("exportar-word", "Exportar a Word (.docx)…", None, true),
+                ep("exportar-comentarios", "Exportar comentarios…", None, true),
                 e("comprimir", "Reducir tamaño…", None, true),
             ],
         },
@@ -606,6 +629,147 @@ mod tests {
         assert!(
             sobran.is_empty(),
             "la UI enruta ids que el menú nativo no emite: {sobran:?}"
+        );
+    }
+
+    /// Entradas del menú «Acciones» de la app que **no deben** estar en la
+    /// barra del sistema, con su motivo. La lista tiene que quedarse corta
+    /// y argumentada: el menú nativo es un espejo, y cada hueco es una
+    /// función que quien la busca por el menú no encuentra.
+    const NO_VAN_EN_LA_BARRA: &[(&str, &str)] = &[];
+
+    /// Entradas que dicen lo mismo con otras palabras en cada sitio, con su
+    /// motivo. En el menú de la app la entrada va debajo de un título de
+    /// grupo que la completa («Salida ▸ Word (.docx)…»); en la barra del
+    /// sistema el grupo es otro y la etiqueta tiene que decir sola lo que
+    /// hace.
+    const EQUIVALENTES: &[(&str, &str, &str)] = &[
+        (
+            "word (.docx)",
+            "exportar a word (.docx)",
+            "en la app va bajo el título «Salida»; en la barra del sistema, \
+             dentro de «Documento», la etiqueta tiene que decir sola qué hace",
+        ),
+        (
+            "dejar de leer en voz alta",
+            "leer en voz alta",
+            "la etiqueta de la app conmuta mientras suena; el id es el mismo \
+             y el menú del sistema se queda con la de encenderlo",
+        ),
+    ];
+
+    /// Una etiqueta comparable: sin mayúsculas, sin los puntos suspensivos
+    /// del final y sin espacios de sobra.
+    fn llana(s: &str) -> String {
+        s.trim().trim_end_matches('…').trim().to_lowercase()
+    }
+
+    /// Los textos de las `<Entrada …>` del menú «Acciones» de la app. Se
+    /// leen del propio JSX: `texto="…"` y también `texto={cond ? "a" : "b"}`,
+    /// que es como se escribe una etiqueta que conmuta.
+    fn etiquetas_del_menu_de_la_app(fuentes: &[(String, String)]) -> Vec<String> {
+        let (fichero, texto) = fuentes
+            .iter()
+            .find(|(f, t)| f.ends_with("MenuAcciones.tsx") && t.contains("<Entrada"))
+            .expect("no se encuentra MenuAcciones.tsx");
+        let mut out: Vec<String> = Vec::new();
+        for trozo in texto.split("<Entrada").skip(1) {
+            // el cuerpo de la etiqueta, hasta el cierre de la entrada
+            let fin = trozo.find("/>").unwrap_or(trozo.len());
+            let cuerpo = &trozo[..fin];
+            let Some(i) = cuerpo.find("texto=") else { continue };
+            let resto = &cuerpo[i + "texto=".len()..];
+            let literales: Vec<String> = if let Some(dentro) = resto.strip_prefix('"') {
+                dentro
+                    .split_once('"')
+                    .map(|(t, _)| vec![t.to_string()])
+                    .unwrap_or_default()
+            } else {
+                // `{ … }`: se cogen todas las cadenas que haya dentro
+                let mut nivel = 0i32;
+                let mut hasta = resto.len();
+                for (j, c) in resto.char_indices() {
+                    match c {
+                        '{' => nivel += 1,
+                        '}' => {
+                            nivel -= 1;
+                            if nivel == 0 {
+                                hasta = j;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                resto[..hasta]
+                    .split('"')
+                    .skip(1)
+                    .step_by(2)
+                    .map(|t| t.to_string())
+                    .collect()
+            };
+            out.extend(literales.into_iter().filter(|t| !t.trim().is_empty()));
+        }
+        assert!(
+            out.len() > 20,
+            "solo se han leído {} entradas de {fichero}",
+            out.len()
+        );
+        out
+    }
+
+    /// **R36b — la dirección que le faltaba al espejo.** El test de arriba
+    /// prueba que todo id del menú nativo está enrutado; nada probaba lo
+    /// contrario, y por eso «Leer en voz alta» y «Exportar comentarios…»
+    /// llevaban un ciclo entero en el menú «Acciones» de la app y no en la
+    /// barra del sistema, que es donde los busca quien ya los conoce.
+    ///
+    /// Se cruza por **etiqueta**, que es lo único que las entradas del menú
+    /// de la app tienen (no llevan id): cada `<Entrada texto="…">` tiene que
+    /// tener su etiqueta en `estructura()`, salvo lo que esté en
+    /// `NO_VAN_EN_LA_BARRA` con su motivo.
+    #[test]
+    fn el_menu_nativo_es_un_espejo_del_menu_de_la_app() {
+        let fuentes = fuentes_de_la_ui();
+        let de_la_app = etiquetas_del_menu_de_la_app(&fuentes);
+        let del_sistema: Vec<String> = entradas().iter().map(|e| llana(e.etiqueta)).collect();
+
+        let faltan: Vec<&String> = de_la_app
+            .iter()
+            .filter(|t| {
+                let l = llana(t);
+                if NO_VAN_EN_LA_BARRA.iter().any(|(e, _)| llana(e) == l) {
+                    return false;
+                }
+                let equivalente = EQUIVALENTES
+                    .iter()
+                    .find(|(app, _, _)| llana(app) == l)
+                    .map(|(_, sistema, _)| llana(sistema));
+                let buscada = equivalente.unwrap_or(l);
+                !del_sistema.contains(&buscada)
+            })
+            .collect();
+        assert!(
+            faltan.is_empty(),
+            "estas entradas del menú «Acciones» no están en el menú nativo, \
+             que tiene que ser su espejo: {faltan:?}. Si de verdad no deben \
+             estar en la barra del sistema, van en NO_VAN_EN_LA_BARRA con su \
+             motivo; si es que se llaman distinto, en EQUIVALENTES"
+        );
+
+        // y las dos listas de excepciones no pueden envejecer en silencio:
+        // una excepción que nombra algo que ya no existe tapa un hueco de
+        // verdad el día que la etiqueta vuelve
+        let sobra: Vec<&str> = NO_VAN_EN_LA_BARRA
+            .iter()
+            .map(|(e, _)| *e)
+            .chain(EQUIVALENTES.iter().map(|(app, _, _)| *app))
+            .filter(|e| !de_la_app.iter().any(|t| llana(t) == llana(e)))
+            .collect();
+        assert!(
+            sobra.is_empty(),
+            "estas excepciones nombran entradas que ya no están en el menú \
+             de la app: {sobra:?}"
         );
     }
 }
