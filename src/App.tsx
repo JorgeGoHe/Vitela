@@ -216,6 +216,7 @@ import PanelComentarios from "./components/PanelComentarios";
 import DialogoExtraer from "./components/DialogoExtraer";
 import DialogoPropiedades from "./components/DialogoPropiedades";
 import DialogoContrasena from "./components/DialogoContrasena";
+import Comparador from "./components/Comparador";
 import DialogoCifrarCert from "./components/DialogoCifrarCert";
 import DialogoProteger, {
   type ProtegerDraft,
@@ -662,6 +663,9 @@ function App() {
   const [protectDraft, setProtectDraft] = useState<ProtegerDraft | null>(null);
   // «Cifrar con certificado…»: la lista de destinatarios vive en su diálogo
   const [cifrarCertAbierto, setCifrarCertAbierto] = useState(false);
+  // «Comparar con otro PDF…»: el fichero con el que se compara. Mientras
+  // hay comparación, el visor lo ocupa ella entera
+  const [comparandoCon, setComparandoCon] = useState<string | null>(null);
   // el FICHERO en disco está cifrado (se abrió con contraseña, o ya se ha
   // guardado con la protección puesta): solo entonces la barra pone el candado
   const [protegido, setProtegido] = useState(false);
@@ -3402,6 +3406,19 @@ function App() {
     }
   }
 
+  /** «Comparar con otro PDF…»: se elige el otro fichero y el visor pasa a
+   *  ser la comparación. No se toca ninguno de los dos. */
+  async function compararConOtro() {
+    if (!workPath) return;
+    const sel = await open({
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+      multiple: false,
+      title: "Comparar con este PDF",
+    });
+    if (typeof sel !== "string") return;
+    setComparandoCon(sel);
+  }
+
   /** Cifrado por certificado: escribe **siempre una copia**. Quien cifra
    *  para otros no tiene por qué tener la clave privada de ninguno de
    *  ellos, así que cifrar el documento abierto lo dejaría sin poder
@@ -4540,6 +4557,7 @@ function App() {
     proteger: () =>
       setProtectDraft({ user: "", owner: "", ...TODO_PERMITIDO }),
     "cifrar-certificado": () => setCifrarCertAbierto(true),
+    comparar: compararConOtro,
     "quitar-proteccion": () => {
       if (protegido || protPendiente) setQuitarProtAsk(true);
     },
@@ -4912,6 +4930,7 @@ function App() {
                   })
                 }
                 cifrarConCertificado={() => setCifrarCertAbierto(true)}
+                comparar={compararConOtro}
                 puedeQuitarProteccion={protegido || protPendiente}
                 quitarProteccion={() => setQuitarProtAsk(true)}
                 abrirAplanar={() => setFlattenAsk(true)}
@@ -5890,7 +5909,16 @@ function App() {
           </aside>
         )}
 
-        <div className="viewer-wrap">
+        {comparandoCon && workPath && (
+          <Comparador
+            workPath={workPath}
+            nombreA={fileName ?? "este documento"}
+            otroPath={comparandoCon}
+            onError={(e) => setError(String(e))}
+            onClose={() => setComparandoCon(null)}
+          />
+        )}
+        <div className="viewer-wrap" hidden={!!comparandoCon}>
           <main
             className={`viewer${arrastrando ? " arrastrando" : ""}${
               prefs.nocturno ? " nocturno" : ""

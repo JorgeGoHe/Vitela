@@ -63,6 +63,7 @@ export default function MenuAcciones({
   askRemoveMarginal,
   quitarFondo,
   openProperties,
+  comparar,
   abrirPreferencias,
   signPdf,
   certificar,
@@ -115,6 +116,8 @@ export default function MenuAcciones({
    *  fondo, que `remove_marginal_text` no sabía quitar. */
   quitarFondo: () => void;
   openProperties: () => void;
+  /** «Comparar con otro PDF…»: dos visores lado a lado; no toca ninguno. */
+  comparar: () => void;
   abrirPreferencias: () => void;
   signPdf: () => void;
   /** «Certificar documento…»: firmar diciendo además qué se puede cambiar
@@ -329,6 +332,11 @@ export default function MenuAcciones({
               icon="hf"
               texto="Quitar encabezados y pies…"
               onSelect={ejecutar(() => askRemoveMarginal("header"))}
+            />
+            <Entrada
+              icon="copy"
+              texto="Comparar con otro PDF…"
+              onSelect={ejecutar(comparar)}
             />
             <Entrada
               icon="doc"

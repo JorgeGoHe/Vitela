@@ -1008,6 +1008,28 @@ export function setPageLabels(
   return invoke("set_page_labels", { workPath, rangos });
 }
 
+/* ---- comparar dos PDF ---- */
+
+/** Una diferencia entre dos documentos. Las páginas se emparejan por
+ *  similitud, así que insertar una hoja al principio **no** marca el resto
+ *  del documento como cambiado; `pagina_a` o `pagina_b` valen `null` cuando
+ *  la página solo está en uno de los dos. */
+export type Diferencia = {
+  tipo: "igual" | "cambiado" | "añadido" | "quitado";
+  pagina_a: number | null;
+  pagina_b: number | null;
+  rects_a: { x: number; y: number; w: number; h: number }[];
+  rects_b: { x: number; y: number; w: number; h: number }[];
+  texto_a: string;
+  texto_b: string;
+};
+
+/** Compara dos PDF por sus bloques de texto. **No toca ninguno de los
+ *  dos**: solo lee. */
+export function comparePdf(a: string, b: string): Promise<Diferencia[]> {
+  return invoke("compare_pdf", { a, b });
+}
+
 /* ---- composición de impresión: folleto, N-up y póster ---- */
 
 /** Las tres composiciones de Acrobat, más «ninguna», que es imprimir una

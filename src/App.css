@@ -3176,6 +3176,139 @@ textarea {
   flex-shrink: 0;
 }
 
+/* comparar dos PDF: dos visores lado a lado y la lista de diferencias.
+   Ocupa el sitio del visor y no toca ninguno de los dos ficheros */
+.comparar {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--lienzo);
+}
+
+.comparar-barra {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+}
+
+.comparar-titulo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comparar-cuerpo {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.comparar-lista {
+  width: 240px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  padding: 8px;
+  background: var(--chrome);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.comparar-fila {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  text-align: left;
+  padding: 5px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.comparar-fila:hover {
+  background: var(--btn-hover);
+}
+
+.comparar-fila.on {
+  background: var(--btn-active);
+}
+
+.comparar-punto {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-top: 4px;
+  flex-shrink: 0;
+}
+
+.comparar-fila-texto {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.comparar-frase {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.comparar-panel {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.comparar-panel .card-label {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.comparar-hoja {
+  position: relative;
+  box-shadow: var(--shadow-page);
+  background: #fff;
+}
+
+.comparar-hoja img {
+  display: block;
+  width: 100%;
+}
+
+.comparar-hueco {
+  width: 100%;
+  min-height: 120px;
+}
+
+.comparar-marca {
+  position: absolute;
+  border-radius: 2px;
+}
+
+.comparar-marca.on {
+  outline: 1.5px solid;
+  outline-offset: 1px;
+}
+
 /* el bloque «Avanzado» de un diálogo: una fila que se pliega, sin ruido */
 .bloque-plegable {
   align-self: flex-start;
