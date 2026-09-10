@@ -12,7 +12,7 @@ import {
   type Rect,
   type ShapeKind,
 } from "../tipos";
-import type { Alineacion } from "../api";
+import type { Alineacion, CampoPropuesto } from "../api";
 import {
   cajaLlamada,
   pagePoint,
@@ -32,6 +32,7 @@ import CapaAnotaciones, { MarcasAnotaciones } from "./pagina/CapaAnotaciones";
 import CapaAreas from "./pagina/CapaAreas";
 import CapaLlamada from "./pagina/CapaLlamada";
 import CapaMedida from "./pagina/CapaMedida";
+import CapaPropuestas from "./pagina/CapaPropuestas";
 import CapaEnlaces from "./pagina/CapaEnlaces";
 import CapaFormularios from "./pagina/CapaFormularios";
 import CapaImagenes from "./pagina/CapaImagenes";
@@ -144,6 +145,13 @@ type Props = {
   onFirmaRect: (page: number, rect: Rect) => void;
   /** Zonas marcadas para censurar que caen en esta página. */
   marcas: { annotIndex: number; rect: Rect }[];
+  /** Campos propuestos por «Reconocer campos…» que caen en esta página,
+   *  con su posición en la lista entera. Todavía no están en el PDF. */
+  propuestas: { i: number; campo: CampoPropuesto }[];
+  /** La propuesta que se está revisando una a una, si está aquí. */
+  propuestaActual: number | null;
+  onPropuestaQuitar: (i: number) => void;
+  onPropuestaRenombrar: (i: number, nombre: string) => void;
   /** Quita una marca de esta página (la lista la lleva App). */
   quitarMarca: (page: number, annotIndex: number) => void;
   /** La lista de marcas ha cambiado: que App la relea. */
@@ -190,6 +198,10 @@ function Pagina({
   onSigStamped,
   onFirmaRect,
   marcas,
+  propuestas,
+  propuestaActual,
+  onPropuestaQuitar,
+  onPropuestaRenombrar,
   quitarMarca,
   onMarcasCambian,
   pedirTextoNuevo,
@@ -1007,6 +1019,14 @@ function Pagina({
             anotaciones={anotaciones}
             scale={scale}
             tool={tool}
+          />
+          <CapaPropuestas
+            propuestas={propuestas}
+            actual={propuestaActual}
+            size={size}
+            scale={scale}
+            onQuitar={onPropuestaQuitar}
+            onRenombrar={onPropuestaRenombrar}
           />
           <CapaMedida
             mode={mode}

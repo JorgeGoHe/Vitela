@@ -63,6 +63,7 @@ export default function MenuAcciones({
   sanear,
   redactar,
   nuevoCampo,
+  reconocerCampos,
   nuevoEnlace,
   printDocument,
   abrirExportar,
@@ -107,6 +108,9 @@ export default function MenuAcciones({
   sanear: () => void;
   redactar: () => void;
   nuevoCampo: () => void;
+  /** «Reconocer campos…»: propone los campos de un formulario impreso y
+   *  deja revisarlos antes de escribir nada. */
+  reconocerCampos: () => void;
   nuevoEnlace: () => void;
   printDocument: () => void;
   abrirExportar: () => void;
@@ -326,6 +330,11 @@ export default function MenuAcciones({
               onSelect={ejecutar(sanear)}
             />
             <div className="menu-titulo">Insertar</div>
+            <Entrada
+              icon="field"
+              texto="Reconocer campos…"
+              onSelect={ejecutar(reconocerCampos)}
+            />
             <Entrada
               icon="field"
               texto="Añadir campo de formulario…"

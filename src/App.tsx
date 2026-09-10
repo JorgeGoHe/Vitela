@@ -104,7 +104,11 @@ import {
   setOutline,
   type Metadata,
   type OutlineNode,
+  detectFormFields,
+  createFormField,
+  type CampoPropuesto,
 } from "./api";
+import { CONFIANZA_MINIMA } from "./components/pagina/CapaPropuestas";
 import {
   ATAJO_COMENTARIOS,
   ATAJO_MARCADORES,
@@ -492,6 +496,10 @@ function App() {
   const [flattenAsk, setFlattenAsk] = useState(false);
   // zonas marcadas para censurar: propuestas revisables, no censuras
   const [marcasRedact, setMarcasRedact] = useState<Redaccion[]>([]);
+  // «Reconocer campos…»: lo que la detección propone, todavía sin escribir
+  // nada en el PDF, y cuál se está revisando
+  const [propuestas, setPropuestas] = useState<CampoPropuesto[]>([]);
+  const [propuestaActual, setPropuestaActual] = useState<number | null>(null);
   const [redactAsk, setRedactAsk] = useState<RedactReport | null>(null);
   const [sanitizeAsk, setSanitizeAsk] = useState<SanitizeReport | null>(null);
   // enlace externo pendiente de confirmar (los URI del PDF no son de fiar)
@@ -1006,6 +1014,8 @@ function App() {
     // el modo lectura es del documento que se estaba leyendo: sin documento
     // dejaría el estado vacío sin barra y sin salida visible
     setModoLectura(false);
+    setPropuestas([]);
+    setPropuestaActual(null);
     setOutlineState([]);
     setComentarios([]);
     setAnnotSel(null);
@@ -1489,6 +1499,108 @@ function App() {
         viewerRef.current?.scrollBy({ top: top * escala });
       }),
     );
+  }
+
+  /** «Reconocer campos…»: el backend propone y **no escribe nada**. La
+   *  lista se pinta sobre las páginas y se corrige antes de crear nada, que
+   *  es lo que Acrobat no hace (allí los campos se crean sin preguntar y
+   *  quitar los que sobran cuesta más que dibujarlos). */
+  async function reconocerCampos() {
+    if (!workPath) return;
+    try {
+      setNotice("Buscando campos…", { persistente: true });
+      const encontrados = await detectFormFields(workPath, null);
+      setPropuestaActual(null);
+      setPropuestas(encontrados);
+      if (encontrados.length === 0) {
+        setNotice("No se ha encontrado ningún campo en este documento", {
+          accion: {
+            texto: "Añadir campo…",
+            onClick: () => {
+              setNotice(null);
+              selectMode("select");
+              setMode("form-new");
+            },
+          },
+        });
+        return;
+      }
+      const dudosos = encontrados.filter(
+        (c) => c.confianza < CONFIANZA_MINIMA,
+      ).length;
+      setNotice(
+        `${plural(encontrados.length, "campo encontrado", "campos encontrados")}${
+          dudosos > 0 ? ` · ${dudosos} sin confirmar: repásalos` : ""
+        }`,
+      );
+    } catch (e) {
+      setNotice(null);
+      setError(String(e));
+    }
+  }
+
+  function quitarPropuesta(i: number) {
+    setPropuestas((v) => v.filter((_, j) => j !== i));
+    setPropuestaActual(null);
+  }
+
+  function renombraPropuesta(i: number, name: string) {
+    setPropuestas((v) => v.map((c, j) => (j === i ? { ...c, name } : c)));
+  }
+
+  /** «Revisar uno a uno»: lleva la vista a la propuesta siguiente y la
+   *  señala, para poder corregirla o quitarla antes de crear nada. */
+  function revisarPropuesta() {
+    if (propuestas.length === 0) return;
+    const siguiente =
+      propuestaActual === null ? 0 : (propuestaActual + 1) % propuestas.length;
+    setPropuestaActual(siguiente);
+    saltarA(propuestas[siguiente].page_index);
+  }
+
+  /** «Crear todos»: un `create_form_field` por campo y **un solo paso de
+   *  historial** (`squash_history`), para que un ⌘Z devuelva el formulario
+   *  entero y no el último campo. */
+  async function crearPropuestas() {
+    if (!workPath || propuestas.length === 0) return;
+    const lote = propuestas;
+    setPropuestas([]);
+    setPropuestaActual(null);
+    try {
+      setNotice("Creando los campos…", { persistente: true });
+      let hechos = 0;
+      for (const c of lote) {
+        await createFormField({
+          workPath,
+          pageIndex: c.page_index,
+          kind: c.kind,
+          rect: c.rect,
+          name: c.name,
+          group: "",
+          exportValue: "",
+          options: [],
+          props: {
+            tooltip: null,
+            obligatorio: false,
+            solo_lectura: false,
+            valor_defecto: null,
+            // el orden de tabulación es el de la lista: es el orden en el
+            // que se han encontrado, que es el de lectura de la página
+            orden_tab: hechos,
+          },
+        });
+        hechos++;
+      }
+      if (hechos > 1) await historial.agrupar(hechos);
+      afterMutation(pageCount);
+      setNotice(
+        `${plural(hechos, "campo creado", "campos creados")} · ${MOD}Z los quita`,
+      );
+    } catch (e) {
+      setNotice(null);
+      setError(String(e));
+      afterMutation(pageCount);
+    }
   }
 
   async function persistOutline(nodes: OutlineNode[]) {
@@ -3240,6 +3352,7 @@ function App() {
     "encabezado-pie": () => setHfOpen(true),
     "quitar-marca-de-agua": () => askRemoveMarginal("watermark"),
     "quitar-encabezados": () => askRemoveMarginal("header"),
+    "reconocer-campos": reconocerCampos,
     "anadir-campo": () => {
       selectMode("select");
       setMode("form-new");
@@ -3386,6 +3499,7 @@ function App() {
     (error ? 1 : 0) +
     (bandaFirmas && firmasDoc.length > 0 ? 1 : 0) +
     (sesionRota && !sesionPlegada ? 1 : 0) +
+    (propuestas.length > 0 ? 1 : 0) +
     (notice ? 1 : 0);
 
   return (
@@ -3594,6 +3708,7 @@ function App() {
                   selectMode("select");
                   setMode("redact");
                 }}
+                reconocerCampos={reconocerCampos}
                 nuevoCampo={() => {
                   selectMode("select");
                   setMode("form-new");
@@ -3667,6 +3782,38 @@ function App() {
           </button>
           <button className="btn" onClick={() => setDescartarAsk(sesionRota)}>
             No guardar
+          </button>
+        </div>
+      )}
+      {propuestas.length > 0 && (
+        <div className="banner-campos">
+          <p>
+            {plural(
+              propuestas.length,
+              "campo encontrado",
+              "campos encontrados",
+            )}
+            {" · "}
+            <span className="dato">
+              nada se escribe hasta que pulses «Crear todos»
+            </span>
+          </p>
+          <button className="btn" onClick={revisarPropuesta}>
+            {propuestaActual === null
+              ? "Revisar uno a uno"
+              : `Siguiente (${propuestaActual + 1} de ${propuestas.length})`}
+          </button>
+          <button className="btn btn-primary" onClick={crearPropuestas}>
+            Crear todos
+          </button>
+          <button
+            className="btn"
+            onClick={() => {
+              setPropuestas([]);
+              setPropuestaActual(null);
+            }}
+          >
+            Cancelar
           </button>
         </div>
       )}
@@ -4462,6 +4609,16 @@ function App() {
                   marcas={marcasRedact
                     .filter((m) => m.page_index === i)
                     .map((m) => ({ annotIndex: m.annot_index, rect: m.rect }))}
+                  propuestas={propuestas
+                    .map((campo, j) => ({ i: j, campo }))
+                    .filter((p) => p.campo.page_index === i)}
+                  propuestaActual={
+                    propuestas[propuestaActual ?? -1]?.page_index === i
+                      ? propuestaActual
+                      : null
+                  }
+                  onPropuestaQuitar={quitarPropuesta}
+                  onPropuestaRenombrar={renombraPropuesta}
                   quitarMarca={quitarMarca}
                   onMarcasCambian={refrescarMarcas}
                   pedirTextoNuevo={pedirTextoNuevo}

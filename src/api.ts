@@ -995,6 +995,30 @@ export type PropsCampo = {
   orden_tab: number | null;
 };
 
+/** Un campo que la detección **propone**: nada de esto está escrito en el
+ *  PDF hasta que el usuario dice que sí. `rect` va en el espacio propio de
+ *  la página, como el de `create_form_field`, y `confianza` (0 a 1) es lo
+ *  seguro que está el backend de esa propuesta: una heurística no acierta
+ *  siempre y no puede fingir que sí. */
+export type CampoPropuesto = {
+  page_index: number;
+  rect: { x: number; y: number; w: number; h: number };
+  kind: TipoCampo;
+  name: string;
+  confianza: number;
+};
+
+/** «Reconocer campos…»: propone los campos de un formulario impreso a
+ *  partir de las líneas de subrayado y las cajas de la página. **No
+ *  escribe nada**: devuelve la lista para que la UI la enseñe y el usuario
+ *  la corrija antes de crear nada. */
+export function detectFormFields(
+  workPath: string,
+  pageIndices: number[] | null,
+): Promise<CampoPropuesto[]> {
+  return invoke("detect_form_fields", { workPath, pageIndices });
+}
+
 /** Crea un campo de formulario en la página.
  *
  *  En un botón de radio, los widgets del mismo `group` comparten **una sola
