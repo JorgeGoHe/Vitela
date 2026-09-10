@@ -188,6 +188,7 @@ import {
   guardaZoom,
   parseRango,
   paginasImprimibles,
+  nombreDeFichero,
   plural,
   autorComentarios,
   nombreEstado,
@@ -608,6 +609,9 @@ function App() {
   // firmas del fichero abierto y la banda que las resume, que se cierra y
   // no vuelve hasta el documento siguiente
   const [firmasDoc, setFirmasDoc] = useState<FirmaInfo[]>([]);
+  /** Copia de trabajo cuyo aviso de «documento certificado» ya se ha dado:
+   *  se dice una vez al abrirlo, no en cada relectura de las firmas. */
+  const avisoCertRef = useRef<string | null>(null);
   const [bandaFirmas, setBandaFirmas] = useState(false);
   // recuadro dibujado para la firma con certificado, y su diálogo
   const [firmaRect, setFirmaRect] = useState<{
@@ -755,6 +759,9 @@ function App() {
     texto: string;
     onClick: () => void;
   } | null>(null);
+  /** Lo que sale al pasar el ratón por la banda: la ruta entera cuando en el
+   *  texto va solo el nombre del fichero. */
+  const [noticeTitulo, setNoticeTitulo] = useState<string | null>(null);
   const [recientes, setRecientes] = useState<Reciente[]>([]);
   // ficha de cada reciente (páginas, tamaño y si va cifrado), pedida sin
   // abrir el documento: es lo que deja poner el candado antes de pinchar
@@ -836,6 +843,7 @@ function App() {
   // el andamio tenía tres atajos y ninguna puerta: quien no leía la pantalla
   // de atajos no sabía que existía
   const [menuAndamio, setMenuAndamio] = useState(false);
+  const botonAndamioRef = useRef<HTMLButtonElement | null>(null);
   const [guias, setGuias] = useState<Guias>(SIN_GUIAS);
   const fijarEscala = useCallback(
     (mm: number) => {
@@ -908,6 +916,23 @@ function App() {
   useEffect(() => {
     if (mode !== "firmar") setFillMark(null);
   }, [mode, setFillMark]);
+
+  // El desplegable del andamio se cierra con Esc y devuelve el foco a su
+  // botón, como el menú «Acciones». Mientras está abierto su velo corta el
+  // manejador de atajos, así que sin esto Esc no lo cerraba y el teclado se
+  // quedaba muerto hasta hacer clic fuera.
+  useEffect(() => {
+    if (!menuAndamio) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      setMenuAndamio(false);
+      botonAndamioRef.current?.focus();
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [menuAndamio]);
 
   /** Abre un PDF en la copia de trabajo; devuelve su `work_path` o null
    *  si no se ha podido abrir. */
@@ -1082,12 +1107,15 @@ function App() {
         persistente?: boolean;
         dato?: string;
         accion?: { texto: string; onClick: () => void };
+        /** La ruta entera, para el `title`: en el texto va el nombre. */
+        titulo?: string;
       },
     ) => {
       setNoticeTexto(texto);
       setNoticePersistente(!!opts?.persistente);
       setNoticeDato(opts?.dato ?? null);
       setNoticeAccion(opts?.accion ?? null);
+      setNoticeTitulo(opts?.titulo ?? null);
       // si algo ha salido bien, la banda roja de antes ya no cuenta: se
       // quedaba en pantalla a través de operaciones correctas
       if (texto) setError(null);
@@ -1198,7 +1226,7 @@ function App() {
     setNotice(
       uno
         ? uno.original_path
-          ? `Recuperados los cambios sin guardar de ${uno.original_path}`
+          ? `Recuperados los cambios sin guardar de ${nombreDeFichero(uno.original_path)}`
           : "Recuperado el documento sin guardar"
         : `${plural(abiertas.length, "documento recuperado", "documentos recuperados")}, cada uno en su pestaña`,
     );
@@ -1675,6 +1703,16 @@ function App() {
         if (cancelled) return;
         setFirmasDoc(f);
         if (f.length > 0) setBandaFirmas(true);
+        // certificar dice «esta es la versión buena» Y qué se puede tocar
+        // después: si no se avisa al abrir, el usuario se entera al fallar
+        // el primer cambio. Una sola vez por documento
+        const cert = f.find((x) => x.certifica);
+        if (cert?.certifica && avisoCertRef.current !== workPath) {
+          avisoCertRef.current = workPath;
+          setNotice(
+            `Documento certificado por ${cert.name || cert.cert_subject || "alguien"}: ${permisosCertificacion(cert.certifica)}. Cualquier otro cambio romperá el sello.`,
+          );
+        }
       })
       .catch(() => {
         if (!cancelled) setFirmasDoc([]);
@@ -1682,7 +1720,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [workPath, docVersion]);
+  }, [workPath, docVersion, setNotice]);
 
   // Zonas marcadas para censurar: viven en el PDF como anotaciones, así que
   // sobreviven a guardar y hay que releerlas con cada cambio del documento
@@ -1899,7 +1937,9 @@ function App() {
     if (!dest) return;
     try {
       await saveAttachment(workPath, index, dest);
-      setNotice(`${a.name} guardado en ${dest}`);
+      setNotice(`${a.name} guardado en ${nombreDeFichero(dest)}`, {
+        titulo: dest,
+      });
     } catch (e) {
       setError(String(e));
     }
@@ -2088,7 +2128,8 @@ function App() {
         await exportComments(workPath, dest, nombreDoc);
       }
       setNotice(
-        `${plural(comentarios.length, "comentario exportado", "comentarios exportados")} a ${dest}`,
+        `${plural(comentarios.length, "comentario exportado", "comentarios exportados")} a ${nombreDeFichero(dest)}`,
+        { titulo: dest },
       );
       // el resumen es un documento para leer: se abre, como el PDF de
       // imágenes, que es lo que se quiere hacer con él a continuación
@@ -3520,7 +3561,8 @@ function App() {
       await encryptPdfCert(workPath, dest, destinatarios);
       setCifrarCertAbierto(false);
       setNotice(
-        `Copia cifrada para ${plural(destinatarios.length, "destinatario", "destinatarios")} en ${dest}`,
+        `Copia cifrada para ${plural(destinatarios.length, "destinatario", "destinatarios")} en ${nombreDeFichero(dest)}`,
+        { titulo: dest },
       );
     } catch (e) {
       setNotice(null);
@@ -3552,7 +3594,9 @@ function App() {
         permisos: permisosDe(d),
       });
       setProtectDraft(null);
-      setNotice(`Copia protegida guardada en ${dest}`);
+      setNotice(`Copia protegida guardada en ${nombreDeFichero(dest)}`, {
+        titulo: dest,
+      });
     } catch (e) {
       setError(String(e));
     }
@@ -3858,7 +3902,8 @@ function App() {
     try {
       const cuantos = await exportFormDataXfdf(workPath, dest);
       setNotice(
-        `${plural(cuantos, "campo exportado", "campos exportados")} · ${dest}`,
+        `${plural(cuantos, "campo exportado", "campos exportados")} · ${nombreDeFichero(dest)}`,
+        { titulo: dest },
       );
     } catch (e) {
       setError(String(e));
@@ -3926,7 +3971,9 @@ function App() {
     if (!dest) return;
     try {
       await exportText(workPath, dest);
-      setNotice(`Texto exportado a ${dest}`);
+      setNotice(`Texto exportado a ${nombreDeFichero(dest)}`, {
+        titulo: dest,
+      });
     } catch (e) {
       setError(String(e));
     }
@@ -3992,7 +4039,8 @@ function App() {
       });
       await exportHtml(workPath, dest, paginas);
       setNotice(
-        `${plural(cuantas, "página exportada", "páginas exportadas")} en ${dest} · las imágenes, en la carpeta de al lado`,
+        `${plural(cuantas, "página exportada", "páginas exportadas")} en ${nombreDeFichero(dest)} · las imágenes, en la carpeta de al lado`,
+        { titulo: dest },
       );
     } catch (e) {
       setNotice(null);
@@ -4042,7 +4090,10 @@ function App() {
       }
       setImagenesOpen(false);
       await openPath(dest);
-      setNotice(`${plural(paginas, "página escrita", "páginas escritas")} en ${dest}`);
+      setNotice(
+        `${plural(paginas, "página escrita", "páginas escritas")} en ${nombreDeFichero(dest)}`,
+        { titulo: dest },
+      );
     } catch (e) {
       setNotice(null);
       const msg = String(e);
@@ -4173,7 +4224,8 @@ function App() {
         afterMutation(pageCount - idx.length);
       }
       setNotice(
-        `${plural(idx.length, "página extraída", "páginas extraídas")} a ${dest}`,
+        `${plural(idx.length, "página extraída", "páginas extraídas")} a ${nombreDeFichero(dest)}`,
+        { titulo: dest },
       );
     } catch (e) {
       setError(String(e));
@@ -4304,7 +4356,7 @@ function App() {
       borraSesion(workPath).catch((e) =>
         console.warn("no se ha podido borrar el apunte de sesión:", e),
       );
-      setNotice(`Guardado en ${dest}`);
+      setNotice(`Guardado en ${nombreDeFichero(dest)}`, { titulo: dest });
       return true;
     } catch (e) {
       setError(String(e));
@@ -4487,7 +4539,8 @@ function App() {
           return;
         }
         setNotice(
-          `Certificado y guardado en ${destino} · ${permisosCertificacion(d.nivel)}${selloLlano(informe, !!avanzado.tsaUrl)}`,
+          `Certificado y guardado en ${nombreDeFichero(destino)} · ${permisosCertificacion(d.nivel)}${selloLlano(informe, !!avanzado.tsaUrl)}`,
+          { titulo: destino },
         );
         return;
       }
@@ -4530,7 +4583,8 @@ function App() {
         return;
       }
       setNotice(
-        `Firmado y guardado en ${destino}${selloLlano(informe, !!avanzado.tsaUrl)}`,
+        `Firmado y guardado en ${nombreDeFichero(destino)}${selloLlano(informe, !!avanzado.tsaUrl)}`,
+        { titulo: destino },
       );
     } catch (e) {
       setNotice(null);
@@ -5062,6 +5116,7 @@ function App() {
                 signPdf={empezarFirma}
                 certificar={empezarCertificacion}
                 puedeCertificar={firmasDoc.length === 0}
+                firmado={firmasDoc.length > 0}
                 abrirProteger={() =>
                   setProtectDraft({
                     user: "",
@@ -5253,7 +5308,7 @@ function App() {
       )}
       {notice && (
         <div className={`banner-notice${noticeSaliendo ? " saliendo" : ""}`}>
-          <p title={notice}>{notice}</p>
+          <p title={noticeTitulo ?? notice}>{notice}</p>
           {noticeDato && <span className="dato notice-dato">{noticeDato}</span>}
           {noticeAccion && (
             <button className="btn" onClick={noticeAccion.onClick}>
@@ -5453,7 +5508,10 @@ function App() {
                 "No se ha podido hablar con el servidor de tiempo"}
               . El documento ya está{" "}
               {selloAsk.certificado ? "certificado" : "firmado"} y guardado en{" "}
-              <span className="dato">{selloAsk.dest}</span>, con la fecha del
+              <span className="dato" title={selloAsk.dest}>
+                {nombreDeFichero(selloAsk.dest)}
+              </span>
+              , con la fecha del
               reloj de este ordenador. Puedes dejarlo así o volver a
               intentarlo con el servidor.
             </p>
@@ -5470,7 +5528,8 @@ function App() {
             const pendiente = selloAsk;
             setSelloAsk(null);
             setNotice(
-              `${pendiente.certificado ? "Certificado" : "Firmado"} y guardado en ${pendiente.dest} · sin sello de tiempo: la fecha es la de tu reloj`,
+              `${pendiente.certificado ? "Certificado" : "Firmado"} y guardado en ${nombreDeFichero(pendiente.dest)} · sin sello de tiempo: la fecha es la de tu reloj`,
+              { titulo: pendiente.dest },
             );
           }}
         />
@@ -6459,10 +6518,11 @@ function App() {
                   cuadrícula tenían tres atajos y ninguna puerta */}
               <div className="menu-wrap">
                 <button
+                  ref={botonAndamioRef}
                   className={`btn btn-icon${
                     reglas || cuadricula ? " on" : ""
                   }`}
-                  title="Reglas, guías y cuadrícula"
+                  title="Reglas, guías y cuadrícula (Esc cierra)"
                   aria-label="Reglas, guías y cuadrícula"
                   aria-haspopup="menu"
                   aria-expanded={menuAndamio}

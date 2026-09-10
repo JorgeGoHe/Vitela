@@ -80,7 +80,8 @@ export default function DialogoMarcaAgua({
   const [text, setText] = useState("BORRADOR");
   const [fontSize, setFontSize] = useState(64);
   const [color, setColor] = useState(() => cargaColores().marcaAgua ?? COLORS[1]);
-  // el 30 % de Acrobat es el defecto sensato: se lee debajo
+  // el 30 % de Acrobat es el defecto sensato para una marca de agua: se lee
+  // debajo. Un color sólido es otra cosa —papel de color— y va al 100 %
   const [opacity, setOpacity] = useState(30);
   const [rotation, setRotation] = useState(45);
   const [position, setPosition] = useState<PosicionMarca>("c");
@@ -96,6 +97,16 @@ export default function DialogoMarcaAgua({
   const esColor = tipo === "color";
   const alFondo = detras || esColor;
   const ficheroRef = useRef<HTMLInputElement | null>(null);
+  // «Color sólido» es papel de color, no una marca translúcida: sus
+  // opacidades son otras y empieza opaco. Al volver a la marca de agua, el
+  // 30 % de Acrobat
+  const OPACIDADES = esColor ? [25, 50, 75, 100] : [15, 25, 30, 50, 75];
+  const [tipoVisto, setTipoVisto] = useState<TipoMarca>(tipo);
+  if (tipo !== tipoVisto) {
+    setTipoVisto(tipo);
+    if (tipo === "color") setOpacity(100);
+    else if (tipoVisto === "color") setOpacity(30);
+  }
 
   const indices = indicesDeRango(todas, rango, pageCount);
   const listo =
@@ -234,7 +245,7 @@ export default function DialogoMarcaAgua({
             value={opacity}
             onChange={(e) => setOpacity(Number(e.target.value))}
           >
-            {[15, 25, 30, 50, 75].map((o) => (
+            {OPACIDADES.map((o) => (
               <option key={o} value={o}>
                 {o} %
               </option>
@@ -356,22 +367,22 @@ export default function DialogoMarcaAgua({
           rango={rango}
           setRango={setRango}
         />
-        <label
-          className={`opt-check${esColor ? " disabled" : ""}`}
-          title={
-            esColor
-              ? "Un color sólido solo puede ir detrás: delante taparía la página"
-              : "El fondo de Acrobat: el mismo dibujo, debajo del texto"
-          }
-        >
-          <input
-            type="checkbox"
-            checked={alFondo}
-            disabled={esColor}
-            onChange={(e) => setDetras(e.target.checked)}
-          />
-          Fondo (detrás del contenido)
-        </label>
+        {/* en «Color sólido» no se enseña: ahí SIEMPRE va detrás (delante
+            taparía la página), y una casilla marcada que no se puede
+            desmarcar es una promesa de elección que no existe */}
+        {!esColor && (
+          <label
+            className="opt-check"
+            title="El fondo de Acrobat: el mismo dibujo, debajo del texto"
+          >
+            <input
+              type="checkbox"
+              checked={detras}
+              onChange={(e) => setDetras(e.target.checked)}
+            />
+            Fondo (detrás del contenido)
+          </label>
+        )}
         <p className="modal-file" style={{ whiteSpace: "normal" }}>
           Se añade como contenido del documento; la previa es aproximada.
           {alFondo &&

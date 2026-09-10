@@ -5,6 +5,7 @@ import {
   fechaAnotacion,
   firmaAnotacion,
   KIND_ICONS,
+  KIND_LABELS,
   KIND_PLURALS,
   MOD,
   nombreEstado,
@@ -214,7 +215,9 @@ export default function PanelComentarios({
             <span className="com-pagina">pág. {c.page_index + 1}</span>
           </span>
           <span className="com-texto">
-            {c.contents || KIND_PLURALS[c.kind] || c.kind}
+            {/* la fila es UN comentario: el plural es del filtro, que
+                cuenta cuántos hay */}
+            {c.contents || KIND_LABELS[c.kind] || c.kind}
           </span>
           {estado && <span className="com-estado-etiqueta">{estado}</span>}
         </span>

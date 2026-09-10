@@ -68,6 +68,7 @@ export default function MenuAcciones({
   signPdf,
   certificar,
   puedeCertificar,
+  firmado,
   abrirProteger,
   cifrarConCertificado,
   puedeQuitarProteccion,
@@ -126,6 +127,9 @@ export default function MenuAcciones({
   /** Solo la primera firma puede certificar; con una puesta, la entrada se
    *  enseña apagada con el motivo al lado. */
   puedeCertificar: boolean;
+  /** El documento lleva firma: proteger o cifrar lo reescriben y la rompen,
+   *  así que se enseñan apagadas con el motivo en vez de fallar después. */
+  firmado: boolean;
   abrirProteger: () => void;
   /** «Cifrar con certificado…»: en vez de una contraseña, la lista de
    *  destinatarios que podrán abrirlo con su clave privada. */
@@ -363,11 +367,21 @@ export default function MenuAcciones({
             <Entrada
               icon="lock"
               texto="Proteger con contraseña…"
+              motivo={
+                firmado
+                  ? "El documento va firmado: cifrarlo lo reescribe y la firma dejaría de valer"
+                  : undefined
+              }
               onSelect={ejecutar(abrirProteger)}
             />
             <Entrada
               icon="lock"
               texto="Cifrar con certificado…"
+              motivo={
+                firmado
+                  ? "El documento va firmado: cifrarlo lo reescribe y la firma dejaría de valer"
+                  : undefined
+              }
               onSelect={ejecutar(cifrarConCertificado)}
             />
             {puedeQuitarProteccion && (

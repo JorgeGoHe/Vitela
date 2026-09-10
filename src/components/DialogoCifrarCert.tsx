@@ -1,6 +1,10 @@
 import { useState } from "react";
-import type { DestinatarioCifrado, Permisos } from "../api";
-import { TODO_PERMITIDO } from "../api";
+import type {
+  CertificadoLeido,
+  DestinatarioCifrado,
+  Permisos,
+} from "../api";
+import { TODO_PERMITIDO, readCertificate } from "../api";
 import { open } from "../dialogos";
 import { useModal } from "../hooks/useModal";
 import Icon from "./Icon";
@@ -41,6 +45,10 @@ export default function DialogoCifrarCert({
   onClose: () => void;
 }) {
   const [lista, setLista] = useState<DestinatarioCifrado[]>([]);
+  // a quién pertenece cada certificado, leído del propio fichero: se cifra
+  // PARA personas, y `maria-lopez-2026.cer` no dice quién es. Si el motor
+  // todavía no sabe leerlo, se queda el nombre del fichero y ya está
+  const [quien, setQuien] = useState<Record<string, CertificadoLeido>>({});
   const listo = lista.length > 0;
   const confirmar = () => {
     if (listo) onConfirm(lista);
@@ -58,6 +66,11 @@ export default function DialogoCifrarCert({
     const rutas =
       typeof sel === "string" ? [sel] : Array.isArray(sel) ? sel : [];
     if (rutas.length === 0) return;
+    for (const r of rutas) {
+      readCertificate(r)
+        .then((c) => setQuien((v) => ({ ...v, [r]: c })))
+        .catch(() => {});
+    }
     setLista((v) => [
       ...v,
       ...rutas
@@ -120,8 +133,14 @@ export default function DialogoCifrarCert({
             {lista.map((d, i) => (
               <div className="combinar-fila" key={d.cert_path}>
                 <span className="combinar-nombre">
-                  <span>{nombreDe(d.cert_path)}</span>
-                  <span className="reciente-dir">{d.cert_path}</span>
+                  <span title={d.cert_path}>
+                    {quien[d.cert_path]?.nombre || nombreDe(d.cert_path)}
+                  </span>
+                  <span className="reciente-dir" title={d.cert_path}>
+                    {quien[d.cert_path]
+                      ? `${nombreDe(d.cert_path)} · lo emitió ${quien[d.cert_path].emisor}`
+                      : nombreDe(d.cert_path)}
+                  </span>
                 </span>
                 <div className="card-row">
                   {PERMISOS.map(([clave, etiqueta]) => (
@@ -137,7 +156,7 @@ export default function DialogoCifrarCert({
                 </div>
                 <button
                   className="btn"
-                  aria-label={`Quitar ${nombreDe(d.cert_path)} de la lista`}
+                  aria-label={`Quitar ${quien[d.cert_path]?.nombre || nombreDe(d.cert_path)} de la lista`}
                   onClick={() =>
                     setLista((v) => v.filter((_, j) => j !== i))
                   }

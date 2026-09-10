@@ -508,6 +508,19 @@ mod tests {
     /// quita al integrar.
     const NADIE_LLAMA: &[(&str, &str)] = &[];
 
+    /// Comandos que la UI llama y que **todavía no existen** en el backend,
+    /// con su motivo. Es el espejo de `NADIE_LLAMA`: la otra mitad se está
+    /// escribiendo en paralelo y la interfaz ya la consume, declarando la
+    /// llamada de forma que un motor sin ese comando no rompa nada. La
+    /// lista tiene que quedar vacía al cerrar el ciclo, y se queja también
+    /// cuando el comando ya existe.
+    const COMANDOS_PENDIENTES: &[(&str, &str)] = &[(
+        "read_certificate",
+        "pendiente_backend: orden 20 del ciclo 10 — la UI ya nombra a los \
+         destinatarios del cifrado por su CN; sin el comando se queda con el \
+         nombre del fichero",
+    )];
+
     /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada
     /// es una función rota que el usuario no puede usar, así que la lista
     /// tiene que quedar vacía: está aquí solo mientras el arreglo vive en
@@ -1122,12 +1135,29 @@ mod tests {
 
         let inventados: Vec<String> = llamadas
             .iter()
-            .filter(|l| !handler.contains(&l.comando))
+            .filter(|l| {
+                !handler.contains(&l.comando)
+                    && !COMANDOS_PENDIENTES.iter().any(|(c, _)| *c == l.comando)
+            })
             .map(|l| format!("{} ({})", l.comando, l.fichero))
             .collect();
         assert!(
             inventados.is_empty(),
-            "la UI llama a comandos que no existen en el backend: {inventados:?}"
+            "la UI llama a comandos que no existen en el backend: {inventados:?}. \
+             Si el comando se está escribiendo en la otra mitad, va en \
+             COMANDOS_PENDIENTES con su motivo"
+        );
+        // una excepción que ya no hace falta tapa el hueco de verdad el día
+        // que el comando se cae del handler
+        let sobran: Vec<&str> = COMANDOS_PENDIENTES
+            .iter()
+            .map(|(c, _)| *c)
+            .filter(|c| handler.iter().any(|h| h == c))
+            .collect();
+        assert!(
+            sobran.is_empty(),
+            "estos comandos ya existen en el backend y siguen en \
+             COMANDOS_PENDIENTES: {sobran:?}"
         );
 
         let nadie: Vec<&String> = handler

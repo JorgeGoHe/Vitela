@@ -2,9 +2,30 @@ import { useModal } from "../hooks/useModal";
 import type { CategoriaPeso } from "../api";
 import { plural, tamanoFichero, type OpcionesComprimir } from "../tipos";
 
+/** Las nueve categorías de la auditoría en español. Lo que llega del
+ *  backend es su **clave** (`lo_demas`, `marcadores_y_enlaces`…), un
+ *  identificador con guion bajo y sin tildes que no se puede enseñar. En
+ *  cuanto el comando devuelva su propia `etiqueta`, manda esa. */
+const CATEGORIA_LLANA: Record<string, string> = {
+  imagenes: "Imágenes",
+  fuentes: "Fuentes incrustadas",
+  contenido: "Contenido de página",
+  anotaciones: "Comentarios y campos",
+  adjuntos: "Adjuntos",
+  marcadores_y_enlaces: "Marcadores y enlaces",
+  metadatos: "Metadatos",
+  estructura: "Estructura del documento",
+  lo_demas: "Lo demás",
+};
+
+/** El nombre que se enseña de una fila de la auditoría. */
+function nombreCategoria(c: CategoriaPeso): string {
+  return c.etiqueta || CATEGORIA_LLANA[c.categoria] || c.categoria;
+}
+
 /** Qué categoría de la auditoría se lleva cada casilla, para poder decir el
- *  ahorro **antes** de pulsar. Se busca por palabra porque el nombre lo
- *  escribe el backend en español y puede crecer («metadatos y XMP»). */
+ *  ahorro **antes** de pulsar. Se busca por palabra sobre la clave, que es
+ *  lo estable: la etiqueta la escribe el backend y puede crecer. */
 const CATEGORIA_DE: Record<keyof OpcionesComprimir, string[]> = {
   quitarAdjuntos: ["adjunt"],
   quitarMetadatos: ["metadat", "xmp"],
@@ -99,14 +120,16 @@ export default function DialogoComprimir({
               className="peso-barra"
               role="img"
               aria-label={`Reparto del tamaño: ${filas
-                .map((c) => `${c.categoria} ${Math.round(c.porcentaje)} %`)
+                .map(
+                  (c) => `${nombreCategoria(c)} ${Math.round(c.porcentaje)} %`,
+                )
                 .join(", ")}`}
             >
               {filas.map((c, i) => (
                 <span
                   key={c.categoria}
                   className="peso-tramo"
-                  title={`${c.categoria} · ${tamanoFichero(c.bytes)}`}
+                  title={`${nombreCategoria(c)} · ${tamanoFichero(c.bytes)}`}
                   style={{
                     width: `${c.porcentaje}%`,
                     // un solo acento con la tinta más o menos diluida: la
@@ -122,7 +145,7 @@ export default function DialogoComprimir({
             <ul className="prop-ficha peso-tabla">
               {filas.map((c) => (
                 <li key={c.categoria}>
-                  <span className="peso-nombre">{c.categoria}</span>
+                  <span className="peso-nombre">{nombreCategoria(c)}</span>
                   <span className="dato">{tamanoFichero(c.bytes)}</span>
                   <span className="dato peso-pct">
                     {Math.round(c.porcentaje)} %

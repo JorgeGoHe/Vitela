@@ -1195,6 +1195,26 @@ export type DestinatarioCifrado = {
   permisos: Permisos;
 };
 
+/** Lo que se sabe de un certificado sin instalarlo: a quién pertenece, quién
+ *  responde por él y hasta cuándo vale. Es lo que hace falta para enseñar
+ *  «María López Ruiz» en vez de `maria-lopez.cer` en la lista de
+ *  destinatarios. */
+export type CertificadoLeido = {
+  /** El `CN` en llano, o el `O` si no lo hay. */
+  nombre: string;
+  /** Quién lo emitió, también en llano. */
+  emisor: string;
+  /** Hasta cuándo vale, en ISO 8601. */
+  not_after: string;
+};
+
+/** Lee un certificado del disco para poder nombrarlo. No lo instala, no lo
+ *  guarda y no sale a la red. Si el motor no lo trae, la interfaz se queda
+ *  con el nombre del fichero y no rompe nada. */
+export function readCertificate(path: string): Promise<CertificadoLeido> {
+  return invoke("read_certificate", { path });
+}
+
 /** Cifra el PDF **para unos destinatarios** en vez de con una contraseña:
  *  un `/Filter /Adobe.PubSec` con un recipiente por certificado que envuelve
  *  la clave del documento. Es lo que usan las administraciones. Escribe
@@ -1456,7 +1476,13 @@ export type CompressReport = {
  *  de página, anotaciones, adjuntos, marcadores y enlaces, metadatos,
  *  estructura y «lo demás»— y la suma cuadra con el tamaño del fichero. */
 export type CategoriaPeso = {
+  /** La clave del backend (`imagenes`, `marcadores_y_enlaces`, …). No se
+   *  enseña: es un identificador, con guion bajo y sin tildes. */
   categoria: string;
+  /** El nombre en español, que es lo que lee el usuario. Opcional porque un
+   *  backend anterior no lo trae; sin él la interfaz traduce la clave con su
+   *  propio mapa. */
+  etiqueta?: string;
   bytes: number;
   porcentaje: number;
 };

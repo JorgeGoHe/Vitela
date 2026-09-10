@@ -339,6 +339,13 @@ export function indicesDeRango(
 }
 
 /** «1 página» / «4 páginas»: la forma correcta, no «4 página(s)». */
+/** El nombre del fichero de una ruta. Es lo que se enseña en una banda o en
+ *  un diálogo: la ruta entera empuja el resto de la frase fuera de la caja
+ *  y no aporta nada que el usuario no sepa. La ruta va en el `title`. */
+export function nombreDeFichero(ruta: string): string {
+  return ruta.split(/[\\/]/).pop() || ruta;
+}
+
 export function plural(n: number, singular: string, plural: string): string {
   return `${n} ${n === 1 ? singular : plural}`;
 }
@@ -1021,13 +1028,28 @@ export function guardaUltimoSello(sello: UltimoSello): void {
   localStorage.setItem(CLAVE_SELLO, JSON.stringify(sello));
 }
 
+/** Las tres plantillas de sello dinámico que **el backend** sabe componer
+ *  él solo, con el usuario del sistema. Sin nombre en Preferencias es lo
+ *  que hay que mandarle: la interfaz no conoce el usuario del sistema, así
+ *  que componer aquí dejaba el sello sin la mitad que promete. */
+export const PLANTILLAS_DINAMICAS: Record<string, string> = {
+  REVISADO: "revisado",
+  RECIBIDO: "recibido",
+  APROBADO: "aprobado",
+};
+
 /** La segunda línea de un sello dinámico, compuesta en el momento de
  *  estamparlo: quién y cuándo. El nombre sale del autor de comentarios de
  *  Preferencias, sin preguntar —es el mismo que firma cada comentario—, y
- *  la fecha va como se escribe en español, no en ISO. */
+ *  la fecha va como se escribe en español, no en ISO, y con dos dígitos en
+ *  el día y el mes, que es como se lee en un sello. */
 export function selloDinamico(autor: string): string {
   const ahora = new Date();
-  const fecha = ahora.toLocaleDateString("es-ES");
+  const fecha = ahora.toLocaleDateString("es-ES", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
   const hora = ahora.toLocaleTimeString("es-ES", {
     hour: "2-digit",
     minute: "2-digit",

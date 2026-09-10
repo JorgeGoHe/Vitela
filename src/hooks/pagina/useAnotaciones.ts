@@ -28,6 +28,7 @@ import {
   hexToRgba,
   MOD,
   mergeLineRects,
+  PLANTILLAS_DINAMICAS,
   selloDinamico,
   type AnnotationInfo,
   type Mode,
@@ -478,11 +479,16 @@ export function useAnotaciones(ctx: {
     const text = tool.stampText.trim();
     if (!workPath || !text) return;
     const p = puntoAPagina({ x, y }, size);
-    // un sello dinámico lleva debajo quién sella y cuándo, resuelto en este
-    // mismo instante; el backend lo compone dentro de la apariencia
-    const dinamico = tool.stampDinamico
-      ? selloDinamico(autorComentarios() ?? "")
-      : null;
+    // Un sello dinámico lleva debajo quién sella y cuándo. Con el nombre
+    // puesto en Preferencias se compone aquí; **sin él se manda la
+    // plantilla** y la compone el backend, que sí conoce el usuario del
+    // sistema: componerla aquí dejaba el sello sin el nombre que promete.
+    const autor = autorComentarios();
+    const dinamico = !tool.stampDinamico
+      ? null
+      : autor
+        ? selloDinamico(autor)
+        : (PLANTILLAS_DINAMICAS[text.toUpperCase()] ?? selloDinamico(""));
     try {
       await addStamp({
         workPath,
@@ -492,7 +498,7 @@ export function useAnotaciones(ctx: {
         x: p.x,
         y: p.y,
         fontSize: 22,
-        author: autorComentarios(),
+        author: autor,
         dinamico,
       });
       tool.onStampUsed(text, tool.stampDinamico);
