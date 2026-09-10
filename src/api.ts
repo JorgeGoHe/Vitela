@@ -1126,8 +1126,36 @@ export function saveAttachment(
  *  paso por el backend no es un rodeo: el permiso del opener está acotado a
  *  http/https/mailto, así que abrir un fichero del disco no se puede hacer
  *  desde el webview. */
-export function openAttachment(path: string, index: number): Promise<void> {
+export function openAttachment(path: string, index: number): Promise<string> {
   return invoke("open_attachment", { path, index });
+}
+
+/** Saca a un temporal el fichero que lleva dentro la **chincheta de una
+ *  página** (`/FileAttachment`) y devuelve su ruta, para abrirlo con el
+ *  visor del sistema. Es el hermano de `open_attachment`, que es el del
+ *  documento: este vive en una página y es un comentario. */
+export function openPageAttachment(
+  path: string,
+  pageIndex: number,
+  annotIndex: number,
+): Promise<string> {
+  return invoke("open_page_attachment", { path, pageIndex, annotIndex });
+}
+
+/** Escribe en el disco el fichero de una chincheta, con su nombre y su
+ *  extensión: hasta ahora se podía adjuntar y no se podía sacar. */
+export function savePageAttachment(
+  path: string,
+  pageIndex: number,
+  annotIndex: number,
+  destPath: string,
+): Promise<void> {
+  return invoke("save_page_attachment", {
+    path,
+    pageIndex,
+    annotIndex,
+    destPath,
+  });
 }
 
 export function addAttachment(

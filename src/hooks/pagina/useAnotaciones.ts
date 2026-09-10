@@ -6,10 +6,12 @@ import {
   type MouseEvent,
 } from "react";
 import { invoke } from "../../ipc";
-import { open } from "../../dialogos";
+import { abrirRuta, open, save } from "../../dialogos";
 import {
   addCallout,
   addFileAttachmentAnnotation,
+  openPageAttachment,
+  savePageAttachment,
   addFreeText,
   addMarkup,
   eraseInkArea,
@@ -526,6 +528,38 @@ export function useAnotaciones(ctx: {
     }
   }
 
+  /** Doble clic en la chincheta: el backend saca el fichero al temporal y
+   *  el visor del sistema lo abre, que es lo que hace Acrobat y lo que ya
+   *  hace el panel de adjuntos del documento. Sin esto, lo que se adjunta a
+   *  una página no se puede volver a sacar. */
+  async function abreAdjuntoDePagina(a: AnnotationInfo) {
+    if (!workPath) return;
+    try {
+      const ruta = await openPageAttachment(workPath, index, a.index);
+      await abrirRuta(ruta);
+      onNotice(`Abriendo ${a.contents || "el adjunto"} con el visor del sistema…`);
+    } catch (e) {
+      onError(e);
+    }
+  }
+
+  /** «Guardar como…» del popover: el fichero sale del PDF con su nombre y
+   *  su extensión. */
+  async function guardaAdjuntoDePagina(a: AnnotationInfo) {
+    if (!workPath) return;
+    const dest = await save({
+      defaultPath: a.contents || "adjunto",
+      title: "Guardar el adjunto",
+    });
+    if (!dest) return;
+    try {
+      await savePageAttachment(workPath, index, a.index, dest);
+      onNotice(`${a.contents || "Adjunto"} guardado en ${dest}`);
+    } catch (e) {
+      onError(e);
+    }
+  }
+
   async function submitNote() {
     if (!workPath || !noteDraft || !noteDraft.text.trim()) {
       setNoteDraft(null);
@@ -777,6 +811,8 @@ export function useAnotaciones(ctx: {
     commitShape,
     placeStamp,
     adjuntaFichero,
+    abreAdjuntoDePagina,
+    guardaAdjuntoDePagina,
     colocaMarca,
     submitNote,
     finishStroke,

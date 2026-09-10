@@ -30,7 +30,7 @@ import { useHerramienta } from "./hooks/useHerramienta";
 import { useLectura } from "./hooks/useLectura";
 import { useMano } from "./hooks/useMano";
 import { destinoDe, esquemaDe, esquemaPermitido } from "./enlaces";
-import { open, save, openUrl } from "./dialogos";
+import { abrirRuta, open, save, openUrl } from "./dialogos";
 import {
   addBlankPage,
   removeMarginalText,
@@ -1767,7 +1767,9 @@ function App() {
   async function abrirAdjunto(index: number, a: Adjunto) {
     if (!workPath) return;
     try {
-      await openAttachment(workPath, index);
+      // el backend lo deja en el temporal y devuelve la ruta: abrirla es de
+      // la UI, que es la que tiene el permiso del opener
+      await abrirRuta(await openAttachment(workPath, index));
       setNotice(`Abriendo ${a.name} con el visor del sistema…`);
     } catch (e) {
       setError(String(e));

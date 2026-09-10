@@ -218,6 +218,8 @@ export default function CapaAnotaciones({
     freeTextDraft,
     setFreeTextDraft,
     commitFreeText,
+    abreAdjuntoDePagina,
+    guardaAdjuntoDePagina,
   } = anotaciones;
   const editando =
     notePopover && noteEdit?.index === notePopover.index ? noteEdit : null;
@@ -251,6 +253,35 @@ export default function CapaAnotaciones({
             </button>
           );
         })}
+      {/* La chincheta de un fichero adjunto: doble clic la abre con el visor
+          del sistema y el clic saca su popover, donde está «Guardar como…».
+          Sin esto, lo que se adjunta a una página no se puede sacar. */}
+      {annots
+        .filter((a) => a.kind === "FileAttachment")
+        .map((a) => (
+          <button
+            key={`fa${a.index}`}
+            className="note-icon adjunto-icon"
+            style={{
+              left: a.x * scale,
+              top: a.y * scale,
+              width: Math.max(18, a.w * scale),
+              height: Math.max(18, a.h * scale),
+            }}
+            title={`${a.contents}\n\nDoble clic para abrirlo · clic para las opciones`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setNotePopover((p) => (p?.index === a.index ? null : a));
+            }}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              setNotePopover(null);
+              abreAdjuntoDePagina(a);
+            }}
+          >
+            <Icon name="clip" size={12} />
+          </button>
+        ))}
       {/* Una marca de redacción no es un comentario: ni color, ni texto que
           corregir. Lo único que se puede hacer con ella es quitarla, y
           conviene recordar que todavía no ha borrado nada. */}
@@ -377,6 +408,15 @@ export default function CapaAnotaciones({
               <Icon name="trash" size={13} />
               Eliminar
             </button>
+            {notePopover.kind === "FileAttachment" && (
+              <button
+                className="btn"
+                onClick={() => guardaAdjuntoDePagina(notePopover)}
+              >
+                <Icon name="save" size={13} />
+                Guardar como…
+              </button>
+            )}
             {editando ? (
               <>
                 <button className="btn" onClick={() => setNoteEdit(null)}>

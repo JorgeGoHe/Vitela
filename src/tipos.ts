@@ -189,6 +189,7 @@ export const KIND_LABELS: Record<string, string> = {
   Link: "Enlace",
   FreeText: "Cuadro de texto",
   Square: "Marca de redacción",
+  FileAttachment: "Fichero adjunto",
 };
 
 /** Plurales para el filtro y el resumen del panel de comentarios. */
@@ -203,6 +204,7 @@ export const KIND_PLURALS: Record<string, string> = {
   FreeText: "Cuadros de texto",
   Link: "Enlaces",
   Square: "Marcas de redacción",
+  FileAttachment: "Ficheros adjuntos",
 };
 
 /** Icono del set `Icon` que representa cada tipo de comentario. */
@@ -217,6 +219,7 @@ export const KIND_ICONS: Record<string, string> = {
   FreeText: "textbox",
   Link: "link",
   Square: "redact",
+  FileAttachment: "clip",
 };
 
 /** «todos» o el plural de un tipo (`KIND_PLURALS`). */

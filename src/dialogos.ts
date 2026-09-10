@@ -10,7 +10,10 @@ import {
   type OpenDialogOptions,
   type SaveDialogOptions,
 } from "@tauri-apps/plugin-dialog";
-import { openUrl as tauriOpenUrl } from "@tauri-apps/plugin-opener";
+import {
+  openPath as tauriOpenPath,
+  openUrl as tauriOpenUrl,
+} from "@tauri-apps/plugin-opener";
 import { hayTauri } from "./ipc";
 
 async function siguienteRespuesta(): Promise<string | string[] | null> {
@@ -37,4 +40,12 @@ export async function save(
 export async function openUrl(url: string): Promise<void> {
   if (hayTauri) return tauriOpenUrl(url);
   console.log(`[qa] openUrl: ${url}`);
+}
+
+/** Abre un fichero del disco con el visor del sistema. Lo usan los dos
+ *  adjuntos —el del documento y la chincheta de una página—, que el backend
+ *  deja en el temporal; el permiso del opener está acotado a esa carpeta. */
+export async function abrirRuta(path: string): Promise<void> {
+  if (hayTauri) return tauriOpenPath(path);
+  console.log(`[qa] abrirRuta: ${path}`);
 }

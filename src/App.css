@@ -3132,6 +3132,13 @@ textarea {
   flex-shrink: 0;
 }
 
+/* la chincheta de un fichero adjunto: el mismo botón que la nota, con el
+   color del clip que ya pinta su apariencia */
+.adjunto-icon {
+  color: #1d1c18;
+  background: #fdba2e;
+}
+
 /* la rejilla de la galería de sellos: cada celda enseña la cara con la que
    va a quedar en el papel, que es de lo que va una galería */
 .sello-rejilla {
