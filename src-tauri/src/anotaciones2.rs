@@ -912,7 +912,7 @@ pub fn erase_ink(
                     goma.right().value,
                     goma.top().value,
                 );
-                queda = borra_del_trazo(doc, id, goma)?;
+                queda = borra_del_trazo(doc, id, goma)?.0;
                 if !queda {
                     // sin trazo no hay comentario: se va del /Annots, que es
                     // lo que hace Acrobat cuando la goma se lo lleva entero
@@ -925,13 +925,138 @@ pub fn erase_ink(
     })
 }
 
+/// Lo que se ha llevado un pase de goma, para que la UI pueda contarlo sin
+/// tener que mirar el documento otra vez.
+#[derive(serde::Serialize, Debug, Default, PartialEq)]
+pub struct BorradoTinta {
+    /// Trazos a los que la goma ha quitado algo de verdad.
+    pub tocados: u16,
+    /// De esos, los que se han quedado sin nada y se han ido del `/Annots`.
+    pub borrados: u16,
+}
+
+/// La goma de borrar, **de una pasada**: busca ella los trazos de la página
+/// que tocan el rectángulo y los borra todos dentro de **una sola**
+/// mutación. `rect` va en el espacio propio de la página.
+///
+/// Es lo que hace Acrobat, donde un pase de goma es un paso de deshacer.
+/// Con `erase_ink` (un trazo por llamada) la UI tenía que recorrer las
+/// anotaciones, decidir cuáles tocaba y llamar una vez por cada una:
+/// geometría de PDF fuera de su sitio, y un arrastre sobre tres trazos
+/// gastaba tres ⌘Z aunque la banda prometiera uno.
+///
+/// No es un error que la goma no encuentre nada: se contesta `{ tocados: 0,
+/// borrados: 0 }` y la mutación se retira sin dejar paso.
+#[tauri::command(async)]
+pub fn erase_ink_area(
+    work_path: String,
+    page_index: u16,
+    rect: Rect,
+) -> Result<BorradoTinta, String> {
+    if rect.w <= 0.0 || rect.h <= 0.0 {
+        return Err("El área de borrado no tiene tamaño".into());
+    }
+    crate::historial::mutacion(work_path, move |work_path| {
+        on_pdfium_thread(move || {
+            let mut hecho = BorradoTinta::default();
+            crate::cirugia_en_hilo(&work_path, |doc| {
+                let page_id = *doc
+                    .get_pages()
+                    .get(&(page_index as u32 + 1))
+                    .ok_or("Página fuera de rango")?;
+                let geo = crate::formularios2::geo_pagina(doc, page_id)?;
+                let g = geo.ui_rect_a_pdf(&rect);
+                let goma = (
+                    g.left().value,
+                    g.bottom().value,
+                    g.right().value,
+                    g.top().value,
+                );
+                // los trazos cuya caja toca la goma, con su sitio en el
+                // /Annots: los ids no se mueven al borrar, los índices sí
+                let candidatos = trazos_en(doc, page_index, goma);
+                let mut fuera: Vec<usize> = Vec::new();
+                for (indice, id) in candidatos {
+                    let (queda, cambiado) = borra_del_trazo(doc, id, goma)?;
+                    if !cambiado {
+                        continue;
+                    }
+                    hecho.tocados += 1;
+                    if !queda {
+                        hecho.borrados += 1;
+                        fuera.push(indice);
+                    }
+                }
+                // de mayor a menor: quitar el primero correría los demás
+                fuera.sort_unstable_by(|a, b| b.cmp(a));
+                for indice in fuera {
+                    crate::anotaciones::quita_annot(doc, page_index, indice)?;
+                }
+                Ok(())
+            })?;
+            if hecho.tocados == 0 {
+                // la goma ha pasado por donde no había trazo: sin cambios,
+                // no hay paso de deshacer que ofrecer
+                crate::historial::retira_paso(&work_path);
+            }
+            Ok(hecho)
+        })
+    })
+}
+
+/// Los `Ink` de la página cuya caja toca la goma, como `(índice en /Annots,
+/// id del objeto)`. La caja es una criba barata: el recorte de verdad lo
+/// hace [`borra_del_trazo`] tramo a tramo.
+fn trazos_en(
+    doc: &lopdf::Document,
+    page_index: u16,
+    goma: (f32, f32, f32, f32),
+) -> Vec<(usize, lopdf::ObjectId)> {
+    use lopdf::Object;
+    let Some(annots) = crate::anotaciones::lista_annots(doc, page_index) else {
+        return Vec::new();
+    };
+    annots
+        .iter()
+        .enumerate()
+        .filter_map(|(i, o)| {
+            let Object::Reference(id) = o else { return None };
+            let d = doc.get_object(*id).ok()?.as_dict().ok()?;
+            if d.get(b"Subtype").ok()?.as_name().ok()? != b"Ink" {
+                return None;
+            }
+            let r: Vec<f32> = d
+                .get(b"Rect")
+                .ok()?
+                .as_array()
+                .ok()?
+                .iter()
+                .filter_map(|n| match n {
+                    Object::Integer(v) => Some(*v as f32),
+                    Object::Real(v) => Some(*v),
+                    _ => None,
+                })
+                .collect();
+            if r.len() != 4 {
+                return None;
+            }
+            let (l, b) = (r[0].min(r[2]), r[1].min(r[3]));
+            let (der, t) = (r[0].max(r[2]), r[1].max(r[3]));
+            let toca = der >= goma.0 && l <= goma.2 && t >= goma.1 && b <= goma.3;
+            toca.then_some((i, *id))
+        })
+        .collect()
+}
+
 /// Quita del `/AP` de un Ink los tramos que tocan el rectángulo y rehace su
-/// `/Rect` y su `/BBox`. Devuelve si ha quedado algo.
+/// `/Rect` y su `/BBox`. Devuelve si ha quedado algo y si de verdad ha
+/// quitado alguno: la goma puede pasar por encima de la caja de un trazo
+/// sin tocar ni un tramo, y entonces no hay por qué reescribir nada.
 fn borra_del_trazo(
     doc: &mut lopdf::Document,
     id: lopdf::ObjectId,
     goma: (f32, f32, f32, f32),
-) -> Result<bool, String> {
+) -> Result<(bool, bool), String> {
     use lopdf::Object;
     let annot = doc
         .get_object(id)
@@ -964,7 +1089,12 @@ fn borra_del_trazo(
         .filter(|t| t.len() >= 2)
         .collect();
     if quedan.is_empty() {
-        return Ok(false);
+        return Ok((false, true));
+    }
+    let puntos = |t: &[Vec<(f32, f32)>]| t.iter().map(Vec::len).sum::<usize>();
+    if quedan.len() == trazos.len() && puntos(&quedan) == puntos(&trazos) {
+        // la goma ha pasado por la caja pero no por el dibujo
+        return Ok((true, false));
     }
     let mut ops = cabecera;
     for trazo in &quedan {
@@ -1005,7 +1135,7 @@ fn borra_del_trazo(
         .and_then(|o| o.as_dict_mut())
         .map_err(|e| e.to_string())?
         .set("Rect", caja_obj());
-    Ok(true)
+    Ok((true, true))
 }
 
 /// Parte el content stream de un trazo en (todo lo de antes del camino, los
@@ -1477,6 +1607,85 @@ mod tests {
         assert!(crate::anotaciones::get_annotations(work.clone(), 0)
             .expect("listar")
             .is_empty());
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// **R34b.** En Acrobat un pase de goma es **un** paso de deshacer.
+    /// Aquí la UI llamaba a `erase_ink` una vez por trazo y cada llamada
+    /// traía su propia `mutacion`: un arrastre sobre tres trazos gastaba
+    /// tres ⌘Z mientras la banda prometía uno. `erase_ink_area` busca él
+    /// los trazos que tocan la zona y hace el lote entero de una vez.
+    #[test]
+    fn la_goma_de_una_pasada_es_un_solo_paso_de_deshacer() {
+        let tmp = std::env::temp_dir().join("anot2-goma-area.pdf");
+        crea_pdf(&["Dibujo"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        // dos rayas horizontales que cruzan la zona de la goma y una
+        // tercera lejos, que no se puede tocar
+        for y in [280.0f32, 320.0] {
+            let puntos: Vec<[f32; 2]> = (0..13).map(|i| [100.0 + i as f32 * 20.0, y]).collect();
+            crate::anotaciones::add_stroke(work.clone(), 0, puntos, None, None, None)
+                .expect("dibujar");
+        }
+        let lejos: Vec<[f32; 2]> = (0..5).map(|i| [100.0 + i as f32 * 20.0, 600.0]).collect();
+        crate::anotaciones::add_stroke(work.clone(), 0, lejos, None, None, None).expect("dibujar");
+        let pasos = crate::historial::history_state(work.clone()).expect("historial").undo;
+
+        let hecho = erase_ink_area(
+            work.clone(),
+            0,
+            Rect { x: 180.0, y: 260.0, w: 80.0, h: 100.0 },
+        )
+        .expect("una sola pasada de goma");
+        assert_eq!(
+            hecho,
+            BorradoTinta { tocados: 2, borrados: 0 },
+            "las dos rayas que cruzan la zona, y solo esas"
+        );
+        let ahora = crate::historial::history_state(work.clone()).expect("historial").undo;
+        assert_eq!(ahora, pasos + 1, "un pase de goma, un paso de deshacer");
+
+        // los tres comentarios siguen ahí y los dos borrados están partidos
+        let anots = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar");
+        assert_eq!(anots.len(), 3);
+
+        // y un ⌘Z devuelve las dos rayas enteras, no media
+        crate::historial::undo(work.clone()).expect("deshacer");
+        for i in 0..2 {
+            let ap = ap_crudo(&work, i);
+            assert_eq!(
+                ap.matches(" m ").count(),
+                2,
+                "la raya {i} vuelve entera (PDFium escribe un `m` de más al crear):\n{ap}"
+            );
+        }
+
+        // la goma que se lleva los trazos enteros los quita del /Annots, y
+        // los índices no se pisan al borrar dos de golpe
+        let hecho = erase_ink_area(
+            work.clone(),
+            0,
+            Rect { x: 50.0, y: 250.0, w: 400.0, h: 120.0 },
+        )
+        .expect("borrarlas del todo");
+        assert_eq!(hecho, BorradoTinta { tocados: 2, borrados: 2 });
+        let anots = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar");
+        assert_eq!(anots.len(), 1, "queda la raya de arriba");
+
+        // pasar la goma por donde no hay nada no es un error ni deja paso
+        let pasos = crate::historial::history_state(work.clone()).expect("historial").undo;
+        let hecho = erase_ink_area(
+            work.clone(),
+            0,
+            Rect { x: 20.0, y: 20.0, w: 30.0, h: 30.0 },
+        )
+        .expect("la goma en el vacío no es un error");
+        assert_eq!(hecho, BorradoTinta::default());
+        assert_eq!(
+            crate::historial::history_state(work.clone()).expect("historial").undo,
+            pasos,
+            "sin cambios no se ofrece un ⌘Z que no hace nada"
+        );
         std::fs::remove_file(&tmp).ok();
     }
 

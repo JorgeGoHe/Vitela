@@ -212,6 +212,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "add_free_text" => cmd!(anotaciones2::add_free_text, { work_path: String, page_index: u16, rect: crate::Rect, text: String, font_size: f32, color: [u8; 4], border: bool, author: Option<String> }),
         "add_callout" => cmd!(anotaciones2::add_callout, { work_path: String, page_index: u16, rect: crate::Rect, punta: [f32; 2], text: String, color: [u8; 4], author: Option<String> }),
         "erase_ink" => cmd!(anotaciones2::erase_ink, { work_path: String, page_index: u16, annot_index: u16, rect: crate::Rect }),
+        "erase_ink_area" => cmd!(anotaciones2::erase_ink_area, { work_path: String, page_index: u16, rect: crate::Rect }),
         "transform_annotation" => cmd!(anotaciones2::transform_annotation, { work_path: String, page_index: u16, annot_index: u16, x: f32, y: f32, w: f32, h: f32 }),
         "add_blank_page" => cmd!(paginas2::add_blank_page, { work_path: String, index: u16 }),
         "pdf_from_images" => cmd!(paginas2::pdf_from_images, { image_paths: Vec<String>, dest_path: String, tamano: String }),
@@ -445,7 +446,12 @@ mod tests {
     /// nadie llama es trabajo que no ha llegado al usuario. Se admite una
     /// excepción mientras las dos mitades se escriben en paralelo, y se
     /// quita al integrar.
-    const NADIE_LLAMA: &[(&str, &str)] = &[];
+    const NADIE_LLAMA: &[(&str, &str)] = &[(
+        "erase_ink_area",
+        "pendiente_ui — R34b: la goma de una pasada. La UI del ciclo 7 deja \
+         de recorrer los `annots` y llama a este; hasta entonces sigue \
+         llamando a `erase_ink`, trazo a trazo",
+    )];
 
     /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada
     /// es una función rota que el usuario no puede usar, así que la lista

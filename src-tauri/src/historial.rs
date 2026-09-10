@@ -128,6 +128,13 @@ fn descarta_ultimo(work_path: &str) {
     });
 }
 
+/// Retira el paso de deshacer de una mutación que ha salido bien y **no ha
+/// cambiado nada**: la goma que pasa por donde no había trazo, por ejemplo.
+/// Ofrecer un ⌘Z que no hace nada visible es peor que no ofrecerlo.
+pub(crate) fn retira_paso(work_path: &str) {
+    descarta_ultimo(work_path);
+}
+
 /// Envuelve una mutación de la copia de trabajo: toma la instantánea, ejecuta
 /// `f` (que recibe la misma ruta, para que el cuerpo del comando no cambie)
 /// y, si falla, retira la instantánea (el disco no ha cambiado porque todos

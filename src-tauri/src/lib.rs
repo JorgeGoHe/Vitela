@@ -1116,6 +1116,7 @@ pub fn run() {
             anotaciones2::add_free_text,
             anotaciones2::add_callout,
             anotaciones2::erase_ink,
+            anotaciones2::erase_ink_area,
             anotaciones2::transform_annotation,
             paginas2::add_blank_page,
             paginas2::pdf_from_images,
