@@ -40,6 +40,10 @@ export default function DialogoImagenes({
   const arrastreRef = useRef<number | null>(null);
   const dropRef = useRef<number | null>(null);
   const [tamano, setTamano] = useState<TamanoImagenes>("a4");
+  // las filas marcadas como ilegibles no van a salir en el PDF: el pie
+  // cuenta lo que de verdad se va a escribir, no lo que hay en la lista
+  const marcadas = rutas.filter((r) => fallos.includes(r)).length;
+  const utiles = rutas.length - marcadas;
   const confirmar = () => {
     if (rutas.length > 0) onConfirm({ rutas, tamano });
   };
@@ -188,8 +192,10 @@ export default function DialogoImagenes({
           </button>
           {rutas.length > 0 && (
             <span className="dato">
-              {plural(rutas.length, "imagen", "imágenes")} ·{" "}
-              {plural(rutas.length, "página", "páginas")}
+              {plural(utiles, "imagen", "imágenes")} ·{" "}
+              {plural(utiles, "página", "páginas")}
+              {marcadas > 0 &&
+                ` · ${plural(marcadas, "no se ha podido leer", "no se han podido leer")}`}
             </span>
           )}
         </div>

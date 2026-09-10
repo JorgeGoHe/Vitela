@@ -152,6 +152,7 @@ type Props = {
   propuestaActual: number | null;
   onPropuestaQuitar: (i: number) => void;
   onPropuestaRenombrar: (i: number, nombre: string) => void;
+  onPropuestaTipo: (i: number) => void;
   /** Quita una marca de esta página (la lista la lleva App). */
   quitarMarca: (page: number, annotIndex: number) => void;
   /** La lista de marcas ha cambiado: que App la relea. */
@@ -202,6 +203,7 @@ function Pagina({
   propuestaActual,
   onPropuestaQuitar,
   onPropuestaRenombrar,
+  onPropuestaTipo,
   quitarMarca,
   onMarcasCambian,
   pedirTextoNuevo,
@@ -263,6 +265,7 @@ function Pagina({
     onAnnotated,
     onPageMutated,
     onError,
+    onNotice,
     onFormularios,
     onModeChange,
   });
@@ -1028,6 +1031,7 @@ function Pagina({
             scale={scale}
             onQuitar={onPropuestaQuitar}
             onRenombrar={onPropuestaRenombrar}
+            onCambiarTipo={onPropuestaTipo}
           />
           <CapaMedida
             mode={mode}

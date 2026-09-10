@@ -14,8 +14,10 @@ import {
  */
 export function useHistorial(opts: {
   workPath: string | null;
-  /** Tras deshacer o rehacer: refresco general (el recuento puede cambiar). */
-  onRestaurado: (pageCount: number) => void;
+  /** Tras deshacer o rehacer: refresco general (el recuento puede cambiar).
+   *  `pasos` son los que quedan por deshacer, que es lo que dice si el
+   *  documento ha vuelto al punto en que se abrió o se guardó. */
+  onRestaurado: (pageCount: number, pasos: number) => void;
   onError: (e: unknown) => void;
 }) {
   const [estado, setEstado] = useState<Pick<HistoryState, "undo" | "redo">>({
@@ -59,7 +61,7 @@ export function useHistorial(opts: {
     try {
       const e = await (atras ? undoDocument(w) : redoDocument(w));
       setEstado(e);
-      optsRef.current.onRestaurado(e.page_count);
+      optsRef.current.onRestaurado(e.page_count, e.undo);
     } catch (e) {
       optsRef.current.onError(e);
     } finally {
@@ -82,6 +84,8 @@ export function useHistorial(opts: {
   }, []);
 
   return {
+    /** Pasos que quedan por deshacer: el «reloj» del documento. */
+    pasos: estado.undo,
     puedeDeshacer: estado.undo > 0,
     puedeRehacer: estado.redo > 0,
     deshacer,

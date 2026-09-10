@@ -97,6 +97,7 @@ import {
   type EstadoComentario,
   flattenPdf,
   getMetadata,
+  historyState,
   removeEncryption,
   TODO_PERMITIDO,
   getOutline,
@@ -473,9 +474,23 @@ function App() {
   }, []);
   // deshacer/rehacer general (instantáneas en el backend); tras restaurar
   // hace falta el refresco completo porque puede cambiar hasta el recuento
+  // El punto del historial en el que el documento está **como se abrió o
+  // como se guardó**, por copia de trabajo. Si ⌘Z devuelve ahí, no queda
+  // nada que perder: el «•» de la pestaña se apaga y cerrar no pregunta por
+  // unos cambios que el propio usuario ya ha deshecho.
+  const puntosLimpiosRef = useRef(new Map<string, number>());
+  const marcaPuntoLimpio = useCallback((work: string) => {
+    historyState(work)
+      .then((e) => puntosLimpiosRef.current.set(work, e.undo))
+      .catch(() => {});
+  }, []);
   const historial = useHistorial({
     workPath,
-    onRestaurado: (n) => afterMutation(n),
+    onRestaurado: (n, pasos) => {
+      afterMutation(n);
+      const limpio = puntosLimpiosRef.current.get(workPath ?? "");
+      if (limpio !== undefined) setModified(pasos !== limpio);
+    },
     onError: (e) => setError(String(e)),
   });
   const refrescarHistorial = historial.refrescar;
@@ -768,6 +783,9 @@ function App() {
       else if (prefs.zoomInicial === "100") setZoom(1);
       else setZoom(cargaZoom());
       setDocVersion((v) => v + 1);
+      // el documento recién abierto está en su punto limpio: si ⌘Z vuelve
+      // aquí, no hay cambios que perder
+      marcaPuntoLimpio(info.work_path);
       // su pestaña. La fila solo se pinta a partir de la segunda
       const id = proximaPestanaRef.current++;
       const nueva: Pestana = {
@@ -1253,6 +1271,7 @@ function App() {
     const victima = pestanas.find((p) => p.id === id);
     if (!victima) return;
     setPestanas((v) => v.filter((p) => p.id !== id));
+    puntosLimpiosRef.current.delete(victima.workPath);
     invoke("close_document", { workPath: victima.workPath }).catch(() => {});
   }
 
@@ -1289,6 +1308,7 @@ function App() {
   function cerrarDocumento() {
     if (!workPath) return;
     const anterior = workPath;
+    puntosLimpiosRef.current.delete(anterior);
     const restantes = pestanas.filter((p) => p.id !== pestanaActiva);
     if (restantes.length > 0) {
       setPestanas(restantes);
@@ -1926,6 +1946,19 @@ function App() {
 
   function renombraPropuesta(i: number, name: string) {
     setPropuestas((v) => v.map((c, j) => (j === i ? { ...c, name } : c)));
+  }
+
+  /** Texto ↔ casilla sobre la propuesta, con su rectángulo intacto: una
+   *  heurística confunde una casilla con una raya de escribir, y hasta
+   *  ahora la única salida era borrarla y volver a dibujar el campo. */
+  function cambiaTipoPropuesta(i: number) {
+    setPropuestas((v) =>
+      v.map((c, j) =>
+        j === i
+          ? { ...c, kind: c.kind === "checkbox" ? "text" : "checkbox" }
+          : c,
+      ),
+    );
   }
 
   /** «Revisar uno a uno»: lleva la vista a la propuesta siguiente y la
@@ -3491,7 +3524,9 @@ function App() {
       setOriginalPath(dest);
       setNombreProvisional(null);
       setModified(false);
-      // guardado: ya no hay nada que recuperar
+      // guardado: este es el punto limpio nuevo, y ya no hay nada que
+      // recuperar
+      marcaPuntoLimpio(workPath);
       borraSesion(workPath).catch((e) =>
         console.warn("no se ha podido borrar el apunte de sesión:", e),
       );
@@ -5055,6 +5090,7 @@ function App() {
                   }
                   onPropuestaQuitar={quitarPropuesta}
                   onPropuestaRenombrar={renombraPropuesta}
+                  onPropuestaTipo={cambiaTipoPropuesta}
                   quitarMarca={quitarMarca}
                   onMarcasCambian={refrescarMarcas}
                   pedirTextoNuevo={pedirTextoNuevo}

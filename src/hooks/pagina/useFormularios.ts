@@ -25,6 +25,7 @@ export function useFormularios(ctx: {
   onAnnotated: (page: number) => void;
   onPageMutated: (page: number) => void;
   onError: (e: unknown) => void;
+  onNotice: (texto: string) => void;
   /** Cuántos campos tiene esta página (para avisar de que se puede rellenar). */
   onFormularios: (n: number) => void;
   onModeChange: (m: Mode) => void;
@@ -41,6 +42,7 @@ export function useFormularios(ctx: {
     onAnnotated,
     onPageMutated,
     onError,
+    onNotice,
     onFormularios,
     onModeChange,
   } = ctx;
@@ -204,10 +206,27 @@ export function useFormularios(ctx: {
     }
   }
 
+  // campos de solo lectura sobre los que ya se ha avisado: el aviso sale la
+  // primera vez que se pulsa cada uno, no en cada clic
+  const avisadosRef = useRef<Set<number>>(new Set());
+
   function onFieldClick(field: FormFieldInfo) {
     // un campo de solo lectura no se toca: en Acrobat ni siquiera coge el
     // foco, y hasta ahora aquí se dejaba cambiar y el cambio iba al fichero
-    if (field.read_only) return;
+    if (field.read_only) {
+      // un campo que no responde al clic y no dice por qué parece la app
+      // rota: la primera vez se cuenta en la banda, con el texto de ayuda
+      // que trae el PDF si lo trae
+      if (avisadosRef.current.has(field.annot_index)) return;
+      avisadosRef.current.add(field.annot_index);
+      const ayuda = field.tooltip?.trim();
+      onNotice(
+        ayuda
+          ? `${field.name} es de solo lectura · ${ayuda}`
+          : `${field.name} es de solo lectura: lo ha bloqueado quien hizo el formulario`,
+      );
+      return;
+    }
     if (field.kind === "Text") {
       setFieldDraft({ field, text: field.value });
     } else if (field.kind === "Checkbox" || field.kind === "RadioButton") {

@@ -2,8 +2,10 @@
  * Capa de «Reconocer campos…»: los campos que la detección **propone**,
  * pintados sobre la página con el borde del acento y su nombre. Nada de
  * esto está escrito todavía en el PDF: cada propuesta se puede renombrar
- * (doble clic) y quitar (Supr) antes de crear nada, que es la regla de la
- * función —una heurística no acierta siempre y no puede fingir que sí—.
+ * (doble clic), cambiar de tipo —texto o casilla, con la tecla T o el
+ * conmutador de la etiqueta— y quitar (Supr) antes de crear nada, que es la
+ * regla de la función —una heurística no acierta siempre y no puede fingir
+ * que sí—.
  */
 import { useState } from "react";
 import type { PageSize } from "../../tipos";
@@ -29,6 +31,7 @@ export default function CapaPropuestas({
   scale,
   onQuitar,
   onRenombrar,
+  onCambiarTipo,
 }: {
   /** Las de esta página, con su posición en la lista entera. */
   propuestas: { i: number; campo: CampoPropuesto }[];
@@ -38,6 +41,8 @@ export default function CapaPropuestas({
   scale: number;
   onQuitar: (i: number) => void;
   onRenombrar: (i: number, nombre: string) => void;
+  /** Conmuta el tipo entre campo de texto y casilla, con el rect intacto. */
+  onCambiarTipo: (i: number) => void;
 }) {
   const [editando, setEditando] = useState<{ i: number; texto: string } | null>(
     null,
@@ -66,10 +71,10 @@ export default function CapaPropuestas({
             role="button"
             aria-label={`${campo.name}, ${TIPOS[campo.kind] ?? campo.kind}${
               dudoso ? ", sin confirmar" : ""
-            }; doble clic para renombrar, Supr para quitar`}
+            }; doble clic para renombrar, T para cambiar el tipo, Supr para quitar`}
             title={`${TIPOS[campo.kind] ?? campo.kind}${
               dudoso ? " · no está claro, repásalo" : ""
-            } · doble clic renombra · Supr lo quita`}
+            } · doble clic renombra · T cambia el tipo · Supr lo quita`}
             onMouseDown={(e) => e.stopPropagation()}
             onDoubleClick={() => setEditando({ i, texto: campo.name })}
             onKeyDown={(e) => {
@@ -80,29 +85,59 @@ export default function CapaPropuestas({
               } else if (e.key === "F2" || e.key === "Enter") {
                 e.preventDefault();
                 setEditando({ i, texto: campo.name });
+              } else if (e.key === "t" || e.key === "T") {
+                // texto ↔ casilla: la heurística confunde una casilla con
+                // una raya de escribir, y volver a dibujar el campo cuesta
+                // más que corregirle el tipo
+                e.preventDefault();
+                e.stopPropagation();
+                onCambiarTipo(i);
               }
             }}
           >
-            {editando?.i === i ? (
-              <input
-                autoFocus
-                className="campo-propuesto-input"
-                value={editando.texto}
-                onChange={(e) => setEditando({ i, texto: e.target.value })}
-                onMouseDown={(e) => e.stopPropagation()}
-                onKeyDown={(e) => {
-                  e.stopPropagation();
-                  if (e.key === "Enter") {
-                    if (editando.texto.trim())
-                      onRenombrar(i, editando.texto.trim());
-                    setEditando(null);
-                  } else if (e.key === "Escape") setEditando(null);
-                }}
-                onBlur={() => setEditando(null)}
-              />
-            ) : (
-              <span className="campo-propuesto-nombre dato">{campo.name}</span>
-            )}
+            <div className="campo-propuesto-etiqueta">
+              {editando?.i === i ? (
+                <input
+                  autoFocus
+                  className="campo-propuesto-input"
+                  aria-label={`Nombre del campo propuesto (${campo.name})`}
+                  value={editando.texto}
+                  onChange={(e) => setEditando({ i, texto: e.target.value })}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === "Enter") {
+                      if (editando.texto.trim())
+                        onRenombrar(i, editando.texto.trim());
+                      setEditando(null);
+                    } else if (e.key === "Escape") setEditando(null);
+                  }}
+                  onBlur={() => setEditando(null)}
+                />
+              ) : (
+                <>
+                  <span className="campo-propuesto-nombre dato">
+                    {campo.name}
+                  </span>
+                  {(campo.kind === "text" || campo.kind === "checkbox") && (
+                    <button
+                      className="campo-propuesto-tipo dato"
+                      title="Cambiar el tipo del campo (T)"
+                      aria-label={`Tipo: ${TIPOS[campo.kind]}. Cambiar a ${
+                        campo.kind === "text" ? "casilla" : "campo de texto"
+                      }`}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onCambiarTipo(i);
+                      }}
+                    >
+                      {campo.kind === "text" ? "Texto" : "Casilla"}
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         );
       })}
