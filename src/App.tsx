@@ -214,9 +214,28 @@ import DialogoBates, { type BatesOpts } from "./components/DialogoBates";
 import "./App.css";
 
 const BASE_WIDTH = 900;
-/** Zoom válido: del 50 % al 400 %, redondeado al 1 %. */
+/** Los niveles de zoom de Acrobat. ⌘+ y ⌘− saltan de uno al siguiente; el
+ *  campo del zoom sigue aceptando cualquier número entre los extremos. */
+const NIVELES_ZOOM = [
+  0.25, 0.3333, 0.5, 0.6667, 0.75, 1, 1.25, 1.5, 2, 4, 8, 16, 24, 64,
+];
+/** Zoom válido: del 25 % al 6400 %, redondeado al 1 % (por debajo del 1 %
+ *  el redondeo se comía los niveles finos, así que a partir del 100 % se
+ *  redondea al entero). */
 function recortaZoom(z: number): number {
-  return Math.min(4, Math.max(0.5, Math.round(z * 100) / 100));
+  const tope = NIVELES_ZOOM[NIVELES_ZOOM.length - 1];
+  return Math.min(tope, Math.max(NIVELES_ZOOM[0], Math.round(z * 100) / 100));
+}
+/** El nivel siguiente (o el anterior) al zoom de ahora. En un plano el
+ *  400 % se queda corto y los saltos de 0,25 tardan una eternidad. */
+function nivelZoom(actual: number, delta: 1 | -1): number {
+  const eps = 0.001;
+  if (delta === 1)
+    return NIVELES_ZOOM.find((n) => n > actual + eps) ?? recortaZoom(actual);
+  return (
+    [...NIVELES_ZOOM].reverse().find((n) => n < actual - eps) ??
+    recortaZoom(actual)
+  );
 }
 /** Los cuatro modos de presentación en el segmentado de la píldora. */
 const MODOS_PILDORA: [ModoPagina, string, string][] = [
@@ -2376,10 +2395,10 @@ function App() {
       ) {
         // sin Shift: ⇧⌘+ y ⇧⌘− quedan reservados para girar la vista
         e.preventDefault();
-        setZoom(recortaZoom(Math.round((zoomNum + 0.25) * 4) / 4));
+        setZoom(nivelZoom(zoomNum, 1));
       } else if (mod && !e.shiftKey && e.key === "-" && pageCount > 0) {
         e.preventDefault();
-        setZoom(recortaZoom(Math.round((zoomNum - 0.25) * 4) / 4));
+        setZoom(nivelZoom(zoomNum, -1));
       } else if (
         mod &&
         e.shiftKey &&
@@ -3959,9 +3978,9 @@ function App() {
     "buscar-anterior": () => busqueda.gotoMatch(-1),
     preferencias: () => setPrefsAbiertas(true),
     /* Ver */
-    "zoom-mas": () => setZoom(recortaZoom(Math.round((zoomNum + 0.25) * 4) / 4)),
+    "zoom-mas": () => setZoom(nivelZoom(zoomNum, 1)),
     "zoom-menos": () =>
-      setZoom(recortaZoom(Math.round((zoomNum - 0.25) * 4) / 4)),
+      setZoom(nivelZoom(zoomNum, -1)),
     "zoom-pagina": () => setZoom("pagina"),
     "zoom-100": () => setZoom(1),
     "zoom-ancho": () => setZoom("ajuste"),
@@ -5433,7 +5452,7 @@ function App() {
                 title={`Reducir (${MOD}−)`}
                 aria-label="Reducir"
                 onClick={() =>
-                  setZoom(recortaZoom(Math.round((zoomNum - 0.25) * 4) / 4))
+                  setZoom(nivelZoom(zoomNum, -1))
                 }
               >
                 <Icon name="minus" size={14} />
@@ -5454,7 +5473,7 @@ function App() {
                   className="pill-input"
                   inputMode="numeric"
                   autoFocus
-                  aria-label="Porcentaje de zoom (50 a 400)"
+                  aria-label="Porcentaje de zoom (25 a 6400)"
                   value={zoomDraft}
                   onFocus={(e) => e.currentTarget.select()}
                   onChange={(e) =>
@@ -5472,7 +5491,7 @@ function App() {
                 title={`Ampliar (${MOD}+)`}
                 aria-label="Ampliar"
                 onClick={() =>
-                  setZoom(recortaZoom(Math.round((zoomNum + 0.25) * 4) / 4))
+                  setZoom(nivelZoom(zoomNum, 1))
                 }
               >
                 <Icon name="plus" size={14} />
