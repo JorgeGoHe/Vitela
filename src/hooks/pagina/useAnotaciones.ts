@@ -10,7 +10,7 @@ import {
   addCallout,
   addFreeText,
   addMarkup,
-  eraseInk,
+  eraseInkArea,
   addShape,
   addStamp,
   setAnnotationColor,
@@ -334,24 +334,17 @@ export function useAnotaciones(ctx: {
 
   /** Goma: se lleva de cada trazo (`Ink`) los segmentos que caen dentro de
    *  la zona borrada, no el trazo entero. La zona es la que se pinta
-   *  mientras se arrastra, así que lo que se ve es lo que se va. */
+   *  mientras se arrastra, así que lo que se ve es lo que se va.
+   *
+   *  Qué trazos toca la zona lo decide el backend, que es de quien es esa
+   *  geometría, y el lote entero va en una sola mutación: un pase de goma,
+   *  un ⌘Z. */
   async function borraConGoma(zona: Rect) {
     if (!workPath) return;
-    const tocados = annots.filter(
-      (a) =>
-        a.kind === "Ink" &&
-        a.x < zona.x + zona.w &&
-        a.x + a.w > zona.x &&
-        a.y < zona.y + zona.h &&
-        a.y + a.h > zona.y,
-    );
-    if (tocados.length === 0) return;
     const pr = rectAPagina(zona, size);
     try {
-      // de mayor a menor: borrar un trazo entero puede reordenar `/Annots`
-      for (const a of [...tocados].sort((x, y) => y.index - x.index)) {
-        await eraseInk(workPath, index, a.index, pr);
-      }
+      const { tocados } = await eraseInkArea(workPath, index, pr);
+      if (tocados === 0) return;
       onAnnotated(index);
       onNotice(`Borrado · ${MOD}Z lo devuelve`);
     } catch (e) {

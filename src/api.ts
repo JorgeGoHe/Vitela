@@ -503,17 +503,21 @@ export function addCallout(args: {
   return invoke("add_callout", { author: null, ...args });
 }
 
-/** Goma de borrar del dibujo: quita del trazo (`Ink`) los segmentos que
- *  caen dentro del rectángulo y vuelve a dibujar su apariencia, en vez de
- *  llevarse el trazo entero. Coordenadas en el espacio propio de la
- *  página. */
-export function eraseInk(
+/** Lo que se ha llevado un pase de goma: cuántos trazos ha tocado y de
+ *  cuántos no ha quedado nada (esos desaparecen del `/Annots`). */
+export type BorradoGoma = { tocados: number; borrados: number };
+
+/** Goma de borrar del dibujo: quita de **cada** trazo (`Ink`) que toque el
+ *  rectángulo los segmentos que caen dentro y vuelve a dibujar su
+ *  apariencia, en vez de llevarse el trazo entero. Busca los trazos el
+ *  backend y hace el lote en una sola mutación, así que un pase de goma es
+ *  un paso de deshacer. Coordenadas en el espacio propio de la página. */
+export function eraseInkArea(
   workPath: string,
   pageIndex: number,
-  annotIndex: number,
   rect: { x: number; y: number; w: number; h: number },
-): Promise<void> {
-  return invoke("erase_ink", { workPath, pageIndex, annotIndex, rect });
+): Promise<BorradoGoma> {
+  return invoke("erase_ink_area", { workPath, pageIndex, rect });
 }
 
 /** Reescribe el texto de un comentario ya creado; el backend refresca `/M`
