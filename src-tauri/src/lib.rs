@@ -1157,6 +1157,8 @@ pub fn run() {
             exportar::export_docx,
             exportar::compress_pdf,
             formularios2::create_form_field,
+            formularios2::create_form_fields,
+            formularios2::detect_form_fields,
             formularios2::create_link,
             formularios2::delete_form_field,
             historial::undo,

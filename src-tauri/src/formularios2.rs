@@ -3,8 +3,10 @@
 //! campos no se ofrece en v1 (dejaría huérfanos en /Fields); los enlaces son
 //! anotaciones normales y se borran con remove_annotation.
 
-use crate::{cirugia, Rect};
+use crate::{cirugia, on_pdfium_thread, Rect};
 use lopdf::{Dictionary, Document as LoDoc, Object, ObjectId, Stream, StringFormat};
+use pdfium_render::prelude::*;
+use serde::Serialize;
 
 /// MediaBox de una página, buscando en el propio dict o heredado del árbol.
 fn media_box(doc: &LoDoc, page_id: ObjectId) -> Result<[f32; 4], String> {
@@ -263,6 +265,71 @@ pub fn create_form_field(
     options: Option<Vec<String>>,
     props: Option<PropsCampo>,
 ) -> Result<(), String> {
+    let campo = CampoNuevo {
+        page_index,
+        kind,
+        rect,
+        name,
+        group,
+        export_value,
+        options,
+        props,
+    };
+    cirugia(&work_path, move |doc| crea_campo(doc, campo))
+}
+
+/// Un campo por crear: lo que [`create_form_field`] recibe suelto y lo que
+/// [`create_form_fields`] recibe en lista.
+#[derive(serde::Deserialize, Clone, Debug)]
+pub struct CampoNuevo {
+    pub page_index: u16,
+    pub kind: String,
+    pub rect: Rect,
+    pub name: String,
+    #[serde(default)]
+    pub group: Option<String>,
+    #[serde(default)]
+    pub export_value: Option<String>,
+    #[serde(default)]
+    pub options: Option<Vec<String>>,
+    #[serde(default)]
+    pub props: Option<PropsCampo>,
+}
+
+/// Crea **un lote** de campos en una sola cirugía, para que un ⌘Z devuelva
+/// el formulario entero. Es lo que necesita «Reconocer campos…»: aceptar
+/// ocho propuestas es un gesto, no ocho.
+///
+/// Si uno falla no se escribe ninguno: la cirugía guarda al final y una
+/// mutación fallida retira su paso de deshacer. Devuelve cuántos ha creado.
+#[tauri::command(async)]
+pub fn create_form_fields(work_path: String, fields: Vec<CampoNuevo>) -> Result<u16, String> {
+    if fields.is_empty() {
+        return Err("No hay ningún campo que crear".into());
+    }
+    let cuantos = fields.len() as u16;
+    cirugia(&work_path, move |doc| {
+        for campo in fields {
+            crea_campo(doc, campo)?;
+        }
+        Ok(())
+    })?;
+    Ok(cuantos)
+}
+
+/// El cuerpo de [`create_form_field`], sobre un documento ya abierto por
+/// lopdf: así el lote entero cabe en una sola cirugía.
+fn crea_campo(doc: &mut LoDoc, campo: CampoNuevo) -> Result<(), String> {
+    let CampoNuevo {
+        page_index,
+        kind,
+        rect,
+        name,
+        group,
+        export_value,
+        options,
+        props,
+    } = campo;
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("El campo necesita un nombre".into());
@@ -284,7 +351,7 @@ pub fn create_form_field(
     if matches!(kind.as_str(), "combo" | "list") && opciones.is_empty() {
         return Err("Un desplegable necesita al menos una opción".into());
     }
-    cirugia(&work_path, move |doc| {
+    {
         let page_id = *doc
             .get_pages()
             .get(&(page_index as u32 + 1))
@@ -479,7 +546,7 @@ pub fn create_form_field(
             otro => return Err(format!("Tipo de campo desconocido: {otro}")),
         }
         remata_acroform(doc, page_id, widget_id, Some(campo_id), &props)
-    })
+    }
 }
 
 /// Tooltip y banderas, que son iguales en todos los campos menos en el
@@ -657,10 +724,600 @@ pub fn create_link(
     })
 }
 
+/// Un campo que la detección **propone**. Nada de esto está escrito en el
+/// documento: es lo que la UI pinta sobre la página para que el usuario lo
+/// repase, lo renombre o lo quite antes de crear nada.
+#[derive(Serialize, Debug, Clone)]
+pub struct CampoPropuesto {
+    pub page_index: u16,
+    /// En el espacio **propio** de la página, origen arriba a la izquierda:
+    /// exactamente lo que `create_form_field` espera recibir, para que la
+    /// UI pueda aceptar una propuesta sin convertir nada.
+    pub rect: Rect,
+    /// `"text"`, `"checkbox"` o `"radio"`.
+    pub kind: String,
+    pub name: String,
+    /// El `/T` del grupo cuando `kind` es `"radio"`; vacío en los demás.
+    /// No estaba en el contrato del analista, pero un radio sin grupo no se
+    /// puede crear: `create_form_field` lo exige.
+    pub group: String,
+    /// De 0 a 1. Una heurística no acierta siempre y no puede fingir que
+    /// sí: por debajo de 0,6 la UI avisa de que hay que repasarlo.
+    pub confianza: f32,
+}
+
+/// Reconoce los campos de un formulario **impreso** y los propone: líneas
+/// de subrayado, casillas, grupos de radios y cajas rectangulares, con el
+/// nombre sacado del texto de al lado.
+///
+/// **No escribe nada.** Es la diferencia con Acrobat, donde «Preparar
+/// formulario» crea los campos sin preguntar y quitar los que sobran cuesta
+/// más que dibujarlos a mano. Aquí se propone, el usuario repasa y crea el
+/// lote con `create_form_fields`, que es **un** paso de deshacer.
+///
+/// La heurística trabaja sobre lo que Vitela ya sabe leer: los bloques de
+/// texto de la página y la **caja** de sus objetos de camino (pdfium-render
+/// 0.8 no expone los segmentos de un camino, y para reconocer una raya o un
+/// recuadro basta con su caja). Lo que ya tiene un widget encima no se
+/// propone: proponer un campo donde ya hay uno es ruido.
+#[tauri::command(async)]
+pub fn detect_form_fields(
+    work_path: String,
+    page_indices: Option<Vec<u16>>,
+) -> Result<Vec<CampoPropuesto>, String> {
+    on_pdfium_thread(move || {
+        crate::with_doc(&work_path, |doc| {
+            let total = doc.pages().len();
+            let paginas: Vec<u16> = match page_indices {
+                Some(v) => v.into_iter().filter(|p| *p < total).collect(),
+                None => (0..total).collect(),
+            };
+            let mut out: Vec<CampoPropuesto> = Vec::new();
+            let mut usados: Vec<String> = Vec::new();
+            for p in paginas {
+                propone_en(doc, p, &mut out, &mut usados);
+            }
+            Ok(out)
+        })
+    })
+}
+
+/// Una raya, un recuadro o una casilla ya reconocidos, con su caja en el
+/// espacio propio de la página.
+struct Marca {
+    rect: Rect,
+    clase: Clase,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum Clase {
+    /// Raya horizontal larga y fina: encima va un campo de texto.
+    Raya,
+    /// Cuadrado pequeño: casilla, o radio si tiene compañeros en su fila.
+    Cuadro,
+    /// Recuadro grande: campo de texto dentro.
+    Caja,
+}
+
+/// Alto máximo de una raya (más que esto ya es un recuadro aplastado).
+const RAYA_ALTO: f32 = 3.5;
+/// Ancho mínimo de una raya para que sea un renglón y no un adorno.
+const RAYA_ANCHO: f32 = 36.0;
+/// Lado máximo de una casilla.
+const CASILLA_LADO: f32 = 22.0;
+/// Alto de un campo de texto cuando lo único que hay es la raya: el cuerpo
+/// de la letra de al lado por esto, que es la proporción de Acrobat.
+const ALTO_POR_CUERPO: f32 = 1.5;
+
+fn propone_en(
+    doc: &PdfDocument<'static>,
+    page_index: u16,
+    out: &mut Vec<CampoPropuesto>,
+    usados: &mut Vec<String>,
+) {
+    let Ok(page) = doc.pages().get(page_index) else {
+        return;
+    };
+    let geo = crate::Geo::de_pagina(&page).propia();
+    let bloques = crate::texto::bloques_de(doc, page_index);
+
+    // lo que ya es un campo: no se propone encima
+    let ocupado: Vec<Rect> = {
+        let annots = page.annotations();
+        (0..annots.len())
+            .filter_map(|i| {
+                let a = annots.get(i).ok()?;
+                a.as_widget_annotation()?;
+                let b = a.bounds().ok()?;
+                Some(geo.pdf_rect_a_ui(&b))
+            })
+            .collect()
+    };
+
+    let mut marcas: Vec<Marca> = Vec::new();
+    let objetos = page.objects();
+    for i in 0..objetos.len() {
+        let Ok(obj) = objetos.get(i) else { continue };
+        if obj.as_path_object().is_none() {
+            continue;
+        }
+        let Ok(b) = obj.bounds() else { continue };
+        let r = geo.pdf_rect_a_ui(&PdfRect::new(b.bottom(), b.left(), b.top(), b.right()));
+        if let Some(clase) = clase_de(&r, geo.ancho()) {
+            marcas.push(Marca { rect: r, clase });
+        }
+    }
+    // las corridas de «_» son la otra forma de imprimir un renglón, y son
+    // texto, no camino
+    for b in &bloques {
+        let t = b.text.trim();
+        if t.len() >= 4 && t.chars().all(|c| c == '_') {
+            marcas.push(Marca {
+                rect: Rect { x: b.x, y: b.y + b.h, w: b.w, h: 1.0 },
+                clase: Clase::Raya,
+            });
+        }
+    }
+
+    // los cuadros que comparten fila con otros son las opciones de un mismo
+    // grupo de radios; uno solo es una casilla
+    let filas = agrupa_en_filas(&marcas);
+
+    for (indice, marca) in marcas.iter().enumerate() {
+        let caja = match marca.clase {
+            // el campo va ENCIMA de la raya, con el alto del cuerpo de al lado
+            Clase::Raya => {
+                let cuerpo = cuerpo_cerca(&bloques, &marca.rect).unwrap_or(11.0);
+                let alto = (cuerpo * ALTO_POR_CUERPO).clamp(12.0, 30.0);
+                Rect {
+                    x: marca.rect.x,
+                    y: (marca.rect.y - alto).max(0.0),
+                    w: marca.rect.w,
+                    h: alto,
+                }
+            }
+            _ => marca.rect.clone(),
+        };
+        if caja.w < 8.0 || caja.h < 8.0 {
+            continue;
+        }
+        if ocupado.iter().any(|o| se_pisan(o, &caja)) {
+            continue;
+        }
+        if out.iter().any(|c| c.page_index == page_index && se_pisan(&c.rect, &caja)) {
+            continue;
+        }
+        let fila = filas.get(&indice).cloned().unwrap_or_default();
+        let hermanos = fila.len().max(1);
+        let (kind, etiqueta, confianza) = match marca.clase {
+            Clase::Raya => (
+                "text",
+                etiqueta_de(&bloques, &marca.rect, Lado::Izquierda),
+                0.9,
+            ),
+            Clase::Caja => (
+                "text",
+                etiqueta_de(&bloques, &marca.rect, Lado::Izquierda),
+                0.65,
+            ),
+            Clase::Cuadro if hermanos > 1 => (
+                "radio",
+                etiqueta_de(&bloques, &marca.rect, Lado::Derecha),
+                0.7,
+            ),
+            Clase::Cuadro => (
+                "checkbox",
+                etiqueta_de(&bloques, &marca.rect, Lado::Derecha),
+                0.8,
+            ),
+        };
+        let (etiqueta, tenia) = match etiqueta {
+            Some(t) => (t, true),
+            // sin texto al lado el campo sigue existiendo, pero el nombre es
+            // un apaño y la confianza lo dice
+            None => (format!("campo_{}", out.len() + 1), false),
+        };
+        let base = nombre_de_campo(&etiqueta);
+        let name = unico(&base, usados);
+        let group = if kind == "radio" {
+            // el grupo lo encabeza el texto que va a la izquierda del
+            // PRIMER cuadro de la fila («Sexo: ○ Hombre ○ Mujer»): tomarlo
+            // del vecino de cada uno daría tres grupos de uno
+            let primero = fila
+                .iter()
+                .copied()
+                .min_by(|a, b| marcas[*a].rect.x.total_cmp(&marcas[*b].rect.x))
+                .unwrap_or(indice);
+            etiqueta_de(&bloques, &marcas[primero].rect, Lado::Izquierda)
+                .map(|t| nombre_de_campo(&t))
+                .unwrap_or_else(|| format!("grupo_{}", out.len() + 1))
+        } else {
+            String::new()
+        };
+        out.push(CampoPropuesto {
+            page_index,
+            rect: caja,
+            kind: kind.to_string(),
+            name,
+            group,
+            confianza: if tenia { confianza } else { confianza - 0.3 },
+        });
+    }
+}
+
+/// Qué es esta caja, si es que es algo. `ancho_pagina` sirve para descartar
+/// los marcos y las tablas que ocupan la hoja entera.
+fn clase_de(r: &Rect, ancho_pagina: f32) -> Option<Clase> {
+    let (w, h) = (r.w, r.h);
+    if w >= RAYA_ANCHO && h <= RAYA_ALTO && w < ancho_pagina * 0.95 {
+        return Some(Clase::Raya);
+    }
+    let lado = w.min(h);
+    if (7.0..=CASILLA_LADO).contains(&lado) && (w / h).clamp(0.1, 10.0) > 0.7 && w / h < 1.4 {
+        return Some(Clase::Cuadro);
+    }
+    if w >= RAYA_ANCHO && (14.0..=120.0).contains(&h) && w < ancho_pagina * 0.95 {
+        return Some(Clase::Caja);
+    }
+    None
+}
+
+/// Qué cuadros comparten fila con cada cuadro (él incluido): dos o más
+/// alineados y del mismo tamaño son las opciones de un grupo de radios, que
+/// es como se imprime «Sí / No / No sabe». El del extremo izquierdo es el
+/// que lleva delante el texto que da nombre al grupo.
+fn agrupa_en_filas(marcas: &[Marca]) -> std::collections::HashMap<usize, Vec<usize>> {
+    let mut out = std::collections::HashMap::new();
+    for (i, a) in marcas.iter().enumerate() {
+        if a.clase != Clase::Cuadro {
+            continue;
+        }
+        let fila: Vec<usize> = marcas
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| {
+                b.clase == Clase::Cuadro
+                    && (b.rect.y - a.rect.y).abs() < a.rect.h * 0.6
+                    && (b.rect.h - a.rect.h).abs() < 3.0
+            })
+            .map(|(j, _)| j)
+            .collect();
+        out.insert(i, fila);
+    }
+    out
+}
+
+enum Lado {
+    Izquierda,
+    Derecha,
+}
+
+/// El texto que da nombre al campo: el más cercano por la izquierda (o por
+/// la derecha, en las casillas) dentro de la misma línea, y si no lo hay,
+/// el de encima. Es de donde lo saca Acrobat y de donde lo sacaría una
+/// persona.
+fn etiqueta_de(bloques: &[crate::texto::TextBlock], r: &Rect, lado: Lado) -> Option<String> {
+    let centro = r.y + r.h / 2.0;
+    let misma_linea = |b: &crate::texto::TextBlock| {
+        let c = b.y + b.h / 2.0;
+        (c - centro).abs() < (b.h.max(r.h)) * 1.2
+    };
+    let util = |b: &crate::texto::TextBlock| {
+        let t = b.text.trim();
+        !t.is_empty() && !t.chars().all(|c| c == '_' || c == '.')
+    };
+    let candidato = match lado {
+        Lado::Izquierda => bloques
+            .iter()
+            .filter(|b| util(b) && misma_linea(b) && b.x + b.w <= r.x + 2.0)
+            .min_by(|a, b| (r.x - (a.x + a.w)).total_cmp(&(r.x - (b.x + b.w)))),
+        Lado::Derecha => bloques
+            .iter()
+            .filter(|b| util(b) && misma_linea(b) && b.x + 2.0 >= r.x + r.w)
+            .min_by(|a, b| (a.x - (r.x + r.w)).total_cmp(&(b.x - (r.x + r.w)))),
+    };
+    let candidato = candidato.or_else(|| {
+        // nada al lado: lo de encima, si cae sobre la misma columna
+        bloques
+            .iter()
+            .filter(|b| {
+                util(b)
+                    && b.y + b.h <= r.y + 1.0
+                    && r.y - (b.y + b.h) < b.h * 2.5
+                    && b.x < r.x + r.w
+                    && b.x + b.w > r.x
+            })
+            .max_by(|a, b| (a.y + a.h).total_cmp(&(b.y + b.h)))
+    })?;
+    let t = candidato.text.trim();
+    (!t.is_empty()).then(|| t.to_string())
+}
+
+/// El cuerpo de letra del texto más cercano a una raya, que es el alto que
+/// tiene que tener el campo que se escriba encima.
+fn cuerpo_cerca(bloques: &[crate::texto::TextBlock], r: &Rect) -> Option<f32> {
+    bloques
+        .iter()
+        .filter(|b| !b.text.trim().is_empty() && (b.y + b.h / 2.0 - r.y).abs() < 40.0)
+        .min_by(|a, b| {
+            let d = |t: &crate::texto::TextBlock| {
+                ((t.x - r.x).powi(2) + (t.y - r.y).powi(2)).sqrt()
+            };
+            d(a).total_cmp(&d(b))
+        })
+        .map(|b| b.font_size)
+        .filter(|s| *s > 1.0)
+}
+
+/// Dos cajas que se pisan de verdad (más de un pelo).
+fn se_pisan(a: &Rect, b: &Rect) -> bool {
+    let solape = (a.x + a.w).min(b.x + b.w) - a.x.max(b.x);
+    let alto = (a.y + a.h).min(b.y + b.h) - a.y.max(b.y);
+    solape > 2.0 && alto > 2.0
+}
+
+/// El nombre del campo a partir del texto de al lado: «Nombre y
+/// apellidos:» → `nombre_y_apellidos`. Sin tildes ni eñes porque el `/T` de
+/// un campo lo leen otros programas y una cadena literal con acentos se lee
+/// mal fuera de aquí.
+fn nombre_de_campo(texto: &str) -> String {
+    let limpio: String = texto
+        .trim()
+        .trim_end_matches([':', '.', '·', '-', '—', ' '])
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(sin_tilde)
+        .collect();
+    let mut out = String::new();
+    for c in limpio.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else if !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    let out = out.trim_matches('_').to_string();
+    let out: String = out.chars().take(40).collect();
+    if out.is_empty() {
+        "campo".to_string()
+    } else {
+        out
+    }
+}
+
+fn sin_tilde(c: char) -> char {
+    match c {
+        'á' | 'à' | 'ä' | 'â' => 'a',
+        'é' | 'è' | 'ë' | 'ê' => 'e',
+        'í' | 'ì' | 'ï' | 'î' => 'i',
+        'ó' | 'ò' | 'ö' | 'ô' => 'o',
+        'ú' | 'ù' | 'ü' | 'û' => 'u',
+        'ñ' => 'n',
+        'ç' => 'c',
+        otro => otro,
+    }
+}
+
+/// Desempata los nombres repetidos: `nombre`, `nombre_2`, `nombre_3`…
+fn unico(base: &str, usados: &mut Vec<String>) -> String {
+    let mut nombre = base.to_string();
+    let mut n = 2;
+    while usados.contains(&nombre) {
+        nombre = format!("{base}_{n}");
+        n += 1;
+    }
+    usados.push(nombre.clone());
+    nombre
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tests::crea_pdf;
+
+    /// Un formulario **impreso** de prueba: rótulos con dos puntos, tres
+    /// renglones de subrayado, dos casillas y una fila de tres opciones,
+    /// que es como se imprimen los formularios de verdad.
+    fn formulario_impreso(dest: &std::path::Path) {
+        let dest = dest.to_path_buf();
+        crate::historial::borra_instantaneas_en_disco(&dest.to_string_lossy());
+        on_pdfium_thread(move || {
+            let pdfium = crate::pdfium().expect("libpdfium");
+            let mut doc = pdfium.create_new_pdf().expect("documento");
+            let font = doc.fonts_mut().helvetica();
+            let mut page = doc
+                .pages_mut()
+                .create_page_at_end(PdfPagePaperSize::a4())
+                .expect("página");
+            let negro = PdfColor::new(0, 0, 0, 255);
+            let texto = |page: &mut PdfPage<'static>, t: &str, x: f32, y: f32| {
+                let mut obj = PdfPageTextObject::new(&doc, t, font, PdfPoints::new(11.0))
+                    .expect("texto");
+                obj.translate(PdfPoints::new(x), PdfPoints::new(y)).expect("colocar");
+                page.objects_mut().add_text_object(obj).expect("añadir");
+            };
+            // tres renglones con su rótulo delante
+            for (i, rotulo) in ["Nombre y apellidos:", "Domicilio:", "DNI:"]
+                .iter()
+                .enumerate()
+            {
+                let y = 700.0 - i as f32 * 40.0;
+                texto(&mut page, rotulo, 60.0, y);
+                let linea = PdfPagePathObject::new_line(
+                    &doc,
+                    PdfPoints::new(200.0),
+                    PdfPoints::new(y - 2.0),
+                    PdfPoints::new(460.0),
+                    PdfPoints::new(y - 2.0),
+                    negro,
+                    PdfPoints::new(1.0),
+                )
+                .expect("renglón");
+                page.objects_mut().add_path_object(linea).expect("añadir");
+            }
+            // dos casillas, cada una con su texto a la derecha
+            for (i, etiqueta) in ["Acepto las condiciones", "Quiero recibir avisos"]
+                .iter()
+                .enumerate()
+            {
+                let y = 560.0 - i as f32 * 30.0;
+                let caja = PdfPagePathObject::new_rect(
+                    &doc,
+                    PdfRect::new(
+                        PdfPoints::new(y),
+                        PdfPoints::new(60.0),
+                        PdfPoints::new(y + 12.0),
+                        PdfPoints::new(72.0),
+                    ),
+                    Some(negro),
+                    Some(PdfPoints::new(1.0)),
+                    None,
+                )
+                .expect("casilla");
+                page.objects_mut().add_path_object(caja).expect("añadir");
+                texto(&mut page, etiqueta, 80.0, y + 2.0);
+            }
+            // una fila de tres opciones, encabezada por su rótulo
+            texto(&mut page, "Sexo:", 60.0, 470.0);
+            for (i, opcion) in ["Hombre", "Mujer", "Otro"].iter().enumerate() {
+                let x = 110.0 + i as f32 * 90.0;
+                let caja = PdfPagePathObject::new_rect(
+                    &doc,
+                    PdfRect::new(
+                        PdfPoints::new(468.0),
+                        PdfPoints::new(x),
+                        PdfPoints::new(478.0),
+                        PdfPoints::new(x + 10.0),
+                    ),
+                    Some(negro),
+                    Some(PdfPoints::new(1.0)),
+                    None,
+                )
+                .expect("opción");
+                page.objects_mut().add_path_object(caja).expect("añadir");
+                texto(&mut page, opcion, x + 16.0, 470.0);
+            }
+            page.regenerate_content().expect("contenido");
+            drop(page);
+            doc.save_to_file(&dest).expect("guardar");
+        })
+    }
+
+    /// **H7.** «Preparar formulario» de Acrobat pasa el documento, propone
+    /// los campos que ha encontrado con el nombre sacado del texto de al
+    /// lado y deja corregir **antes** de aceptar. Aquí, además, no se
+    /// escribe nada hasta que se dice que sí: una heurística no acierta
+    /// siempre y no puede fingir que sí.
+    #[test]
+    fn reconocer_campos_propone_sin_escribir_nada() {
+        let pdf = std::env::temp_dir().join("formularios2-reconocer.pdf");
+        formulario_impreso(&pdf);
+        let work = pdf.to_string_lossy().into_owned();
+
+        let propuestas = detect_form_fields(work.clone(), None).expect("reconocer");
+        assert_eq!(
+            propuestas.len(),
+            8,
+            "tres renglones, dos casillas y tres opciones: {:?}",
+            propuestas
+                .iter()
+                .map(|c| (c.kind.as_str(), c.name.as_str()))
+                .collect::<Vec<_>>()
+        );
+
+        // el tipo sale de la forma: renglón → texto, cuadro suelto →
+        // casilla, cuadros alineados → opciones de un grupo
+        let de = |k: &str| -> Vec<&CampoPropuesto> {
+            propuestas.iter().filter(|c| c.kind == k).collect()
+        };
+        assert_eq!(de("text").len(), 3);
+        assert_eq!(de("checkbox").len(), 2);
+        assert_eq!(de("radio").len(), 3);
+
+        // el nombre sale del texto de al lado, limpio de dos puntos y de
+        // espacios, y sin tildes: el `/T` lo leen otros programas
+        let nombres: Vec<&str> = propuestas.iter().map(|c| c.name.as_str()).collect();
+        assert!(
+            nombres.contains(&"nombre_y_apellidos"),
+            "los nombres: {nombres:?}"
+        );
+        assert!(nombres.contains(&"domicilio"), "los nombres: {nombres:?}");
+        assert!(nombres.contains(&"dni"), "los nombres: {nombres:?}");
+        assert!(
+            nombres.contains(&"acepto_las_condiciones"),
+            "la casilla toma el texto de su derecha: {nombres:?}"
+        );
+
+        // las tres opciones son del MISMO grupo, y el grupo lo encabeza el
+        // texto que va delante de la fila
+        let grupos: Vec<&str> = de("radio").iter().map(|c| c.group.as_str()).collect();
+        assert_eq!(grupos, vec!["sexo"; 3], "un solo grupo: {grupos:?}");
+        let opciones: Vec<&str> = de("radio").iter().map(|c| c.name.as_str()).collect();
+        assert!(opciones.contains(&"hombre") && opciones.contains(&"mujer"));
+
+        // el campo de texto va ENCIMA del renglón, no debajo ni encima del
+        // rótulo: se escribe donde se escribiría a mano
+        let renglon = de("text")
+            .into_iter()
+            .find(|c| c.name == "nombre_y_apellidos")
+            .expect("el renglón del nombre");
+        assert!(renglon.rect.x > 190.0, "empieza donde empieza la raya");
+        assert!(renglon.rect.h > 10.0 && renglon.rect.h < 30.0, "alto de un renglón");
+        assert!(
+            propuestas.iter().all(|c| c.confianza > 0.0 && c.confianza <= 1.0),
+            "la confianza va de 0 a 1"
+        );
+
+        // **nada se ha escrito**: el documento sigue sin formulario
+        assert!(
+            get_form_fields_vacio(&work),
+            "reconocer no puede tocar el documento"
+        );
+
+        // y crear el lote entero es UN paso de deshacer
+        let pasos = crate::historial::history_state(work.clone()).expect("historial").undo;
+        let lote: Vec<CampoNuevo> = propuestas
+            .iter()
+            .map(|c| CampoNuevo {
+                page_index: c.page_index,
+                kind: c.kind.clone(),
+                rect: c.rect.clone(),
+                name: c.name.clone(),
+                group: (!c.group.is_empty()).then(|| c.group.clone()),
+                export_value: Some(c.name.clone()),
+                options: None,
+                props: None,
+            })
+            .collect();
+        let creados = create_form_fields(work.clone(), lote).expect("crear el lote");
+        assert_eq!(creados, 8);
+        assert_eq!(
+            crate::historial::history_state(work.clone()).expect("historial").undo,
+            pasos + 1,
+            "ocho campos, un solo ⌘Z"
+        );
+        let campos = crate::formularios::get_form_fields(work.clone(), 0).expect("campos");
+        assert_eq!(campos.len(), 8, "los ocho widgets cuelgan de la página");
+        crate::historial::undo(work.clone()).expect("deshacer");
+        assert!(get_form_fields_vacio(&work), "un ⌘Z devuelve el formulario entero");
+
+        // y un documento sin nada que parezca campo devuelve la lista vacía
+        // sin error, que es lo que hay que contestar
+        let liso = std::env::temp_dir().join("formularios2-sin-campos.pdf");
+        crea_pdf(&["Solo texto corrido, sin renglones ni cuadros"], &liso);
+        let vacio = detect_form_fields(liso.to_string_lossy().into_owned(), None)
+            .expect("un documento liso no es un error");
+        assert!(vacio.is_empty(), "no había nada que proponer: {vacio:?}");
+        std::fs::remove_file(&liso).ok();
+        std::fs::remove_file(&pdf).ok();
+    }
+
+    fn get_form_fields_vacio(work: &str) -> bool {
+        crate::formularios::get_form_fields(work.to_string(), 0)
+            .map(|c| c.is_empty())
+            .unwrap_or(true)
+    }
 
     /// **H2.** Un grupo de tres radios es **un solo campo** con tres
     /// `/Kids`, no tres campos que se marcan a la vez. Ese es el defecto de

@@ -253,6 +253,8 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "export_docx" => cmd!(exportar::export_docx, { work_path: String, dest_path: String, page_indices: Option<Vec<u16>> }),
         "compress_pdf" => cmd!(exportar::compress_pdf, { work_path: String, quality: u8, max_dpi: u16 }),
         "create_form_field" => cmd!(crate::formularios2::create_form_field, { work_path: String, page_index: u16, kind: String, rect: crate::Rect, name: String, group: Option<String>, export_value: Option<String>, options: Option<Vec<String>>, props: Option<crate::formularios2::PropsCampo> }),
+        "create_form_fields" => cmd!(crate::formularios2::create_form_fields, { work_path: String, fields: Vec<crate::formularios2::CampoNuevo> }),
+        "detect_form_fields" => cmd!(crate::formularios2::detect_form_fields, { work_path: String, page_indices: Option<Vec<u16>> }),
         "delete_form_field" => cmd!(crate::formularios2::delete_form_field, { work_path: String, name: String }),
         "create_link" => cmd!(crate::formularios2::create_link, { work_path: String, page_index: u16, rect: crate::Rect, uri: Option<String>, dest_page: Option<u16> }),
         "close_document" => cmd!(crate::close_document, { work_path: String }),
@@ -446,7 +448,19 @@ mod tests {
     /// nadie llama es trabajo que no ha llegado al usuario. Se admite una
     /// excepción mientras las dos mitades se escriben en paralelo, y se
     /// quita al integrar.
-    const NADIE_LLAMA: &[(&str, &str)] = &[(
+    const NADIE_LLAMA: &[(&str, &str)] = &[
+        (
+            "detect_form_fields",
+            "pendiente_ui — H7: «Reconocer campos…». Solo propone, no \
+             escribe; la UI del ciclo 7 pinta las propuestas sobre la página \
+             para repasarlas antes de crear nada",
+        ),
+        (
+            "create_form_fields",
+            "pendiente_ui — H7: crear el lote aceptado en una sola cirugía, \
+             para que un ⌘Z devuelva el formulario entero",
+        ),
+        (
         "erase_ink_area",
         "pendiente_ui — R34b: la goma de una pasada. La UI del ciclo 7 deja \
          de recorrer los `annots` y llama a este; hasta entonces sigue \
