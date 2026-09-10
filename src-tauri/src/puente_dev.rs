@@ -231,9 +231,9 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "replace_image" => cmd!(imagenes::replace_image, { work_path: String, page_index: u16, object_index: u32, image_path: String }),
         "crop_image" => cmd!(imagenes::crop_image, { work_path: String, page_index: u16, object_index: u32, rect: crate::Rect }),
         "delete_image" => cmd!(imagenes::delete_image, { work_path: String, page_index: u16, object_index: u32 }),
-        "sign_pdf" => cmd!(crate::sign_pdf, { work_path: String, dest_path: String, cert_pem_path: String, key_pem_path: String, reason: Option<String>, rect: Option<crate::Rect>, page_index: Option<u16>, signer_name: Option<String>, signature_png: Option<String> }),
-        "certify_pdf" => cmd!(crate::certify_pdf, { work_path: String, dest_path: String, nivel: u8, cert_pem_path: Option<String>, key_pem_path: Option<String>, p12_path: Option<String>, password: Option<String>, reason: Option<String>, rect: Option<crate::Rect>, page_index: Option<u16>, signer_name: Option<String>, signature_png: Option<String> }),
-        "sign_pdf_p12" => cmd!(crate::sign_pdf_p12, { work_path: String, dest_path: String, p12_path: String, password: String, reason: Option<String>, rect: Option<crate::Rect>, page_index: Option<u16>, signer_name: Option<String>, signature_png: Option<String> }),
+        "sign_pdf" => cmd!(crate::sign_pdf, { work_path: String, dest_path: String, cert_pem_path: String, key_pem_path: String, reason: Option<String>, rect: Option<crate::Rect>, page_index: Option<u16>, signer_name: Option<String>, signature_png: Option<String>, tsa_url: Option<String>, ltv: Option<bool> }),
+        "certify_pdf" => cmd!(crate::certify_pdf, { work_path: String, dest_path: String, nivel: u8, cert_pem_path: Option<String>, key_pem_path: Option<String>, p12_path: Option<String>, password: Option<String>, reason: Option<String>, rect: Option<crate::Rect>, page_index: Option<u16>, signer_name: Option<String>, signature_png: Option<String>, tsa_url: Option<String>, ltv: Option<bool> }),
+        "sign_pdf_p12" => cmd!(crate::sign_pdf_p12, { work_path: String, dest_path: String, p12_path: String, password: String, reason: Option<String>, rect: Option<crate::Rect>, page_index: Option<u16>, signer_name: Option<String>, signature_png: Option<String>, tsa_url: Option<String>, ltv: Option<bool> }),
         "verify_signatures" => cmd!(firma::verify_signatures, { path: String }),
         "stamp_signature" => cmd!(firmas_visuales::stamp_signature, { work_path: String, page_index: u16, png_base64: String, x: f32, y: f32, w: f32, h: f32 }),
         "import_signature_file" => cmd!(firmas_visuales::import_signature_file, { image_path: String, ranura: Option<String> }),
@@ -570,6 +570,18 @@ mod tests {
     /// puede llegar a ella. Fue el estado exacto de `char_spacing` durante
     /// un ciclo entero. La lista tiene que quedar vacía al cerrar el ciclo.
     const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[
+        (
+            "sign_pdf",
+            "tsa_url",
+            "ciclo 9: el bloque «Avanzado» del diálogo de firmar llega con la interfaz",
+        ),
+        ("sign_pdf", "ltv", "ciclo 9: ídem, la casilla de guardar la prueba de validez"),
+        (
+            "sign_pdf_p12",
+            "tsa_url",
+            "ciclo 9: ídem, con el certificado en un .p12",
+        ),
+        ("sign_pdf_p12", "ltv", "ciclo 9: ídem"),
         (
             "add_measure",
             "escala",

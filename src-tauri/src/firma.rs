@@ -13,7 +13,11 @@ use sha2::{Digest, Sha256};
 use x509_cert::spki::AlgorithmIdentifierOwned;
 
 /// Hueco reservado para la firma DER dentro de /Contents (en bytes).
-const SIG_LEN: usize = 8192;
+// el hueco reservado para el PKCS#7. Con sello de tiempo el CMS crece lo
+// que ocupe el token de la autoridad (unos 4 KB con su cadena), así que
+// desde el ciclo 9 hay sitio de sobra: el hueco es relleno, no pesa nada
+// que importe.
+const SIG_LEN: usize = 16384;
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
@@ -23,6 +27,11 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 pub struct Credenciales {
     cert: x509_cert::Certificate,
     key: rsa::RsaPrivateKey,
+    /// La cadena que venga con el certificado (los intermedios, sin el
+    /// del firmante). Un `.p12` la trae y hasta el ciclo 9 se tiraba: sin
+    /// ella, quien verifica la firma fuera de aquí no puede subir hasta la
+    /// raíz y la marca como «emisor desconocido».
+    cadena: Vec<x509_cert::Certificate>,
 }
 
 /// Credenciales desde certificado + clave en PEM (RSA sin cifrar).
@@ -35,7 +44,7 @@ pub fn credenciales_pem(cert_pem: &str, key_pem: &str) -> Result<Credenciales, S
             rsa::RsaPrivateKey::from_pkcs1_pem(key_pem)
         })
         .map_err(|e| format!("Clave privada PEM inválida (RSA sin cifrar): {e}"))?;
-    Ok(Credenciales { cert, key })
+    Ok(Credenciales { cert, key, cadena: Vec::new() })
 }
 
 /// Credenciales desde un contenedor PKCS#12 (.p12/.pfx) con contraseña.
@@ -67,11 +76,49 @@ pub fn credenciales_p12(p12_bytes: &[u8], password: &str) -> Result<Credenciales
         .as_der();
     let cert = x509_cert::Certificate::from_der(cert_der)
         .map_err(|e| format!("Certificado del .p12 inválido: {e}"))?;
-    Ok(Credenciales { cert, key })
+    // los intermedios del contenedor viajan con la firma: es lo que deja
+    // que otro visor llegue hasta la raíz
+    let cadena = chain
+        .certs()
+        .iter()
+        .skip(1)
+        .filter_map(|c| x509_cert::Certificate::from_der(c.as_der()).ok())
+        .collect();
+    Ok(Credenciales { cert, key, cadena })
+}
+
+/// Lo que sale de firmar, para que la interfaz pueda contarlo: si la
+/// firma lleva sello de tiempo, cuál, y —si se pidió y no se pudo— por
+/// qué se ha firmado sin él.
+///
+/// Firmar sin sello **no es un fallo**: la firma vale igual y su fecha es
+/// la del reloj del que firmó, que es lo que hay que decir. Lo que no
+/// puede pasar es que la firma se caiga entera después de haber elegido
+/// dónde guardarla porque el servidor de sellado no contestaba.
+#[derive(serde::Serialize, Debug, Default)]
+pub struct InformeFirma {
+    /// ¿Lleva sello de tiempo de una autoridad?
+    pub sellada: bool,
+    /// Quién y cuándo, para enseñarlo.
+    pub sello: Option<crate::tsa::SelloDeTiempo>,
+    /// Vacío si no hay nada que contar; si no, en llano, por qué la firma
+    /// ha salido sin sello.
+    pub aviso: String,
+    /// ¿Se han archivado los certificados de la cadena en el `/DSS`?
+    pub ltv: bool,
 }
 
 /// Construye el CMS SignedData detached sobre el digest dado.
-fn build_cms(cred: &Credenciales, digest: &[u8]) -> Result<Vec<u8>, String> {
+///
+/// Con `tsa_url` se le pide a la autoridad un sello de tiempo sobre la
+/// firma ya hecha y se mete como **atributo no firmado** del SignerInfo,
+/// que es donde lo pone el RFC 3161: no toca lo firmado, así que la firma
+/// sigue valiendo si el sello no llega.
+fn build_cms(
+    cred: &Credenciales,
+    digest: &[u8],
+    tsa_url: Option<&str>,
+) -> Result<(Vec<u8>, InformeFirma), String> {
     let cert = cred.cert.clone();
     let key = cred.key.clone();
     let signer_id = SignerIdentifier::IssuerAndSerialNumber(IssuerAndSerialNumber {
@@ -96,18 +143,91 @@ fn build_cms(cred: &Credenciales, digest: &[u8]) -> Result<Vec<u8>, String> {
     )
     .map_err(|e| format!("SignerInfo: {e}"))?;
     let mut builder = SignedDataBuilder::new(&content);
-    let signed = builder
+    builder
         .add_digest_algorithm(digest_alg)
         .map_err(|e| e.to_string())?
         .add_certificate(CertificateChoices::Certificate(cert))
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    // la cadena que venga con el certificado viaja dentro de la firma
+    for intermedio in &cred.cadena {
+        builder
+            .add_certificate(CertificateChoices::Certificate(intermedio.clone()))
+            .map_err(|e| e.to_string())?;
+    }
+    let signed = builder
         .add_signer_info::<rsa::pkcs1v15::SigningKey<Sha256>, rsa::pkcs1v15::Signature>(
             si_builder,
         )
         .map_err(|e| e.to_string())?
         .build()
         .map_err(|e| e.to_string())?;
-    signed.to_der().map_err(|e| e.to_string())
+    let der = signed.to_der().map_err(|e| e.to_string())?;
+    let Some(url) = tsa_url.map(str::trim).filter(|u| !u.is_empty()) else {
+        return Ok((der, InformeFirma::default()));
+    };
+    match sella(&der, url) {
+        Ok((con_sello, sello)) => Ok((
+            con_sello,
+            InformeFirma {
+                sellada: true,
+                sello: Some(sello),
+                ..Default::default()
+            },
+        )),
+        // el sello no ha podido ser: la firma sale sin él y se dice
+        Err(aviso) => Ok((
+            der,
+            InformeFirma {
+                sellada: false,
+                sello: None,
+                aviso,
+                ltv: false,
+            },
+        )),
+    }
+}
+
+/// Le pide el sello a la autoridad sobre la firma ya hecha y lo mete en el
+/// CMS como atributo no firmado.
+fn sella(der: &[u8], url: &str) -> Result<(Vec<u8>, crate::tsa::SelloDeTiempo), String> {
+    use der::{Decode, Encode, Reader};
+    let ci: cms::content_info::ContentInfo = {
+        let mut reader = der::SliceReader::new(der).map_err(|e| e.to_string())?;
+        reader.decode().map_err(|e| e.to_string())?
+    };
+    let mut sd: cms::signed_data::SignedData =
+        ci.content.decode_as().map_err(|e| e.to_string())?;
+    let firma = sd
+        .signer_infos
+        .0
+        .as_slice()
+        .first()
+        .ok_or("La firma no tiene firmante")?
+        .signature
+        .as_bytes()
+        .to_vec();
+    let token = crate::tsa::pide_token(url, &firma)?;
+    let sello = crate::tsa::lee_sello(&token)
+        .ok_or("El sello de tiempo que ha devuelto el servidor no se ha podido leer")?;
+    let valor = der::Any::from_der(&token).map_err(|e| e.to_string())?;
+    let atributo = x509_cert::attr::Attribute {
+        oid: crate::tsa::OID_TOKEN,
+        values: der::asn1::SetOfVec::try_from(vec![valor]).map_err(|e| e.to_string())?,
+    };
+    let mut infos: Vec<cms::signed_data::SignerInfo> = sd.signer_infos.0.iter().cloned().collect();
+    let unsigned = der::asn1::SetOfVec::try_from(vec![atributo]).map_err(|e| e.to_string())?;
+    infos[0].unsigned_attrs = Some(unsigned);
+    // el SignerInfo con atributos no firmados es de versión 1 igual: lo que
+    // sube la versión son el sid y el tipo de contenido, que no cambian
+    sd.signer_infos = cms::signed_data::SignerInfos(
+        der::asn1::SetOfVec::try_from(infos).map_err(|e| e.to_string())?,
+    );
+    let contenido = der::Any::encode_from(&sd).map_err(|e| e.to_string())?;
+    let nuevo = cms::content_info::ContentInfo {
+        content_type: const_oid::db::rfc5911::ID_SIGNED_DATA,
+        content: contenido,
+    };
+    Ok((nuevo.to_der().map_err(|e| e.to_string())?, sello))
 }
 
 /// ¿Lleva el fichero una firma digital? Se mira el `/ByteRange`, que es lo
@@ -340,6 +460,7 @@ fn escribe_campo_de_firma(
     apariencia: &Apariencia,
     ordinal: usize,
     certifica: Option<u8>,
+    ltv: bool,
 ) -> Result<(), String> {
     // diccionario de firma con huecos para ByteRange y Contents
     let mut sig = Dictionary::new();
@@ -393,6 +514,20 @@ fn escribe_campo_de_firma(
         );
     }
     let sig_id = destino.add_object(sig);
+    // los certificados del `/DSS`, si se ha pedido archivarlos. Se crean
+    // aquí porque dentro del `cambia` del catálogo ya no se puede añadir
+    // objetos al documento
+    let dss_id: Option<Vec<Object>> = ltv.then(|| {
+        std::iter::once(&cred.cert)
+            .chain(cred.cadena.iter())
+            .filter_map(|c| c.to_der().ok())
+            .map(|der| {
+                let mut s = lopdf::Stream::new(Dictionary::new(), der);
+                let _ = s.compress();
+                Object::Reference(destino.add_object(Object::Stream(s)))
+            })
+            .collect()
+    });
 
     // widget de firma: invisible sin `rect`, y con su propia apariencia si
     // la UI dibujó el rectángulo (que es como firma Acrobat)
@@ -527,6 +662,15 @@ fn escribe_campo_de_firma(
             perms.set("DocMDP", Object::Reference(sig_id));
             catalog.set("Perms", Object::Dictionary(perms));
         }
+        if let Some(dss) = dss_id {
+            // **LTV**: los certificados de la cadena archivados en el
+            // documento, para poder seguir comprobando la firma dentro de
+            // años sin ir a buscarlos a ninguna parte
+            let mut d = Dictionary::new();
+            d.set("Type", Object::Name(b"DSS".to_vec()));
+            d.set("Certs", Object::Array(dss));
+            catalog.set("DSS", Object::Dictionary(d));
+        }
         Ok(())
     })
 }
@@ -538,7 +682,12 @@ fn escribe_campo_de_firma(
 /// `desde` es el byte a partir del cual buscar: en una actualización
 /// incremental, el principio de la revisión nueva, porque delante hay otra
 /// firma con su propio `/ByteRange` y su propio `/Contents`.
-fn cose_la_firma(out: &mut [u8], desde: usize, cred: &Credenciales) -> Result<(), String> {
+fn cose_la_firma(
+    out: &mut [u8],
+    desde: usize,
+    cred: &Credenciales,
+    tsa_url: Option<&str>,
+) -> Result<InformeFirma, String> {
     let marker: Vec<u8> = {
         let mut v = vec![b'<'];
         v.extend(std::iter::repeat_n(b'0', SIG_LEN * 2));
@@ -578,13 +727,13 @@ fn cose_la_firma(out: &mut [u8], desde: usize, cred: &Credenciales) -> Result<()
     hasher.update(&out[..contents_start]);
     hasher.update(&out[contents_end..]);
     let digest = hasher.finalize();
-    let der = build_cms(cred, &digest)?;
+    let (der, informe) = build_cms(cred, &digest, tsa_url)?;
     if der.len() > SIG_LEN {
         return Err("La firma no cabe en el hueco reservado".into());
     }
     let hex: String = der.iter().map(|byte| format!("{byte:02X}")).collect();
     out[contents_start + 1..contents_start + 1 + hex.len()].copy_from_slice(hex.as_bytes());
-    Ok(())
+    Ok(informe)
 }
 
 /// Cuántas veces aparece `aguja` en `pajar`.
@@ -615,8 +764,23 @@ pub fn sign(
     cred: &Credenciales,
     reason: Option<String>,
     apariencia: &Apariencia,
-) -> Result<(), String> {
-    firma_o_certifica(src_path, dest_path, cred, reason, apariencia, None)
+    avanzado: &Avanzado,
+) -> Result<InformeFirma, String> {
+    firma_o_certifica(src_path, dest_path, cred, reason, apariencia, None, avanzado)
+}
+
+/// Lo que la interfaz pide en el bloque «Avanzado» del diálogo de firmar,
+/// apagado por defecto porque las dos cosas necesitan red.
+#[derive(Default, Debug, Clone)]
+pub struct Avanzado {
+    /// La dirección del servidor de tiempo (RFC 3161). Sin ella, la firma
+    /// lleva la fecha del reloj del que firma, que es lo que hay que
+    /// contar.
+    pub tsa_url: Option<String>,
+    /// Archivar los certificados de la cadena en el `/DSS` del documento,
+    /// para que la firma se pueda seguir comprobando dentro de años sin
+    /// tener que ir a buscarlos.
+    pub ltv: bool,
 }
 
 /// **Certificar el documento** (Acrobat: «Certificar con firma visible»).
@@ -629,6 +793,7 @@ pub fn sign(
 /// documento entero, y detrás de otra firma ya hay bytes que esta no ha
 /// visto. El spec lo dice y los visores lo comprueban; decirlo antes es
 /// mejor que escribir un documento que Acrobat marcará en rojo.
+#[allow(clippy::too_many_arguments)]
 pub fn certify(
     src_path: &str,
     dest_path: &str,
@@ -636,7 +801,8 @@ pub fn certify(
     reason: Option<String>,
     apariencia: &Apariencia,
     nivel: u8,
-) -> Result<(), String> {
+    avanzado: &Avanzado,
+) -> Result<InformeFirma, String> {
     if !(1..=3).contains(&nivel) {
         return Err("El nivel de certificación es 1, 2 o 3".into());
     }
@@ -647,9 +813,10 @@ pub fn certify(
                 .into(),
         );
     }
-    firma_o_certifica(src_path, dest_path, cred, reason, apariencia, Some(nivel))
+    firma_o_certifica(src_path, dest_path, cred, reason, apariencia, Some(nivel), avanzado)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn firma_o_certifica(
     src_path: &str,
     dest_path: &str,
@@ -657,7 +824,8 @@ fn firma_o_certifica(
     reason: Option<String>,
     apariencia: &Apariencia,
     certifica: Option<u8>,
-) -> Result<(), String> {
+    avanzado: &Avanzado,
+) -> Result<InformeFirma, String> {
     let bytes =
         std::fs::read(src_path).map_err(|e| format!("No se ha podido leer el PDF: {e}"))?;
     let doc =
@@ -681,6 +849,7 @@ fn firma_o_certifica(
             apariencia,
             ordinal,
             certifica,
+            avanzado.ltv,
         )?;
         let mut out = Vec::new();
         inc.save_to(&mut out)
@@ -696,14 +865,18 @@ fn firma_o_certifica(
             apariencia,
             ordinal,
             certifica,
+            avanzado.ltv,
         )?;
         let mut out = Vec::new();
         doc.save_to(&mut out)
             .map_err(|e| format!("No se ha podido serializar: {e}"))?;
         (out, 0)
     };
-    cose_la_firma(&mut out, desde, cred)?;
-    std::fs::write(dest_path, &out).map_err(|e| format!("No se ha podido escribir: {e}"))
+    let mut informe = cose_la_firma(&mut out, desde, cred, avanzado.tsa_url.as_deref())?;
+    informe.ltv = avanzado.ltv;
+    std::fs::write(dest_path, &out)
+        .map_err(|e| format!("No se ha podido escribir: {e}"))?;
+    Ok(informe)
 }
 
 /// Lo que se sabe de una firma tras comprobarla, en el lenguaje de la UI:
@@ -797,6 +970,11 @@ pub struct FirmaInfo {
     /// diccionario de firma y, si el catálogo señala esta firma en su
     /// `/Perms /DocMDP` sin nivel escrito, del defecto del spec (2).
     pub certifica: Option<u8>,
+    /// **La hora sellada por una autoridad** (RFC 3161), si la firma la
+    /// lleva. Es la diferencia entre «firmado el 10 de septiembre» y «el
+    /// 10 de septiembre según el reloj del que firmó»: sin sello, la fecha
+    /// la pone quien firma y Vitela la enseñaba como si fuera un hecho.
+    pub sello_de_tiempo: Option<crate::tsa::SelloDeTiempo>,
 }
 
 /// Firma comprobada y documento intacto.
@@ -1032,6 +1210,7 @@ fn lee_firma(
         // documento, no de esta firma
         documento_intacto: false,
         certifica,
+        sello_de_tiempo: None,
     };
     let rangos: Vec<usize> = sig
         .get(b"ByteRange")
@@ -1066,6 +1245,7 @@ fn lee_firma(
         info.not_yet_valid = cms.not_yet_valid;
         info.self_signed = cms.self_signed;
         info.confianza = cms.confianza;
+        info.sello_de_tiempo = cms.sello;
         info.algoritmo = cms.algoritmo;
         // el hash del /ByteRange se calcula con el algoritmo que declara la
         // firma, no siempre SHA-256: con SHA-384 o SHA-512 el documento
@@ -1167,6 +1347,8 @@ struct DatosCms {
     self_signed: bool,
     /// Ver `confianza.rs`.
     confianza: String,
+    /// El sello de tiempo de una autoridad, si la firma lo lleva.
+    sello: Option<crate::tsa::SelloDeTiempo>,
 }
 
 /// ¿El certificado está fuera de su periodo de validez, y por qué lado?
@@ -1259,7 +1441,18 @@ fn lee_cms(der_con_relleno: &[u8]) -> Option<DatosCms> {
         expired: fuera,
         not_yet_valid: todavia_no,
         confianza,
+        sello: sello_de(signer),
     })
+}
+
+/// El sello de tiempo que viaje en los atributos **no firmados** del
+/// SignerInfo, que es donde lo pone el RFC 3161.
+fn sello_de(signer: &cms::signed_data::SignerInfo) -> Option<crate::tsa::SelloDeTiempo> {
+    use der::Encode;
+    let attrs = signer.unsigned_attrs.as_ref()?;
+    let token = attrs.iter().find(|a| a.oid == crate::tsa::OID_TOKEN)?;
+    let der = token.values.iter().next()?.to_der().ok()?;
+    crate::tsa::lee_sello(&der)
 }
 
 /// El certificado que señala el `SignerIdentifier` (emisor + número de
@@ -1552,6 +1745,7 @@ mod tests {
             &credenciales(),
             None,
             &Apariencia::default(),
+            &Avanzado::default(),
         )
         .expect("firmar");
         let f = &verify_signatures(dest.to_string_lossy().into_owned()).expect("verificar")[0];
@@ -1665,6 +1859,7 @@ mod tests {
             &credenciales(),
             None,
             &ap,
+            &Avanzado::default(),
         )
         .expect("firmar");
         let ruta = dest.to_string_lossy().into_owned();
@@ -1871,6 +2066,185 @@ mod tests {
         ci.to_der().expect("ContentInfo")
     }
 
+    /// Un servidor de tiempo de mentira: escucha en localhost, contesta a
+    /// una petición RFC 3161 con un token firmado por nuestro propio
+    /// certificado de prueba y se apaga. Devuelve su URL.
+    fn tsa_de_mentira(cuando: &str) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        let escucha = std::net::TcpListener::bind("127.0.0.1:0").expect("escuchar");
+        let url = format!("http://{}/tsr", escucha.local_addr().expect("puerto"));
+        let token = token_de_mentira(cuando);
+        let hilo = std::thread::spawn(move || {
+            let Ok((mut cliente, _)) = escucha.accept() else { return };
+            // se lee la petición **entera** antes de contestar: cerrar el
+            // socket con bytes sin leer manda un RST y el cliente se queda
+            // sin respuesta. Lo que mande no se mira: lo que se prueba
+            // aquí es que Vitela sabe meter el token en el CMS y volver a
+            // leerlo
+            let mut peticion = Vec::new();
+            let mut buf = [0u8; 1024];
+            while let Ok(n) = cliente.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                peticion.extend_from_slice(&buf[..n]);
+                let entera = peticion
+                    .windows(4)
+                    .position(|v| v == b"\r\n\r\n")
+                    .map(|corte| {
+                        let cabecera = String::from_utf8_lossy(&peticion[..corte]).to_lowercase();
+                        let largo = cabecera
+                            .split("content-length:")
+                            .nth(1)
+                            .and_then(|t| t.split(['\r', '\n']).next())
+                            .and_then(|t| t.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        peticion.len() >= corte + 4 + largo
+                    })
+                    .unwrap_or(false);
+                if entera {
+                    break;
+                }
+            }
+            let respuesta = super::super::tsa::respuesta_de_prueba(&token);
+            let cabeceras = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/timestamp-reply\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n",
+                respuesta.len()
+            );
+            let _ = cliente.write_all(cabeceras.as_bytes());
+            let _ = cliente.write_all(&respuesta);
+            let _ = cliente.flush();
+        });
+        (url, hilo)
+    }
+
+    /// Un `TimeStampToken` de verdad —un CMS con un `TSTInfo` dentro—
+    /// firmado con el certificado de prueba.
+    fn token_de_mentira(cuando: &str) -> Vec<u8> {
+        use der::asn1::{Any, OctetString, SetOfVec};
+        use der::{Decode, Tag};
+        let cred = credenciales();
+        // TSTInfo: versión, política, imprint, serie y la hora
+        let tst = crate::tsa::tst_de_prueba(cuando);
+        let content = EncapsulatedContentInfo {
+            econtent_type: crate::tsa::OID_TSTINFO,
+            econtent: Some(
+                Any::new(Tag::OctetString, tst.as_slice()).expect("eContent"),
+            ),
+        };
+        let alg = |oid| AlgorithmIdentifierOwned { oid, parameters: None };
+        let signer = cms::signed_data::SignerInfo {
+            version: cms::content_info::CmsVersion::V1,
+            sid: SignerIdentifier::IssuerAndSerialNumber(IssuerAndSerialNumber {
+                issuer: cred.cert.tbs_certificate.issuer.clone(),
+                serial_number: cred.cert.tbs_certificate.serial_number.clone(),
+            }),
+            digest_alg: alg(const_oid::db::rfc5912::ID_SHA_256),
+            signed_attrs: None,
+            signature_algorithm: alg(const_oid::db::rfc5912::SHA_256_WITH_RSA_ENCRYPTION),
+            signature: OctetString::new(vec![0u8; 32]).expect("firma"),
+            unsigned_attrs: None,
+        };
+        let mut bolso = SetOfVec::new();
+        bolso
+            .insert(CertificateChoices::Certificate(cred.cert.clone()))
+            .expect("certificado");
+        let sd = cms::signed_data::SignedData {
+            version: cms::content_info::CmsVersion::V1,
+            digest_algorithms: {
+                let mut v = SetOfVec::new();
+                v.insert(alg(const_oid::db::rfc5912::ID_SHA_256)).expect("alg");
+                v
+            },
+            encap_content_info: content,
+            certificates: Some(bolso.into()),
+            crls: None,
+            signer_infos: cms::signed_data::SignerInfos(
+                SetOfVec::from_iter([signer]).expect("signer"),
+            ),
+        };
+        let der = sd.to_der().expect("SignedData");
+        cms::content_info::ContentInfo {
+            content_type: const_oid::db::rfc5911::ID_SIGNED_DATA,
+            content: Any::from_der(&der).expect("any"),
+        }
+        .to_der()
+        .expect("ContentInfo")
+    }
+
+    /// **El sello de tiempo, de punta a punta** (orden 4.1 del ciclo 9).
+    /// La fecha de una firma sin sello es la del reloj del que firmó, y
+    /// Vitela la enseñaba como si fuera un hecho. Con sello, quien
+    /// responde por la hora es un tercero, y eso es lo que hay que poder
+    /// enseñar en la tarjeta.
+    #[test]
+    fn firmar_con_sello_de_tiempo_lo_mete_en_el_cms_y_se_vuelve_a_leer() {
+        let dir = std::env::temp_dir();
+        let src = dir.join("firma-tsa-src.pdf");
+        let dest = dir.join("firma-tsa-firmado.pdf");
+        crea_pdf(&["Contrato con hora"], &src);
+        let (url, hilo) = tsa_de_mentira("20260910194012Z");
+
+        let informe = sign(
+            &src.to_string_lossy(),
+            &dest.to_string_lossy(),
+            &credenciales(),
+            None,
+            &Apariencia::default(),
+            &Avanzado { tsa_url: Some(url), ltv: true },
+        )
+        .expect("firmar con sello");
+        let _ = hilo.join();
+
+        assert!(informe.sellada, "el informe tiene que decir que va sellada: {}", informe.aviso);
+        assert!(informe.aviso.is_empty(), "sin aviso: {}", informe.aviso);
+        let sello = informe.sello.expect("el sello");
+        assert_eq!(sello.fecha, "2026-09-10T19:40:12+00:00");
+        assert!(!sello.autoridad.is_empty(), "quién ha sellado");
+
+        // y se vuelve a leer del documento: es lo que enseña la tarjeta
+        let firmas = verify_signatures(dest.to_string_lossy().into_owned()).expect("verificar");
+        assert_eq!(firmas.len(), 1);
+        assert_eq!(firmas[0].estado, "ok", "el sello no puede romper la firma");
+        let leido = firmas[0].sello_de_tiempo.as_ref().expect("el sello leído");
+        assert_eq!(leido.fecha, "2026-09-10T19:40:12+00:00");
+
+        // LTV: los certificados archivados en el /DSS del catálogo
+        let texto = String::from_utf8_lossy(&std::fs::read(&dest).expect("leer")).to_string();
+        assert!(texto.contains("/DSS"), "sin /DSS no hay nada archivado");
+
+        // **sin servidor, la firma sale igual y se dice por qué**: lo que
+        // no puede pasar es que se caiga después de elegir el destino
+        let sin_red = dir.join("firma-tsa-sin-red.pdf");
+        let informe = sign(
+            &src.to_string_lossy(),
+            &sin_red.to_string_lossy(),
+            &credenciales(),
+            None,
+            &Apariencia::default(),
+            &Avanzado {
+                tsa_url: Some("http://127.0.0.1:9/tsr".into()),
+                ltv: false,
+            },
+        )
+        .expect("firmar sin sello no es un fallo");
+        assert!(!informe.sellada);
+        assert!(
+            informe.aviso.contains("servidor de tiempo"),
+            "el aviso tiene que nombrar el servidor de tiempo para que la \
+             interfaz pueda preguntar «¿firmar sin sello?»: {}",
+            informe.aviso
+        );
+        let firmas = verify_signatures(sin_red.to_string_lossy().into_owned()).expect("verificar");
+        assert_eq!(firmas[0].estado, "ok");
+        assert!(firmas[0].sello_de_tiempo.is_none());
+
+        for f in [&src, &dest, &sin_red] {
+            std::fs::remove_file(f).ok();
+        }
+    }
+
     /// Un PDF firmado por Vitela, para recoserle otra firma encima.
     fn pdf_firmado(nombre: &str) -> (std::path::PathBuf, Vec<u8>) {
         let dir = std::env::temp_dir();
@@ -1883,6 +2257,7 @@ mod tests {
             &credenciales(),
             None,
             &Apariencia::default(),
+            &Avanzado::default(),
         )
         .expect("firmar");
         let bytes = std::fs::read(&dest).expect("leer");
@@ -1945,6 +2320,7 @@ mod tests {
             &credenciales(),
             Some("Conforme".into()),
             &ap,
+            &Avanzado::default(),
         )
         .expect("firmar con apariencia");
 
@@ -2003,6 +2379,7 @@ mod tests {
             &credenciales(),
             None,
             &Apariencia::default(),
+            &Avanzado::default(),
         )
         .expect("firmar sin apariencia");
         let f = &verify_signatures(invisible.to_string_lossy().into_owned()).expect("verificar")[0];
@@ -2036,6 +2413,7 @@ mod tests {
             &credenciales(),
             None,
             &Apariencia::default(),
+            &Avanzado::default(),
         )
         .expect("firmar");
         let antes = std::fs::read(&firmado).expect("leer el firmado");
@@ -2108,6 +2486,7 @@ mod tests {
             &credenciales(),
             None,
             &Apariencia::default(),
+            &Avanzado::default(),
         )
         .expect("firmar");
         let f = &verify_signatures(dest.to_string_lossy().into_owned()).expect("verificar")[0];
@@ -2247,6 +2626,7 @@ mod tests {
             Some("Esta es la versión buena".into()),
             &Apariencia::default(),
             2,
+            &Avanzado::default(),
         )
         .expect("certificar");
 
@@ -2274,6 +2654,7 @@ mod tests {
             None,
             &Apariencia::default(),
             2,
+            &Avanzado::default(),
         )
         .unwrap_err();
         assert!(e.contains("ya lleva una firma"), "el aviso en llano: {e}");
@@ -2287,6 +2668,7 @@ mod tests {
             None,
             &Apariencia::default(),
             9,
+            &Avanzado::default(),
         )
         .unwrap_err()
         .contains("1, 2 o 3"));
@@ -2299,6 +2681,7 @@ mod tests {
             &credenciales(),
             None,
             &Apariencia::default(),
+            &Avanzado::default(),
         )
         .expect("firmar");
         assert!(
@@ -2330,6 +2713,7 @@ mod tests {
             &credenciales(),
             None,
             &Apariencia::default(),
+            &Avanzado::default(),
         )
         .expect("firmar");
         let firmas = verify_signatures(normal.to_string_lossy().into_owned()).expect("verificar");
@@ -2344,6 +2728,7 @@ mod tests {
             None,
             &Apariencia::default(),
             2,
+            &Avanzado::default(),
         )
         .expect("certificar");
         let firmas = verify_signatures(cert.to_string_lossy().into_owned()).expect("verificar");
@@ -2358,6 +2743,7 @@ mod tests {
             &otras_credenciales(),
             None,
             &Apariencia::default(),
+            &Avanzado::default(),
         )
         .expect("firmar encima");
         let firmas = verify_signatures(encima.to_string_lossy().into_owned()).expect("verificar");
@@ -2392,6 +2778,7 @@ mod tests {
             &credenciales(),
             Some("Conforme".into()),
             &Apariencia::default(),
+            &Avanzado::default(),
         )
         .expect("la primera firma");
         let primera = std::fs::read(&una).expect("leer");
@@ -2410,6 +2797,7 @@ mod tests {
                 signer_name: Some("Ada Lovelace".into()),
                 signature_png: None,
             },
+            &Avanzado::default(),
         )
         .expect("la segunda firma");
         let ambas = std::fs::read(&dos).expect("leer");
@@ -2462,6 +2850,7 @@ mod tests {
             &credenciales(),
             None,
             &Apariencia::default(),
+            &Avanzado::default(),
         )
         .expect("la tercera firma");
         let firmas = verify_signatures(tres.to_string_lossy().into_owned()).expect("verificar");
@@ -2499,6 +2888,7 @@ mod tests {
             &credenciales(),
             None,
             &Apariencia::default(),
+            &Avanzado::default(),
         )
         .expect("la primera firma");
         let firmas = verify_signatures(una.to_string_lossy().into_owned()).expect("verificar");
@@ -2511,6 +2901,7 @@ mod tests {
             &otras_credenciales(),
             None,
             &Apariencia::default(),
+            &Avanzado::default(),
         )
         .expect("la segunda firma");
         let firmas = verify_signatures(dos.to_string_lossy().into_owned()).expect("verificar");
@@ -2577,6 +2968,7 @@ mod tests {
             &credenciales(),
             None,
             &Apariencia::default(),
+            &Avanzado::default(),
         )
         .expect("la primera firma");
 
@@ -2607,6 +2999,7 @@ mod tests {
             &otras_credenciales(),
             None,
             &Apariencia::default(),
+            &Avanzado::default(),
         )
         .expect("la segunda firma");
 
@@ -2670,6 +3063,7 @@ mod tests {
             &credenciales(),
             Some("Conforme con el presupuesto".into()),
             &ap,
+            &Avanzado::default(),
         )
         .expect("firmar con motivo");
         let contenido = ap_de_la_firma(&dest.to_string_lossy());
@@ -2690,6 +3084,7 @@ mod tests {
             &credenciales(),
             None,
             &ap,
+            &Avanzado::default(),
         )
         .expect("firmar sin motivo");
         assert!(
