@@ -204,8 +204,9 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "sign_pdf_p12" => cmd!(crate::sign_pdf_p12, { work_path: String, dest_path: String, p12_path: String, password: String, reason: Option<String>, rect: Option<crate::Rect>, page_index: Option<u16>, signer_name: Option<String>, signature_png: Option<String> }),
         "verify_signatures" => cmd!(firma::verify_signatures, { path: String }),
         "stamp_signature" => cmd!(firmas_visuales::stamp_signature, { work_path: String, page_index: u16, png_base64: String, x: f32, y: f32, w: f32, h: f32 }),
-        "import_signature_file" => cmd!(firmas_visuales::import_signature_file, { image_path: String }),
-        "save_stored_signature" => cmd!(firmas_visuales::save_stored_signature, { name: String, png_base64: String }),
+        "import_signature_file" => cmd!(firmas_visuales::import_signature_file, { image_path: String, ranura: Option<String> }),
+        "save_stored_signature" => cmd!(firmas_visuales::save_stored_signature, { name: String, png_base64: String, ranura: Option<String> }),
+        "set_signature_slot" => cmd!(firmas_visuales::set_signature_slot, { id: String, ranura: String }),
         "list_stored_signatures" => firmas_visuales::list_stored_signatures()
             .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
         "delete_stored_signature" => cmd!(firmas_visuales::delete_stored_signature, { id: String }),
@@ -481,6 +482,10 @@ mod tests {
             "ciclo 9: «Fondo ▸ Color» espera al diálogo de marca de agua y fondo",
         ),
         (
+            "set_signature_slot",
+            "ciclo 9 (R58): cambiar la ranura de una imagen guardada llega con la galería",
+        ),
+        (
             "get_open_action",
             "ciclo 9 (R56): «Vista inicial» es la cuarta pestaña de ⌘D y llega con la interfaz",
         ),
@@ -506,6 +511,17 @@ mod tests {
     /// puede llegar a ella. Fue el estado exacto de `char_spacing` durante
     /// un ciclo entero. La lista tiene que quedar vacía al cerrar el ciclo.
     const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[
+        (
+            "import_signature_file",
+            "ranura",
+            "ciclo 9 (R58): la galería de sellos y la ranura de iniciales llegan \
+             con la interfaz",
+        ),
+        (
+            "save_stored_signature",
+            "ranura",
+            "ciclo 9 (R58): ídem; hoy la interfaz guarda la ranura en localStorage",
+        ),
         (
             "insert_pdf_at",
             "page_indices",

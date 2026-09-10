@@ -15,6 +15,41 @@ pub struct FirmaGuardada {
     pub id: String,
     pub name: String,
     pub png_base64: String,
+    /// **Para qué es esta imagen** (R58): `"firma"`, `"iniciales"` o
+    /// `"sello"`. Hasta el ciclo 8 la distinción vivía en el
+    /// `localStorage` de la interfaz, porque el backend guardaba imágenes
+    /// por nombre y no sabía de ranuras: limpiar el almacenamiento del
+    /// navegador embebido dejaba las imágenes puestas y la ranura perdida.
+    /// Ahora es un campo de la biblioteca, que es donde vive.
+    pub ranura: String,
+}
+
+/// Las tres ranuras de la biblioteca. La de por defecto es la firma, que
+/// es lo que había antes de que hubiera ranuras: una imagen guardada por
+/// una versión anterior sigue siendo una firma.
+pub(crate) const RANURAS: [&str; 3] = ["firma", "iniciales", "sello"];
+pub(crate) const RANURA_DEFECTO: &str = "firma";
+
+/// Valida la ranura que llega de la UI. Una ranura que no existe es un
+/// error en llano, no una imagen guardada donde nadie la va a buscar.
+fn ranura_valida(ranura: Option<&str>) -> Result<String, String> {
+    let r = ranura.map(str::trim).filter(|r| !r.is_empty());
+    match r {
+        None => Ok(RANURA_DEFECTO.to_string()),
+        Some(r) if RANURAS.contains(&r) => Ok(r.to_string()),
+        Some(otra) => Err(format!(
+            "«{otra}» no es una ranura de la biblioteca: son firma, iniciales o sello"
+        )),
+    }
+}
+
+/// La ranura guardada de una imagen, o la de por defecto.
+fn ranura_de(dir: &std::path::Path, id: &str) -> String {
+    std::fs::read_to_string(dir.join(format!("{id}.ranura")))
+        .map(|s| s.trim().to_string())
+        .ok()
+        .filter(|s| RANURAS.contains(&s.as_str()))
+        .unwrap_or_else(|| RANURA_DEFECTO.to_string())
 }
 
 /// Estampa una imagen (base64, normalmente PNG con alfa) en la página con
@@ -103,7 +138,9 @@ pub(crate) fn guardar_firma_en(
     dir: &std::path::Path,
     name: &str,
     png_base64: &str,
+    ranura: Option<&str>,
 ) -> Result<FirmaGuardada, String> {
+    let ranura = ranura_valida(ranura)?;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(png_base64.trim())
         .map_err(|e| format!("Imagen base64 inválida: {e}"))?;
@@ -121,10 +158,14 @@ pub(crate) fn guardar_firma_en(
     std::fs::write(dir.join(format!("{id}.txt")), limpio).map_err(|e| {
         crate::mensaje_llano(format!("No se ha podido guardar el nombre: {e}"))
     })?;
+    std::fs::write(dir.join(format!("{id}.ranura")), &ranura).map_err(|e| {
+        crate::mensaje_llano(format!("No se ha podido guardar la ranura: {e}"))
+    })?;
     Ok(FirmaGuardada {
         id,
         name: limpio.to_string(),
         png_base64: png_base64.trim().to_string(),
+        ranura,
     })
 }
 
@@ -145,10 +186,12 @@ pub(crate) fn listar_firmas_en(dir: &std::path::Path) -> Result<Vec<FirmaGuardad
         let Ok(bytes) = std::fs::read(&path) else { continue };
         let name = std::fs::read_to_string(dir.join(format!("{id}.txt")))
             .unwrap_or_else(|_| "Firma".into());
+        let ranura = ranura_de(dir, &id);
         out.push(FirmaGuardada {
             id,
             name: name.trim().to_string(),
             png_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+            ranura,
         });
     }
     out.sort_by(|a, b| b.id.cmp(&a.id));
@@ -159,7 +202,10 @@ pub(crate) fn listar_firmas_en(dir: &std::path::Path) -> Result<Vec<FirmaGuardad
 /// devuelve una ruta; la lectura se hace aquí, sin plugin fs). Se re-codifica
 /// a PNG para conservar la transparencia con un formato único.
 #[tauri::command(async)]
-pub fn import_signature_file(image_path: String) -> Result<FirmaGuardada, String> {
+pub fn import_signature_file(
+    image_path: String,
+    ranura: Option<String>,
+) -> Result<FirmaGuardada, String> {
     let img = image::open(&image_path).map_err(|e| {
         crate::mensaje_llano(format!("No se ha podido leer la imagen: {e}"))
     })?;
@@ -173,13 +219,35 @@ pub fn import_signature_file(image_path: String) -> Result<FirmaGuardada, String
         .and_then(|s| s.to_str())
         .unwrap_or("Firma")
         .to_string();
-    guardar_firma_en(&dir_de_firmas()?, &name, &png_base64)
+    guardar_firma_en(&dir_de_firmas()?, &name, &png_base64, ranura.as_deref())
 }
 
-/// Guarda una firma reutilizable en la biblioteca del usuario.
+/// Guarda una imagen reutilizable en la biblioteca del usuario: una firma
+/// manuscrita, unas iniciales o un sello, según la `ranura`.
 #[tauri::command(async)]
-pub fn save_stored_signature(name: String, png_base64: String) -> Result<FirmaGuardada, String> {
-    guardar_firma_en(&dir_de_firmas()?, &name, &png_base64)
+pub fn save_stored_signature(
+    name: String,
+    png_base64: String,
+    ranura: Option<String>,
+) -> Result<FirmaGuardada, String> {
+    guardar_firma_en(&dir_de_firmas()?, &name, &png_base64, ranura.as_deref())
+}
+
+/// Cambia la ranura de una imagen ya guardada («esto son mis iniciales, no
+/// mi firma»), sin volver a subirla.
+#[tauri::command(async)]
+pub fn set_signature_slot(id: String, ranura: String) -> Result<(), String> {
+    if id.contains(['/', '\\', '.']) {
+        return Err("Id de firma inválido".into());
+    }
+    let ranura = ranura_valida(Some(&ranura))?;
+    let dir = dir_de_firmas()?;
+    if !dir.join(format!("{id}.png")).exists() {
+        return Err("Esa imagen ya no está en la biblioteca".into());
+    }
+    std::fs::write(dir.join(format!("{id}.ranura")), &ranura).map_err(|e| {
+        crate::mensaje_llano(format!("No se ha podido guardar la ranura: {e}"))
+    })
 }
 
 /// Lista las firmas guardadas (con su PNG en base64 para las miniaturas).
@@ -199,6 +267,7 @@ pub fn delete_stored_signature(id: String) -> Result<(), String> {
         crate::mensaje_llano(format!("No se ha podido borrar la firma: {e}"))
     })?;
     let _ = std::fs::remove_file(dir.join(format!("{id}.txt")));
+    let _ = std::fs::remove_file(dir.join(format!("{id}.ranura")));
     Ok(())
 }
 
@@ -274,17 +343,74 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let png = png_con_alfa_base64();
-        let guardada = guardar_firma_en(&dir, "  Mi firma  ", &png).expect("guardar");
+        let guardada = guardar_firma_en(&dir, "  Mi firma  ", &png, None).expect("guardar");
         assert_eq!(guardada.name, "Mi firma");
+        // sin decir ranura, una firma: es lo que había antes de que
+        // hubiera ranuras
+        assert_eq!(guardada.ranura, "firma");
 
         let lista = listar_firmas_en(&dir).expect("listar");
         assert_eq!(lista.len(), 1);
         assert_eq!(lista[0].id, guardada.id);
         assert_eq!(lista[0].name, "Mi firma");
         assert_eq!(lista[0].png_base64, png);
+        assert_eq!(lista[0].ranura, "firma");
 
         std::fs::remove_file(dir.join(format!("{}.png", guardada.id))).unwrap();
         assert!(listar_firmas_en(&dir).expect("listar").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **R58 — la ranura vive en la biblioteca.** Cuáles de las imágenes
+    /// guardadas son iniciales lo recordaba el `localStorage` de la
+    /// interfaz, porque el backend guardaba imágenes por nombre y no sabía
+    /// de ranuras: limpiar el almacenamiento del navegador embebido dejaba
+    /// las imágenes puestas y la distinción perdida. Y con la galería de
+    /// sellos son tres ranuras, no dos.
+    #[test]
+    fn la_biblioteca_recuerda_para_que_es_cada_imagen() {
+        let dir = std::env::temp_dir().join(format!(
+            "firmas-ranura-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = png_con_alfa_base64();
+
+        let firma = guardar_firma_en(&dir, "Mi firma", &png, None).expect("firma");
+        let iniciales =
+            guardar_firma_en(&dir, "JG", &png, Some("iniciales")).expect("iniciales");
+        let sello = guardar_firma_en(&dir, "Aprobado", &png, Some("sello")).expect("sello");
+        assert_eq!(iniciales.ranura, "iniciales");
+        assert_eq!(sello.ranura, "sello");
+
+        let lista = listar_firmas_en(&dir).expect("listar");
+        let ranura_de_id = |id: &str| {
+            lista
+                .iter()
+                .find(|f| f.id == id)
+                .map(|f| f.ranura.clone())
+                .expect("la imagen tiene que estar en la lista")
+        };
+        assert_eq!(ranura_de_id(&firma.id), "firma");
+        assert_eq!(ranura_de_id(&iniciales.id), "iniciales");
+        assert_eq!(ranura_de_id(&sello.id), "sello");
+
+        // una ranura que no existe se dice, no se guarda a medias
+        assert!(guardar_firma_en(&dir, "X", &png, Some("rubrica"))
+            .unwrap_err()
+            .contains("firma, iniciales o sello"));
+
+        // una imagen de una versión anterior (sin fichero de ranura) sigue
+        // siendo una firma
+        std::fs::remove_file(dir.join(format!("{}.ranura", iniciales.id))).unwrap();
+        let lista = listar_firmas_en(&dir).expect("listar");
+        assert_eq!(
+            lista.iter().find(|f| f.id == iniciales.id).unwrap().ranura,
+            "firma"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -1209,6 +1209,7 @@ pub fn run() {
             firmas_visuales::stamp_signature,
             firmas_visuales::import_signature_file,
             firmas_visuales::save_stored_signature,
+            firmas_visuales::set_signature_slot,
             firmas_visuales::list_stored_signatures,
             firmas_visuales::delete_stored_signature,
             imagenes::get_image_data,
