@@ -163,7 +163,10 @@ export function useHerramienta(
       medidaTipo,
       medidaDejar,
       calibrando,
-      escala,
+      // por miembros y no por el objeto: `App` lo compone en cada render y
+      // el `tool` memoizado dejaría de serlo (y con él, todas las Paginas)
+      escala.escalaMm,
+      escala.onEscala,
       fillMark,
       fillColor,
       activeSig,
