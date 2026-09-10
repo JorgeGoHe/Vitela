@@ -1,4 +1,7 @@
+import { useState } from "react";
+import { indicesDeRango } from "../tipos";
 import { useModal } from "../hooks/useModal";
+import RangoPaginas from "./RangoPaginas";
 
 /** Modal de exportación de las páginas como imágenes (formato y resolución). */
 export default function DialogoExportar({
@@ -6,6 +9,7 @@ export default function DialogoExportar({
   setFmt,
   dpi,
   setDpi,
+  pageCount,
   onConfirm,
   onClose,
 }: {
@@ -13,10 +17,22 @@ export default function DialogoExportar({
   setFmt: (f: "png" | "jpeg") => void;
   dpi: number;
   setDpi: (d: number) => void;
-  onConfirm: () => void;
+  pageCount: number;
+  /** Las páginas elegidas, o `null` si son todas. */
+  onConfirm: (pageIndices: number[] | null) => void;
   onClose: () => void;
 }) {
-  const { ref, onKeyDown } = useModal({ onClose, onConfirm });
+  // el mismo bloque «todas / 1-3, 8» de imprimir, marca de agua y Word:
+  // exportar el documento entero para quedarse con tres páginas era lo que
+  // faltaba desde el ciclo 2
+  const [todas, setTodas] = useState(true);
+  const [rango, setRango] = useState("");
+  const indices = indicesDeRango(todas, rango, pageCount);
+  const listo = todas || (indices?.length ?? 0) > 0;
+  const confirmar = () => {
+    if (listo) onConfirm(indices);
+  };
+  const { ref, onKeyDown } = useModal({ onClose, onConfirm: confirmar });
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -52,12 +68,24 @@ export default function DialogoExportar({
             ))}
           </select>
         </div>
-        <p className="modal-file">Una imagen por página del documento.</p>
+        <RangoPaginas
+          pageCount={pageCount}
+          todas={todas}
+          setTodas={setTodas}
+          rango={rango}
+          setRango={setRango}
+        />
+        <p className="modal-file">Una imagen por página.</p>
         <div className="card-actions">
           <button className="btn" onClick={onClose}>
             Cancelar
           </button>
-          <button className="btn btn-primary" onClick={onConfirm}>
+          <button
+            className="btn btn-primary"
+            disabled={!listo}
+            title={listo ? undefined : "Ese rango no deja ninguna página"}
+            onClick={confirmar}
+          >
             Elegir carpeta…
           </button>
         </div>

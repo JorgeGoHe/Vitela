@@ -178,6 +178,16 @@ export default function CapaTexto({
             Al guardar, el párrafo se recoloca a su ancho · ⇧Enter parte la
             línea
           </span>
+          {/* la fuente de este bloque no se puede reescribir: el texto
+              corregido saldrá en Helvetica y cambiará de aspecto. Se dice
+              aquí, antes de teclear, y no al ver el resultado */}
+          {blockDraft.block.reescribible === false && (
+            <span className="opt-hint texto-aviso-fuente">
+              {blockDraft.block.font_family
+                ? `Este texto usa ${blockDraft.block.font_family}, que no viene dentro del PDF: lo corregido saldrá en Helvetica.`
+                : "La fuente de este texto no viene dentro del PDF: lo corregido saldrá en Helvetica."}
+            </span>
+          )}
           <textarea
             autoFocus
             value={blockDraft.text}

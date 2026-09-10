@@ -105,6 +105,12 @@ export type TextBlock = {
    *  que deja pintar del color real el swatch «A» («el que ya tenga») en vez
    *  de una letra gris con un tooltip. */
   color: Rgba;
+  /** ¿Se puede reescribir este bloque **con su misma fuente**? Con `false`
+   *  la fuente no está incrustada (o no se deja usar) y el texto corregido
+   *  saldrá en otra: cambia de aspecto, así que se avisa ANTES de teclear.
+   *  Opcional porque un motor anterior no lo trae; sin el dato no se
+   *  promete nada. */
+  reescribible?: boolean;
 };
 export type ImageInfo = {
   object_index: number;
@@ -455,10 +461,10 @@ export function hojasDeComposicion(
   if (paginas === 0) return 0;
   if (modo === "nup")
     return Math.ceil(paginas / Math.max(1, comp.por_hoja));
-  if (modo === "folleto") {
-    const hojas = Math.ceil(paginas / 4);
-    return comp.caras === "ambas" ? hojas : hojas;
-  }
+  // el papel es el mismo se impriman las dos caras o una: con «solo el
+  // anverso» salen las mismas hojas, impresas por un lado. Eso se dice en
+  // el texto del pie, que es donde el usuario lo puede leer
+  if (modo === "folleto") return Math.ceil(paginas / 4);
   if (modo === "poster") {
     const trozos = Math.max(1, Math.ceil(comp.escala_por_ciento / 100));
     return paginas * trozos * trozos;

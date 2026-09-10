@@ -525,11 +525,23 @@ mod tests {
     /// es una función rota que el usuario no puede usar, así que la lista
     /// tiene que quedar vacía: está aquí solo mientras el arreglo vive en
     /// la otra mitad.
-    const ARGUMENTOS_PENDIENTES: &[(&str, &str)] = &[(
-        "open_pdf",
-        "pendiente_backend: C-3 del ciclo 10 — la UI ya manda key_path y \
-         key_password para abrir un PDF cifrado por certificado",
-    )];
+    const ARGUMENTOS_PENDIENTES: &[(&str, &str)] = &[
+        (
+            "open_pdf",
+            "pendiente_backend: C-3 del ciclo 10 — la UI ya manda key_path y \
+             key_password para abrir un PDF cifrado por certificado",
+        ),
+        (
+            "export_pages_png",
+            "pendiente_backend: C-12 del ciclo 10 — la UI ya manda \
+             page_indices para exportar solo un rango",
+        ),
+        (
+            "crop_page",
+            "pendiente_backend: C-12 del ciclo 10 — la UI ya manda margenes \
+             en puntos para recortar por la medida exacta",
+        ),
+    ];
 
     /// Parámetros opcionales de un comando que **ninguna** llamada de la UI
     /// manda, con su motivo. Un `Option<T>` que nadie manda es una capacidad

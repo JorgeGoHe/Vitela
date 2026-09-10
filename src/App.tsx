@@ -134,6 +134,8 @@ import {
   importCommentsXfdf,
   type OrdenComentarios,
   adoptSession,
+  cropPage,
+  type MargenesRecorte,
   type DocumentoAbierto,
   type FirmaGuardada,
   type InformeFirma,
@@ -234,6 +236,7 @@ import DialogoProteger, {
 } from "./components/DialogoProteger";
 import DialogoConfirmar from "./components/DialogoConfirmar";
 import DialogoExportar from "./components/DialogoExportar";
+import DialogoRecortar from "./components/DialogoRecortar";
 import DialogoComprimir from "./components/DialogoComprimir";
 import DialogoPreferencias from "./components/DialogoPreferencias";
 import DialogoImprimir from "./components/DialogoImprimir";
@@ -843,6 +846,9 @@ function App() {
   // el andamio tenía tres atajos y ninguna puerta: quien no leía la pantalla
   // de atajos no sabía que existía
   const [menuAndamio, setMenuAndamio] = useState(false);
+  /** «Márgenes exactos…» del modo Recortar: arrastrar vale para una página,
+   *  pero dejar 20 mm en todas hay que escribirlo. */
+  const [recorteOpen, setRecorteOpen] = useState(false);
   const botonAndamioRef = useRef<HTMLButtonElement | null>(null);
   const [guias, setGuias] = useState<Guias>(SIN_GUIAS);
   const fijarEscala = useCallback(
@@ -3634,6 +3640,39 @@ function App() {
     }
   }
 
+  /** Recortar por la medida exacta, no por el arrastre. Los márgenes van en
+   *  puntos y **los aplica el backend página a página**: con hojas de
+   *  tamaños distintos, un rectángulo no puede decir «20 mm por cada
+   *  lado». El `rect` se manda calculado para la página de delante, que es
+   *  lo que entiende un motor que aún no lea los márgenes. */
+  async function aplicarRecorteMargenes(m: MargenesRecorte, todas: boolean) {
+    if (!workPath) return;
+    const size = pageSizes[pageIndex];
+    if (!size) return;
+    setRecorteOpen(false);
+    try {
+      await cropPage(
+        workPath,
+        pageIndex,
+        {
+          x: m.izq,
+          y: m.arriba,
+          w: Math.max(1, size.width - m.izq - m.der),
+          h: Math.max(1, size.height - m.arriba - m.abajo),
+        },
+        todas,
+        m,
+      );
+      setMode("select");
+      afterMutation(pageCount);
+      setNotice(
+        `${todas ? "Todas las páginas recortadas" : `Página ${pageIndex + 1} recortada`} · ${MOD}Z para deshacer`,
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   /** ⌘P: el diálogo propio, antes que el del sistema (como Acrobat). */
   function printDocument() {
     if (!workPath) return;
@@ -3937,7 +3976,7 @@ function App() {
     }
   }
 
-  async function exportImages() {
+  async function exportImages(pageIndices: number[] | null) {
     if (!workPath) return;
     const dir = await open({
       directory: true,
@@ -3948,9 +3987,16 @@ function App() {
     try {
       setExportOpen(false);
       setNotice("Exportando imágenes…", { persistente: true });
-      const rutas = await exportPagesPng(workPath, dir, exportDpi, exportFmt);
+      const rutas = await exportPagesPng(
+        workPath,
+        dir,
+        exportDpi,
+        exportFmt,
+        pageIndices,
+      );
       setNotice(
-        `${plural(rutas.length, "imagen exportada", "imágenes exportadas")} a ${dir}`,
+        `${plural(rutas.length, "imagen exportada", "imágenes exportadas")} a ${nombreDeFichero(dir)}`,
+        { titulo: dir },
       );
     } catch (e) {
       setNotice(null);
@@ -5095,6 +5141,8 @@ function App() {
                   setMenuOpen((o) => !o);
                 }}
                 onCerrar={() => setMenuOpen(false)}
+                openFile={openFile}
+                saveFile={saveFile}
                 saveFileAs={saveFileAs}
                 closeDocument={closeDocument}
                 addPdf={addPdf}
@@ -5910,6 +5958,7 @@ function App() {
           setFmt={setExportFmt}
           dpi={exportDpi}
           setDpi={setExportDpi}
+          pageCount={pageCount}
           onConfirm={exportImages}
           onClose={() => setExportOpen(false)}
         />
@@ -5957,7 +6006,19 @@ function App() {
       {mode === "crop" && (
         <div className="sign-hint">
           Arrastra para marcar el área que quieres conservar · Esc cancela
+          <button className="btn" onClick={() => setRecorteOpen(true)}>
+            Márgenes exactos…
+          </button>
         </div>
+      )}
+      {recorteOpen && (
+        <DialogoRecortar
+          size={pageSizes[pageIndex]}
+          pageCount={pageCount}
+          paginaActual={pageIndex + 1}
+          onConfirm={aplicarRecorteMargenes}
+          onClose={() => setRecorteOpen(false)}
+        />
       )}
       {mode === "firmar" && !activeSig && herramienta.fillMark && (
         <div className="sign-hint">

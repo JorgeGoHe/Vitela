@@ -2928,6 +2928,15 @@ textarea {
   box-shadow: var(--shadow-card);
   color: var(--fg);
   pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* la píldora no coge el ratón —estorbaría al gesto que explica—, pero un
+   botón dentro sí: es la otra forma de hacer lo mismo */
+.sign-hint .btn {
+  pointer-events: auto;
 }
 
 .image-box .image-preview {
@@ -3039,6 +3048,12 @@ textarea {
 .sel-popover .btn {
   padding: 5px 10px;
   font-size: 12px;
+}
+
+/* lo que va a cambiar de aspecto al guardar: no es un error, es un aviso, y
+   por eso lleva el color del corrector y no el de la banda roja */
+.texto-aviso-fuente {
+  color: var(--danger);
 }
 
 /* el error que pertenece a un campo se dice a su lado, no en la banda roja

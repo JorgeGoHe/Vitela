@@ -419,6 +419,11 @@ export default function DialogoImprimir({
               )}
               {o.composicion === "folleto" &&
                 ` · orden ${caraDeFolleto(hojas)[0]}-${caraDeFolleto(hojas)[1]}, 2-${caraDeFolleto(hojas)[0] - 1}…`}
+              {/* las hojas son las mismas: lo que cambia es que se imprimen
+                  por un lado, y eso hay que decirlo */}
+              {o.composicion === "folleto" &&
+                o.comp.caras !== "ambas" &&
+                ` · solo el ${o.comp.caras === "anverso" ? "anverso" : "reverso"}`}
             </span>
           </div>
         )}

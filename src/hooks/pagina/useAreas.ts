@@ -69,7 +69,13 @@ export function useAreas(ctx: {
   async function applyCrop(allPages: boolean) {
     if (!workPath || !cropDraft) return;
     try {
-      await cropPage(workPath, index, rectAPagina(cropDraft, size), allPages);
+      await cropPage(
+        workPath,
+        index,
+        rectAPagina(cropDraft, size),
+        allPages,
+        null,
+      );
       setCropDraft(null);
       onModeChange("select");
       onDocMutated(pageCount);

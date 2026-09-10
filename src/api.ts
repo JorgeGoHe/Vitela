@@ -714,13 +714,34 @@ export function pdfFromImages(
   return invoke("pdf_from_images", { imagePaths, destPath, tamano });
 }
 
+/** Los cuatro márgenes que se recortan, **en puntos PDF** (1/72 de
+ *  pulgada), medidos desde cada borde de la página. Es la otra forma de
+ *  recortar de Acrobat: la exacta, la que se puede repetir en un lote.
+ *  Con varias páginas de tamaños distintos, un rectángulo no vale: los
+ *  márgenes los aplica el backend página a página. */
+export type MargenesRecorte = {
+  arriba: number;
+  abajo: number;
+  izq: number;
+  der: number;
+};
+
+/** Recorta la página. Con `margenes` manda la medida exacta desde cada
+ *  borde; sin ellos, el rectángulo arrastrado de siempre. */
 export function cropPage(
   workPath: string,
   pageIndex: number,
   rect: { x: number; y: number; w: number; h: number },
   allPages: boolean,
+  margenes: MargenesRecorte | null,
 ): Promise<void> {
-  return invoke("crop_page", { workPath, pageIndex, rect, allPages });
+  return invoke("crop_page", {
+    workPath,
+    pageIndex,
+    rect,
+    allPages,
+    margenes,
+  });
 }
 
 export function addWatermark(args: {
@@ -1317,14 +1338,22 @@ export function redactArea(
   return invoke("redact_area", { workPath, pageIndex, rect, dryRun });
 }
 
-/** Exporta todas las páginas como imágenes; devuelve las rutas escritas. */
+/** Exporta las páginas como imágenes y devuelve las rutas escritas. Con
+ *  `pageIndices` solo esas; sin él, todas —que es el caso de siempre—. */
 export function exportPagesPng(
   path: string,
   destDir: string,
   dpi: number,
   format: "png" | "jpeg",
+  pageIndices: number[] | null,
 ): Promise<string[]> {
-  return invoke("export_pages_png", { path, destDir, dpi, format });
+  return invoke("export_pages_png", {
+    path,
+    destDir,
+    dpi,
+    format,
+    pageIndices,
+  });
 }
 
 export function exportText(path: string, destPath: string): Promise<void> {

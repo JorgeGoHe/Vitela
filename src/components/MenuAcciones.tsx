@@ -48,6 +48,8 @@ export default function MenuAcciones({
   abierto,
   onToggle,
   onCerrar,
+  openFile,
+  saveFile,
   saveFileAs,
   closeDocument,
   addPdf,
@@ -97,6 +99,10 @@ export default function MenuAcciones({
   abierto: boolean;
   onToggle: () => void;
   onCerrar: () => void;
+  /** «Abrir…» y «Guardar»: estaban en la barra y en el menú nativo y no en
+   *  el de la app, que es el índice de lo que se puede hacer. */
+  openFile: () => void;
+  saveFile: () => void;
   saveFileAs: () => void;
   /** Cierra el menú por su cuenta. */
   closeDocument: () => void;
@@ -263,6 +269,18 @@ export default function MenuAcciones({
             )}
             <div className="menu-titulo">Archivo</div>
             <Entrada
+              icon="open"
+              texto="Abrir…"
+              atajo={`${MOD}O`}
+              onSelect={ejecutar(openFile)}
+            />
+            <Entrada
+              icon="save"
+              texto="Guardar"
+              atajo={`${MOD}S`}
+              onSelect={ejecutar(saveFile)}
+            />
+            <Entrada
               icon="save"
               texto="Guardar como…"
               atajo={`⇧${MOD}S`}
@@ -384,13 +402,19 @@ export default function MenuAcciones({
               }
               onSelect={ejecutar(cifrarConCertificado)}
             />
-            {puedeQuitarProteccion && (
-              <Entrada
-                icon="lock"
-                texto="Quitar la contraseña…"
-                onSelect={ejecutar(quitarProteccion)}
-              />
-            )}
+            {/* atenuada con su motivo, no escondida: dos criterios en el
+                mismo grupo dejaban al usuario buscando una entrada que
+                existe (al lado, «Certificar…» sí se atenúa) */}
+            <Entrada
+              icon="lock"
+              texto="Quitar la contraseña…"
+              motivo={
+                puedeQuitarProteccion
+                  ? undefined
+                  : "Este documento no tiene contraseña puesta"
+              }
+              onSelect={ejecutar(quitarProteccion)}
+            />
             <Entrada
               icon="flatten"
               texto="Fijar las anotaciones en la página…"

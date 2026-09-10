@@ -75,7 +75,7 @@ const GRUPOS: { titulo: string; atajos: Atajo[] }[] = [
         "Reglas (arrastra desde una para dejar una guía en la página; ⌥ para todas)",
       ],
       [atajo(";"), "Guías: enseñarlas y esconderlas"],
-      [atajo("U"), "Cuadrícula"],
+      [`${atajo("U")} · ${atajo("'")}`, "Cuadrícula"],
       [atajo("U", "shift cmd"), "Ajustar a la cuadrícula lo que coloques"],
       [atajo("Y", "shift cmd"), "Leer en voz alta desde esta página (Esc para)"],
       [`${atajo("←", "alt")} · ${atajo("→", "alt")}`, "Vista anterior y siguiente"],
