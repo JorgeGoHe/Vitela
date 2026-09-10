@@ -522,7 +522,9 @@ fn open_pdf(path: String, password: Option<String>) -> Result<DocumentInfo, Stri
                     .map(|b| b.windows(12).any(|v| v == b"Adobe.PubSec"))
                     .unwrap_or(false)
                 {
-                    return Err("Este PDF está cifrado para unos destinatarios concretos,                                 no con contraseña. Vitela todavía no sabe abrir estos:                                 ábrelo con el programa donde tengas instalado tu                                 certificado"
+                    return Err("Este PDF está cifrado para unos destinatarios \
+concretos, no con contraseña. Vitela todavía no sabe abrir estos: ábrelo con \
+el programa donde tengas instalado tu certificado"
                         .into());
                 }
                 return Err(mensaje_apertura(&e, &path));
@@ -1750,8 +1752,28 @@ pub(crate) mod tests {
         crea_pdf(&["Hola"], &bueno);
         let b = bueno.to_string_lossy().into_owned();
 
+        // un PDF cifrado por certificado: el usuario no tiene contraseña
+        // que probar y hay que decirle qué es
+        let pubsec = std::env::temp_dir().join("editor_pdf_test_errores_pubsec.pdf");
+        std::fs::write(
+            &pubsec,
+            b"%PDF-1.7\n/Filter /Adobe.PubSec /V 5 /R 6\n%%EOF\n".as_slice(),
+        )
+        .expect("escribir");
+        let ps = pubsec.to_string_lossy().into_owned();
+        assert!(
+            open_pdf(ps.clone(), None)
+                .unwrap_err()
+                .contains("destinatarios"),
+            "un PDF /Adobe.PubSec se reconoce y se explica, no se trata como dañado"
+        );
+
         let casos: Vec<(&str, String)> = vec![
             ("abrir un fichero dañado", open_pdf(d.clone(), None).unwrap_err()),
+            (
+                "abrir un PDF cifrado para unos destinatarios",
+                open_pdf(ps.clone(), None).unwrap_err(),
+            ),
             ("renderizar un fichero dañado", render_page_b64(d.clone(), 0, 100, None).unwrap_err()),
             (
                 "listar anotaciones de un fichero dañado",
@@ -1835,10 +1857,18 @@ pub(crate) mod tests {
                 "al {que} el mensaje no empieza como una frase: {e}"
             );
             assert!(e.len() > 20, "al {que} el mensaje no explica nada: {e}");
+            // dos espacios seguidos delatan un literal partido en varias
+            // líneas sin `\`: el sangrado del código se cuela en la frase
+            // y el usuario lee un mensaje con carreras de espacios dentro
+            assert!(
+                !e.contains("  "),
+                "al {que} el mensaje lleva dos espacios seguidos: {e}"
+            );
         }
 
         std::fs::remove_file(&danado).ok();
         std::fs::remove_file(&bueno).ok();
+        std::fs::remove_file(&pubsec).ok();
     }
 
     #[test]

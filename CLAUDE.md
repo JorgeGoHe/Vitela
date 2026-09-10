@@ -1023,6 +1023,13 @@ compila los instaladores a mano o al etiquetar `v*`.
     idénticas ahí dentro, y equivocarse rompe el documento de quien lo
     abra en Word. El `.docx` se queda como está —texto, estilo, color e
     imágenes en su sitio—, dicho antes de elegir destino.
+- Comandos del ciclo 10 (el de cierre):
+  - **Un mensaje con carreras de espacios dentro** (C-9): un literal partido
+    en varias líneas sin la barra invertida se lleva el sangrado del código
+    dentro de la frase, y eso lo lee el usuario. El aviso del PDF cifrado
+    para destinatarios salía con tres tandas de treinta y tres espacios.
+    `los_errores_que_ve_el_usuario_no_llevan_jerga` cubre ahora también ese
+    PDF y exige que **ningún error contenga dos espacios seguidos**.
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (cada uno con su envoltorio en camelCase):
     - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la
