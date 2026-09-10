@@ -5981,7 +5981,7 @@ function App() {
       />
 
       <div className="body">
-        {pageCount > 0 && sidebarVisible && (
+        {pageCount > 0 && sidebarVisible && !comparandoCon && (
           <aside className="sidebar">
             <div className="sidebar-tabs">
               <button
@@ -6122,7 +6122,11 @@ function App() {
             />
           </LimiteError>
         )}
-        <div className="viewer-wrap" hidden={!!comparandoCon}>
+        {/* la comparación ocupa el sitio del visor de verdad: montado al
+            lado se llevaba media ventana pintando otra cosa y dejaba los dos
+            paneles de la comparación más estrechos que una página */}
+        {!comparandoCon && (
+        <div className="viewer-wrap">
           <main
             className={`viewer${arrastrando ? " arrastrando" : ""}${
               prefs.nocturno ? " nocturno" : ""
@@ -6579,6 +6583,7 @@ function App() {
             </div>
           )}
         </div>
+        )}
       </div>
     </div>
   );

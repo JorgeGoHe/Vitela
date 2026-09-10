@@ -4,9 +4,17 @@ import { invoke } from "../ipc";
 import { MOD, plural, type PageSize } from "../tipos";
 import Icon from "./Icon";
 
-/** Ancho al que se rasteriza cada hoja de la comparación. Dos columnas en
- *  una ventana normal: no hace falta más, y así se pinta al instante. */
-const ANCHO = 620;
+/** Ancho de partida mientras no se ha medido el panel. Cada hoja se
+ *  rasteriza al ancho de **su** panel: con un ancho fijo, en una ventana
+ *  normal la página no cabía y se veía un tercio. */
+const ANCHO_INICIAL = 620;
+
+/** El ancho se redondea a este múltiplo para no volver a rasterizar las dos
+ *  hojas en cada píxel de un arrastre de ventana. */
+const PASO = 20;
+
+/** Lo que ocupa el `padding` del panel a los dos lados. */
+const MARGEN = 32;
 
 /** El color de cada tipo de diferencia, con los de la paleta de anotación:
  *  amarillo lo que cambia, verde lo que llega, rojo lo que se va. */
@@ -32,19 +40,22 @@ function Hoja({
   rects,
   color,
   resaltado,
+  ancho,
 }: {
   src: string | undefined;
   size: PageSize | undefined;
   rects: { x: number; y: number; w: number; h: number }[];
   color: string;
   resaltado: boolean;
+  /** Ancho útil del panel: la hoja se dibuja a esa medida. */
+  ancho: number;
 }) {
   if (!src || !size) return <div className="comparar-hueco" />;
-  const escala = ANCHO / size.width;
+  const escala = ancho / size.width;
   return (
     <div
       className="comparar-hoja"
-      style={{ width: ANCHO, height: size.height * escala }}
+      style={{ width: ancho, height: size.height * escala }}
     >
       <img src={src} alt="" draggable={false} />
       {rects.map((r, i) => (
@@ -102,6 +113,8 @@ export default function Comparador({
   // señalada
   const filasRef = useRef<Map<number, HTMLButtonElement>>(new Map());
   const sincronizando = useRef(false);
+  // el ancho al que se rasteriza cada hoja: el de su panel, medido
+  const [ancho, setAncho] = useState(ANCHO_INICIAL);
   // el aviso de error se lee por referencia: si entrara en las dependencias
   // del efecto, cada render de App volvería a abrir el otro documento
   const onErrorRef = useRef(onError);
@@ -142,6 +155,27 @@ export default function Comparador({
     };
   }, [workPath, otroPath]);
 
+  // El ancho de la hoja es el del panel que la enseña. Se mide con un
+  // `ResizeObserver` y se redondea, para no rasterizar en cada píxel del
+  // arrastre; al cambiar, las hojas ya pintadas se tiran y se vuelven a
+  // pedir a la medida nueva.
+  useEffect(() => {
+    const el = izqRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const util = Math.max(180, el.clientWidth - MARGEN);
+      const nuevo = Math.round(util / PASO) * PASO;
+      setAncho((v) => (v === nuevo ? v : nuevo));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    setHojasA({});
+    setHojasB({});
+  }, [ancho]);
+
   const dif = difs?.[actual];
 
   // Las dos hojas de la diferencia señalada, rasterizadas a demanda: se
@@ -152,7 +186,7 @@ export default function Comparador({
     (async () => {
       try {
         if (dif.pagina_a !== null && hojasA[dif.pagina_a] === undefined) {
-          const src = await renderPageSrc(workPath, dif.pagina_a, ANCHO);
+          const src = await renderPageSrc(workPath, dif.pagina_a, ancho);
           if (vivo) setHojasA((v) => ({ ...v, [dif.pagina_a as number]: src }));
         }
         if (
@@ -160,7 +194,7 @@ export default function Comparador({
           dif.pagina_b !== null &&
           hojasB[dif.pagina_b] === undefined
         ) {
-          const src = await renderPageSrc(otroWork, dif.pagina_b, ANCHO);
+          const src = await renderPageSrc(otroWork, dif.pagina_b, ancho);
           if (vivo) setHojasB((v) => ({ ...v, [dif.pagina_b as number]: src }));
         }
       } catch (e) {
@@ -170,7 +204,7 @@ export default function Comparador({
     return () => {
       vivo = false;
     };
-  }, [dif, workPath, otroWork, hojasA, hojasB]);
+  }, [dif, workPath, otroWork, hojasA, hojasB, ancho]);
 
   /** El scroll de un lado arrastra al otro, que es lo que hace que dos
    *  visores lado a lado sirvan para comparar. */
@@ -343,6 +377,7 @@ export default function Comparador({
             rects={dif?.rects_a ?? []}
             color={dif ? COLOR[dif.tipo] : "transparent"}
             resaltado
+            ancho={ancho}
           />
         </div>
         <div
@@ -357,6 +392,7 @@ export default function Comparador({
             rects={dif?.rects_b ?? []}
             color={dif ? COLOR[dif.tipo] : "transparent"}
             resaltado
+            ancho={ancho}
           />
         </div>
       </div>
