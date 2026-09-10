@@ -550,8 +550,16 @@ compila los instaladores a mano o al etiquetar `v*`.
     a escribir el `Tc`, así que mover o estirar después ese bloque se lo
     lleva por delante.
   - **Reflujo del párrafo** (`texto.rs`): `edit_text_block` gana `reflow`
-    (encendido por defecto cuando el bloque tiene párrafo debajo) y
-    devuelve `{ lineas, se_sale, reflujo }`. `parrafo_de` reconoce el
+    y devuelve `{ lineas, se_sale, reflujo }`. **El contrato, fijado en el
+    ciclo 7 (AC-061)**: `new_text` es SIEMPRE el texto del **bloque
+    tocado** —la línea, que es lo que la UI tiene en su cuadro de
+    edición—, nunca el del párrafo entero; con `reflow: true` el backend
+    reconoce él el párrafo (`parrafo_de`, sin que la UI tenga que decidir
+    si lo hay), sustituye solo esa línea y recoloca el conjunto. **El
+    resto del párrafo no se pierde nunca.** El defecto es
+    `reflow.unwrap_or(false)`: la bandera cambia lo que significan los
+    demás argumentos, y una bandera así no puede traer puesto el
+    comportamiento que toca lo que no se le ha pedido. `parrafo_de` reconoce el
     párrafo bajando desde el bloque tocado por las líneas que comparten
     columna (borde izquierdo, centro o borde derecho), cuerpo de letra y
     distancia de interlineado (más de 2,6 cuerpos ya es otro párrafo).

@@ -283,12 +283,19 @@ pub struct InformeEdicion {
 /// Mantiene la fuente del objeto (si la fuente embebida no tiene los glifos
 /// del texto nuevo, esos caracteres no se verán).
 ///
-/// Con **reflujo** (lo normal en un párrafo de varias líneas), corregir una
-/// palabra recoloca el párrafo entero: el texto se reparte por el ancho de
-/// la columna y las líneas de abajo suben o bajan, como en «Editar PDF» de
-/// Acrobat. Sin él —o en un bloque de una sola línea, donde no hay párrafo
-/// que rehacer—, la primera línea reemplaza al objeto original y las demás
-/// se insertan como objetos nuevos colocados debajo.
+/// **`new_text` es siempre el texto del bloque tocado**, la línea, y nunca
+/// el del párrafo entero: es lo que la UI tiene en su cuadro de edición
+/// (AC-061). Con `reflow` en `true`, el backend reconoce él el párrafo que
+/// cuelga de ese bloque (`parrafo_de`), sustituye **solo esa línea** por el
+/// texto nuevo y recoloca el conjunto al ancho de la columna, como en
+/// «Editar PDF» de Acrobat. El resto del párrafo no se pierde nunca.
+///
+/// Sin `reflow` —que es el defecto: `reflow.unwrap_or(false)`— se hace lo
+/// de siempre: la primera línea reemplaza al objeto original y las demás
+/// se insertan como objetos nuevos colocados debajo. El defecto es el
+/// conservador **a propósito**: `reflow` cambia lo que significan los
+/// demás argumentos, y una bandera así no puede traer puesto el
+/// comportamiento que toca lo que no se le ha pedido.
 ///
 /// **El reflujo no cruza bloques ni páginas**: si el párrafo crece, el
 /// contenido siguiente no se mueve. Acrobat tampoco lo hace, y prometerlo
@@ -308,30 +315,21 @@ pub fn edit_text_block(
 ) -> Result<InformeEdicion, String> {
     let tc = espaciado(char_spacing);
     mutacion(work_path, move |work_path| on_pdfium_thread(move || {
-        // ¿hay párrafo que refluir? Por defecto sí en cuanto el bloque tiene
-        // más de una línea debajo; con `reflow: false` la UI se queda con el
-        // comportamiento de siempre
-        if reflow.unwrap_or(true) {
-            let hay_parrafo = with_doc(&work_path, |doc| {
-                Ok(doc
-                    .pages()
-                    .get(page_index)
-                    .ok()
-                    .map(|p| parrafo_de(&p, object_index as usize).len())
-                    .unwrap_or(0))
-            })? > 1;
-            if hay_parrafo || reflow == Some(true) {
-                return refluye(
-                    &work_path,
-                    page_index,
-                    object_index,
-                    &new_text,
-                    color,
-                    align.as_deref(),
-                    line_height,
-                    tc,
-                );
-            }
+        // el párrafo lo reconoce el backend (`parrafo_de`), que es quien
+        // tiene la geometría: la UI solo dice si quiere que se recoloque.
+        // Sin pedirlo no se refluye (AC-061): la bandera cambia lo que
+        // significan los demás argumentos
+        if reflow.unwrap_or(false) {
+            return refluye(
+                &work_path,
+                page_index,
+                object_index,
+                &new_text,
+                color,
+                align.as_deref(),
+                line_height,
+                tc,
+            );
         }
         edita_sin_reflujo(&work_path, page_index, object_index, &new_text, color, align, line_height, tc)
     }))
@@ -557,9 +555,15 @@ fn parrafo_de(page: &PdfPage, object_index: usize) -> Vec<LineaDelParrafo> {
     grupo
 }
 
-/// Corrige un párrafo **recolocándolo entero**: mide el texto nuevo,
-/// lo reparte al ancho de la columna, reescribe las líneas que ya había y
-/// crea o borra las que sobren.
+/// Corrige un párrafo **recolocándolo entero**: `new_text` es el texto de
+/// la línea tocada, el resto del párrafo se lee de la página, y el conjunto
+/// se reparte al ancho de la columna reescribiendo las líneas que ya había
+/// y creando o quitando las que hagan falta.
+///
+/// Que `new_text` sea la línea y no el párrafo es el contrato de AC-061:
+/// hasta el ciclo 6 se entendía como el párrafo entero y las líneas de
+/// abajo se borraban sin avisar en cuanto la UI mandaba —correctamente— el
+/// texto de un solo bloque.
 #[allow(clippy::too_many_arguments)]
 fn refluye(
     work_path: &str,
@@ -625,10 +629,18 @@ fn refluye(
         };
         let [r, g, b, a] = color.unwrap_or(color_viejo);
 
+        // el párrafo entero: la línea tocada con su texto nuevo y las de
+        // abajo tal como están. Sin esto —con `new_text` entendido como el
+        // párrafo entero— corregir una línea borraba las demás (AC-061)
+        let texto_parrafo = std::iter::once(new_text.to_string())
+            .chain(parrafo.iter().skip(1).map(|l| l.texto.clone()))
+            .collect::<Vec<String>>()
+            .join(" ");
+
         // el texto nuevo, repartido al ancho de la columna con los anchos
         // AFM (Helvetica): en una fuente más estrecha las líneas rompen un
         // poco antes, que es el error que no se sale del papel
-        let nuevas: Vec<String> = crate::anotaciones2::parte_lineas(new_text, size, ancho)
+        let nuevas: Vec<String> = crate::anotaciones2::parte_lineas(&texto_parrafo, size, ancho)
             .into_iter()
             .filter(|l| !l.trim().is_empty())
             .collect();
@@ -1649,7 +1661,9 @@ mod tests {
             .expect("la última")
             .y;
 
-        let texto = lineas.join(" ").replace("contrato", "contrato de arrendamiento");
+        // se corrige SOLO la línea tocada, que es lo que la UI tiene en su
+        // cuadro de edición: el resto del párrafo lo pone el backend
+        let texto = lineas[0].replace("contrato", "contrato de arrendamiento");
         let informe = edit_text_block(
             work.clone(),
             0,
@@ -1659,7 +1673,7 @@ mod tests {
             None,
             None,
             None,
-            None,
+            Some(true),
         )
         .expect("corregir con reflujo");
         assert!(informe.reflujo, "el párrafo tenía cuatro líneas: {informe:?}");
@@ -1697,6 +1711,85 @@ mod tests {
         std::fs::remove_file(&tmp).ok();
     }
 
+    /// **R39b (AC-061, crítico).** Corregir una línea de un párrafo con
+    /// reflujo **no puede borrar el resto del párrafo**. Hasta el ciclo 6,
+    /// `new_text` se entendía como el texto del párrafo entero mientras la
+    /// UI mandaba —correctamente— el del bloque tocado: las líneas de abajo
+    /// desaparecían del documento sin banda, sin confirmación y sin ningún
+    /// signo de que se hubiera borrado nada.
+    ///
+    /// El contrato es el de ahora: `new_text` es siempre la línea, el
+    /// backend reconoce él el párrafo y lo recoloca entero.
+    #[test]
+    fn corregir_una_linea_con_reflujo_no_se_lleva_el_resto_del_parrafo() {
+        let tmp = std::env::temp_dir().join("texto-reflujo-no-borra.pdf");
+        crea_pdf(&["Contrato"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        let lineas = [
+            "El presente contrato se firma entre",
+            "las partes que abajo se indican y",
+            "regula el uso del inmueble situado",
+        ];
+        let indice = parrafo_de_prueba(&work, &lineas, 11.0, 1.35);
+
+        // se corrige la PRIMERA línea con una palabra más larga, que es lo
+        // que la UI manda: el texto de ese bloque y nada más
+        let informe = edit_text_block(
+            work.clone(),
+            0,
+            indice,
+            "El presente contrato de arrendamiento se firma entre".into(),
+            None,
+            None,
+            None,
+            None,
+            Some(true),
+        )
+        .expect("corregir la primera línea");
+        assert!(informe.reflujo, "el backend reconoce el párrafo él solo: {informe:?}");
+
+        let parrafo: Vec<crate::texto::TextBlock> = get_text_blocks(work.clone(), 0)
+            .expect("bloques")
+            .into_iter()
+            .filter(|b| b.font_size < 12.0)
+            .collect();
+        assert_eq!(
+            parrafo.len(),
+            informe.lineas as usize,
+            "el informe y el documento dicen lo mismo: {parrafo:?}"
+        );
+        assert!(parrafo.len() >= 3, "las tres líneas siguen ahí: {parrafo:?}");
+        let todo = parrafo.iter().map(|b| b.text.clone()).collect::<Vec<_>>().join(" ");
+        for palabras in ["arrendamiento", "abajo se indican", "inmueble situado"] {
+            assert!(todo.contains(palabras), "falta «{palabras}» del párrafo: {todo}");
+        }
+        // y las líneas se han recolocado: ninguna se sale de la columna
+        let ancho = parrafo.iter().map(|b| b.w).fold(0.0f32, f32::max);
+        assert!(ancho < 300.0, "el párrafo se ha repartido, no alargado: {ancho:.1}");
+
+        // sin pedir reflujo NO se refluye: la bandera cambia lo que
+        // significan los demás argumentos y su defecto no puede ser el
+        // que toca lo que no se le ha pedido
+        crate::historial::undo(work.clone()).expect("deshacer");
+        let informe = edit_text_block(
+            work.clone(),
+            0,
+            indice,
+            "El presente contrato de arrendamiento se firma entre".into(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("corregir sin decir nada de reflujo");
+        assert!(
+            !informe.reflujo,
+            "sin `reflow` se hace lo de siempre: {informe:?}"
+        );
+        std::fs::remove_file(&tmp).ok();
+    }
+
     /// **H1 (b) y (c).** Un párrafo que crece de cuatro a seis líneas tiene
     /// seis objetos, y uno que encoge de cuatro a dos tiene dos: ni líneas
     /// huérfanas debajo ni objetos vacíos.
@@ -1721,38 +1814,55 @@ mod tests {
         };
         assert_eq!(cuenta(&work), 4);
 
-        // crece: el mismo texto y medio más
-        let largo = format!("{} {}", lineas.join(" "), lineas[..2].join(" "));
-        let informe = edit_text_block(work.clone(), 0, indice, largo, None, None, None, None, None)
-            .expect("crecer");
+        // crece: la primera línea se alarga con el párrafo entero detrás
+        let largo = format!("{} {}", lineas[0], lineas.join(" "));
+        let informe =
+            edit_text_block(work.clone(), 0, indice, largo, None, None, None, None, Some(true))
+                .expect("crecer");
         assert!(informe.lineas >= 6, "seis líneas o más: {informe:?}");
         assert_eq!(cuenta(&work), informe.lineas as usize, "un objeto por línea");
 
-        // encoge: dos líneas
-        let indice = get_text_blocks(work.clone(), 0)
+        // ⌘Z lo devuelve entero, en un solo paso
+        crate::historial::undo(work.clone()).expect("deshacer");
+        assert_eq!(cuenta(&work), 4, "el párrafo vuelve como estaba");
+
+        // encoge: en un párrafo cuya primera línea es casi todo el texto,
+        // recortarla deja el resto en menos líneas y las que sobran se van
+        // sin dejar objetos vacíos detrás
+        let tmp2 = std::env::temp_dir().join("texto-reflujo-encoge.pdf");
+        crea_pdf(&["Memoria"], &tmp2);
+        let work2 = tmp2.to_string_lossy().into_owned();
+        let largas = [
+            "Uno dos tres cuatro cinco seis siete ocho nueve diez once doce",
+            "trece",
+            "catorce",
+        ];
+        let indice2 = parrafo_de_prueba(&work2, &largas, 11.0, 1.35);
+        assert_eq!(cuenta(&work2), 3);
+        let informe = edit_text_block(
+            work2.clone(),
+            0,
+            indice2,
+            "Uno".into(),
+            None,
+            None,
+            None,
+            None,
+            Some(true),
+        )
+        .expect("encoger");
+        assert!(informe.lineas < 3, "el párrafo encoge: {informe:?}");
+        assert_eq!(cuenta(&work2), informe.lineas as usize, "sin objetos huérfanos");
+        // y el texto de las líneas de abajo sigue estando entero
+        let todo = get_text_blocks(work2.clone(), 0)
             .expect("bloques")
             .into_iter()
             .filter(|b| b.font_size < 12.0)
-            .min_by(|a, b| a.y.total_cmp(&b.y))
-            .expect("la primera")
-            .object_index;
-        let informe = edit_text_block(
-            work.clone(),
-            0,
-            indice,
-            "Uno dos tres cuatro cinco seis siete ocho".into(),
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .expect("encoger");
-        assert_eq!(cuenta(&work), informe.lineas as usize, "sin objetos huérfanos");
-        assert!(informe.lineas <= 2, "dos líneas: {informe:?}");
-        // y ⌘Z lo devuelve entero, en un solo paso
-        crate::historial::undo(work.clone()).expect("deshacer");
-        assert!(cuenta(&work) >= 6, "el párrafo vuelve como estaba");
+            .map(|b| b.text)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(todo.contains("catorce"), "no se pierde el final: {todo}");
+        std::fs::remove_file(&tmp2).ok();
         std::fs::remove_file(&tmp).ok();
     }
 
@@ -1776,12 +1886,12 @@ mod tests {
             work.clone(),
             0,
             indice,
-            lineas.join(" ").replace("Primera", "La primerísima de todas"),
+            lineas[0].replace("Primera", "La primerísima de todas"),
             None,
             None,
             None,
             None,
-            None,
+            Some(true),
         )
         .expect("corregir en una página girada");
         assert!(informe.reflujo);
@@ -1827,8 +1937,9 @@ mod tests {
             .expect("la primera")
             .object_index;
         let largo = "Casi al final de la hoja ".repeat(12);
-        let informe = edit_text_block(work.clone(), 0, indice, largo, None, None, None, None, None)
-            .expect("corregir");
+        let informe =
+            edit_text_block(work.clone(), 0, indice, largo, None, None, None, None, Some(true))
+                .expect("corregir");
         assert!(informe.reflujo);
         assert!(
             informe.se_sale,
