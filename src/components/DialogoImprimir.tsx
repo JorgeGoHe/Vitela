@@ -349,12 +349,12 @@ export default function DialogoImprimir({
                 max={1000}
                 step={25}
                 aria-label="Porcentaje de ampliación del póster"
-                value={o.comp.escala}
+                value={o.comp.escala_por_ciento}
                 onChange={(e) =>
                   cambia({
                     comp: {
                       ...o.comp,
-                      escala: Math.min(
+                      escala_por_ciento: Math.min(
                         1000,
                         Math.max(100, Number(e.target.value) || 100),
                       ),
@@ -407,7 +407,7 @@ export default function DialogoImprimir({
               porHoja={o.comp.por_hoja}
               orden={o.comp.orden}
               borde={o.comp.borde}
-              escala={o.comp.escala}
+              escala={o.comp.escala_por_ciento}
               paginas={hojas}
             />
             <span className="dato">

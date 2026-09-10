@@ -35,9 +35,13 @@ pub struct OpcionesComposicion {
     /// quien imprime a doble cara a mano.
     #[serde(default)]
     pub caras: Option<String>,
-    /// Póster: cuánto se amplía la página (2,0 = 200 %).
+    /// Póster: cuánto se amplía la página, **en por ciento** (200 = el
+    /// doble), que es la unidad del control del diálogo y la de Acrobat.
+    /// Se llama así, y no `escala`, para que ningún lado pueda mandar un
+    /// factor donde el otro espera un porcentaje: con el mismo nombre y el
+    /// mismo tipo, ningún test cruzado ve la diferencia de unidad.
     #[serde(default)]
-    pub escala: Option<f32>,
+    pub escala_por_ciento: Option<f32>,
     /// Póster: solape entre hojas, en milímetros (Acrobat pone 0).
     #[serde(default)]
     pub solape_mm: Option<f32>,
@@ -465,10 +469,14 @@ fn compone_poster(
     entradas: &[Entrada],
     op: &OpcionesComposicion,
 ) -> Result<Vec<Hoja>, String> {
-    let escala = op.escala.unwrap_or(2.0);
-    if !(escala.is_finite() && escala > 1.0) {
-        return Err("El póster amplía la página: la escala tiene que ser mayor que 1".into());
+    let por_ciento = op.escala_por_ciento.unwrap_or(200.0);
+    if !(por_ciento.is_finite() && por_ciento > 100.0) {
+        return Err("El póster amplía la página: la escala tiene que ser mayor que el 100 %".into());
     }
+    if por_ciento > 1000.0 {
+        return Err("El póster amplía como mucho al 1000 %".into());
+    }
+    let escala = por_ciento / 100.0;
     let solape = (op.solape_mm.unwrap_or(0.0).max(0.0)) * MM;
     let marcas = op.marcas.unwrap_or(false);
     let mut hojas = Vec::new();
@@ -630,7 +638,7 @@ mod tests {
             "poster".into(),
             OpcionesComposicion {
                 page_indices: Some(vec![0]),
-                escala: Some(2.0),
+                escala_por_ciento: Some(200.0),
                 marcas: Some(true),
                 ..Default::default()
             },
@@ -640,17 +648,43 @@ mod tests {
         assert_eq!(paginas_de(&r.path), 4);
         std::fs::remove_file(&r.path).ok();
 
-        // una escala que no amplía no es un póster
+        // una escala que no amplía no es un póster; y la unidad es el
+        // porcentaje del diálogo: un 2 (el factor de antes) no amplía
+        for e in [50.0, 2.0] {
+            assert!(compose_print(
+                work.clone(),
+                "poster".into(),
+                OpcionesComposicion {
+                    escala_por_ciento: Some(e),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err()
+            .contains("100 %"));
+        }
+        // sin decir escala, el 200 % de Acrobat: cuatro hojas, no 40.000
+        let r = compose_print(
+            work.clone(),
+            "poster".into(),
+            OpcionesComposicion {
+                page_indices: Some(vec![0]),
+                ..Default::default()
+            },
+        )
+        .expect("póster por defecto");
+        assert_eq!(r.hojas, 4);
+        std::fs::remove_file(&r.path).ok();
+        // y el tope, para que un número mal tecleado no pida miles de hojas
         assert!(compose_print(
             work.clone(),
             "poster".into(),
             OpcionesComposicion {
-                escala: Some(0.5),
+                escala_por_ciento: Some(20000.0),
                 ..Default::default()
             },
         )
         .unwrap_err()
-        .contains("mayor que 1"));
+        .contains("1000 %"));
         // y una composición que no existe se dice
         assert!(compose_print(work.clone(), "espiral".into(), OpcionesComposicion::default())
             .unwrap_err()

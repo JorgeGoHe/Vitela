@@ -453,7 +453,7 @@ export function hojasDeComposicion(
     return comp.caras === "ambas" ? hojas : hojas;
   }
   if (modo === "poster") {
-    const trozos = Math.max(1, Math.ceil(comp.escala / 100));
+    const trozos = Math.max(1, Math.ceil(comp.escala_por_ciento / 100));
     return paginas * trozos * trozos;
   }
   return paginas;
@@ -476,7 +476,7 @@ export const COMPOSICION_POR_DEFECTO: Omit<
   borde: false,
   encuadernacion: "izquierda",
   caras: "ambas",
-  escala: 200,
+  escala_por_ciento: 200,
   solape_mm: 0,
   marcas: false,
 };

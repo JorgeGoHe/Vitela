@@ -937,7 +937,13 @@ compila los instaladores a mano o al etiquetar `v*`.
     sacar solo el anverso o solo el reverso. Por dentro las tres son
     páginas nuevas con las viejas dentro como Form XObject, todo con lopdf
     —convertir una página en XObject no lo expone pdfium-render— y con el
-    `/Rotate` horneado en la matriz: se compone lo que se ve.
+    `/Rotate` horneado en la matriz: se compone lo que se ve. La
+    ampliación del póster es `escala_por_ciento` (200 = el doble, tope
+    1000): el campo se llamó `escala` y el backend lo leía como factor
+    mientras la interfaz mandaba el porcentaje del control, así que un
+    póster al «200 %» salía en 40.000 hojas. Mismo nombre, mismo tipo,
+    distinta unidad: ningún test cruzado lo ve, y por eso la unidad va en
+    el nombre.
   - **La auditoría de espacio** (`exportar.rs`): `audit_pdf(path)` →
     `[{ categoria, bytes, porcentaje }]` con las nueve de Acrobat. Lo que
     no se sabe atribuir va a «lo demás», así que la suma es el tamaño del

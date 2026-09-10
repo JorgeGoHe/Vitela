@@ -1052,7 +1052,7 @@ export type OpcionesComposicion = {
   caras: "ambas" | "anverso" | "reverso";
   /** Póster: a cuánto se amplía, cuánto se solapan las hojas y si se
    *  imprimen las marcas de corte. */
-  escala: number;
+  escala_por_ciento: number;
   solape_mm: number;
   marcas: boolean;
 };
