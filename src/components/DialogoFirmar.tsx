@@ -44,6 +44,7 @@ export default function DialogoFirmar({
   rect,
   firmas,
   firmasPrevias,
+  error,
   onConfirm,
   onClose,
 }: {
@@ -58,6 +59,10 @@ export default function DialogoFirmar({
   /** Firmas que ya lleva el documento: firmar encima ya no es un muro, así
    *  que lo que hace falta es decir qué le pasa a la que ya estaba. */
   firmasPrevias: FirmaInfo[];
+  /** Lo que ha fallado en el último intento (certificado ilegible,
+   *  contraseña mal). Se pinta AQUÍ dentro y no solo en la banda: el
+   *  diálogo sigue abierto y el error es de uno de sus campos. */
+  error: string | null;
   onConfirm: (d: FirmaDraft) => void;
   onClose: () => void;
 }) {
@@ -320,6 +325,11 @@ export default function DialogoFirmar({
           </span>
         </div>
 
+        {error && (
+          <p className="modal-error" role="alert">
+            {error}
+          </p>
+        )}
         <div className="card-actions">
           <button className="btn" onClick={onClose}>
             Cancelar

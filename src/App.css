@@ -563,6 +563,11 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* por encima del velo del modal (z-index 100): el error más probable de
+     firmar, cifrar o poner una marca de agua salía DETRÁS del velo y su
+     botón no se podía pulsar */
+  position: relative;
+  z-index: 110;
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   color: var(--danger);
   border-bottom: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
@@ -1620,6 +1625,10 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  /* igual que la banda de error: el progreso («Firmando…») y su botón de
+     cancelar tienen que verse con un diálogo abierto */
+  position: relative;
+  z-index: 110;
   padding: 6px 12px;
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   border-bottom: 1px solid var(--border);

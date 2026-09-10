@@ -28,11 +28,15 @@ const PERMISOS: [keyof Permisos, string][] = [
  */
 export default function DialogoCifrarCert({
   firmado,
+  error,
   onConfirm,
   onClose,
 }: {
   /** El documento lleva firma: cifrar reescribe el fichero y la rompe. */
   firmado: boolean;
+  /** Lo que ha fallado en el último intento (un certificado que no se deja
+   *  leer, casi siempre). Se pinta dentro del diálogo, que sigue abierto. */
+  error: string | null;
   onConfirm: (destinatarios: DestinatarioCifrado[]) => void;
   onClose: () => void;
 }) {
@@ -142,6 +146,11 @@ export default function DialogoCifrarCert({
             Añadir destinatario…
           </button>
         </div>
+        {error && (
+          <p className="modal-error" role="alert">
+            {error}
+          </p>
+        )}
         <div className="card-actions">
           <button className="btn" onClick={onClose}>
             Cancelar

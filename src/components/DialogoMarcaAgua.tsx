@@ -60,6 +60,7 @@ export default function DialogoMarcaAgua({
   paginaActual,
   previaSrc,
   previaSize,
+  error,
   onApply,
   onClose,
 }: {
@@ -69,6 +70,9 @@ export default function DialogoMarcaAgua({
   /** Miniatura ya renderizada de esa página, si la hay. */
   previaSrc: string | null;
   previaSize: PageSize | undefined;
+  /** Lo que ha fallado en el último intento. Se pinta dentro, porque el
+   *  diálogo sigue abierto y la banda roja quedaría bajo el velo. */
+  error: string | null;
   onApply: (opts: MarcaAguaOpts) => void;
   onClose: () => void;
 }) {
@@ -374,6 +378,11 @@ export default function DialogoMarcaAgua({
             " Detrás del contenido queda tapada donde la página lleve una imagen o un fondo opaco."}
           {" Se puede quitar después con «Quitar fondo…»."}
         </p>
+        {error && (
+          <p className="modal-error" role="alert">
+            {error}
+          </p>
+        )}
         <div className="card-actions">
           <button className="btn" onClick={onClose}>
             Cancelar

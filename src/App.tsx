@@ -502,6 +502,12 @@ function App() {
     docVersion,
   );
   const [error, setError] = useState<string | null>(null);
+  /** El error de una operación lanzada DESDE un diálogo que sigue abierto
+   *  (firmar, certificar, cifrar con certificado, marca de agua). La banda
+   *  roja quedaba debajo del velo del modal y su botón no se podía pulsar,
+   *  así que ese error se pinta dentro del propio diálogo, junto a los
+   *  campos que hay que corregir. */
+  const [errorModal, setErrorModal] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
   const { requestRender, evictPage, evictAll } = useRenderCache(
@@ -3278,6 +3284,7 @@ function App() {
 
   async function applyWatermark(opts: MarcaAguaOpts) {
     if (!workPath) return;
+    setErrorModal(null);
     try {
       // el fondo no se coloca ni se gira: cubre la página entera y va por su
       // propio comando, que además deja marcado lo que pone para que
@@ -3318,7 +3325,8 @@ function App() {
         `${opts.detras ? "Fondo añadido" : "Marca de agua añadida"} en ${plural(opts.pageIndices?.length ?? pageCount, "página", "páginas")} · ${MOD}Z para deshacer`,
       );
     } catch (e) {
-      setError(String(e));
+      // el diálogo sigue abierto: el error va dentro, no bajo el velo
+      setErrorModal(String(e));
     }
   }
 
@@ -3425,6 +3433,7 @@ function App() {
    *  volver a abrirse. */
   async function aplicarCifradoCert(destinatarios: DestinatarioCifrado[]) {
     if (!workPath) return;
+    setErrorModal(null);
     const dest = await save({
       filters: [{ name: "PDF", extensions: ["pdf"] }],
       defaultPath: (originalPath ?? "documento.pdf").replace(
@@ -3443,7 +3452,7 @@ function App() {
       );
     } catch (e) {
       setNotice(null);
-      setError(String(e));
+      setErrorModal(String(e));
     }
   }
 
@@ -4339,6 +4348,7 @@ function App() {
       tsaUrl: d.tsa && !sinTsa ? d.tsaUrl.trim() || null : null,
       ltv: d.ltv,
     };
+    setErrorModal(null);
     try {
       if (certificando) {
         setNotice("Certificando…", { persistente: true });
@@ -4401,7 +4411,9 @@ function App() {
         setSelloAsk({ draft: d, dest: destino });
         return;
       }
-      setError(String(e));
+      // la contraseña equivocada del certificado es el fallo más probable
+      // de esta función: se dice dentro del diálogo, al lado del campo
+      setErrorModal(String(e));
     }
   }
 
@@ -5138,10 +5150,12 @@ function App() {
           rect={firmaRect.rect}
           firmas={firmas}
           firmasPrevias={firmasDoc}
+          error={errorModal}
           onConfirm={aplicarFirma}
           onClose={() => {
             setFirmaRect(null);
             setCertificando(false);
+            setErrorModal(null);
           }}
         />
       )}
@@ -5198,8 +5212,12 @@ function App() {
           paginaActual={pageIndex}
           previaSrc={thumbs[pageIndex] ?? null}
           previaSize={pageSizes[pageIndex]}
+          error={errorModal}
           onApply={applyWatermark}
-          onClose={() => setWmOpen(false)}
+          onClose={() => {
+            setWmOpen(false);
+            setErrorModal(null);
+          }}
         />
       )}
       {hfOpen && (
@@ -5247,8 +5265,12 @@ function App() {
       {cifrarCertAbierto && (
         <DialogoCifrarCert
           firmado={firmasDoc.length > 0}
+          error={errorModal}
           onConfirm={aplicarCifradoCert}
-          onClose={() => setCifrarCertAbierto(false)}
+          onClose={() => {
+            setCifrarCertAbierto(false);
+            setErrorModal(null);
+          }}
         />
       )}
       {protectDraft && (
