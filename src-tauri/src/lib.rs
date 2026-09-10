@@ -451,6 +451,25 @@ fn causa_llana(s: &str) -> Option<&'static str> {
     if tiene("PdfiumLibraryInternalError") || tiene("PdfiumError") {
         return Some("el PDF no ha admitido este cambio; guárdalo, ciérralo y vuelve a abrirlo");
     }
+    // **Los argumentos que no casan** (AC-074): cuando la interfaz llama a
+    // un comando con una clave que no es la suya, lo que sale es el texto
+    // de serde —«missing field `labels`»— o el de Tauri —«invalid args
+    // `workPath` for command …»—, con el nombre del módulo y de la función
+    // dentro. Eso no es un mensaje para nadie: es un fallo de la
+    // aplicación, no algo que el usuario haya hecho mal, y lo único útil
+    // que se le puede decir es que no es culpa suya y qué hacer.
+    if tiene("missing field") || tiene("unknown field") {
+        return Some(
+            "la aplicación no ha mandado todos los datos de esta acción; \
+             vuelve a intentarlo y, si sigue pasando, cierra y abre Vitela",
+        );
+    }
+    if tiene("invalid args") || tiene("invalid type:") || tiene("invalid value:") {
+        return Some(
+            "la aplicación ha mandado un dato que el motor no esperaba; \
+             vuelve a intentarlo y, si sigue pasando, cierra y abre Vitela",
+        );
+    }
     None
 }
 

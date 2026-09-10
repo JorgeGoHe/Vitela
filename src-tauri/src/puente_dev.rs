@@ -166,8 +166,14 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
             struct Args {
                 $($n: $t),*
             }
-            let a: Args = serde_json::from_value(body)
-                .map_err(|e| format!("argumentos inválidos para {}: {e}", stringify!($f)))?;
+            // el texto de serde («missing field `labels`») con el módulo y
+            // la función dentro no es un mensaje para nadie: pasa por
+            // `mensaje_llano`, que lo cuenta como lo que es —un fallo de la
+            // aplicación, no del usuario— y deja el detalle para stderr
+            let a: Args = serde_json::from_value(body).map_err(|e| {
+                eprintln!("[puente] argumentos inválidos para {}: {e}", stringify!($f));
+                crate::mensaje_llano(e)
+            })?;
             $f($(a.$n),*)
                 .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string()))
         }};
@@ -1359,6 +1365,37 @@ mod tests {
             inventados.is_empty(),
             "OPCIONALES_INDEBIDOS nombra parámetros que no existen: {inventados:?}"
         );
+    }
+
+    /// **AC-074, la propina.** Un `invoke` con una clave que el comando no
+    /// conoce contestaba con el texto crudo de serde —«argumentos
+    /// inválidos para documento::set_page_labels: missing field
+    /// `labels`»— y la banda lo enseñaba tal cual: el nombre de un módulo
+    /// de Rust, en inglés, delante de alguien que solo quería numerar unas
+    /// páginas. Es un fallo de la aplicación, no del usuario.
+    #[test]
+    fn los_argumentos_que_no_casan_se_cuentan_en_llano() {
+        let e = despachar("get_page_text", json!({ "path": "/tmp/x.pdf" })).unwrap_err();
+        for jerga in ["missing field", "::", "serde", "pageIndex"] {
+            assert!(!e.contains(jerga), "sale jerga ({jerga}): {e}");
+        }
+        assert!(
+            e.starts_with(char::is_uppercase) && e.len() > 30,
+            "el mensaje no explica nada: {e}"
+        );
+        assert!(
+            e.contains("no ha mandado todos los datos"),
+            "y dice de quién es el fallo: {e}"
+        );
+
+        // un dato del tipo que no es, lo mismo
+        let e = despachar(
+            "get_page_text",
+            json!({ "path": "/tmp/x.pdf", "pageIndex": "la primera" }),
+        )
+        .unwrap_err();
+        assert!(!e.contains("invalid type"), "sale jerga: {e}");
+        assert!(e.contains("no esperaba"), "y lo cuenta en llano: {e}");
     }
 
     /// **AC-074.** La tabla del `match` de `despachar` es una copia a mano
