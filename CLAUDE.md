@@ -1065,6 +1065,17 @@ compila los instaladores a mano o al etiquetar `v*`.
     `open_pdf` era el objeto entero, con lo que ninguna composición
     llegaba a imprimirse (AC-087). Lo que de verdad no se mira va en
     `RETORNOS_IGNORADOS` con su motivo.
+  - **Un documento tocado después de firmarlo se dice modificado**
+    (AC-083, `firma.rs`): un `/ByteRange` que ya no cabe en el fichero —o
+    cuyo hueco ha dejado de ser su `/Contents`— es **prueba** de que los
+    bytes han cambiado, no una duda. Antes se salía por ahí con el «no se
+    ha podido comprobar» que trae puesto la ficha, y quitar una página de
+    un PDF firmado lo dejaba en gris acusando al algoritmo de ser uno que
+    Vitela no sabe leer, siendo el mismo que Vitela acababa de escribir.
+    El «no se sabe» se guarda para cuando de verdad no se sabe, y
+    `algoritmo` dice cuál de las dos cosas es: con «certificado del
+    firmante ausente» la culpa no es del algoritmo y la banda no puede
+    decir que lo sea.
   - **Un mensaje con carreras de espacios dentro** (C-9): un literal partido
     en varias líneas sin la barra invertida se lleva el sangrado del código
     dentro de la frase, y eso lo lee el usuario. El aviso del PDF cifrado

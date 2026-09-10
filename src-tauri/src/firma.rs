@@ -1031,6 +1031,9 @@ pub struct FirmaInfo {
     /// Qué se ha comprobado, para la tarjeta: «RSA-2048 / SHA-256»,
     /// «ECDSA P-256 / SHA-384». Con lo no soportado, lo que se ha
     /// encontrado, para que se pueda contar.
+    /// **Y es lo que distingue los dos «no se ha podido comprobar»**: con
+    /// `"certificado del firmante ausente"` la culpa no es del algoritmo y
+    /// la banda no puede decir que lo sea.
     pub algoritmo: String,
     /// **Del documento, no de esta firma**: vale lo mismo en todas las de
     /// la lista. Es cierto cuando todas las firmas están en `"ok"` y una de
@@ -1362,15 +1365,25 @@ fn lee_firma(
         return info;
     }
     let (a, b, c, d) = (rangos[0], rangos[1], rangos[2], rangos[3]);
+    // **AC-083.** Un `/ByteRange` que se sale del fichero —o que se solapa
+    // consigo mismo— es **prueba** de que el fichero ha cambiado, no una
+    // duda: los números los escribió quien firmó y ya no cuadran con lo que
+    // hay. Antes se salía por aquí con el «no se ha podido comprobar» que
+    // trae puesto `info`, y un documento firmado y luego recortado se
+    // presentaba en gris diciendo que usaba un tipo de firma que Vitela no
+    // sabe leer, siendo la misma que Vitela acababa de escribir.
     if a + b > bytes.len() || c + d > bytes.len() || c < a + b {
+        info.estado = ESTADO_MODIFICADO.to_string();
         return info;
     }
-    // el hueco entre los dos rangos tiene que ser justo el /Contents
+    // el hueco entre los dos rangos tiene que ser justo el /Contents; si
+    // ahí hay otra cosa, los bytes se han movido
     let hueco = &bytes[a + b..c];
-    info.covers_whole_file = a == 0
-        && c + d == bytes.len()
-        && hueco.first() == Some(&b'<')
-        && hueco.last() == Some(&b'>');
+    if hueco.first() != Some(&b'<') || hueco.last() != Some(&b'>') {
+        info.estado = ESTADO_MODIFICADO.to_string();
+        return info;
+    }
+    info.covers_whole_file = a == 0 && c + d == bytes.len();
 
     if let Some(cms) = lee_cms(contents) {
         info.cert_subject = nombre_llano(&cms.subject);
@@ -2449,6 +2462,62 @@ mod tests {
         );
 
         for f in [&src, &dest, &sin_red, &sin_aia] {
+            std::fs::remove_file(f).ok();
+        }
+    }
+
+    /// **AC-083, alto.** Un documento firmado y luego modificado se
+    /// presentaba en **gris** —«no se ha podido comprobar la firma: usa un
+    /// tipo de firma que Vitela todavía no sabe leer»— siendo la misma
+    /// RSA/SHA-256 que Vitela acababa de escribir. El `/ByteRange` del
+    /// fichero recortado seguía diciendo dónde acababa el original, así que
+    /// la comprobación se salía antes de leer el CMS y se quedaba con el
+    /// «no se sabe» que trae puesto.
+    ///
+    /// Unos números que ya no caben en el fichero son **prueba** de que el
+    /// fichero ha cambiado. El «no se sabe» se guarda para cuando de verdad
+    /// no se sabe: un algoritmo que no se conoce o un certificado que falta.
+    #[test]
+    fn un_documento_firmado_y_luego_tocado_se_dice_modificado_y_no_desconocido() {
+        let dir = std::env::temp_dir();
+        let src = dir.join("firma-tocado-src.pdf");
+        let firmado = dir.join("firma-tocado-firmado.pdf");
+        crea_pdf(&["Uno", "Dos", "Tres"], &src);
+        sign(
+            &src.to_string_lossy(),
+            &firmado.to_string_lossy(),
+            &credenciales(),
+            None,
+            &Apariencia::default(),
+            &Avanzado::default(),
+        )
+        .expect("firmar");
+        assert_eq!(
+            verify_signatures(firmado.to_string_lossy().into_owned()).expect("verificar")[0]
+                .estado,
+            ESTADO_OK
+        );
+
+        // lo que hace cualquiera: abrirlo, quitar una página y guardar. El
+        // documento sigue siendo un PDF válido y su /ByteRange dice dónde
+        // acababa el de antes
+        let info = crate::open_pdf(firmado.to_string_lossy().into_owned(), None, None, None)
+            .expect("abrir el firmado");
+        crate::paginas::delete_page(info.work_path.clone(), 1).expect("quitar una página");
+        let roto = dir.join("firma-tocado-roto.pdf");
+        crate::save_pdf(info.work_path.clone(), roto.to_string_lossy().into_owned())
+            .expect("guardar");
+        crate::close_document(info.work_path).ok();
+
+        let f = &verify_signatures(roto.to_string_lossy().into_owned()).expect("verificar")[0];
+        assert_eq!(
+            f.estado, ESTADO_MODIFICADO,
+            "un /ByteRange que ya no cabe en el fichero es prueba, no duda"
+        );
+        assert!(!f.documento_intacto);
+        assert!(!f.digest_ok);
+
+        for f in [&src, &firmado, &roto] {
             std::fs::remove_file(f).ok();
         }
     }
