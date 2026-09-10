@@ -1404,7 +1404,7 @@ function App() {
     });
     if (!dest) return;
     try {
-      await exportComments(workPath, dest, "txt");
+      await exportComments(workPath, dest, originalPath?.split("/").pop());
       setNotice(
         `${plural(comentarios.length, "comentario exportado", "comentarios exportados")} a ${dest}`,
       );
@@ -3123,6 +3123,7 @@ function App() {
     "exportar-imagenes": () => setExportOpen(true),
     "exportar-texto": exportPlainText,
     "exportar-word": () => setWordAsk(true),
+    "crear-desde-imagenes": () => setImagenesOpen(true),
     // Copiar y Seleccionar todo: el menú nativo se queda con ⌘C y ⌘A antes
     // que el webview, así que las dos entradas actúan donde esté mirando el
     // usuario —el campo con el foco, si lo hay— y solo si no hay ninguno

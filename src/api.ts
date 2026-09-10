@@ -176,7 +176,7 @@ export function reorderImage(
   return invoke("reorder_image", {
     workPath,
     pageIndex,
-    imageIndex,
+    objectIndex: imageIndex,
     alFrente,
   });
 }
@@ -356,11 +356,11 @@ export function setAnnotationState(
 /** Saca la lista de comentarios a un fichero para leerla fuera: el
  *  «Resumen de comentarios» de Acrobat. */
 export function exportComments(
-  path: string,
+  workPath: string,
   destPath: string,
-  formato: "txt",
+  documentName?: string,
 ): Promise<void> {
-  return invoke("export_comments", { path, destPath, formato });
+  return invoke("export_comments", { workPath, destPath, documentName });
 }
 
 /** Todos los comentarios del documento en una sola pasada (una llamada por

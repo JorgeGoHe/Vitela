@@ -445,31 +445,13 @@ mod tests {
     /// nadie llama es trabajo que no ha llegado al usuario. Se admite una
     /// excepción mientras las dos mitades se escriben en paralelo, y se
     /// quita al integrar.
-    const NADIE_LLAMA: &[(&str, &str)] = &[
-        ("pdf_from_images", "pendiente_ui: R26 lo lleva a Archivo y al estado vacío"),
-        ("delete_attachment", "pendiente_ui: R27 lo pone en el panel de adjuntos (Supr con confirmación)"),
-        ("open_attachment", "pendiente_ui: R27 lo pone en el panel de adjuntos («Abrir», la acción principal de la fila)"),
-        ("add_callout", "pendiente_ui: H3 lo pone en la fila de modos de comentario"),
-        ("erase_ink", "pendiente_ui: H3 lo pone como conmutador dentro del modo Dibujar"),
-    ];
+    const NADIE_LLAMA: &[(&str, &str)] = &[];
 
     /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada
     /// es una función rota que el usuario no puede usar, así que la lista
     /// tiene que quedar vacía: está aquí solo mientras el arreglo vive en
     /// la otra mitad.
-    const ARGUMENTOS_PENDIENTES: &[(&str, &str)] = &[
-        (
-            "export_comments",
-            "pendiente_ui: la UI del ciclo 6 lo llama \
-             `export_comments(workPath, destPath, documentName?)` —el contrato de \
-             R31b— y la de este árbol todavía manda `path` y `formato`",
-        ),
-        (
-        "reorder_image",
-        "pendiente_ui: `api.ts` manda `imageIndex` y el comando espera \
-         `objectIndex`, como sus cinco hermanos de imagen; hasta que la UI lo \
-         corrija, «Traer al frente» y «Enviar al fondo» no llegan al backend",
-    )];
+    const ARGUMENTOS_PENDIENTES: &[(&str, &str)] = &[];
 
     /// Llamadas cuyos argumentos no son un objeto literal y el test no
     /// puede leer (`invoke("render_page", args, opts)`, que arma el objeto
