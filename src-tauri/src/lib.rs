@@ -511,7 +511,22 @@ fn open_pdf(path: String, password: Option<String>) -> Result<DocumentInfo, Stri
             Err(PdfiumError::PdfiumLibraryInternalError(
                 PdfiumInternalError::PasswordError,
             )) => return Err("PASSWORD_REQUIRED".into()),
-            Err(e) => return Err(mensaje_apertura(&e, &path)),
+            Err(e) => {
+                // un PDF cifrado **por certificado** no se abre con
+                // contraseña ninguna: hay que decir qué es en vez de
+                // dejar al usuario probando claves. Vitela sabe
+                // escribirlos (`encrypt_pdf_cert`) y todavía no abrirlos:
+                // haría falta la clave privada del destinatario, que hoy
+                // no tiene por dónde entrar
+                if std::fs::read(&path)
+                    .map(|b| b.windows(12).any(|v| v == b"Adobe.PubSec"))
+                    .unwrap_or(false)
+                {
+                    return Err("Este PDF está cifrado para unos destinatarios concretos,                                 no con contraseña. Vitela todavía no sabe abrir estos:                                 ábrelo con el programa donde tengas instalado tu                                 certificado"
+                        .into());
+                }
+                return Err(mensaje_apertura(&e, &path));
+            }
         };
         let page_count = doc.pages().len();
         let had_password = password.is_some();
@@ -1321,6 +1336,7 @@ pub fn run() {
             documento::set_metadata,
             documento::get_links,
             seguridad::encrypt_pdf,
+            seguridad::encrypt_pdf_cert,
             seguridad::remove_encryption,
             seguridad::flatten_pdf,
             seguridad::redact_area,

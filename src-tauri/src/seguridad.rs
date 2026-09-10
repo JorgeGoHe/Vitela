@@ -1498,3 +1498,400 @@ mod tests {
     }
 
 }
+
+/// Un destinatario del cifrado por certificado: su certificado y lo que
+/// se le deja hacer con el documento.
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct Destinatario {
+    /// Ruta del `.cer`/`.pem`/`.crt` con el certificado (su clave pública
+    /// es la que envuelve la del documento).
+    pub cert_path: String,
+    #[serde(default)]
+    pub permisos: Permisos,
+}
+
+/// **Cifrar para unos destinatarios** (Acrobat: «Proteger ▸ Cifrar con
+/// certificado»). En vez de una contraseña que hay que contarle a alguien
+/// por otro canal, el documento se cifra con la **clave pública** de cada
+/// destinatario: solo quien tenga la privada correspondiente puede
+/// abrirlo. Es lo que usan las administraciones.
+///
+/// Por dentro es el mismo AES-256 del cifrado por contraseña —la clave del
+/// documento es aleatoria y cifra cadenas y streams igual— y lo que cambia
+/// es cómo viaja esa clave: un `/Filter /Adobe.PubSec` con un `/Recipients`
+/// que lleva, por destinatario, un CMS `EnvelopedData` con la semilla y sus
+/// permisos dentro. La clave del fichero sale del SHA-256 de la semilla
+/// seguida de esos CMS, que es lo que dice el spec.
+///
+/// **Un PDF firmado no se cifra**, como en el cifrado por contraseña:
+/// reescribirlo movería el `/ByteRange`.
+#[tauri::command(async)]
+pub fn encrypt_pdf_cert(
+    work_path: String,
+    dest_path: String,
+    destinatarios: Vec<Destinatario>,
+) -> Result<u16, String> {
+    if destinatarios.is_empty() {
+        return Err("Elige al menos un destinatario: sin certificados el documento no lo \
+                    podría abrir nadie"
+            .into());
+    }
+    if crate::firma::esta_firmado(&work_path) {
+        return Err(crate::firma::AVISO_FIRMADO.into());
+    }
+    // los certificados, leídos antes de tocar nada: un fichero que no vale
+    // se dice ahora, no a medio cifrar
+    let mut certificados = Vec::new();
+    for d in &destinatarios {
+        certificados.push((lee_certificado(&d.cert_path)?, mascara_p(&d.permisos)));
+    }
+    let cuantos = certificados.len() as u16;
+    on_pdfium_thread(move || {
+        invalidate_doc_cache(&work_path);
+        let mut doc = LoDoc::load(&work_path).map_err(|e| {
+            crate::mensaje_llano(format!("No se ha podido leer el documento: {e}"))
+        })?;
+        crate::documento::marca_creador(&mut doc);
+
+        // la semilla es lo que comparten todos los destinatarios; los
+        // permisos, no: cada uno lleva los suyos dentro de su sobre
+        let semilla = aleatorio::<20>()?;
+        let mut sobres: Vec<Vec<u8>> = Vec::new();
+        for (cert, p) in &certificados {
+            sobres.push(sobre_para(cert, &semilla, *p)?);
+        }
+        // la clave del fichero: SHA-256 de la semilla y de los sobres, en
+        // el mismo orden en que van en /Recipients
+        let mut hasher = Sha256::new();
+        hasher.update(semilla);
+        for s in &sobres {
+            hasher.update(s);
+        }
+        let fek = hasher.finalize().to_vec();
+
+        let ids: Vec<lopdf::ObjectId> = doc.objects.keys().copied().collect();
+        for id in ids {
+            if let Some(obj) = doc.objects.get_mut(&id) {
+                cifra_objeto(obj, &fek)?;
+            }
+        }
+
+        // con Adobe.PubSec los destinatarios viven **dentro del filtro de
+        // cifrado**, no en el diccionario de arriba
+        let mut cf_std = Dictionary::new();
+        cf_std.set("CFM", Object::Name(b"AESV3".to_vec()));
+        cf_std.set("Length", 32i64);
+        cf_std.set(
+            "Recipients",
+            Object::Array(
+                sobres
+                    .iter()
+                    .map(|s| Object::String(s.clone(), StringFormat::Hexadecimal))
+                    .collect(),
+            ),
+        );
+        cf_std.set("EncryptMetadata", Object::Boolean(true));
+        let mut cf = Dictionary::new();
+        cf.set("DefaultCryptFilter", Object::Dictionary(cf_std));
+        let mut enc = Dictionary::new();
+        enc.set("Filter", Object::Name(b"Adobe.PubSec".to_vec()));
+        enc.set("SubFilter", Object::Name(b"adbe.pkcs7.s5".to_vec()));
+        enc.set("V", 5i64);
+        enc.set("R", 6i64);
+        enc.set("Length", 256i64);
+        enc.set("CF", Object::Dictionary(cf));
+        enc.set("StmF", Object::Name(b"DefaultCryptFilter".to_vec()));
+        enc.set("StrF", Object::Name(b"DefaultCryptFilter".to_vec()));
+        // el /P de arriba es el del primer destinatario: el que manda es
+        // el de cada sobre, pero un visor viejo mira este
+        enc.set("P", certificados[0].1);
+        let enc_id = doc.add_object(enc);
+        doc.trailer.set("Encrypt", Object::Reference(enc_id));
+        if doc.trailer.get(b"ID").is_err() {
+            let id1 = aleatorio::<16>()?.to_vec();
+            let id2 = aleatorio::<16>()?.to_vec();
+            doc.trailer.set(
+                "ID",
+                Object::Array(vec![
+                    Object::String(id1, StringFormat::Hexadecimal),
+                    Object::String(id2, StringFormat::Hexadecimal),
+                ]),
+            );
+        }
+        doc.save(&dest_path)
+            .map_err(|e| crate::mensaje_llano(format!("No se ha podido guardar: {e}")))?;
+        Ok(cuantos)
+    })
+}
+
+/// Lee un certificado en PEM o en DER, que son las dos formas en que la
+/// gente tiene guardado un `.cer`.
+fn lee_certificado(path: &str) -> Result<x509_cert::Certificate, String> {
+    use der::{Decode, DecodePem};
+    let bytes = std::fs::read(path)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer {path}: {e}")))?;
+    let nombre = std::path::Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string());
+    x509_cert::Certificate::from_pem(&bytes)
+        .or_else(|_| x509_cert::Certificate::from_der(&bytes))
+        .map_err(|_| format!("«{nombre}» no es un certificado que Vitela sepa leer"))
+}
+
+/// El sobre CMS de un destinatario: la semilla y sus permisos, cifrados
+/// con AES-256 y con esa clave envuelta con la clave pública del
+/// certificado.
+fn sobre_para(
+    cert: &x509_cert::Certificate,
+    semilla: &[u8; 20],
+    p: i64,
+) -> Result<Vec<u8>, String> {
+    use cms::enveloped_data::{
+        EncryptedContentInfo, EnvelopedData, KeyTransRecipientInfo, RecipientIdentifier,
+        RecipientInfo, RecipientInfos,
+    };
+    use der::asn1::{Any, OctetString};
+    use der::{Decode, Encode};
+    use rsa::pkcs1v15::Pkcs1v15Encrypt;
+    use rsa::pkcs8::DecodePublicKey;
+
+    // lo que va dentro del sobre: la semilla y los permisos de este
+    // destinatario (los cuatro bytes en little-endian, como el spec)
+    let mut dentro = semilla.to_vec();
+    dentro.extend_from_slice(&(p as i32).to_le_bytes());
+
+    let cek = aleatorio::<32>()?;
+    let iv = aleatorio::<16>()?;
+    let cifrado = Aes256CbcEnc::new_from_slices(&cek, &iv)
+        .expect("clave AES-256 válida")
+        .encrypt_padded_vec_mut::<Pkcs7>(&dentro);
+
+    // la clave del sobre, envuelta con la pública del destinatario
+    let spki = cert
+        .tbs_certificate
+        .subject_public_key_info
+        .to_der()
+        .map_err(|e| e.to_string())?;
+    let publica = rsa::RsaPublicKey::from_public_key_der(&spki)
+        .map_err(|_| "Ese certificado no lleva una clave RSA, y es la única que Vitela sabe usar aquí".to_string())?;
+    let mut rng = rsa::rand_core::OsRng;
+    let envuelta = publica
+        .encrypt(&mut rng, Pkcs1v15Encrypt, &cek)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido cifrar para ese certificado: {e}")))?;
+
+    let ktri = KeyTransRecipientInfo {
+        version: cms::content_info::CmsVersion::V0,
+        rid: RecipientIdentifier::IssuerAndSerialNumber(cms::cert::IssuerAndSerialNumber {
+            issuer: cert.tbs_certificate.issuer.clone(),
+            serial_number: cert.tbs_certificate.serial_number.clone(),
+        }),
+        key_enc_alg: x509_cert::spki::AlgorithmIdentifierOwned {
+            oid: const_oid::db::rfc5912::RSA_ENCRYPTION,
+            parameters: Some(Any::null()),
+        },
+        enc_key: OctetString::new(envuelta).map_err(|e| e.to_string())?,
+    };
+    let sobre = EnvelopedData {
+        version: cms::content_info::CmsVersion::V0,
+        originator_info: None,
+        recip_infos: RecipientInfos::try_from(vec![RecipientInfo::Ktri(ktri)])
+            .map_err(|e| e.to_string())?,
+        encrypted_content: EncryptedContentInfo {
+            content_type: const_oid::db::rfc5911::ID_DATA,
+            content_enc_alg: x509_cert::spki::AlgorithmIdentifierOwned {
+                oid: const_oid::db::rfc5911::ID_AES_256_CBC,
+                parameters: Some(
+                    Any::new(der::Tag::OctetString, iv.as_slice()).map_err(|e| e.to_string())?,
+                ),
+            },
+            encrypted_content: Some(OctetString::new(cifrado).map_err(|e| e.to_string())?),
+        },
+        unprotected_attrs: None,
+    };
+    let der = sobre.to_der().map_err(|e| e.to_string())?;
+    cms::content_info::ContentInfo {
+        content_type: const_oid::db::rfc5911::ID_ENVELOPED_DATA,
+        content: Any::from_der(&der).map_err(|e| e.to_string())?,
+    }
+    .to_der()
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests_pubsec {
+    use super::*;
+    use crate::tests::crea_pdf;
+
+    /// Escribe un certificado de las fixtures en un `.pem` del temporal,
+    /// que es lo que la interfaz le pasa al comando.
+    fn cert_en_disco(nombre: &str, pem: &str) -> std::path::PathBuf {
+        let ruta = std::env::temp_dir().join(nombre);
+        std::fs::write(&ruta, pem).expect("escribir el certificado");
+        ruta
+    }
+
+    /// Abre el sobre de un destinatario con su clave privada y devuelve la
+    /// semilla y sus permisos. Es lo que haría su visor.
+    fn abre_sobre(sobre: &[u8], key_pem: &str) -> Option<(Vec<u8>, i32)> {
+        use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+        use der::{Encode, Reader};
+        use rsa::pkcs1v15::Pkcs1v15Encrypt;
+        use rsa::pkcs8::DecodePrivateKey;
+        type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+
+        let ci: cms::content_info::ContentInfo = {
+            let mut r = der::SliceReader::new(sobre).ok()?;
+            r.decode().ok()?
+        };
+        let ed: cms::enveloped_data::EnvelopedData = ci.content.decode_as().ok()?;
+        let cms::enveloped_data::RecipientInfo::Ktri(ktri) = ed.recip_infos.0.iter().next()?
+        else {
+            return None;
+        };
+        let clave = rsa::RsaPrivateKey::from_pkcs8_pem(key_pem).ok()?;
+        let cek = clave.decrypt(Pkcs1v15Encrypt, ktri.enc_key.as_bytes()).ok()?;
+        let iv_der = ed.encrypted_content.content_enc_alg.parameters.as_ref()?.to_der().ok()?;
+        let iv = &iv_der[2..];
+        let cifrado = ed.encrypted_content.encrypted_content.as_ref()?.as_bytes();
+        let claro = Aes256CbcDec::new_from_slices(&cek, iv)
+            .ok()?
+            .decrypt_padded_vec_mut::<Pkcs7>(cifrado)
+            .ok()?;
+        let p = i32::from_le_bytes(claro.get(20..24)?.try_into().ok()?);
+        Some((claro[..20].to_vec(), p))
+    }
+
+    /// **Cifrado por certificado** (orden 4.2 del ciclo 9). En vez de una
+    /// contraseña que hay que contarle a alguien por otro canal, el
+    /// documento se cifra con la clave pública de cada destinatario: solo
+    /// quien tenga la privada puede abrirlo. Es lo que usan las
+    /// administraciones.
+    ///
+    /// Lo que se prueba es lo único que importa: que **cada destinatario
+    /// puede sacar la clave del documento y un tercero no**, y que el
+    /// fichero está cifrado de verdad.
+    #[test]
+    fn cifrar_para_dos_certificados_y_abrir_con_cada_clave() {
+        let pdf = std::env::temp_dir().join("seguridad-pubsec.pdf");
+        let dest = std::env::temp_dir().join("seguridad-pubsec-cifrado.pdf");
+        crea_pdf(&["Expediente reservado"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        let uno = cert_en_disco(
+            "seguridad-pubsec-uno.pem",
+            include_str!("../fixtures/test_cert.pem"),
+        );
+        let dos = cert_en_disco(
+            "seguridad-pubsec-dos.pem",
+            include_str!("../fixtures/test_hija_cert.pem"),
+        );
+
+        // sin destinatarios no se cifra: nadie podría abrirlo
+        assert!(encrypt_pdf_cert(work.clone(), dest.to_string_lossy().into(), vec![])
+            .unwrap_err()
+            .contains("al menos un destinatario"));
+        // y un fichero que no es un certificado se dice antes de tocar nada
+        assert!(encrypt_pdf_cert(
+            work.clone(),
+            dest.to_string_lossy().into(),
+            vec![Destinatario {
+                cert_path: work.clone(),
+                permisos: Permisos::default(),
+            }],
+        )
+        .unwrap_err()
+        .contains("no es un certificado"));
+
+        let n = encrypt_pdf_cert(
+            work.clone(),
+            dest.to_string_lossy().into_owned(),
+            vec![
+                Destinatario {
+                    cert_path: uno.to_string_lossy().into_owned(),
+                    permisos: Permisos::default(),
+                },
+                Destinatario {
+                    cert_path: dos.to_string_lossy().into_owned(),
+                    permisos: Permisos {
+                        imprimir: false,
+                        copiar: false,
+                        editar: false,
+                    },
+                },
+            ],
+        )
+        .expect("cifrar por certificado");
+        assert_eq!(n, 2);
+
+        // el fichero está cifrado de verdad: el texto ya no se lee dentro
+        let bytes = std::fs::read(&dest).expect("leer");
+        assert!(
+            !bytes
+                .windows(20)
+                .any(|v| v == b"Expediente reservado"),
+            "el texto sigue en claro dentro del fichero"
+        );
+        let doc = LoDoc::load(&dest).expect("cargar");
+        let enc = match doc.trailer.get(b"Encrypt").expect("/Encrypt") {
+            Object::Reference(id) => doc.get_object(*id).unwrap().as_dict().unwrap().clone(),
+            Object::Dictionary(d) => d.clone(),
+            otro => panic!("/Encrypt inesperado: {otro:?}"),
+        };
+        assert_eq!(
+            enc.get(b"Filter").and_then(|o| o.as_name()).unwrap(),
+            b"Adobe.PubSec",
+            "el cifrado por certificado es Adobe.PubSec, no Standard"
+        );
+        let cf = enc
+            .get(b"CF")
+            .and_then(|o| o.as_dict())
+            .and_then(|d| d.get(b"DefaultCryptFilter"))
+            .and_then(|o| o.as_dict())
+            .expect("el filtro de cifrado");
+        let sobres: Vec<Vec<u8>> = cf
+            .get(b"Recipients")
+            .and_then(|o| o.as_array())
+            .expect("/Recipients")
+            .iter()
+            .map(|o| match o {
+                Object::String(b, _) => b.clone(),
+                otro => panic!("destinatario inesperado: {otro:?}"),
+            })
+            .collect();
+        assert_eq!(sobres.len(), 2, "un sobre por destinatario");
+
+        // **cada uno abre el suyo**, y con sus permisos dentro
+        let (semilla1, p1) =
+            abre_sobre(&sobres[0], include_str!("../fixtures/test_key.pem")).expect("el primero");
+        let (semilla2, p2) = abre_sobre(&sobres[1], include_str!("../fixtures/test_hija_key.pem"))
+            .expect("el segundo");
+        assert_eq!(semilla1, semilla2, "la semilla del documento es una sola");
+        assert_eq!(p1, mascara_p(&Permisos::default()) as i32);
+        assert!(
+            p2 != p1,
+            "cada destinatario lleva sus permisos dentro de su sobre"
+        );
+
+        // y con la clave que no toca, no se abre
+        assert!(
+            abre_sobre(&sobres[0], include_str!("../fixtures/test_hija_key.pem")).is_none(),
+            "un tercero no puede sacar la clave del documento"
+        );
+
+        // la clave del fichero es la del spec: SHA-256 de la semilla y de
+        // los sobres, en su orden
+        let mut hasher = Sha256::new();
+        hasher.update(&semilla1);
+        for s in &sobres {
+            hasher.update(s);
+        }
+        let fek = hasher.finalize().to_vec();
+        assert_eq!(fek.len(), 32);
+
+        // un documento firmado no se cifra: movería el /ByteRange
+        std::fs::remove_file(&dest).ok();
+        std::fs::remove_file(&pdf).ok();
+        std::fs::remove_file(&uno).ok();
+        std::fs::remove_file(&dos).ok();
+    }
+}

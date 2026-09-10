@@ -279,6 +279,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "set_metadata" => cmd!(documento::set_metadata, { work_path: String, meta: documento::Metadata }),
         "get_links" => cmd!(documento::get_links, { path: String, page_index: u16 }),
         "encrypt_pdf" => cmd!(seguridad::encrypt_pdf, { work_path: String, dest_path: Option<String>, user_password: String, owner_password: Option<String>, permisos: Option<seguridad::Permisos> }),
+        "encrypt_pdf_cert" => cmd!(seguridad::encrypt_pdf_cert, { work_path: String, dest_path: String, destinatarios: Vec<seguridad::Destinatario> }),
         "remove_encryption" => cmd!(seguridad::remove_encryption, { work_path: String }),
         "flatten_pdf" => cmd!(seguridad::flatten_pdf, { work_path: String }),
         "redact_area" => cmd!(seguridad::redact_area, { work_path: String, page_index: u16, rect: crate::Rect, dry_run: bool }),
@@ -530,6 +531,10 @@ mod tests {
             "audit_pdf",
             "ciclo 9: la barra apilada y la tabla del diálogo de comprimir llegan \
              con la interfaz",
+        ),
+        (
+            "encrypt_pdf_cert",
+            "ciclo 9: «Proteger ▸ Cifrar con certificado…» llega con la interfaz",
         ),
         (
             "compose_print",
