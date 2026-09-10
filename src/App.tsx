@@ -138,6 +138,7 @@ import {
   cargaVista,
   cuandoLlano,
   etiquetaDePagina,
+  paginaEscrita,
   pagineoLlano,
   type RangoEtiquetas,
   estadoDeFirma,
@@ -2642,10 +2643,17 @@ function App() {
   /** Salta a la página escrita en la píldora; fuera de rango, gotoPage la
    *  recorta en silencio. Es un salto largo, así que pasa por `saltarA` y
    *  ⌥← devuelve a donde se estaba leyendo. */
+  /** «Ir a la página» entiende la etiqueta que ella misma enseña —«xii»— y,
+   *  si lo escrito no es ninguna, el número físico, como Acrobat. */
   function irAPaginaEscrita() {
-    const n = Number.parseInt(pageDraft ?? "", 10);
+    const destino = paginaEscrita(pageDraft ?? "", etiquetas, pageCount);
     setPageDraft(null);
-    if (!Number.isNaN(n)) saltarA(Math.min(Math.max(n - 1, 0), pageCount - 1));
+    if (destino === null) {
+      if ((pageDraft ?? "").trim())
+        setNotice(`En este documento no hay ninguna página «${pageDraft}»`);
+      return;
+    }
+    saltarA(destino);
   }
 
   /** El punto de lectura de ahora mismo. */
@@ -5682,15 +5690,14 @@ function App() {
                   className="pill-input"
                   inputMode="numeric"
                   autoFocus
-                  // el número que se escribe es siempre el FÍSICO: es el
-                  // que sabe todo el mundo y el único que no depende de la
-                  // numeración del documento
-                  aria-label={`Ir a la página (1 a ${pageCount}, por su número)`}
+                  // se admite la etiqueta («xii») además del número físico:
+                  // la píldora enseña la etiqueta a un centímetro del campo
+                  // y no aceptarla era la interfaz contradiciéndose
+                  aria-label={`Ir a la página (1 a ${pageCount}, por su número o por su etiqueta)`}
+                  title="Escribe el número de página o su etiqueta («xii»)"
                   value={pageDraft}
                   onFocus={(e) => e.currentTarget.select()}
-                  onChange={(e) =>
-                    setPageDraft(e.target.value.replace(/[^0-9]/g, ""))
-                  }
+                  onChange={(e) => setPageDraft(e.target.value)}
                   onBlur={() => setPageDraft(null)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") irAPaginaEscrita();

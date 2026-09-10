@@ -74,7 +74,7 @@ const GRUPOS: { titulo: string; atajos: Atajo[] }[] = [
       [atajo("'"), "Cuadrícula"],
       [atajo("Y", "shift cmd"), "Leer en voz alta desde esta página (Esc para)"],
       [`${atajo("←", "alt")} · ${atajo("→", "alt")}`, "Vista anterior y siguiente"],
-      [atajo("N", "shift cmd"), "Ir a la página"],
+      [atajo("N", "shift cmd"), "Ir a la página (por su número o su etiqueta)"],
       [`${atajo("←", "")} · ${atajo("→", "")}`, "Página anterior y siguiente"],
       [
         atajo("Espacio", ""),

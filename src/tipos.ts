@@ -786,6 +786,27 @@ export function etiquetaDePagina(
   return texto || String(i + 1);
 }
 
+/** La página que se ha escrito en «Ir a la página». Se busca primero como
+ *  **etiqueta** —«xii», «A-3»: es como se llama la hoja dentro del
+ *  documento y es lo que la píldora enseña a un centímetro del campo— y, si
+ *  lo escrito no es ninguna, se lee como número físico, que es lo que hace
+ *  Acrobat. Devuelve el índice de página, o `null` si no es ni una cosa ni
+ *  la otra. */
+export function paginaEscrita(
+  texto: string,
+  rangos: RangoEtiquetas[],
+  pageCount: number,
+): number | null {
+  const buscado = texto.trim().toLowerCase();
+  if (!buscado) return null;
+  for (let i = 0; i < pageCount; i++) {
+    if (etiquetaDePagina(rangos, i).trim().toLowerCase() === buscado) return i;
+  }
+  const n = Number.parseInt(buscado.replace(/[^0-9]/g, ""), 10);
+  if (Number.isNaN(n)) return null;
+  return Math.min(Math.max(n - 1, 0), pageCount - 1);
+}
+
 /** Cómo se enseña una página cuando su etiqueta no es su número físico:
  *  «ii (2)», como Acrobat. Si coinciden, solo el número. */
 export function pagineoLlano(rangos: RangoEtiquetas[], i: number): string {
