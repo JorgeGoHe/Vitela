@@ -114,6 +114,8 @@ import {
   setPageLabels,
   historyState,
   removeEncryption,
+  encryptPdfCert,
+  type DestinatarioCifrado,
   TODO_PERMITIDO,
   getOutline,
   setMetadata,
@@ -213,6 +215,7 @@ import PanelComentarios from "./components/PanelComentarios";
 import DialogoExtraer from "./components/DialogoExtraer";
 import DialogoPropiedades from "./components/DialogoPropiedades";
 import DialogoContrasena from "./components/DialogoContrasena";
+import DialogoCifrarCert from "./components/DialogoCifrarCert";
 import DialogoProteger, {
   type ProtegerDraft,
 } from "./components/DialogoProteger";
@@ -656,6 +659,8 @@ function App() {
     password: string;
   } | null>(null);
   const [protectDraft, setProtectDraft] = useState<ProtegerDraft | null>(null);
+  // «Cifrar con certificado…»: la lista de destinatarios vive en su diálogo
+  const [cifrarCertAbierto, setCifrarCertAbierto] = useState(false);
   // el FICHERO en disco está cifrado (se abrió con contraseña, o ya se ha
   // guardado con la protección puesta): solo entonces la barra pone el candado
   const [protegido, setProtegido] = useState(false);
@@ -3395,6 +3400,34 @@ function App() {
     }
   }
 
+  /** Cifrado por certificado: escribe **siempre una copia**. Quien cifra
+   *  para otros no tiene por qué tener la clave privada de ninguno de
+   *  ellos, así que cifrar el documento abierto lo dejaría sin poder
+   *  volver a abrirse. */
+  async function aplicarCifradoCert(destinatarios: DestinatarioCifrado[]) {
+    if (!workPath) return;
+    const dest = await save({
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+      defaultPath: (originalPath ?? "documento.pdf").replace(
+        /\.pdf$/i,
+        "-cifrado.pdf",
+      ),
+      title: "Guardar PDF cifrado",
+    });
+    if (!dest) return;
+    try {
+      setNotice("Cifrando…", { persistente: true });
+      await encryptPdfCert(workPath, dest, destinatarios);
+      setCifrarCertAbierto(false);
+      setNotice(
+        `Copia cifrada para ${plural(destinatarios.length, "destinatario", "destinatarios")} en ${dest}`,
+      );
+    } catch (e) {
+      setNotice(null);
+      setError(String(e));
+    }
+  }
+
   /** Segunda opción del mismo diálogo: una copia protegida aparte. */
   async function applyProtectCopy() {
     // se valida antes de abrir el diálogo del sistema: nadie elige carpeta
@@ -4476,6 +4509,7 @@ function App() {
     certificar: empezarCertificacion,
     proteger: () =>
       setProtectDraft({ user: "", owner: "", ...TODO_PERMITIDO }),
+    "cifrar-certificado": () => setCifrarCertAbierto(true),
     "quitar-proteccion": () => {
       if (protegido || protPendiente) setQuitarProtAsk(true);
     },
@@ -4846,6 +4880,7 @@ function App() {
                     ...TODO_PERMITIDO,
                   })
                 }
+                cifrarConCertificado={() => setCifrarCertAbierto(true)}
                 puedeQuitarProteccion={protegido || protPendiente}
                 quitarProteccion={() => setQuitarProtAsk(true)}
                 abrirAplanar={() => setFlattenAsk(true)}
@@ -5152,6 +5187,13 @@ function App() {
           onClose={() => setPwdDraft(null)}
           etiqueta="Abrir"
           placeholder="Contraseña del documento"
+        />
+      )}
+      {cifrarCertAbierto && (
+        <DialogoCifrarCert
+          firmado={firmasDoc.length > 0}
+          onConfirm={aplicarCifradoCert}
+          onClose={() => setCifrarCertAbierto(false)}
         />
       )}
       {protectDraft && (

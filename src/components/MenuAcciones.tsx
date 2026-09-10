@@ -68,6 +68,7 @@ export default function MenuAcciones({
   certificar,
   puedeCertificar,
   abrirProteger,
+  cifrarConCertificado,
   puedeQuitarProteccion,
   quitarProteccion,
   abrirAplanar,
@@ -122,6 +123,9 @@ export default function MenuAcciones({
    *  enseña apagada con el motivo al lado. */
   puedeCertificar: boolean;
   abrirProteger: () => void;
+  /** «Cifrar con certificado…»: en vez de una contraseña, la lista de
+   *  destinatarios que podrán abrirlo con su clave privada. */
+  cifrarConCertificado: () => void;
   /** Solo se ofrece quitar la contraseña si el documento la tiene. */
   puedeQuitarProteccion: boolean;
   quitarProteccion: () => void;
@@ -349,6 +353,11 @@ export default function MenuAcciones({
               icon="lock"
               texto="Proteger con contraseña…"
               onSelect={ejecutar(abrirProteger)}
+            />
+            <Entrada
+              icon="lock"
+              texto="Cifrar con certificado…"
+              onSelect={ejecutar(cifrarConCertificado)}
             />
             {puedeQuitarProteccion && (
               <Entrada

@@ -1128,6 +1128,27 @@ export function encryptPdf(args: {
 }
 
 /** Quita el cifrado del documento de trabajo. */
+/** Un destinatario del cifrado por certificado: su certificado público y
+ *  lo que se le deja hacer. Van dentro de una lista de estructuras, así que
+ *  las claves se escriben ya en snake_case. */
+export type DestinatarioCifrado = {
+  cert_path: string;
+  permisos: Permisos;
+};
+
+/** Cifra el PDF **para unos destinatarios** en vez de con una contraseña:
+ *  un `/Filter /Adobe.PubSec` con un recipiente por certificado que envuelve
+ *  la clave del documento. Es lo que usan las administraciones. Escribe
+ *  siempre una copia: el documento abierto se queda como está, porque quien
+ *  lo cifra no tiene por qué poder volver a abrirlo. */
+export function encryptPdfCert(
+  workPath: string,
+  destPath: string,
+  destinatarios: DestinatarioCifrado[],
+): Promise<void> {
+  return invoke("encrypt_pdf_cert", { workPath, destPath, destinatarios });
+}
+
 export function removeEncryption(workPath: string): Promise<void> {
   return invoke("remove_encryption", { workPath });
 }
