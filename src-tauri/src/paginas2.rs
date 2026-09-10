@@ -39,11 +39,16 @@ pub fn add_blank_page(work_path: String, index: u16) -> Result<u16, String> {
 /// como Acrobat) y se centra, sin deformarla nunca; con `"imagen"` la
 /// página mide lo que mide la imagen a 72 dpi y no hay margen.
 ///
-/// Devuelve **cuántas páginas** ha hecho, que no siempre son cuántas
-/// imágenes le dieron: una que no se deje leer se salta en vez de tirar el
+/// Devuelve **cuántas páginas** ha hecho y **cuáles se han quedado fuera y
+/// por qué**: una imagen que no se deje leer se salta en vez de tirar el
 /// lote entero —quien acaba de elegir veinte escaneos no quiere empezar de
-/// cero por uno—, y la UI cuenta la diferencia. Si no se puede leer
-/// ninguna, se dice cuáles.
+/// cero por uno—, pero un resultado parcial en silencio es peor todavía.
+/// Con la lista, la UI puede decir «19 de 20 páginas · *foto-7.heic* no se
+/// ha podido leer» y dejar marcada esa fila, que es la regla que el
+/// proyecto ya cumple en `replace_text` y en `export_docx`.
+///
+/// Si no se puede leer **ninguna** sigue siendo un error, con los nombres y
+/// los motivos dentro: no hay documento que enseñar.
 ///
 /// Escribe un fichero nuevo: no toca ningún documento abierto y no deja
 /// paso de deshacer.
@@ -52,7 +57,7 @@ pub fn pdf_from_images(
     image_paths: Vec<String>,
     dest_path: String,
     tamano: String,
-) -> Result<u16, String> {
+) -> Result<InformeImagenes, String> {
     if image_paths.is_empty() {
         return Err("No hay ninguna imagen con la que hacer el PDF".into());
     }
@@ -60,18 +65,22 @@ pub fn pdf_from_images(
         let pdfium = pdfium()?;
         let mut doc = pdfium.create_new_pdf().map_err(crate::mensaje_llano)?;
         const MARGEN: f32 = 36.0;
-        let mut fallidas: Vec<String> = Vec::new();
+        let mut saltadas: Vec<ImagenSaltada> = Vec::new();
         for ruta in &image_paths {
             // una foto que no se deja leer no se lleva por delante el lote:
-            // se salta y el recuento lo dice («3 de 4»), que es lo que pide
-            // quien acaba de elegir veinte escaneos
-            let Ok(img) = image::open(ruta) else {
-                fallidas.push(ruta.clone());
-                continue;
+            // se salta, se apunta con su motivo y el recuento lo dice
+            // («19 de 20»), que es lo que pide quien acaba de elegir veinte
+            // escaneos
+            let img = match image::open(ruta) {
+                Ok(img) => img,
+                Err(e) => {
+                    saltadas.push(ImagenSaltada::nueva(ruta, motivo_de_imagen(&e)));
+                    continue;
+                }
             };
             let (iw, ih) = (img.width() as f32, img.height() as f32);
             if iw < 1.0 || ih < 1.0 {
-                fallidas.push(ruta.clone());
+                saltadas.push(ImagenSaltada::nueva(ruta, "La imagen no tiene tamaño".into()));
                 continue;
             }
             let papel = match tamano.as_str() {
@@ -109,14 +118,63 @@ pub fn pdf_from_images(
         }
         let total = doc.pages().len();
         if total == 0 {
-            let cuales = fallidas.join(", ");
+            let cuales = saltadas
+                .iter()
+                .map(|s| format!("{} ({})", s.nombre, s.motivo))
+                .collect::<Vec<_>>()
+                .join(", ");
             return Err(format!("No se ha podido leer ninguna de las imágenes: {cuales}"));
         }
         doc.save_to_file(&dest_path).map_err(|e| {
             crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}"))
         })?;
-        Ok(total)
+        Ok(InformeImagenes { paginas: total, saltadas })
     })
+}
+
+/// Lo que ha salido de «Crear PDF desde imágenes»: las páginas escritas y
+/// las imágenes que se han quedado fuera, con su motivo.
+#[derive(serde::Serialize, Debug, Default)]
+pub struct InformeImagenes {
+    pub paginas: u16,
+    pub saltadas: Vec<ImagenSaltada>,
+}
+
+/// Una imagen que no ha llegado a ser página. Lleva la ruta —para que la UI
+/// marque su fila en el diálogo, que es donde el usuario la eligió— y el
+/// nombre suelto, que es lo que se enseña.
+#[derive(serde::Serialize, Debug)]
+pub struct ImagenSaltada {
+    pub ruta: String,
+    pub nombre: String,
+    pub motivo: String,
+}
+
+impl ImagenSaltada {
+    fn nueva(ruta: &str, motivo: String) -> Self {
+        let nombre = std::path::Path::new(ruta)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| ruta.to_string());
+        Self { ruta: ruta.to_string(), nombre, motivo }
+    }
+}
+
+/// Por qué no se ha podido leer una imagen, en llano y en español. El
+/// `Display` del crate `image` va en inglés y en su jerga («The image
+/// format could not be determined»), y esto lo lee el usuario en la banda.
+fn motivo_de_imagen(e: &image::ImageError) -> String {
+    use image::ImageError;
+    match e {
+        ImageError::IoError(io) if io.kind() == std::io::ErrorKind::NotFound => {
+            "El fichero ya no está donde estaba".into()
+        }
+        ImageError::IoError(_) => "No se ha podido leer el fichero".into(),
+        ImageError::Unsupported(_) => "Vitela no entiende ese formato de imagen".into(),
+        ImageError::Decoding(_) => "El fichero está dañado o no es una imagen".into(),
+        ImageError::Limits(_) => "La imagen es demasiado grande".into(),
+        _ => "No se ha podido leer como imagen".into(),
+    }
 }
 
 /// Duplica la página dada (la copia queda justo después). Devuelve el total.
@@ -567,9 +625,10 @@ mod tests {
             rutas.push(ruta.to_string_lossy().into_owned());
         }
 
-        let total = pdf_from_images(rutas.clone(), dest.to_string_lossy().into_owned(), "a4".into())
+        let hecho = pdf_from_images(rutas.clone(), dest.to_string_lossy().into_owned(), "a4".into())
             .expect("crear el PDF");
-        assert_eq!(total, 3, "una página por imagen");
+        assert_eq!(hecho.paginas, 3, "una página por imagen");
+        assert!(hecho.saltadas.is_empty(), "no se ha quedado ninguna fuera");
         let d = dest.to_string_lossy().into_owned();
         let sizes = crate::get_page_sizes(d.clone()).expect("tamaños");
         assert_eq!(sizes.len(), 3);
@@ -607,24 +666,54 @@ mod tests {
         // sin imágenes no hay PDF, y se dice
         assert!(pdf_from_images(vec![], d.clone(), "a4".into()).is_err());
 
-        // **R26.** Una imagen que no se deja leer se salta y el lote sigue:
-        // el recuento que vuelve es el que la UI enseña («2 de 3»)
+        // **R26 y R35b.** Una imagen que no se deja leer se salta y el lote
+        // sigue; y el informe dice **cuál** se ha quedado fuera y por qué,
+        // que es lo que la UI necesita para decir «2 de 3 · *X* no se ha
+        // podido leer» en vez de callarse la que falta.
         let rota = std::env::temp_dir().join("pdf-imagenes-rota.png");
         std::fs::write(&rota, b"esto no es un png").expect("escribir la rota");
+        let que_no_esta = std::env::temp_dir().join("pdf-imagenes-fantasma.png");
+        std::fs::remove_file(&que_no_esta).ok();
         let dest3 = std::env::temp_dir().join("pdf-imagenes-con-rota.pdf");
         let mezcla = vec![
             rutas[0].clone(),
             rota.to_string_lossy().into_owned(),
             rutas[1].clone(),
+            que_no_esta.to_string_lossy().into_owned(),
         ];
-        let hechas = pdf_from_images(
+        let hecho = pdf_from_images(
             mezcla,
             dest3.to_string_lossy().into_owned(),
             "a4".into(),
         )
         .expect("el lote sigue con las que sí se leen");
-        assert_eq!(hechas, 2, "dos páginas de tres imágenes");
-        // y si no se lee ninguna, se dice cuál
+        assert_eq!(hecho.paginas, 2, "dos páginas de cuatro imágenes");
+        assert_eq!(hecho.saltadas.len(), 2, "y dos que se han quedado fuera");
+        assert_eq!(hecho.saltadas[0].nombre, "pdf-imagenes-rota.png");
+        assert_eq!(hecho.saltadas[0].ruta, rota.to_string_lossy());
+        assert!(
+            hecho.saltadas[0].motivo.contains("dañado")
+                || hecho.saltadas[0].motivo.contains("formato"),
+            "el motivo: {}",
+            hecho.saltadas[0].motivo
+        );
+        assert_eq!(hecho.saltadas[1].nombre, "pdf-imagenes-fantasma.png");
+        assert!(
+            hecho.saltadas[1].motivo.contains("ya no está"),
+            "el motivo: {}",
+            hecho.saltadas[1].motivo
+        );
+        // y ningún motivo habla en inglés ni en la jerga del crate `image`
+        for s in &hecho.saltadas {
+            assert!(
+                !s.motivo.contains("format")
+                    && !s.motivo.contains("Error")
+                    && !s.motivo.contains("os error"),
+                "el motivo tiene que estar en llano: {}",
+                s.motivo
+            );
+        }
+        // y si no se lee ninguna, sigue siendo un error y se dice cuál
         let err = pdf_from_images(
             vec![rota.to_string_lossy().into_owned()],
             dest3.to_string_lossy().into_owned(),
