@@ -3132,6 +3132,40 @@ textarea {
   flex-shrink: 0;
 }
 
+/* la rejilla de la galería de sellos: cada celda enseña la cara con la que
+   va a quedar en el papel, que es de lo que va una galería */
+.sello-rejilla {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.sello-celda {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+}
+
+.sello-celda:hover {
+  border-color: var(--accent);
+}
+
+.sello-celda.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.sello-celda-pie {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
 .sello-preview {
   font-family: var(--font-mono);
   font-size: 12px;

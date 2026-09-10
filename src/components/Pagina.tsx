@@ -75,7 +75,10 @@ export type ToolProps = {
   shapeFill: boolean;
   shapeWidth: number;
   stampText: string;
-  stampCustom: string;
+  /** El sello compone quién y cuándo dentro de su apariencia. */
+  stampDinamico: boolean;
+  /** Se ha estampado: la galería lo recuerda como el último usado. */
+  onStampUsed: (texto: string, dinamico: boolean) => void;
   stampColor: string;
   freeTextColor: string;
   freeTextSize: number;
@@ -476,7 +479,9 @@ function Pagina({
       imagenes.insertImageAt(x, y);
       return;
     }
-    if (mode === "firmar") {
+    // un sello de «Mis sellos» es una imagen: se coloca por el mismo camino
+    // que la firma manuscrita, sin una segunda implementación del gesto
+    if (mode === "firmar" || (mode === "stamp" && activeSig)) {
       // con una marca armada, el clic la coloca (Acrobat: se ponen con un
       // clic y se mueven después); si no, manda la firma manuscrita
       if (tool.fillMark) {
@@ -637,7 +642,7 @@ function Pagina({
       anotaciones.setStrokePts(anotaciones.strokeLiveRef.current);
       return;
     }
-    if (mode === "firmar") {
+    if (mode === "firmar" || (mode === "stamp" && activeSig)) {
       const start = areas.sigDragRef.current;
       if (!activeSig || !start) return;
       const { x, y } = pagePoint(e, scale, viewRotation);
@@ -787,7 +792,7 @@ function Pagina({
       }
       return;
     }
-    if (mode === "firmar") {
+    if (mode === "firmar" || (mode === "stamp" && activeSig)) {
       const start = areas.sigDragRef.current;
       areas.sigDragRef.current = null;
       if (!activeSig || !start) return;

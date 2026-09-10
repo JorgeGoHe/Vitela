@@ -1,11 +1,18 @@
 import { invoke } from "./ipc";
 import type { AnnotationInfo, SearchMatch, TextBlock } from "./tipos";
 
-/** Firma manuscrita guardada en la biblioteca del usuario. */
+/** Para qué sirve una imagen guardada: la firma entera, las iniciales que
+ *  se ponen en cada página o un sello propio. **Vive en el backend**, que
+ *  es donde vive la biblioteca: en `localStorage` se perdía al cambiar de
+ *  máquina y no la conocía nadie más. */
+export type RanuraImagen = "firma" | "iniciales" | "sello";
+
+/** Imagen guardada en la biblioteca del usuario (firma, iniciales o sello). */
 export type FirmaGuardada = {
   id: string;
   name: string;
   png_base64: string;
+  ranura: RanuraImagen;
 };
 
 export function listStoredSignatures(): Promise<FirmaGuardada[]> {
@@ -15,12 +22,16 @@ export function listStoredSignatures(): Promise<FirmaGuardada[]> {
 export function saveStoredSignature(
   name: string,
   pngBase64: string,
+  ranura: RanuraImagen,
 ): Promise<FirmaGuardada> {
-  return invoke("save_stored_signature", { name, pngBase64 });
+  return invoke("save_stored_signature", { name, pngBase64, ranura });
 }
 
-export function importSignatureFile(imagePath: string): Promise<FirmaGuardada> {
-  return invoke("import_signature_file", { imagePath });
+export function importSignatureFile(
+  imagePath: string,
+  ranura: RanuraImagen,
+): Promise<FirmaGuardada> {
+  return invoke("import_signature_file", { imagePath, ranura });
 }
 
 export function deleteStoredSignature(id: string): Promise<void> {
@@ -286,7 +297,12 @@ export function addShape(args: {
   return invoke("add_shape", { fill: null, ...args });
 }
 
-/** Sello de texto centrado en el punto dado. */
+/** Sello de texto centrado en el punto dado.
+ *
+ *  `dinamico` es la segunda línea de un **sello dinámico** —quién y cuándo,
+ *  «Jorge Gómez · 10/09/2026 19:40»— con la plantilla ya resuelta en el
+ *  momento de estampar; el backend la compone dentro del `/AP` debajo de la
+ *  palabra del sello. Sin él, el sello de siempre. */
 export function addStamp(args: {
   workPath: string;
   pageIndex: number;
@@ -296,8 +312,9 @@ export function addStamp(args: {
   y: number;
   fontSize: number;
   author?: string | null;
+  dinamico?: string | null;
 }): Promise<void> {
-  return invoke("add_stamp", { author: null, ...args });
+  return invoke("add_stamp", { author: null, dinamico: null, ...args });
 }
 
 /** Render de página como URL para <img>. En Tauri llega como bytes (IPC

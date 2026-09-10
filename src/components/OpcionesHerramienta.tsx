@@ -8,7 +8,6 @@ import {
 } from "../tipos";
 import type { Alineacion } from "../api";
 import type { MarcaRellenar } from "./Pagina";
-import { STAMP_PRESETS } from "../hooks/useHerramienta";
 import Icon from "./Icon";
 
 const SHAPE_COLORS = ANNOT_COLORS;
@@ -89,8 +88,8 @@ export default function OpcionesHerramienta({
   setShapeWidth,
   stampText,
   setStampText,
-  stampCustom,
-  setStampCustom,
+  stampDinamico,
+  abrirSellos,
   stampColor,
   hayFormularios,
   resaltarCampos,
@@ -158,8 +157,10 @@ export default function OpcionesHerramienta({
   setShapeWidth: (w: number) => void;
   stampText: string;
   setStampText: (t: string) => void;
-  stampCustom: string;
-  setStampCustom: (t: string) => void;
+  /** El sello elegido compone quién y cuándo debajo de la palabra. */
+  stampDinamico: boolean;
+  /** Abre la galería: la rejilla con la vista previa de cada sello. */
+  abrirSellos: () => void;
   stampColor: string;
   /** El documento tiene campos: solo entonces sale la fila de Seleccionar. */
   hayFormularios: boolean;
@@ -731,27 +732,18 @@ export default function OpcionesHerramienta({
       )}
       {mode === "stamp" && (
         <div className="tool-options">
-          <select
-            className="size-select"
+          <button className="btn" onClick={abrirSellos}>
+            <Icon name="stamp" size={14} />
+            Sellos…
+          </button>
+          <input
+            type="text"
+            className="stamp-input"
+            placeholder="Texto del sello"
+            aria-label="Texto del sello"
             value={stampText}
-            onChange={(e) => setStampText(e.target.value)}
-          >
-            {STAMP_PRESETS.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-            <option value="custom">Personalizado…</option>
-          </select>
-          {stampText === "custom" && (
-            <input
-              type="text"
-              className="stamp-input"
-              placeholder="Texto del sello"
-              value={stampCustom}
-              onChange={(e) => setStampCustom(e.target.value.toUpperCase())}
-            />
-          )}
+            onChange={(e) => setStampText(e.target.value.toUpperCase())}
+          />
           <div className="swatches">
             {["#c0392b", "#2743c0", "#2ea043", "#1d1c18"].map((c) => (
               <button
@@ -786,9 +778,13 @@ export default function OpcionesHerramienta({
             className="sello-preview"
             style={{ color: stampColor, borderColor: stampColor }}
           >
-            {(stampText === "custom" ? stampCustom || "SELLO" : stampText)}
+            {stampText || "SELLO"}
           </span>
-          <span className="opt-hint">Clic en la página para colocarlo</span>
+          <span className="opt-hint">
+            {stampDinamico
+              ? "Lleva tu nombre y la hora · clic en la página"
+              : "Clic en la página para colocarlo"}
+          </span>
         </div>
       )}
     </>

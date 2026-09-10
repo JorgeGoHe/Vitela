@@ -826,25 +826,59 @@ export function aplicaRangoEtiquetas(
 
 /* ---- opciones de búsqueda (persistidas en localStorage) ---- */
 
-/* ---- iniciales: la segunda ranura de la biblioteca de firmas ---- */
+/* ---- sellos: la galería, el último usado y la línea de los dinámicos ---- */
 
-const CLAVE_INICIALES = "editorPdf.iniciales";
+/** Los siete sellos de la biblioteca estándar de Acrobat, con su texto tal
+ *  como se estampa. */
+export const SELLOS_ESTANDAR = [
+  "APROBADO",
+  "REVISADO",
+  "RECIBIDO",
+  "CONFIDENCIAL",
+  "BORRADOR",
+  "DEFINITIVO",
+  "NULO",
+];
 
-/** Qué entradas de la biblioteca son las iniciales y no la firma entera.
- *  La biblioteca del backend guarda imágenes por nombre y no sabe de
- *  ranuras; cuál es cuál es una preferencia de esta máquina, como el resto
- *  de la memoria de la interfaz. */
-export function cargaIniciales(): string[] {
+/** Los dinámicos: los mismos tres de Acrobat, que componen **en el momento**
+ *  quién sella y cuándo debajo de la palabra. */
+export const SELLOS_DINAMICOS = ["REVISADO", "RECIBIDO", "APROBADO"];
+
+const CLAVE_SELLO = "editorPdf.ultimoSello";
+
+/** El sello que se puso la última vez: la galería lo enseña el primero y
+ *  lo trae elegido, porque quien sella un expediente pone el mismo sello
+ *  cincuenta veces. La ranura de las imágenes guardadas ya no vive aquí:
+ *  es un campo de la biblioteca del backend. */
+export type UltimoSello = { texto: string; dinamico: boolean };
+
+export function cargaUltimoSello(): UltimoSello | null {
   try {
-    const v = JSON.parse(localStorage.getItem(CLAVE_INICIALES) ?? "[]");
-    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+    const v = JSON.parse(localStorage.getItem(CLAVE_SELLO) ?? "null");
+    if (!v || typeof v.texto !== "string" || !v.texto) return null;
+    return { texto: v.texto, dinamico: !!v.dinamico };
   } catch {
-    return [];
+    return null;
   }
 }
 
-export function guardaIniciales(ids: string[]): void {
-  localStorage.setItem(CLAVE_INICIALES, JSON.stringify(ids));
+export function guardaUltimoSello(sello: UltimoSello): void {
+  localStorage.setItem(CLAVE_SELLO, JSON.stringify(sello));
+}
+
+/** La segunda línea de un sello dinámico, compuesta en el momento de
+ *  estamparlo: quién y cuándo. El nombre sale del autor de comentarios de
+ *  Preferencias, sin preguntar —es el mismo que firma cada comentario—, y
+ *  la fecha va como se escribe en español, no en ISO. */
+export function selloDinamico(autor: string): string {
+  const ahora = new Date();
+  const fecha = ahora.toLocaleDateString("es-ES");
+  const hora = ahora.toLocaleTimeString("es-ES", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const quien = autor.trim();
+  return `${quien ? `${quien} · ` : ""}${fecha} ${hora}`;
 }
 
 const CLAVE_BUSQUEDA = "editorPdf.opcionesBusqueda";

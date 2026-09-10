@@ -6,18 +6,18 @@ import {
   listStoredSignatures,
   saveStoredSignature,
   type FirmaGuardada,
+  type RanuraImagen,
 } from "../api";
-import { cargaIniciales, guardaIniciales, type Mode } from "../tipos";
+import type { Mode } from "../tipos";
 
 /**
  * Biblioteca de firmas manuscritas y la firma activa lista para estampar.
  * La biblioteca se carga al entrar en modo firma; Esc cancela el estampado.
  *
- * Hay **dos ranuras**, como en Acrobat: la firma y las iniciales. La
- * biblioteca del backend guarda imágenes por nombre y no sabe de ranuras,
- * así que cuál es cuál se recuerda aquí (`localStorage`), como el resto de
- * la memoria de la interfaz. Las iniciales son lo que se estampa **en cada
- * página** de un contrato.
+ * Hay **tres ranuras**: la firma, las iniciales —lo que se estampa en cada
+ * página de un contrato— y los sellos propios de la galería. Cuál es cuál
+ * lo dice el backend (`ranura`), que es donde vive la biblioteca: en
+ * `localStorage` se quedaba en esta máquina y no la conocía nadie más.
  */
 export function useFirmas(opts: {
   mode: Mode;
@@ -32,24 +32,13 @@ export function useFirmas(opts: {
   const [drawingSig, setDrawingSig] = useState<false | "firma" | "iniciales">(
     false,
   );
-  const [iniciales, setIniciales] = useState<string[]>(() => cargaIniciales());
-
-  /** Marca o desmarca una entrada de la biblioteca como «iniciales». */
-  const marcaIniciales = useCallback((id: string, esInicial: boolean) => {
-    setIniciales((v) => {
-      const next = esInicial
-        ? [...new Set([...v, id])]
-        : v.filter((x) => x !== id);
-      guardaIniciales(next);
-      return next;
-    });
-  }, []);
   const optsRef = useRef(opts);
   optsRef.current = opts;
 
-  // Biblioteca de firmas al entrar en modo firma; Esc cancela el estampado
+  // La biblioteca se carga al entrar en los dos modos que la usan —la firma
+  // manuscrita y la galería de sellos—; Esc cancela el estampado
   useEffect(() => {
-    if (opts.mode !== "firmar") return;
+    if (opts.mode !== "firmar" && opts.mode !== "stamp") return;
     listStoredSignatures()
       .then(setFirmas)
       .catch((e) => optsRef.current.onError(e));
@@ -74,7 +63,13 @@ export function useFirmas(opts: {
     img.src = `data:image/png;base64,${f.png_base64}`;
   }
 
-  async function uploadSignature(ranura: "firma" | "iniciales" = "firma") {
+  const TITULOS: Record<RanuraImagen, string> = {
+    firma: "Imagen de tu firma (PNG con transparencia funciona mejor)",
+    iniciales: "Imagen de tus iniciales (PNG con transparencia funciona mejor)",
+    sello: "Imagen del sello (PNG con transparencia funciona mejor)",
+  };
+
+  async function uploadSignature(ranura: RanuraImagen = "firma") {
     const sel = await open({
       filters: [
         {
@@ -83,16 +78,12 @@ export function useFirmas(opts: {
         },
       ],
       multiple: false,
-      title:
-        ranura === "iniciales"
-          ? "Imagen de tus iniciales (PNG con transparencia funciona mejor)"
-          : "Imagen de tu firma (PNG con transparencia funciona mejor)",
+      title: TITULOS[ranura],
     });
     if (typeof sel !== "string") return;
     try {
-      const f = await importSignatureFile(sel);
+      const f = await importSignatureFile(sel, ranura);
       setFirmas((l) => [f, ...l]);
-      if (ranura === "iniciales") marcaIniciales(f.id, true);
       pickSignature(f);
     } catch (e) {
       opts.onError(e);
@@ -102,13 +93,12 @@ export function useFirmas(opts: {
   async function saveDrawnSignature(
     name: string,
     png: string,
-    ranura: "firma" | "iniciales" = "firma",
+    ranura: RanuraImagen = "firma",
   ) {
     try {
-      const f = await saveStoredSignature(name, png);
+      const f = await saveStoredSignature(name, png, ranura);
       setDrawingSig(false);
       setFirmas((l) => [f, ...l]);
-      if (ranura === "iniciales") marcaIniciales(f.id, true);
       pickSignature(f);
     } catch (e) {
       opts.onError(e);
@@ -119,7 +109,6 @@ export function useFirmas(opts: {
     try {
       await deleteStoredSignature(id);
       setFirmas((l) => l.filter((f) => f.id !== id));
-      marcaIniciales(id, false);
     } catch (e) {
       opts.onError(e);
     }
@@ -132,10 +121,14 @@ export function useFirmas(opts: {
   }, []);
 
   return {
-    firmas,
+    /** La biblioteca de firmar: la firma entera y las iniciales. */
+    firmas: firmas.filter((f) => f.ranura !== "sello"),
     /** Ids de la biblioteca que son iniciales, no la firma entera. */
-    iniciales,
-    marcaIniciales,
+    iniciales: firmas.filter((f) => f.ranura === "iniciales").map((f) => f.id),
+    /** Los sellos propios de la galería («Mis sellos»). */
+    sellos: firmas.filter((f) => f.ranura === "sello"),
+    /** La biblioteca entera, sin filtrar por ranura. */
+    biblioteca: firmas,
     activeSig,
     setActiveSig,
     drawingSig,

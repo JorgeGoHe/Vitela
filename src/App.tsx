@@ -189,6 +189,7 @@ import PanelFirmasDoc from "./components/PanelFirmasDoc";
 import PanelAdjuntos from "./components/PanelAdjuntos";
 import PanelCapas from "./components/PanelCapas";
 import DialogoFirmar from "./components/DialogoFirmar";
+import PanelSellos from "./components/PanelSellos";
 import DibujarFirma from "./components/DibujarFirma";
 import DialogoMarcaAgua, {
   type MarcaAguaOpts,
@@ -579,6 +580,9 @@ function App() {
   // certificar es firmar diciendo además qué se puede tocar después, así que
   // comparte el recuadro, el diálogo y el destino: solo cambia el comando
   const [certificando, setCertificando] = useState(false);
+  // la galería de sellos: se abre al entrar en el modo (como la biblioteca
+  // de firmas) y al pulsar «Sellos…» en la fila contextual
+  const [galeriaSellos, setGaleriaSellos] = useState(false);
   // el atajo de una pestaña la abre Y le lleva el foco: subir el contador es
   // la señal para el panel (un booleano no distinguiría dos peticiones)
   const [focoComentarios, setFocoComentarios] = useState(0);
@@ -725,6 +729,7 @@ function App() {
   const {
     firmas,
     iniciales,
+    sellos,
     activeSig,
     setActiveSig,
     drawingSig,
@@ -4296,6 +4301,9 @@ function App() {
   function selectMode(m: Mode) {
     setMode((cur) => (cur === m ? "select" : m));
     setActiveSig(null);
+    // entrar en el modo Sello enseña la galería, como entrar en Firma enseña
+    // la biblioteca: el sello se elige viéndolo, no de memoria
+    setGaleriaSellos(m === "stamp" && mode !== "stamp");
   }
 
   // la fila contextual va fija bajo la barra: sin contar las bandas se
@@ -4688,6 +4696,26 @@ function App() {
             setFirmaRect(null);
             setCertificando(false);
           }}
+        />
+      )}
+
+      {mode === "stamp" && galeriaSellos && (
+        <PanelSellos
+          color={herramienta.stampColor}
+          ultimo={herramienta.ultimoSello}
+          mios={sellos}
+          onElegirTexto={(texto, dinamico) => {
+            setActiveSig(null);
+            herramienta.eligeSello(texto, dinamico);
+            setGaleriaSellos(false);
+          }}
+          onElegirImagen={(f) => {
+            pickSignature(f);
+            setGaleriaSellos(false);
+          }}
+          onSubirImagen={() => uploadSignature("sello")}
+          onBorrarImagen={removeSignature}
+          onClose={() => setGaleriaSellos(false)}
         />
       )}
 
@@ -5217,8 +5245,8 @@ function App() {
         setShapeWidth={herramienta.setShapeWidth}
         stampText={herramienta.stampText}
         setStampText={herramienta.setStampText}
-        stampCustom={herramienta.stampCustom}
-        setStampCustom={herramienta.setStampCustom}
+        stampDinamico={herramienta.stampDinamico}
+        abrirSellos={() => setGaleriaSellos(true)}
         stampColor={herramienta.stampColor}
         hayFormularios={hayFormularios}
         onExportarDatos={exportarDatosFormulario}

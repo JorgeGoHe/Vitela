@@ -26,6 +26,7 @@ import {
   hexToRgba,
   MOD,
   mergeLineRects,
+  selloDinamico,
   type AnnotationInfo,
   type Mode,
   type PageSize,
@@ -472,10 +473,14 @@ export function useAnotaciones(ctx: {
   }
 
   async function placeStamp(x: number, y: number) {
-    const text =
-      tool.stampText === "custom" ? tool.stampCustom.trim() : tool.stampText;
+    const text = tool.stampText.trim();
     if (!workPath || !text) return;
     const p = puntoAPagina({ x, y }, size);
+    // un sello dinámico lleva debajo quién sella y cuándo, resuelto en este
+    // mismo instante; el backend lo compone dentro de la apariencia
+    const dinamico = tool.stampDinamico
+      ? selloDinamico(autorComentarios() ?? "")
+      : null;
     try {
       await addStamp({
         workPath,
@@ -486,7 +491,9 @@ export function useAnotaciones(ctx: {
         y: p.y,
         fontSize: 22,
         author: autorComentarios(),
+        dinamico,
       });
+      tool.onStampUsed(text, tool.stampDinamico);
       onAnnotated(index);
     } catch (e) {
       onError(e);

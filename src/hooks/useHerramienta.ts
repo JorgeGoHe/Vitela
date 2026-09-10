@@ -1,15 +1,15 @@
 import { useCallback, useMemo, useState } from "react";
-import { cargaColores, guardaColor, type ShapeKind } from "../tipos";
+import {
+  cargaColores,
+  cargaUltimoSello,
+  guardaColor,
+  guardaUltimoSello,
+  SELLOS_ESTANDAR,
+  type ShapeKind,
+  type UltimoSello,
+} from "../tipos";
 import type { Alineacion } from "../api";
 import type { MarcaRellenar, ToolProps } from "../components/Pagina";
-
-export const STAMP_PRESETS = [
-  "APROBADO",
-  "BORRADOR",
-  "CONFIDENCIAL",
-  "REVISADO",
-  "URGENTE",
-];
 
 /**
  * Opciones de las herramientas de anotación (trazo, marcado, formas y
@@ -36,8 +36,18 @@ export function useHerramienta(
   const [shapeColor, setShapeColor] = useState(() => cargaColores().forma ?? "#c0392b");
   const [shapeFill, setShapeFill] = useState(false);
   const [shapeWidth, setShapeWidth] = useState(2);
-  const [stampText, setStampText] = useState(STAMP_PRESETS[0]);
-  const [stampCustom, setStampCustom] = useState("");
+  // el sello elegido en la galería: su texto y si compone quién y cuándo
+  // dentro del `/AP` (dinámico). Arranca en el último que se puso, que es lo
+  // que hace falta cuando se sella un expediente entero
+  const [ultimoSello, setUltimoSello] = useState<UltimoSello | null>(() =>
+    cargaUltimoSello(),
+  );
+  const [stampText, setStampText] = useState(
+    () => cargaUltimoSello()?.texto ?? SELLOS_ESTANDAR[0],
+  );
+  const [stampDinamico, setStampDinamico] = useState(
+    () => cargaUltimoSello()?.dinamico ?? false,
+  );
   const [stampColor, setStampColor] = useState(() => cargaColores().sello ?? "#c0392b");
   const [freeTextColor, setFreeTextColor] = useState(
     () => cargaColores().cuadro ?? "#1d1c18",
@@ -89,6 +99,20 @@ export function useHerramienta(
     else setStampColor(color);
   }
 
+  /** La galería: elegir un sello es elegir su texto y si es dinámico. */
+  const eligeSello = useCallback((texto: string, dinamico: boolean) => {
+    setStampText(texto);
+    setStampDinamico(dinamico);
+  }, []);
+
+  /** Se ha estampado: ese pasa a ser el último usado, y la galería lo
+   *  enseñará el primero la próxima vez (también en la sesión siguiente). */
+  const onStampUsed = useCallback((texto: string, dinamico: boolean) => {
+    const puesto = { texto, dinamico };
+    setUltimoSello(puesto);
+    guardaUltimoSello(puesto);
+  }, []);
+
   const onMarkupUsed = useCallback(
     (kind: "highlight" | "underline" | "strikeout", color: string) => {
       const accion =
@@ -119,7 +143,8 @@ export function useHerramienta(
       shapeFill,
       shapeWidth,
       stampText,
-      stampCustom,
+      stampDinamico,
+      onStampUsed,
       stampColor,
       freeTextColor,
       freeTextSize,
@@ -152,7 +177,8 @@ export function useHerramienta(
       shapeFill,
       shapeWidth,
       stampText,
-      stampCustom,
+      stampDinamico,
+      onStampUsed,
       stampColor,
       freeTextColor,
       freeTextSize,
@@ -189,8 +215,9 @@ export function useHerramienta(
     setShapeWidth,
     stampText,
     setStampText,
-    stampCustom,
-    setStampCustom,
+    stampDinamico,
+    eligeSello,
+    ultimoSello,
     stampColor,
     freeTextColor,
     freeTextSize,
