@@ -105,7 +105,7 @@ import {
   type Metadata,
   type OutlineNode,
   detectFormFields,
-  createFormField,
+  createFormFields,
   type CampoPropuesto,
   exportCommentsPdf,
   exportCommentsXfdf,
@@ -1890,9 +1890,9 @@ function App() {
     saltarA(propuestas[siguiente].page_index);
   }
 
-  /** «Crear todos»: un `create_form_field` por campo y **un solo paso de
-   *  historial** (`squash_history`), para que un ⌘Z devuelva el formulario
-   *  entero y no el último campo. */
+  /** «Crear todos»: **una sola cirugía** (`create_form_fields`). Con una
+   *  llamada por campo, un fallo en el sexto dejaba cinco escritos y un
+   *  error, y un formulario a medias es peor que uno que no se creó. */
   async function crearPropuestas() {
     if (!workPath || propuestas.length === 0) return;
     const lote = propuestas;
@@ -1900,16 +1900,15 @@ function App() {
     setPropuestaActual(null);
     try {
       setNotice("Creando los campos…", { persistente: true });
-      let hechos = 0;
-      for (const c of lote) {
-        await createFormField({
-          workPath,
-          pageIndex: c.page_index,
+      const hechos = await createFormFields(
+        workPath,
+        lote.map((c, i) => ({
+          page_index: c.page_index,
           kind: c.kind,
           rect: c.rect,
           name: c.name,
           group: "",
-          exportValue: "",
+          export_value: "",
           options: [],
           props: {
             tooltip: null,
@@ -1918,12 +1917,10 @@ function App() {
             valor_defecto: null,
             // el orden de tabulación es el de la lista: es el orden en el
             // que se han encontrado, que es el de lectura de la página
-            orden_tab: hechos,
+            orden_tab: i,
           },
-        });
-        hechos++;
-      }
-      if (hechos > 1) await historial.agrupar(hechos);
+        })),
+      );
       afterMutation(pageCount);
       setNotice(
         `${plural(hechos, "campo creado", "campos creados")} · ${MOD}Z los quita`,

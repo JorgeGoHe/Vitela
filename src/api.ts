@@ -1082,6 +1082,31 @@ export function createFormField(args: {
   return invoke("create_form_field", { ...args });
 }
 
+/** Un campo del lote de `createFormFields`. Las claves van en snake_case:
+ *  es una estructura anidada y Tauri solo traduce los argumentos de primer
+ *  nivel del comando. */
+export type CampoNuevo = {
+  page_index: number;
+  kind: TipoCampo;
+  rect: { x: number; y: number; w: number; h: number };
+  name: string;
+  group?: string | null;
+  export_value?: string | null;
+  options?: string[] | null;
+  props?: PropsCampo | null;
+};
+
+/** Crea un lote de campos en **una sola cirugía**: si uno falla no se
+ *  escribe ninguno y un ⌘Z devuelve el formulario entero. Es la vía de
+ *  «Reconocer campos…»: aceptar ocho propuestas es un gesto, no ocho, y un
+ *  formulario a medias es peor que uno que no se creó. Devuelve cuántos. */
+export function createFormFields(
+  workPath: string,
+  fields: CampoNuevo[],
+): Promise<number> {
+  return invoke("create_form_fields", { workPath, fields });
+}
+
 /** Crea un enlace (a URL externa o a otra página). */
 export function createLink(args: {
   workPath: string;
