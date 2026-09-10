@@ -826,6 +826,7 @@ mod formularios2;
 mod historial;
 mod menu;
 mod imagenes;
+mod imprimir;
 mod paginas;
 mod paginas2;
 mod recientes;
@@ -1294,6 +1295,7 @@ pub fn run() {
             paginas2::add_bates,
             paginas2::remove_marginal_text,
             paginas2::add_background,
+            imprimir::compose_print,
             paginas2::remove_background,
             documento::get_outline,
             documento::set_outline,

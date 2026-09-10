@@ -264,6 +264,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "add_bates" => cmd!(paginas2::add_bates, { work_path: String, prefijo: String, sufijo: String, digitos: u8, empieza_en: u32, position: Option<String>, font_size: Option<f32>, page_indices: Option<Vec<u16>> }),
         "remove_marginal_text" => cmd!(paginas2::remove_marginal_text, { work_path: String, zona: String, dry_run: bool }),
         "add_background" => cmd!(paginas2::add_background, { work_path: String, color: Option<[u8; 4]>, image_png: Option<String>, opacity: Option<f32>, page_indices: Option<Vec<u16>> }),
+        "compose_print" => cmd!(crate::imprimir::compose_print, { work_path: String, modo: String, opciones: crate::imprimir::OpcionesComposicion }),
         "remove_background" => cmd!(paginas2::remove_background, { work_path: String, dry_run: bool }),
         "add_header_footer" => cmd!(paginas2::add_header_footer, { work_path: String, header_left: Option<String>, header_center: Option<String>, header_right: Option<String>, footer_left: Option<String>, footer_center: Option<String>, footer_right: Option<String>, font_size: f32, page_indices: Option<Vec<u16>> }),
         "get_outline" => cmd!(documento::get_outline, { path: String }),
@@ -523,6 +524,11 @@ mod tests {
         (
             "cancel_search",
             "ciclo 9: su botón «Cancelar» vive en la banda de progreso de esa búsqueda",
+        ),
+        (
+            "compose_print",
+            "ciclo 9: el desplegable «Composición» del diálogo de imprimir llega \
+             con la interfaz",
         ),
         (
             "add_background",
