@@ -832,6 +832,7 @@ mod busqueda;
 mod documento;
 mod exportar;
 mod comentarios;
+mod comparar;
 mod comentarios2;
 mod confianza;
 mod firma;
@@ -1363,6 +1364,7 @@ pub fn run() {
             exportar::compress_pdf,
             exportar::audit_pdf,
             exportar::export_html,
+            comparar::compare_pdf,
             formularios2::create_form_field,
             formularios2::create_form_fields,
             formularios2::export_form_data_xfdf,
