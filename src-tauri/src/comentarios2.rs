@@ -212,9 +212,10 @@ fn escribe(
 // la pidió.
 // ---------------------------------------------------------------------------
 
-/// Los subtipos de anotación que **son comentarios** y viajan en el XFDF.
-/// Fuera quedan `/Popup` (la ventana de una nota, que no es un comentario),
-/// `/Widget` (un campo de formulario), `/Link` y `/Sig`.
+/// Los subtipos de anotación que **son comentarios**: los que viajan en el
+/// XFDF y los únicos que salen en el panel, en el contador y en los dos
+/// resúmenes. Fuera quedan `/Popup` (la ventana de una nota, que no es un
+/// comentario), `/Widget` (un campo de formulario), `/Link` y `/Sig`.
 const SUBTIPOS: &[&str] = &[
     "Text",
     "Highlight",
@@ -232,6 +233,22 @@ const SUBTIPOS: &[&str] = &[
     "Caret",
     "FileAttachment",
 ];
+
+/// ¿Este subtipo es un comentario? **La única criba**, compartida por el
+/// XFDF y por [`crate::anotaciones::get_document_annotations`], que es lo
+/// que alimenta el panel de comentarios, el contador del diálogo de
+/// exportar, el `.txt` y el resumen en PDF (AC-071). Mientras el XFDF
+/// filtraba y el panel no, un campo de formulario se listaba como
+/// «comentario», contaba en «N comentarios» y **Supr lo borraba**: nadie
+/// tiene motivo para sospechar que borrar un comentario vacío le rompe el
+/// formulario.
+///
+/// La comparación no mira mayúsculas a propósito: los nombres del spec
+/// (`/StrikeOut`, `/PolyLine`) y los que devuelve PDFium por su enum
+/// (`Strikeout`, `Polyline`) no se escriben igual, y son el mismo subtipo.
+pub fn es_comentario(subtipo: &str) -> bool {
+    SUBTIPOS.iter().any(|s| s.eq_ignore_ascii_case(subtipo))
+}
 
 /// Exporta los comentarios a **XFDF**, que es el formato con el que un
 /// revisor le devuelve la revisión a quien le mandó el documento: XML plano
@@ -885,6 +902,24 @@ mod tests {
         )
         .expect("el dibujo");
         work
+    }
+
+    /// **AC-071.** La criba de subtipos es **una sola** para el XFDF y para
+    /// el panel: mientras cada mitad tenía la suya, el XFDF salía limpio y
+    /// el panel listaba los campos del formulario como comentarios.
+    #[test]
+    fn un_campo_un_enlace_y_una_firma_no_son_comentarios() {
+        for si in ["Text", "Highlight", "Ink", "FreeText", "Stamp", "FileAttachment"] {
+            assert!(es_comentario(si), "{si} es un comentario");
+        }
+        for no in ["Widget", "Link", "Popup", "Sig", "Screen", "Unknown"] {
+            assert!(!es_comentario(no), "{no} no es un comentario");
+        }
+        // el spec escribe `/StrikeOut` y `/PolyLine`; PDFium, `Strikeout` y
+        // `Polyline`. Son el mismo subtipo.
+        for uno in ["StrikeOut", "Strikeout", "PolyLine", "Polyline"] {
+            assert!(es_comentario(uno), "{uno} es un comentario");
+        }
     }
 
     /// **H9.** «Crear resumen de comentarios» produce **un PDF** con una

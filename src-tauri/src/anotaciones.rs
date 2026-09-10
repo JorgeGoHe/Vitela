@@ -917,10 +917,21 @@ pub struct AnotacionDoc {
     pub page_index: u16,
 }
 
-/// Todas las anotaciones del documento, ordenadas por página y, dentro de
+/// **Los comentarios** del documento, ordenados por página y, dentro de
 /// cada una, en el orden de `/Annots`. Una sola pasada: en un PDF de 300
 /// páginas, pedirlas página a página serían 300 viajes por el canal del
 /// hilo de PDFium.
+///
+/// Solo los subtipos que **son un comentario**
+/// ([`crate::comentarios2::es_comentario`]): un campo de formulario, un
+/// enlace o una firma están en el `/Annots` de la página y no son cosas que
+/// alguien haya dejado dicho. Esta es la lista que alimenta el panel de
+/// comentarios, el contador del diálogo de exportar, el `.txt` y el resumen
+/// en PDF, así que hasta el ciclo 8 los campos de un formulario salían como
+/// filas «Widget», contaban en «N comentarios» y **Supr los borraba**
+/// (AC-071). El `index` que se devuelve sigue siendo la posición dentro del
+/// `/Annots` de la página, no el ordinal entre los comentarios: es lo que
+/// `remove_annotation` necesita para borrar el que se señala.
 #[tauri::command(async)]
 pub fn get_document_annotations(path: String) -> Result<Vec<AnotacionDoc>, String> {
     on_pdfium_thread(move || {
@@ -931,11 +942,18 @@ pub fn get_document_annotations(path: String) -> Result<Vec<AnotacionDoc>, Strin
                 let Ok(mut anots) = lee_annots(doc, p) else {
                     continue;
                 };
+                // el color, el autor y la fecha se alinean por índice con el
+                // /Annots: la criba va después, nunca antes
                 aplica_datos(&path, p, &mut anots);
-                out.extend(anots.into_iter().map(|annot| AnotacionDoc {
-                    annot,
-                    page_index: p,
-                }));
+                out.extend(
+                    anots
+                        .into_iter()
+                        .filter(|a| crate::comentarios2::es_comentario(&a.kind))
+                        .map(|annot| AnotacionDoc {
+                            annot,
+                            page_index: p,
+                        }),
+                );
             }
             Ok(out)
         })
@@ -2096,6 +2114,67 @@ mod tests_apariencia {
         assert!(
             annots_guardadas(&work).is_empty(),
             "el popup huérfano se queda en el fichero"
+        );
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// **AC-071.** Un campo de formulario **no es un comentario**, y un
+    /// enlace tampoco. Los dos viven en el `/Annots` de la página, así que
+    /// el panel los listaba, el contador los sumaba, salían en el `.txt` y
+    /// en el resumen en PDF y —lo serio— **Supr los borraba**: quien
+    /// «borraba un comentario vacío» se llevaba por delante un campo del
+    /// formulario sin ningún motivo para sospecharlo.
+    ///
+    /// El `index` que se devuelve sigue siendo el del `/Annots`, no el
+    /// ordinal entre los comentarios: con un campo delante, los dos números
+    /// se separan y `remove_annotation` borraría otra cosa.
+    #[test]
+    fn un_campo_de_formulario_no_es_un_comentario() {
+        let tmp = std::env::temp_dir().join("editor_pdf_test_annots_widget.pdf");
+        crea_pdf(&["Encuesta"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        for (i, valor) in ["op0", "op1", "op2"].iter().enumerate() {
+            crate::formularios2::create_form_field(
+                work.clone(),
+                0,
+                "radio".into(),
+                Rect { x: 80.0, y: 300.0 + i as f32 * 40.0, w: 14.0, h: 14.0 },
+                (*valor).into(),
+                Some("sexo".into()),
+                Some((*valor).into()),
+                None,
+                None,
+            )
+            .expect("radio");
+        }
+        crate::formularios2::create_link(
+            work.clone(),
+            0,
+            Rect { x: 80.0, y: 500.0, w: 120.0, h: 16.0 },
+            Some("https://example.org".into()),
+            None,
+        )
+        .expect("enlace");
+        add_note(work.clone(), 0, 300.0, 400.0, "Revisar la fecha".into(), None)
+            .expect("nota");
+
+        let todas = get_document_annotations(work.clone()).expect("listar");
+        assert_eq!(
+            todas.len(),
+            1,
+            "tres campos y un enlace no son comentarios: {todas:?}"
+        );
+        assert_eq!(todas[0].annot.kind, "Text");
+        assert_eq!(todas[0].annot.contents, "Revisar la fecha");
+
+        // el índice es el del /Annots: borrar por él se lleva la nota y deja
+        // el formulario donde estaba
+        remove_annotation(work.clone(), 0, todas[0].annot.index).expect("borrar la nota");
+        assert!(get_document_annotations(work.clone()).expect("listar").is_empty());
+        assert_eq!(
+            crate::formularios::get_form_fields(work.clone(), 0).expect("campos").len(),
+            3,
+            "el formulario sigue entero"
         );
         std::fs::remove_file(&tmp).ok();
     }
