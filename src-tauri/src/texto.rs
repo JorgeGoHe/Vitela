@@ -5,7 +5,7 @@ use crate::historial::mutacion;
 use pdfium_render::prelude::*;
 use serde::Serialize;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct TextBlock {
     pub object_index: u32,
     pub text: String,
@@ -264,11 +264,35 @@ fn estilo_de(fuente: &PdfFont, nombre: &str) -> (bool, bool) {
     (negrita || pesada, cursiva || fuente.is_italic())
 }
 
+/// Lo que se sabe de una corrección, para que la UI pueda repintar la caja
+/// y avisar sin tener que volver a preguntar.
+#[derive(Serialize, Debug, Default)]
+pub struct InformeEdicion {
+    /// Cuántas líneas tiene el párrafo después de corregirlo.
+    pub lineas: u16,
+    /// El párrafo ha crecido tanto que la última línea cae **fuera del
+    /// papel**. Escribir fuera en silencio es lo que no puede pasar.
+    pub se_sale: bool,
+    /// Se ha repartido el texto por el ancho del párrafo (reflujo) o se ha
+    /// hecho lo de siempre: la primera línea encima del objeto y las demás
+    /// como objetos nuevos debajo.
+    pub reflujo: bool,
+}
+
 /// Edición real de texto: reescribe el objeto de texto del content stream.
 /// Mantiene la fuente del objeto (si la fuente embebida no tiene los glifos
-/// del texto nuevo, esos caracteres no se verán). Si el texto nuevo tiene
-/// varias líneas, la primera reemplaza al objeto original y las demás se
-/// insertan como objetos nuevos con la misma fuente, colocados debajo.
+/// del texto nuevo, esos caracteres no se verán).
+///
+/// Con **reflujo** (lo normal en un párrafo de varias líneas), corregir una
+/// palabra recoloca el párrafo entero: el texto se reparte por el ancho de
+/// la columna y las líneas de abajo suben o bajan, como en «Editar PDF» de
+/// Acrobat. Sin él —o en un bloque de una sola línea, donde no hay párrafo
+/// que rehacer—, la primera línea reemplaza al objeto original y las demás
+/// se insertan como objetos nuevos colocados debajo.
+///
+/// **El reflujo no cruza bloques ni páginas**: si el párrafo crece, el
+/// contenido siguiente no se mueve. Acrobat tampoco lo hace, y prometerlo
+/// sería prometer un procesador de textos.
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 pub fn edit_text_block(
@@ -280,9 +304,55 @@ pub fn edit_text_block(
     align: Option<String>,
     line_height: Option<f32>,
     char_spacing: Option<f32>,
-) -> Result<(), String> {
+    reflow: Option<bool>,
+) -> Result<InformeEdicion, String> {
     let tc = espaciado(char_spacing);
     mutacion(work_path, move |work_path| on_pdfium_thread(move || {
+        // ¿hay párrafo que refluir? Por defecto sí en cuanto el bloque tiene
+        // más de una línea debajo; con `reflow: false` la UI se queda con el
+        // comportamiento de siempre
+        if reflow.unwrap_or(true) {
+            let hay_parrafo = with_doc(&work_path, |doc| {
+                Ok(doc
+                    .pages()
+                    .get(page_index)
+                    .ok()
+                    .map(|p| parrafo_de(&p, object_index as usize).len())
+                    .unwrap_or(0))
+            })? > 1;
+            if hay_parrafo || reflow == Some(true) {
+                return refluye(
+                    &work_path,
+                    page_index,
+                    object_index,
+                    &new_text,
+                    color,
+                    align.as_deref(),
+                    line_height,
+                    tc,
+                );
+            }
+        }
+        edita_sin_reflujo(&work_path, page_index, object_index, &new_text, color, align, line_height, tc)
+    }))
+}
+
+/// El camino de siempre: la primera línea encima del objeto y las demás
+/// como objetos nuevos debajo.
+#[allow(clippy::too_many_arguments)]
+fn edita_sin_reflujo(
+    work_path: &str,
+    page_index: u16,
+    object_index: u32,
+    new_text: &str,
+    color: Option<[u8; 4]>,
+    align: Option<String>,
+    line_height: Option<f32>,
+    tc: Option<f32>,
+) -> Result<InformeEdicion, String> {
+    let work_path = work_path.to_string();
+    let new_text = new_text.to_string();
+    {
         let pdfium = pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -397,8 +467,285 @@ pub fn edit_text_block(
                 escribe_espaciado(doc, page_index, &ordinales, tc)
             })?;
         }
-        Ok(())
-    }))
+        Ok(InformeEdicion {
+            lineas: new_text.lines().count().max(1) as u16,
+            se_sale: false,
+            reflujo: false,
+        })
+    }
+}
+
+/// Una línea del párrafo: dónde está y de qué tamaño, en el espacio del
+/// PDF (que es donde hay que colocarla).
+struct LineaDelParrafo {
+    indice: usize,
+    texto: String,
+    izq: f32,
+    der: f32,
+    arriba: f32,
+    /// La `y` del **origen del objeto**, que es la línea base del texto:
+    /// la caja de los glifos sube y baja con las mayúsculas y los rabos de
+    /// las letras, y la línea base no. Es la que hay que respetar para
+    /// recolocar un párrafo sin que las líneas bailen.
+    base_y: f32,
+    size: f32,
+}
+
+/// Los datos de todos los objetos de texto de la página, en el orden de la
+/// página, con sus cajas **sin voltear** (coordenadas del PDF).
+fn lineas_de_la_pagina(page: &PdfPage) -> Vec<LineaDelParrafo> {
+    let objetos = page.objects();
+    (0..objetos.len())
+        .filter_map(|i| {
+            let obj = objetos.get(i).ok()?;
+            let t = obj.as_text_object()?;
+            if t.text().trim().is_empty() {
+                return None;
+            }
+            let b = obj.bounds().ok()?;
+            Some(LineaDelParrafo {
+                indice: i,
+                texto: t.text(),
+                izq: b.left().value,
+                der: b.right().value,
+                arriba: b.top().value,
+                base_y: obj.get_vertical_translation().value,
+                size: t.scaled_font_size().value,
+            })
+        })
+        .collect()
+}
+
+/// Las líneas del párrafo que empieza en `object_index`, **hacia abajo**:
+/// las que comparten columna (mismo borde izquierdo, mismo centro o mismo
+/// borde derecho, según cómo esté alineado), tienen el mismo cuerpo de
+/// letra y van una debajo de otra a una distancia de interlineado.
+///
+/// En un PDF no hay párrafos: hay trozos de texto colocados en un papel.
+/// Esta es la misma heurística con la que cualquier editor los reconoce, y
+/// por eso es la que decide hasta dónde llega el reflujo.
+fn parrafo_de(page: &PdfPage, object_index: usize) -> Vec<LineaDelParrafo> {
+    let mut lineas = lineas_de_la_pagina(page);
+    let Some(pos) = lineas.iter().position(|l| l.indice == object_index) else {
+        return Vec::new();
+    };
+    let base = lineas.remove(pos);
+    let tol = (base.size * 0.6).max(1.5);
+    let centro = |l: &LineaDelParrafo| (l.izq + l.der) / 2.0;
+    let (base_izq, base_der, base_centro) = (base.izq, base.der, centro(&base));
+    let alineada = |l: &LineaDelParrafo| {
+        (l.izq - base_izq).abs() < tol
+            || (centro(l) - base_centro).abs() < tol
+            || (l.der - base_der).abs() < tol
+    };
+    let mut grupo = vec![base];
+    loop {
+        let ultima = grupo.last().unwrap();
+        let siguiente = lineas
+            .iter()
+            .filter(|l| l.arriba < ultima.arriba - 0.5)
+            .filter(|l| (l.size - ultima.size).abs() <= ultima.size * 0.25)
+            .filter(|l| alineada(l))
+            // el hueco entre líneas: más de dos cuerpos y medio ya es otro
+            // párrafo, no la línea siguiente
+            .filter(|l| ultima.arriba - l.arriba < ultima.size * 2.6)
+            .max_by(|a, b| a.arriba.total_cmp(&b.arriba));
+        let Some(elegida) = siguiente.map(|l| l.indice) else { break };
+        let pos = lineas.iter().position(|l| l.indice == elegida).unwrap();
+        grupo.push(lineas.remove(pos));
+    }
+    grupo
+}
+
+/// Corrige un párrafo **recolocándolo entero**: mide el texto nuevo,
+/// lo reparte al ancho de la columna, reescribe las líneas que ya había y
+/// crea o borra las que sobren.
+#[allow(clippy::too_many_arguments)]
+fn refluye(
+    work_path: &str,
+    page_index: u16,
+    object_index: u32,
+    new_text: &str,
+    color: Option<[u8; 4]>,
+    align: Option<&str>,
+    line_height: Option<f32>,
+    tc: Option<f32>,
+) -> Result<InformeEdicion, String> {
+    let pdfium = pdfium()?;
+    let mut doc = pdfium
+        .load_pdf_from_file(work_path, None)
+        .map_err(crate::mensaje_llano)?;
+    let mut ordinales: Vec<usize> = Vec::new();
+    let (lineas_finales, se_sale) = {
+        let mut page = doc.pages().get(page_index).map_err(crate::mensaje_llano)?;
+        let parrafo = parrafo_de(&page, object_index as usize);
+        if parrafo.is_empty() {
+            return Err("Ese bloque de texto ya no está en la página".into());
+        }
+        let size = parrafo[0].size;
+        // la columna: el ancho es el de la línea más larga, que es lo que
+        // el ojo lee como el ancho del párrafo (la última siempre es corta)
+        let col_izq = parrafo.iter().map(|l| l.izq).fold(f32::MAX, f32::min);
+        let col_der = parrafo.iter().map(|l| l.der).fold(f32::MIN, f32::max);
+        // el ancho de la columna es el de la caja **o el que midan con los
+        // AFM las líneas que ya hay**, el que sea mayor: la fuente del PDF
+        // no es exactamente la que se mide, y sin esta holgura una línea
+        // que no ha cambiado se partiría en dos por un error del 5 %
+        let medido = parrafo
+            .iter()
+            .map(|l| crate::anotaciones2::ancho_helvetica(&l.texto, size))
+            .fold(0.0f32, f32::max);
+        let ancho = (col_der - col_izq).max(medido).max(size * 2.0);
+        // el interlineado: el que se mide entre las líneas que ya hay, que
+        // es el del párrafo. Si la UI pide uno, manda el suyo
+        let interlineado_medido = match (line_height, parrafo.len() > 1) {
+            (Some(lh), _) => size * interlineado(Some(lh)),
+            (None, true) => {
+                let total: f32 = parrafo.windows(2).map(|p| p[0].base_y - p[1].base_y).sum();
+                total / (parrafo.len() - 1) as f32
+            }
+            (None, false) => size * interlineado(None),
+        };
+        let familia = {
+            let objetos = page.objects();
+            objetos
+                .get(object_index as usize)
+                .ok()
+                .and_then(|o| o.as_text_object().map(|t| t.font().family().to_lowercase()))
+                .unwrap_or_default()
+        };
+        let color_viejo = {
+            let objetos = page.objects();
+            objetos
+                .get(object_index as usize)
+                .ok()
+                .and_then(|o| o.fill_color().ok())
+                .map(|c| [c.red(), c.green(), c.blue(), c.alpha()])
+                .unwrap_or([0, 0, 0, 255])
+        };
+        let [r, g, b, a] = color.unwrap_or(color_viejo);
+
+        // el texto nuevo, repartido al ancho de la columna con los anchos
+        // AFM (Helvetica): en una fuente más estrecha las líneas rompen un
+        // poco antes, que es el error que no se sale del papel
+        let nuevas: Vec<String> = crate::anotaciones2::parte_lineas(new_text, size, ancho)
+            .into_iter()
+            .filter(|l| !l.trim().is_empty())
+            .collect();
+        if nuevas.is_empty() {
+            return Err("El texto está vacío".into());
+        }
+
+        // dónde va cada línea: el borde de la columna que manda la
+        // alineación, y la altura de la que había o, si es nueva, la
+        // siguiente del interlineado
+        let coloca = |ancho_linea: f32| match align.unwrap_or("izq") {
+            "centro" | "center" => (col_izq + col_der) / 2.0 - ancho_linea / 2.0,
+            "der" | "derecha" | "right" => col_der - ancho_linea,
+            _ => col_izq,
+        };
+
+        // 1) las que se reescriben encima de las que ya había
+        let reutilizadas = nuevas.len().min(parrafo.len());
+        for (i, texto) in nuevas.iter().take(reutilizadas).enumerate() {
+            let objetos = page.objects_mut();
+            let mut obj = objetos
+                .get(parrafo[i].indice)
+                .map_err(crate::mensaje_llano)?;
+            {
+                let t = obj
+                    .as_text_object_mut()
+                    .ok_or("Ese bloque ya no es texto")?;
+                t.set_text(texto).map_err(crate::mensaje_llano)?;
+                t.set_fill_color(PdfColor::new(r, g, b, a))
+                    .map_err(crate::mensaje_llano)?;
+            }
+            let caja = obj.bounds().map_err(crate::mensaje_llano)?;
+            let dx = coloca(caja.right().value - caja.left().value) - caja.left().value;
+            // la línea vuelve a su sitio del párrafo: la base de la primera
+            // manda y las de abajo van a su interlineado, medido entre
+            // líneas base y no entre cajas de glifos
+            let dy = (parrafo[0].base_y - interlineado_medido * i as f32)
+                - obj.get_vertical_translation().value;
+            if dx.abs() > 0.01 || dy.abs() > 0.01 {
+                obj.translate(PdfPoints::new(dx), PdfPoints::new(dy))
+                    .map_err(crate::mensaje_llano)?;
+            }
+        }
+        drop(page);
+
+        // 2) las que sobran del texto nuevo: objetos nuevos debajo, con la
+        // fuente estándar aproximada (el handle de la del PDF queda ligado
+        // a su página y PDFium casca con handles colgantes)
+        let token = if nuevas.len() > parrafo.len() {
+            Some(fuente_por_nombre(&mut doc, &familia))
+        } else {
+            None
+        };
+        let mut page = doc.pages().get(page_index).map_err(crate::mensaje_llano)?;
+        if let Some(token) = token {
+            for (k, texto) in nuevas.iter().enumerate().skip(parrafo.len()) {
+                let mut obj =
+                    PdfPageTextObject::new(&doc, texto, token, PdfPoints::new(size))
+                        .map_err(crate::mensaje_llano)?;
+                obj.set_fill_color(PdfColor::new(r, g, b, a))
+                    .map_err(crate::mensaje_llano)?;
+                let ancho_linea = ancho_del_objeto(&obj, texto, size);
+                let y = parrafo[0].base_y - interlineado_medido * k as f32;
+                obj.translate(PdfPoints::new(coloca(ancho_linea)), PdfPoints::new(y))
+                    .map_err(crate::mensaje_llano)?;
+                page.objects_mut()
+                    .add_text_object(obj)
+                    .map_err(crate::mensaje_llano)?;
+            }
+        }
+
+        // 3) las que sobran del párrafo viejo: fuera, de mayor a menor para
+        // no invalidar los índices que quedan
+        let mut sobran: Vec<usize> = parrafo
+            .iter()
+            .skip(nuevas.len())
+            .map(|l| l.indice)
+            .collect();
+        sobran.sort_unstable();
+        for indice in sobran.iter().rev() {
+            let quitado = page
+                .objects_mut()
+                .remove_object_at_index(*indice)
+                .map_err(crate::mensaje_llano)?;
+            // su Drop llama a FPDFPageObj_Destroy y PDFium casca: regla del
+            // proyecto, nunca se suelta un objeto sacado
+            std::mem::forget(quitado);
+        }
+        page.regenerate_content().map_err(crate::mensaje_llano)?;
+
+        // el ordinal de cada línea entre los objetos de texto, para el `Tc`
+        if tc.is_some() {
+            for (i, _) in nuevas.iter().enumerate() {
+                let indice = if i < reutilizadas {
+                    let viejo = parrafo[i].indice;
+                    viejo - sobran.iter().filter(|s| **s < viejo).count()
+                } else {
+                    // los nuevos se han añadido al final
+                    page.objects().len() - (nuevas.len() - i)
+                };
+                ordinales.push(ordinal_de_texto(&page, indice));
+            }
+        }
+
+        // ¿se ha salido del papel? La última línea es la que se cae
+        let ultima_y = parrafo[0].base_y - interlineado_medido * (nuevas.len() - 1) as f32;
+        let se_sale = ultima_y < 0.0;
+        drop(page);
+        (nuevas.len() as u16, se_sale)
+    };
+    save_and_close(doc, work_path)?;
+    if let Some(tc) = tc {
+        crate::cirugia_en_hilo(work_path, |doc| {
+            escribe_espaciado(doc, page_index, &ordinales, tc)
+        })?;
+    }
+    Ok(InformeEdicion { lineas: lineas_finales, se_sale, reflujo: true })
 }
 
 /// Una coincidencia que hay que reescribir: el bloque donde está (el
@@ -975,6 +1322,7 @@ mod tests {
             None,
             None,
             Some(2.0),
+        None,
         )
         .expect("corregir con espaciado");
 
@@ -1001,7 +1349,7 @@ mod tests {
 
         // sin espaciado (o con 0) el operador no se escribe: `Tc` vale 0 por
         // defecto y ensuciar el stream por nada no ayuda a nadie
-        edit_text_block(work.clone(), 0, antes.object_index, "Texto original".into(), None, None, None, None)
+        edit_text_block(work.clone(), 0, antes.object_index, "Texto original".into(), None, None, None, None, None)
             .expect("corregir sin espaciado");
         let doc = lopdf::Document::load(&work).expect("releer");
         let pid = doc.get_pages()[&1];
@@ -1070,6 +1418,286 @@ mod tests {
         std::fs::remove_file(&tmp).ok();
     }
 
+    /// Escribe un párrafo de `n` líneas en la página, una por objeto, con
+    /// el interlineado dado, y devuelve el índice del primer objeto.
+    fn parrafo_de_prueba(work: &str, lineas: &[&str], size: f32, lh: f32) -> u32 {
+        for (i, texto) in lineas.iter().enumerate() {
+            add_text_block(
+                work.to_string(),
+                0,
+                60.0,
+                200.0 + size * lh * i as f32,
+                (*texto).into(),
+                size,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("escribir la línea");
+        }
+        let bloques = get_text_blocks(work.to_string(), 0).expect("bloques");
+        bloques
+            .iter()
+            .find(|b| b.text.contains(lineas[0]))
+            .expect("la primera línea")
+            .object_index
+    }
+
+    /// **H1 (a).** Cambiar una palabra corta por una larga en la primera
+    /// línea de un párrafo de cuatro recoloca **el párrafo entero**: siguen
+    /// siendo cuatro líneas, ninguna se pasa del ancho y la última no ha
+    /// bajado. Esto es lo que separa «editar un PDF» de «reescribir una
+    /// línea y dejar las sobras debajo».
+    #[test]
+    fn corregir_una_palabra_recoloca_el_parrafo_entero() {
+        let tmp = std::env::temp_dir().join("texto-reflujo-cuatro.pdf");
+        crea_pdf(&["Contrato"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        // la última línea es corta: ahí está la holgura que absorbe la
+        // palabra nueva sin que el párrafo gane una línea
+        let lineas = [
+            "El presente contrato se firma entre las partes",
+            "que abajo se relacionan y tiene por objeto",
+            "regular el uso del local sito en la calle",
+            "Mayor numero once.",
+        ];
+        let indice = parrafo_de_prueba(&work, &lineas, 11.0, 1.35);
+        let antes = get_text_blocks(work.clone(), 0).expect("bloques");
+        let ancho_antes = antes
+            .iter()
+            .filter(|b| lineas.iter().any(|l| b.text.contains(&l[..12])))
+            .map(|b| b.w)
+            .fold(0.0f32, f32::max);
+        let ultima_antes = antes
+            .iter()
+            .find(|b| b.text.contains("Mayor numero"))
+            .expect("la última")
+            .y;
+
+        let texto = lineas.join(" ").replace("contrato", "contrato de arrendamiento");
+        let informe = edit_text_block(
+            work.clone(),
+            0,
+            indice,
+            texto,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("corregir con reflujo");
+        assert!(informe.reflujo, "el párrafo tenía cuatro líneas: {informe:?}");
+        assert!(!informe.se_sale);
+
+        let despues = get_text_blocks(work.clone(), 0).expect("bloques");
+        // el párrafo es lo que va en cuerpo 11; el título del fixture va en 14
+        let parrafo: Vec<_> = despues.iter().filter(|b| b.font_size < 12.0).collect();
+        assert_eq!(
+            parrafo.len(),
+            informe.lineas as usize,
+            "el informe y el documento dicen lo mismo: {despues:?}"
+        );
+        assert_eq!(parrafo.len(), 4, "siguen siendo cuatro líneas: {parrafo:?}");
+        for b in &parrafo {
+            assert!(
+                b.w <= ancho_antes + 1.0,
+                "«{}» mide {:.1} y la columna medía {ancho_antes:.1}",
+                b.text,
+                b.w
+            );
+        }
+        let ultima = parrafo
+            .iter()
+            .map(|b| b.y)
+            .fold(f32::MIN, f32::max);
+        assert!(
+            (ultima - ultima_antes).abs() < 1.5,
+            "la última línea no baja: {ultima_antes:.1} → {ultima:.1}"
+        );
+        // y el texto entero sigue estando, con la palabra nueva
+        let todo = parrafo.iter().map(|b| b.text.clone()).collect::<Vec<_>>().join(" ");
+        assert!(todo.contains("arrendamiento"), "{todo}");
+        assert!(todo.contains("numero once"), "no se pierde el final: {todo}");
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// **H1 (b) y (c).** Un párrafo que crece de cuatro a seis líneas tiene
+    /// seis objetos, y uno que encoge de cuatro a dos tiene dos: ni líneas
+    /// huérfanas debajo ni objetos vacíos.
+    #[test]
+    fn el_parrafo_crece_y_encoge_sin_dejar_lineas_huerfanas() {
+        let tmp = std::env::temp_dir().join("texto-reflujo-crece.pdf");
+        crea_pdf(&["Memoria"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        let lineas = [
+            "Uno dos tres cuatro cinco seis",
+            "siete ocho nueve diez once",
+            "doce trece catorce quince",
+            "dieciseis diecisiete dieciocho",
+        ];
+        let indice = parrafo_de_prueba(&work, &lineas, 11.0, 1.35);
+        let cuenta = |work: &str| {
+            get_text_blocks(work.to_string(), 0)
+                .expect("bloques")
+                .into_iter()
+                .filter(|b| b.font_size < 12.0)
+                .count()
+        };
+        assert_eq!(cuenta(&work), 4);
+
+        // crece: el mismo texto y medio más
+        let largo = format!("{} {}", lineas.join(" "), lineas[..2].join(" "));
+        let informe = edit_text_block(work.clone(), 0, indice, largo, None, None, None, None, None)
+            .expect("crecer");
+        assert!(informe.lineas >= 6, "seis líneas o más: {informe:?}");
+        assert_eq!(cuenta(&work), informe.lineas as usize, "un objeto por línea");
+
+        // encoge: dos líneas
+        let indice = get_text_blocks(work.clone(), 0)
+            .expect("bloques")
+            .into_iter()
+            .filter(|b| b.font_size < 12.0)
+            .min_by(|a, b| a.y.total_cmp(&b.y))
+            .expect("la primera")
+            .object_index;
+        let informe = edit_text_block(
+            work.clone(),
+            0,
+            indice,
+            "Uno dos tres cuatro cinco seis siete ocho".into(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("encoger");
+        assert_eq!(cuenta(&work), informe.lineas as usize, "sin objetos huérfanos");
+        assert!(informe.lineas <= 2, "dos líneas: {informe:?}");
+        // y ⌘Z lo devuelve entero, en un solo paso
+        crate::historial::undo(work.clone()).expect("deshacer");
+        assert!(cuenta(&work) >= 6, "el párrafo vuelve como estaba");
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// **H1 (d).** El mismo caso en una página girada 90°: el reflujo
+    /// trabaja en el espacio propio de la página, donde viven las cajas de
+    /// los objetos, así que el `/Rotate` no lo despeina.
+    #[test]
+    fn el_reflujo_tambien_funciona_en_una_pagina_girada() {
+        let tmp = std::env::temp_dir().join("texto-reflujo-girada.pdf");
+        crea_pdf(&["Girado"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        let lineas = [
+            "Primera linea del parrafo girado",
+            "segunda linea del mismo parrafo",
+            "tercera y ultima linea de todas",
+        ];
+        let indice = parrafo_de_prueba(&work, &lineas, 11.0, 1.35);
+        crate::paginas::rotate_page(work.clone(), 0).expect("girar 90°");
+
+        let informe = edit_text_block(
+            work.clone(),
+            0,
+            indice,
+            lineas.join(" ").replace("Primera", "La primerísima de todas"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("corregir en una página girada");
+        assert!(informe.reflujo);
+        let bloques = get_text_blocks(work.clone(), 0).expect("bloques");
+        let parrafo: Vec<_> = bloques.iter().filter(|b| b.font_size < 12.0).collect();
+        assert_eq!(parrafo.len(), informe.lineas as usize);
+        let todo = parrafo.iter().map(|b| b.text.clone()).collect::<Vec<_>>().join(" ");
+        assert!(todo.contains("primerísima"), "{todo}");
+        assert!(todo.contains("ultima linea de todas"), "{todo}");
+        crate::render_page_png(work.clone(), 0, 200, true).expect("render");
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// **H1.** Un párrafo que crece hasta salirse del papel se dice, no se
+    /// escribe fuera en silencio.
+    #[test]
+    fn un_parrafo_que_no_cabe_en_la_pagina_lo_dice() {
+        let tmp = std::env::temp_dir().join("texto-reflujo-no-cabe.pdf");
+        crea_pdf(&["Al fondo"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        // dos líneas pegadas al borde de abajo de la A4 (842 pt de alto)
+        let lineas = ["Casi al final de la hoja", "y esta es la ultima de todas"];
+        for (i, texto) in lineas.iter().enumerate() {
+            add_text_block(
+                work.clone(),
+                0,
+                60.0,
+                810.0 + i as f32 * 15.0,
+                (*texto).into(),
+                11.0,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("escribir");
+        }
+        let indice = get_text_blocks(work.clone(), 0)
+            .expect("bloques")
+            .into_iter()
+            .find(|b| b.text.contains("Casi al final"))
+            .expect("la primera")
+            .object_index;
+        let largo = "Casi al final de la hoja ".repeat(12);
+        let informe = edit_text_block(work.clone(), 0, indice, largo, None, None, None, None, None)
+            .expect("corregir");
+        assert!(informe.reflujo);
+        assert!(
+            informe.se_sale,
+            "el párrafo se sale del papel y hay que decirlo: {informe:?}"
+        );
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// Con `reflow: false` se conserva el camino de siempre, que es el que
+    /// usa la UI cuando no quiere que se le mueva nada.
+    #[test]
+    fn sin_reflujo_se_hace_lo_de_siempre() {
+        let tmp = std::env::temp_dir().join("texto-sin-reflujo.pdf");
+        crea_pdf(&["Base"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        let lineas = ["Primera linea corta", "segunda linea corta"];
+        let indice = parrafo_de_prueba(&work, &lineas, 11.0, 1.35);
+        let informe = edit_text_block(
+            work.clone(),
+            0,
+            indice,
+            "Una sola linea muy larga que no se reparte porque no hay reflujo".into(),
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+        )
+        .expect("corregir sin reflujo");
+        assert!(!informe.reflujo);
+        let bloques = get_text_blocks(work.clone(), 0).expect("bloques");
+        assert!(
+            bloques.iter().any(|b| b.text.contains("no hay reflujo")),
+            "la línea se escribe entera, sin partir: {bloques:?}"
+        );
+        assert!(
+            bloques.iter().any(|b| b.text.contains("segunda linea")),
+            "y la segunda línea del párrafo se queda donde estaba"
+        );
+        std::fs::remove_file(&tmp).ok();
+    }
+
     #[test]
     fn edicion_de_texto() {
         let tmp = std::env::temp_dir().join("editor_pdf_test_edicion.pdf");
@@ -1093,7 +1721,7 @@ mod tests {
             "Texto editado".into(),
             None,
             None,
-            None, None)
+            None, None, None)
         .expect("editar bloque");
         let t = textos_de(&tmp);
         assert!(t[0].contains("Texto editado"), "tras editar: {t:?}");
@@ -1276,6 +1904,7 @@ mod tests {
             None,
             Some(2.0),
             None,
+        None,
         )
         .expect("corregir");
         let bloques = get_text_blocks(work.clone(), 0).expect("bloques");
@@ -1298,7 +1927,10 @@ mod tests {
             uno.font_size
         );
 
-        // y con el de siempre (1,2) las líneas quedan más juntas
+        // y con el de siempre (1,2) las líneas quedan más juntas. Ojo: aquí
+        // ya hay párrafo, así que la corrección va por el reflujo, y sin
+        // pedir interlineado el reflujo respeta el que tenga el párrafo
+        // (que es el 2 de arriba): el 1,2 hay que pedirlo
         edit_text_block(
             work.clone(),
             0,
@@ -1306,6 +1938,7 @@ mod tests {
             "Rojo uno\nRojo dos".into(),
             None,
             None,
+            Some(1.2),
             None,
             None,
         )
@@ -1385,7 +2018,7 @@ mod tests {
             "Primera línea\nSegunda línea\nTercera".into(),
             None,
             None,
-            None, None)
+            None, None, None)
         .expect("editar multilínea");
 
         let t = textos_de(&tmp).join(" ");
@@ -1697,7 +2330,7 @@ mod tests {
             "Izquierda".into(),
             Some([20, 20, 200, 255]),
             None,
-            None, None)
+            None, None, None)
         .expect("recolorear");
         let png = crate::render_page_png(work.clone(), 0, 600, true).expect("render");
         let img = image::load_from_memory(&png).expect("PNG").to_rgba8();
@@ -1741,7 +2374,7 @@ mod tests {
             "Un texto bastante más largo".into(),
             None,
             Some("centro".into()),
-            None, None)
+            None, None, None)
         .expect("corregir");
         let b = get_text_blocks(work.clone(), 0)
             .expect("listar")
