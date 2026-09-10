@@ -506,71 +506,8 @@ mod tests {
     /// excepción mientras las dos mitades se escriben en paralelo, y se
     /// quita al integrar.
     const NADIE_LLAMA: &[(&str, &str)] = &[
-        ("certify_pdf", "ciclo 9: certificar con /DocMDP necesita su diálogo y su id de menú"),
-        (
-            "open_page_attachment",
-            "ciclo 9: el doble clic en la chincheta llega con la mitad de la interfaz",
-        ),
-        (
-            "save_page_attachment",
-            "ciclo 9: «Guardar como…» del popover de la chincheta, ídem",
-        ),
-        (
-            "adopt_session",
-            "ciclo 9 (AC-077): recuperar una sesión adopta su copia en vez de \
-             copiarla; el cambio de `recuperarSesiones` llega con la interfaz",
-        ),
-        (
-            "search_folder",
-            "ciclo 9: el segmentado «Este documento / Una carpeta…» del cajón de \
-             búsqueda llega con la interfaz",
-        ),
-        (
-            "cancel_search",
-            "ciclo 9: su botón «Cancelar» vive en la banda de progreso de esa búsqueda",
-        ),
-        (
-            "audit_pdf",
-            "ciclo 9: la barra apilada y la tabla del diálogo de comprimir llegan \
-             con la interfaz",
-        ),
-        (
-            "compare_pdf",
-            "ciclo 9: los dos visores lado a lado llegan con la interfaz",
-        ),
-        (
-            "export_html",
-            "ciclo 9: «Exportar a HTML…» llega con la interfaz",
-        ),
-        (
-            "encrypt_pdf_cert",
-            "ciclo 9: «Proteger ▸ Cifrar con certificado…» llega con la interfaz",
-        ),
-        (
-            "compose_print",
-            "ciclo 9: el desplegable «Composición» del diálogo de imprimir llega \
-             con la interfaz",
-        ),
-        (
-            "add_background",
-            "ciclo 9: «Fondo ▸ Color» espera al diálogo de marca de agua y fondo",
-        ),
-        (
-            "set_signature_slot",
-            "ciclo 9 (R58): cambiar la ranura de una imagen guardada llega con la galería",
-        ),
-        (
-            "get_open_action",
-            "ciclo 9 (R56): «Vista inicial» es la cuarta pestaña de ⌘D y llega con la interfaz",
-        ),
-        (
-            "set_open_action",
-            "ciclo 9 (R56): ídem, es la única parte de las propiedades que se escribe",
-        ),
-        (
-            "remove_background",
-            "ciclo 9: «Quitar fondo…» espera a su entrada de menú en la interfaz",
-        ),
+        ("adopt_session", "ciclo 10: la UI recupera con recover_session/borra_sesion; adoptar la copia queda para el cierre"),
+        ("set_signature_slot", "ciclo 10: la UI fija la ranura al guardar/importar; cambiarla después no tiene botón"),
     ];
 
     /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada
@@ -584,54 +521,7 @@ mod tests {
     /// del backend sin vía de acceso: existe, está probada y el usuario no
     /// puede llegar a ella. Fue el estado exacto de `char_spacing` durante
     /// un ciclo entero. La lista tiene que quedar vacía al cerrar el ciclo.
-    const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[
-        (
-            "compress_pdf",
-            "quitar_adjuntos",
-            "ciclo 9: las casillas del PDF Optimizer llegan con la interfaz",
-        ),
-        ("compress_pdf", "quitar_metadatos", "ciclo 9: ídem"),
-        ("compress_pdf", "aplanar_formularios", "ciclo 9: ídem"),
-        (
-            "sign_pdf",
-            "tsa_url",
-            "ciclo 9: el bloque «Avanzado» del diálogo de firmar llega con la interfaz",
-        ),
-        ("sign_pdf", "ltv", "ciclo 9: ídem, la casilla de guardar la prueba de validez"),
-        (
-            "sign_pdf_p12",
-            "tsa_url",
-            "ciclo 9: ídem, con el certificado en un .p12",
-        ),
-        ("sign_pdf_p12", "ltv", "ciclo 9: ídem"),
-        (
-            "add_measure",
-            "escala",
-            "ciclo 9 (orden 8 del QA): la escala la fija el usuario por documento \
-             en la interfaz, que es quien tiene que mandarla",
-        ),
-        (
-            "import_signature_file",
-            "ranura",
-            "ciclo 9 (R58): la galería de sellos y la ranura de iniciales llegan \
-             con la interfaz",
-        ),
-        (
-            "save_stored_signature",
-            "ranura",
-            "ciclo 9 (R58): ídem; hoy la interfaz guarda la ranura en localStorage",
-        ),
-        (
-            "insert_pdf_at",
-            "page_indices",
-            "ciclo 9 (R57): el campo «Páginas del documento que entra» de \
-             DialogoInsertar llega con la interfaz",
-        ),(
-        "add_stamp",
-        "dinamico",
-        "ciclo 9: los sellos dinámicos esperan a la galería de sellos de la \
-         interfaz (pendiente_ui)",
-    )];
+    const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[];
 
     /// **R45b.** Parámetros **obligatorios** en Rust que el envoltorio de
     /// `api.ts` declara opcionales (`workPath?: string`, un tipo que admite
@@ -1474,11 +1364,6 @@ mod tests {
         ("list_stored_signatures", "no lleva argumentos"),
         ("recover_session", "no lleva argumentos"),
         ("list_recent", "no lleva argumentos"),
-        (
-            "set_page_labels",
-            "AC-074: el puente lo llamaba `labels` y el comando `rangos`; \
-             corregido en main, llega con el rebase",
-        ),
     ];
 
     /// Los argumentos que declara la tabla del puente, por comando.
@@ -1588,11 +1473,7 @@ mod tests {
     /// Lo que se exige aquí es lo mínimo que lo habría cazado: un comando
     /// que devuelve una lista se declara como lista, y uno que devuelve un
     /// `struct` con campos nombrados **no** se declara como lista.
-    const TIPOS_PENDIENTES: &[(&str, &str)] = &[(
-        "get_page_labels",
-        "AC-075: `api.ts` lo declaraba `RangoEtiquetas[]` y devuelve \
-         `{ rangos, etiquetas }`; corregido en main, llega con el rebase",
-    )];
+    const TIPOS_PENDIENTES: &[(&str, &str)] = &[];
 
     /// Los `struct` con campos nombrados del core, que es lo que viaja a la
     /// UI como objeto JSON.

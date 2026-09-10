@@ -1575,9 +1575,21 @@ export function addMeasure(args: {
   color: Rgba;
   closed?: boolean;
   author?: string | null;
+  /** La escala con la que se ha medido, para que viaje con el documento
+   *  (`/Measure`) y Acrobat la enseñe tal cual; sin ella no se escribe. */
+  escala?: EscalaMedida | null;
 }): Promise<number> {
-  return invoke("add_measure", { closed: false, author: null, ...args });
+  return invoke("add_measure", { closed: false, author: null, escala: null, ...args });
 }
+
+/** La escala de una medida tal como la guarda el PDF: cuántas `unidad`
+ *  mide un punto (1/72 de pulgada) y cómo se llama la unidad. */
+export type EscalaMedida = {
+  unidades_por_punto: number;
+  unidad: string;
+  razon?: string;
+  decimales?: number | null;
+};
 
 /** Escribe el bitmap de un objeto de imagen en un PNG del disco. Es el
  *  mismo mapa de bits de `getImageData`, pero sin cruzar el canal en

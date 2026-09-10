@@ -167,6 +167,11 @@ export function useMedida(ctx: {
         color: hexToRgba(tool.shapeColor),
         closed: cerrar,
         author: autorComentarios(),
+        escala: {
+          unidades_por_punto: tool.escalaMm,
+          unidad: "mm",
+          razon: `1 pt = ${tool.escalaMm.toFixed(4)} mm`,
+        },
       });
       onAnnotated(index);
       onNotice(`Medida puesta: ${texto} · ${MOD}Z la quita`);

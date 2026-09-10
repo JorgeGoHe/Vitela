@@ -92,24 +92,6 @@ fn e(
     })
 }
 
-/// Como [`e`], pero marcando la entrada **`pendiente_ui`**: la mitad de la
-/// interfaz de ese id llega en otra rama del mismo ciclo. El test cruzado
-/// avisa por stderr en vez de fallar y la marca se quita al integrar.
-fn ep(
-    id: &'static str,
-    etiqueta: &'static str,
-    atajo: Option<&'static str>,
-    necesita_documento: bool,
-) -> Elemento {
-    Elemento::Accion(Entrada {
-        id,
-        etiqueta,
-        atajo,
-        necesita_documento,
-        pendiente_ui: true,
-    })
-}
-
 fn sep() -> Elemento {
     Elemento::Separador
 }
@@ -202,10 +184,10 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 // «Ver ▸ Mostrar/Ocultar» de Acrobat (R54): reglas, guías
                 // y cuadrícula existían solo en el teclado, así que no las
                 // encontraba nadie
-                ep("mostrar-reglas", "Reglas", Some("CmdOrCtrl+R"), true),
-                ep("mostrar-guias", "Guías", Some("CmdOrCtrl+;"), true),
-                ep("mostrar-cuadricula", "Cuadrícula", Some("CmdOrCtrl+U"), true),
-                ep(
+                e("mostrar-reglas", "Reglas", Some("CmdOrCtrl+R"), true),
+                e("mostrar-guias", "Guías", Some("CmdOrCtrl+;"), true),
+                e("mostrar-cuadricula", "Cuadrícula", Some("CmdOrCtrl+U"), true),
+                e(
                     "ajustar-cuadricula",
                     "Ajustar a la cuadrícula",
                     Some("Shift+CmdOrCtrl+U"),
@@ -229,7 +211,7 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 e("encabezado-pie", "Encabezado, pie y numeración…", None, true),
                 e("quitar-marca-de-agua", "Quitar marca de agua…", None, true),
                 e("quitar-encabezados", "Quitar encabezados y pies…", None, true),
-                ep("quitar-fondo", "Quitar fondo…", None, true),
+                e("quitar-fondo", "Quitar fondo…", None, true),
                 sep(),
                 e("anadir-campo", "Añadir campo de formulario…", None, true),
                 e("reconocer-campos", "Reconocer campos…", None, true),
@@ -240,9 +222,9 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 // certificar es firmar **y** decir qué se puede cambiar
                 // después: va justo debajo de firmar, que es donde lo pone
                 // Acrobat
-                ep("certificar", "Certificar documento…", None, true),
+                e("certificar", "Certificar documento…", None, true),
                 e("proteger", "Proteger con contraseña…", None, true),
-                ep("cifrar-certificado", "Cifrar con certificado…", None, true),
+                e("cifrar-certificado", "Cifrar con certificado…", None, true),
                 e("quitar-proteccion", "Quitar la contraseña…", None, true),
                 e("aplanar", "Fijar las anotaciones en la página…", None, true),
                 e("redactar", "Redactar (censurar)…", None, true),
@@ -253,12 +235,12 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 e("exportar-imagenes", "Exportar como imágenes…", None, true),
                 e("exportar-texto", "Exportar texto…", None, true),
                 e("exportar-word", "Exportar a Word (.docx)…", None, true),
-                ep("exportar-html", "Exportar a HTML…", None, true),
+                e("exportar-html", "Exportar a HTML…", None, true),
                 e("exportar-comentarios", "Exportar comentarios…", None, true),
                 e("importar-comentarios", "Importar comentarios…", None, true),
                 e("comprimir", "Reducir tamaño…", None, true),
                 sep(),
-                ep("comparar", "Comparar con otro PDF…", None, true),
+                e("comparar", "Comparar con otro PDF…", None, true),
             ],
         },
         Grupo {
@@ -678,13 +660,12 @@ mod tests {
     /// hace.
     const EQUIVALENTES: &[(&str, &str, &str)] = &[
         (
-            "marca de agua",
-            "marca de agua y fondo",
-            "ciclo 9: el diálogo pasa a llamarse «Marca de agua y fondo…» \
-             porque el fondo es su otra mitad; la etiqueta de la app llega \
-             con la interfaz y esta excepción se va al integrar",
+            "página web (.html)",
+            "exportar a html",
+            "en la app va bajo el título «Salida»; en la barra del sistema, \
+             dentro de «Documento», la etiqueta tiene que decir sola qué hace",
         ),
-        (
+                (
             "word (.docx)",
             "exportar a word (.docx)",
             "en la app va bajo el título «Salida»; en la barra del sistema, \
