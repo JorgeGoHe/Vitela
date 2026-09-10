@@ -25,11 +25,13 @@ import { useFormularios } from "../hooks/pagina/useFormularios";
 import { useImagenes } from "../hooks/pagina/useImagenes";
 import { useAnotaciones } from "../hooks/pagina/useAnotaciones";
 import { useAreas } from "../hooks/pagina/useAreas";
+import { useMedida } from "../hooks/pagina/useMedida";
 import { useSeleccionTexto } from "../hooks/pagina/useSeleccionTexto";
 import { useTexto } from "../hooks/pagina/useTexto";
 import CapaAnotaciones, { MarcasAnotaciones } from "./pagina/CapaAnotaciones";
 import CapaAreas from "./pagina/CapaAreas";
 import CapaLlamada from "./pagina/CapaLlamada";
+import CapaMedida from "./pagina/CapaMedida";
 import CapaEnlaces from "./pagina/CapaEnlaces";
 import CapaFormularios from "./pagina/CapaFormularios";
 import CapaImagenes from "./pagina/CapaImagenes";
@@ -48,6 +50,16 @@ export type ToolProps = {
   goma: boolean;
   /** Diámetro del borrado, en puntos de página. */
   gomaAncho: number;
+  /** Modo «Medir»: qué se mide, si se deja puesta y si toca calibrar. */
+  medidaTipo: "distancia" | "area";
+  medidaDejar: boolean;
+  calibrando: boolean;
+  /** Milímetros por punto de página del documento abierto. */
+  escalaMm: number;
+  /** Fija la escala del documento (la guarda App por ruta). */
+  onEscala: (mmPorPunto: number) => void;
+  /** El arrastre de calibración ha terminado: desarma el botón. */
+  onCalibrado: () => void;
   markupPending: string | null;
   onMarkupPending: (c: string | null) => void;
   markupColors: { resaltar: string; subrayar: string; tachar: string };
@@ -296,6 +308,16 @@ function Pagina({
     onSigStamped,
     onMarcasCambian,
   });
+  const medida = useMedida({
+    workPath,
+    index,
+    mode,
+    size,
+    tool,
+    onPageMutated,
+    onError,
+    onNotice,
+  });
 
   // «Añadir texto» e «Insertar imagen…» de la fila contextual: los abre la
   // página actual, en el margen superior izquierdo del área de texto, que es
@@ -438,6 +460,13 @@ function Pagina({
       areas.setCropDraft(null);
       return;
     }
+    if (mode === "medir") {
+      medida.medidaStartRef.current = { x, y };
+      medida.medidaLiveRef.current = null;
+      medida.setMedidaDraft(null);
+      medida.setCalibre(null);
+      return;
+    }
     if (mode === "redact") {
       areas.redactStartRef.current = { x, y };
       areas.setRedactDraft(null);
@@ -574,6 +603,15 @@ function Pagina({
       const d = { x1: start.x, y1: start.y, x2: x, y2: y };
       anotaciones.shapeLiveRef.current = d;
       anotaciones.setShapeDraft(d);
+      return;
+    }
+    if (mode === "medir") {
+      const start = medida.medidaStartRef.current;
+      if (!start) return;
+      const { x, y } = pagePoint(e, scale, viewRotation);
+      const d = { x1: start.x, y1: start.y, x2: x, y2: y };
+      medida.medidaLiveRef.current = d;
+      medida.setMedidaDraft(d);
       return;
     }
     if (mode === "crop") {
@@ -727,6 +765,26 @@ function Pagina({
     if (mode === "crop") {
       areas.cropStartRef.current = null;
       // el borrador se queda visible; se confirma con los botones
+      return;
+    }
+    if (mode === "medir") {
+      medida.medidaStartRef.current = null;
+      const d = medida.medidaLiveRef.current;
+      medida.medidaLiveRef.current = null;
+      if (!d || Math.abs(d.x2 - d.x1) + Math.abs(d.y2 - d.y1) < 4) {
+        medida.setMedidaDraft(null);
+        return;
+      }
+      if (tool.calibrando) {
+        // el trazo se queda hasta que se diga cuánto mide de verdad
+        medida.setMedidaDraft(null);
+        medida.setCalibre(d);
+        tool.onCalibrado();
+        return;
+      }
+      // la medida se queda en pantalla; solo toca el documento si se ha
+      // pedido dejarla puesta
+      if (tool.medidaDejar) medida.dejaMedida(d);
       return;
     }
     if (mode === "redact") {
@@ -928,6 +986,13 @@ function Pagina({
             mode={mode}
             anotaciones={anotaciones}
             scale={scale}
+            tool={tool}
+          />
+          <CapaMedida
+            mode={mode}
+            medida={medida}
+            scale={scale}
+            displayWidth={displayWidth}
             tool={tool}
           />
           <CapaAreas

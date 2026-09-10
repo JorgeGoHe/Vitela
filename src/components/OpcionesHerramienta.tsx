@@ -4,6 +4,7 @@ import {
   plural,
   type Mode,
   type ShapeKind,
+  formateaLongitud,
 } from "../tipos";
 import type { Alineacion } from "../api";
 import type { MarcaRellenar } from "./Pagina";
@@ -48,6 +49,18 @@ export default function OpcionesHerramienta({
   setGoma,
   gomaAncho,
   setGomaAncho,
+  leyendo,
+  pausada,
+  paginaLeida,
+  onPausarLectura,
+  onPararLectura,
+  medidaTipo,
+  setMedidaTipo,
+  medidaDejar,
+  setMedidaDejar,
+  calibrando,
+  setCalibrando,
+  escalaMm,
   shapeKind,
   setShapeKind,
   shapeColor,
@@ -94,6 +107,21 @@ export default function OpcionesHerramienta({
   setGoma: (v: boolean) => void;
   gomaAncho: number;
   setGomaAncho: (v: number) => void;
+  /** «Leer en voz alta»: mientras suena, la fila es la de la lectura. */
+  leyendo: boolean;
+  pausada: boolean;
+  paginaLeida: number | null;
+  onPausarLectura: () => void;
+  onPararLectura: () => void;
+  /** Modo «Medir». */
+  medidaTipo: "distancia" | "area";
+  setMedidaTipo: (v: "distancia" | "area") => void;
+  medidaDejar: boolean;
+  setMedidaDejar: (v: boolean) => void;
+  calibrando: boolean;
+  setCalibrando: (v: boolean) => void;
+  /** Milímetros por punto de página del documento abierto. */
+  escalaMm: number;
   shapeKind: ShapeKind;
   setShapeKind: (k: ShapeKind) => void;
   shapeColor: string;
@@ -141,6 +169,26 @@ export default function OpcionesHerramienta({
   aplicarRedaccion: () => void;
   quitarMarcasRedact: () => void;
 }) {
+  // mientras se lee en voz alta la fila es la de la lectura: es lo que el
+  // usuario está haciendo, y son los controles que va a querer a mano
+  if (leyendo) {
+    return (
+      <div className="tool-options">
+        <span>Leyendo en voz alta</span>
+        {paginaLeida !== null && (
+          <span className="dato">pág. {paginaLeida + 1}</span>
+        )}
+        <button className="btn" onClick={onPausarLectura}>
+          {pausada ? "Seguir" : "Pausa"}
+        </button>
+        <button className="btn" onClick={onPararLectura}>
+          Parar
+        </button>
+        <span className="opt-hint">Esc también para</span>
+      </div>
+    );
+  }
+
   return (
     <>
       {mode === "select" && hayFormularios && (
@@ -393,6 +441,52 @@ export default function OpcionesHerramienta({
               ))}
             </select>
           )}
+        </div>
+      )}
+      {mode === "medir" && (
+        <div className="tool-options">
+          <div className="segmented">
+            {(
+              [
+                ["distancia", "Distancia"],
+                ["area", "Área"],
+              ] as ["distancia" | "area", string][]
+            ).map(([v, etiqueta]) => (
+              <button
+                key={v}
+                className={`btn${medidaTipo === v ? " on" : ""}`}
+                aria-pressed={medidaTipo === v}
+                onClick={() => setMedidaTipo(v)}
+              >
+                {etiqueta}
+              </button>
+            ))}
+          </div>
+          {/* la escala se pide una vez por documento y se guarda por ruta;
+              sin fijarla se mide el papel, como Acrobat cuando el PDF no
+              trae `/Measure` */}
+          <span className="dato" title="Lo que mide de verdad un centímetro del papel">
+            1 cm de papel = {formateaLongitud(28.3465, escalaMm)}
+          </span>
+          <button
+            className={`btn${calibrando ? " on" : ""}`}
+            title="Arrastra sobre algo cuya medida conozcas y dime cuánto mide"
+            aria-pressed={calibrando}
+            onClick={() => setCalibrando(!calibrando)}
+          >
+            Fijar la escala…
+          </button>
+          <label className="opt-check">
+            <input
+              type="checkbox"
+              checked={medidaDejar}
+              onChange={(e) => setMedidaDejar(e.target.checked)}
+            />
+            Dejar la medida puesta
+          </label>
+          <span className="opt-hint">
+            Arrastra sobre la página · Esc sale
+          </span>
         </div>
       )}
       {mode === "callout" && (

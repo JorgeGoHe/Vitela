@@ -27,6 +27,7 @@ import { useBusqueda } from "./hooks/useBusqueda";
 import { useReemplazo } from "./hooks/useReemplazo";
 import { useFirmas } from "./hooks/useFirmas";
 import { useHerramienta } from "./hooks/useHerramienta";
+import { useLectura } from "./hooks/useLectura";
 import { destinoDe, esquemaDe, esquemaPermitido } from "./enlaces";
 import { open, save, openUrl } from "./dialogos";
 import {
@@ -123,8 +124,11 @@ import {
   marcaAvisoPantalla,
   type ModoPagina,
   type OpcionesImprimir,
+  cargaEscala,
   cargaResaltarCampos,
   copyToClipboard,
+  guardaEscala,
+  MM_POR_PUNTO,
   formateaRango,
   hexToRgba,
   guardaResaltarCampos,
@@ -552,7 +556,20 @@ function App() {
     setMode,
     onError: (e) => setError(String(e)),
   });
-  const herramienta = useHerramienta(activeSig);
+  // la escala de medida es del documento, no de la herramienta: se guarda
+  // por ruta y se recupera al abrirlo (un plano no cambia de escala)
+  const [escalaMm, setEscalaMm] = useState(MM_POR_PUNTO);
+  const fijarEscala = useCallback(
+    (mm: number) => {
+      setEscalaMm(mm);
+      guardaEscala(originalPath, mm);
+    },
+    [originalPath],
+  );
+  const herramienta = useHerramienta(activeSig, {
+    escalaMm,
+    onEscala: fijarEscala,
+  });
   const tool = herramienta.tool;
   const setFillMark = herramienta.setFillMark;
 
@@ -618,6 +635,7 @@ function App() {
       setFirmasDoc([]);
       setBandaFirmas(false);
       setNombreProvisional(null);
+      setEscalaMm(cargaEscala(original !== undefined ? original : path));
       setOriginalPath(original !== undefined ? original : path);
       setWorkPath(info.work_path);
       setPageCount(info.page_count);
@@ -1488,6 +1506,13 @@ function App() {
       const tag = (e.target as HTMLElement)?.tagName;
       const enCampo = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
       if (e.key === "Escape" && !mod) {
+        // la lectura en voz alta es lo primero que Esc calla: es lo que
+        // está pasando y lo que molesta si no se para
+        if (lectura.leyendo) {
+          e.preventDefault();
+          lectura.parar();
+          return;
+        }
         // preparando la impresión, Esc la cancela: es el trabajo largo que
         // hay en marcha, y hasta ahora solo se paraba con el botón de la banda
         if (printCancelRef.current) {
@@ -1507,6 +1532,12 @@ function App() {
       } else if (mod && !e.shiftKey && (e.key === "l" || e.key === "L") && pageCount > 0) {
         e.preventDefault();
         cambiaPantallaCompleta(!pantallaCompleta);
+      } else if (mod && e.shiftKey && (e.key === "y" || e.key === "Y") && pageCount > 0) {
+        // leer desde la página que se está leyendo hasta el final, y la
+        // segunda pulsación calla, como el conmutador de Acrobat
+        e.preventDefault();
+        if (lectura.leyendo) lectura.parar();
+        else lectura.leer(pageIndex, true);
       } else if (mod && e.shiftKey && (e.key === "l" || e.key === "L")) {
         // el modo nocturno del documento: solo cambia lo que se ve
         e.preventDefault();
@@ -1776,6 +1807,16 @@ function App() {
     },
     [pageCount, continuo],
   );
+
+  // «Leer en voz alta»: la síntesis del webview sobre el texto de cada
+  // página, desde la que se está leyendo. Va detrás de `gotoPage`, que es
+  // un `useCallback` y no se iza.
+  const lectura = useLectura({
+    workPath,
+    pageCount,
+    onNotice: setNotice,
+    onPagina: gotoPage,
+  });
 
   /** La página a la que llevan ← y →: el pliego entero en las presentaciones
    *  de dos, la de al lado en el resto. */
@@ -3154,6 +3195,12 @@ function App() {
       hint: "Señalar algo con una línea y escribir al lado (clic donde señala, arrastra hasta el texto)",
     },
     {
+      id: "medir",
+      icon: "hf",
+      label: "Medir",
+      hint: "Medir distancias y áreas sobre la página (no toca el documento)",
+    },
+    {
       id: "edit",
       icon: "textedit",
       label: "Editar",
@@ -3276,6 +3323,7 @@ function App() {
               [
                 ["select"],
                 ["draw", "note", "freetext", "callout", "shape", "stamp"],
+                ["medir"],
                 ["edit", "image"],
                 ["firmar"],
               ] as Mode[][]
@@ -3416,6 +3464,11 @@ function App() {
                 exportarWord={() => setWordAsk(true)}
                 exportarComentarios={exportarComentarios}
                 abrirComprimir={() => setCompressOpen(true)}
+                leerEnVozAlta={() => {
+                  if (lectura.leyendo) lectura.parar();
+                  else lectura.leer(pageIndex, true);
+                }}
+                leyendo={lectura.leyendo}
               />
             </>
           )}
@@ -3954,6 +4007,18 @@ function App() {
         setGoma={herramienta.setGoma}
         gomaAncho={herramienta.gomaAncho}
         setGomaAncho={herramienta.setGomaAncho}
+        leyendo={lectura.leyendo}
+        pausada={lectura.pausada}
+        paginaLeida={lectura.paginaLeida}
+        onPausarLectura={lectura.pausar}
+        onPararLectura={lectura.parar}
+        medidaTipo={herramienta.medidaTipo}
+        setMedidaTipo={herramienta.setMedidaTipo}
+        medidaDejar={herramienta.medidaDejar}
+        setMedidaDejar={herramienta.setMedidaDejar}
+        calibrando={herramienta.calibrando}
+        setCalibrando={herramienta.setCalibrando}
+        escalaMm={escalaMm}
         shapeKind={herramienta.shapeKind}
         setShapeKind={herramienta.setShapeKind}
         shapeColor={herramienta.shapeColor}

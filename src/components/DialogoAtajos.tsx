@@ -62,10 +62,14 @@ const GRUPOS: { titulo: string; atajos: Atajo[] }[] = [
       [atajo("3", "alt cmd"), "Comentarios"],
       [atajo("L"), "Pantalla completa (Esc sale)"],
       [atajo("L", "shift cmd"), "Modo nocturno del documento"],
+      [atajo("Y", "shift cmd"), "Leer en voz alta desde esta página (Esc para)"],
       [`${atajo("←", "alt")} · ${atajo("→", "alt")}`, "Vista anterior y siguiente"],
       [atajo("N", "shift cmd"), "Ir a la página"],
       [`${atajo("←", "")} · ${atajo("→", "")}`, "Página anterior y siguiente"],
-      [atajo("Esc", ""), "Quitar las coincidencias, o salir de la herramienta"],
+      [
+        atajo("Esc", ""),
+        "Parar la lectura, quitar las coincidencias, o salir de la herramienta",
+      ],
     ],
   },
   {

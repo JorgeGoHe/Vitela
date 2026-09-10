@@ -135,6 +135,8 @@ export type Mode =
   | "freetext"
   /** Llamada: clic donde señala, arrastre hasta donde va el texto. */
   | "callout"
+  /** Medir: distancia y área sobre la página, sin tocar el documento. */
+  | "medir"
   /** Dibujar el recuadro donde se verá la firma con certificado. */
   | "firma-cert";
 export type ShapeKind = "rect" | "ellipse" | "line" | "arrow";
@@ -740,4 +742,57 @@ export function guardaColor(accion: string, color: string) {
   const c = cargaColores();
   c[accion] = color;
   localStorage.setItem(CLAVE_COLORES, JSON.stringify(c));
+}
+
+/* ---- medir (H5): la escala del documento, en milímetros por punto ---- */
+
+/** Un punto PDF es 1/72 de pulgada: la escala del papel, que es la que usa
+ *  Acrobat cuando el PDF no trae `/Measure`. */
+export const MM_POR_PUNTO = 25.4 / 72;
+
+const CLAVE_ESCALA = "editorPdf.escala";
+
+/** La escala se pide una vez por documento y se guarda por su ruta: un
+ *  plano no cambia de escala entre sesiones. */
+export function cargaEscala(path: string | null): number {
+  if (!path) return MM_POR_PUNTO;
+  try {
+    const todas = JSON.parse(localStorage.getItem(CLAVE_ESCALA) ?? "{}");
+    const v = Number(todas[path]);
+    return Number.isFinite(v) && v > 0 ? v : MM_POR_PUNTO;
+  } catch {
+    return MM_POR_PUNTO;
+  }
+}
+
+export function guardaEscala(path: string | null, mmPorPunto: number) {
+  if (!path) return;
+  try {
+    const todas = JSON.parse(localStorage.getItem(CLAVE_ESCALA) ?? "{}");
+    todas[path] = mmPorPunto;
+    localStorage.setItem(CLAVE_ESCALA, JSON.stringify(todas));
+  } catch {
+    /* sin localStorage la escala vale para esta sesión y ya */
+  }
+}
+
+/** Un número con coma decimal y sin ceros de más, como se escribe aquí. */
+function numero(n: number, decimales: number): string {
+  return n.toFixed(decimales).replace(/\.?0+$/, "").replace(".", ",");
+}
+
+/** «12,4 cm» a partir de una longitud en puntos de página. */
+export function formateaLongitud(puntos: number, mmPorPunto: number): string {
+  const mm = puntos * mmPorPunto;
+  if (mm >= 1000) return `${numero(mm / 1000, 2)} m`;
+  if (mm >= 10) return `${numero(mm / 10, 1)} cm`;
+  return `${numero(mm, 1)} mm`;
+}
+
+/** «3,2 cm²» a partir de un área en puntos cuadrados de página. */
+export function formateaArea(puntos2: number, mmPorPunto: number): string {
+  const mm2 = puntos2 * mmPorPunto * mmPorPunto;
+  if (mm2 >= 1_000_000) return `${numero(mm2 / 1_000_000, 2)} m²`;
+  if (mm2 >= 100) return `${numero(mm2 / 100, 1)} cm²`;
+  return `${numero(mm2, 1)} mm²`;
 }

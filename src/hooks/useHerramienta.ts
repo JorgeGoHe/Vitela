@@ -15,7 +15,12 @@ export const STAMP_PRESETS = [
  * Opciones de las herramientas de anotación (trazo, marcado, formas y
  * sello) y el objeto `tool` memoizado que reciben las Paginas.
  */
-export function useHerramienta(activeSig: ToolProps["activeSig"]) {
+export function useHerramienta(
+  activeSig: ToolProps["activeSig"],
+  /** La escala del documento abierto: la guarda `App` por ruta, porque es
+   *  del documento y no de la herramienta. */
+  escala: { escalaMm: number; onEscala: (mmPorPunto: number) => void },
+) {
   const [drawColor, setDrawColor] = useState(() => cargaColores().dibujo ?? "#c0392b");
   const [drawWidth, setDrawWidth] = useState(2);
   const [markupPending, setMarkupPending] = useState<string | null>(null);
@@ -55,6 +60,13 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
   // el cursor redondo del tamaño del borrado (Acrobat)
   const [goma, setGoma] = useState(false);
   const [gomaAncho, setGomaAncho] = useState(16);
+  // medir: qué se mide, si la medida se deja puesta en el documento y si el
+  // arrastre siguiente es el de fijar la escala
+  const [medidaTipo, setMedidaTipo] = useState<"distancia" | "area">(
+    "distancia",
+  );
+  const [medidaDejar, setMedidaDejar] = useState(false);
+  const [calibrando, setCalibrando] = useState(false);
   // marca de «rellenar y firmar» armada, si la hay
   const [fillMark, setFillMark] = useState<MarcaRellenar | null>(null);
   const [fillColor, setFillColor] = useState(
@@ -116,6 +128,12 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
       textLineHeight,
       goma,
       gomaAncho,
+      medidaTipo,
+      medidaDejar,
+      calibrando,
+      escalaMm: escala.escalaMm,
+      onEscala: escala.onEscala,
+      onCalibrado: () => setCalibrando(false),
       onTextBlockPicked: setTextColorBloque,
       fillMark,
       fillColor,
@@ -142,6 +160,10 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
       textLineHeight,
       goma,
       gomaAncho,
+      medidaTipo,
+      medidaDejar,
+      calibrando,
+      escala,
       fillMark,
       fillColor,
       activeSig,
@@ -179,6 +201,12 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
     setGoma,
     gomaAncho,
     setGomaAncho,
+    medidaTipo,
+    setMedidaTipo,
+    medidaDejar,
+    setMedidaDejar,
+    calibrando,
+    setCalibrando,
     textColorBloque,
     fillMark,
     setFillMark,

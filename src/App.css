@@ -1189,6 +1189,7 @@ textarea {
 .textlayer.mode-firmar,
 .textlayer.mode-freetext,
 .textlayer.mode-callout,
+.textlayer.mode-medir,
 .textlayer.mode-shape,
 .textlayer.mode-crop,
 .textlayer.mode-form-new,
@@ -1692,6 +1693,43 @@ textarea {
 /* el recuadro de la firma se dibuja como el de recortar */
 .textlayer.mode-firma-cert {
   cursor: crosshair;
+}
+
+/* medir: el trazo y su etiqueta, encima de la hoja y sin tocarla */
+.medida-linea {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 30;
+}
+
+.medida-linea line {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.medida-caja {
+  position: absolute;
+  border: 1.5px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  pointer-events: none;
+  z-index: 30;
+}
+
+.medida-etiqueta {
+  position: absolute;
+  transform: translate(6px, -50%);
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 31;
 }
 
 /* la llamada: la línea y la punta que señalan, mientras se escribe */

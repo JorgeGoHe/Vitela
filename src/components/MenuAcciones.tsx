@@ -70,6 +70,8 @@ export default function MenuAcciones({
   exportarWord,
   exportarComentarios,
   abrirComprimir,
+  leerEnVozAlta,
+  leyendo,
 }: {
   /** Últimos ficheros abiertos, la misma lista que el estado vacío. */
   recientes: Reciente[];
@@ -112,6 +114,9 @@ export default function MenuAcciones({
   exportarWord: () => void;
   exportarComentarios: () => void;
   abrirComprimir: () => void;
+  /** «Leer en voz alta»: empieza por la página que se está leyendo. */
+  leerEnVozAlta: () => void;
+  leyendo: boolean;
 }) {
   const botonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -353,6 +358,12 @@ export default function MenuAcciones({
               icon="note"
               texto="Exportar comentarios…"
               onSelect={ejecutar(exportarComentarios)}
+            />
+            <Entrada
+              icon="note"
+              texto={leyendo ? "Dejar de leer en voz alta" : "Leer en voz alta"}
+              atajo={`⇧${MOD}Y`}
+              onSelect={ejecutar(leerEnVozAlta)}
             />
             <Entrada
               icon="shrink"
