@@ -1059,6 +1059,18 @@ compila los instaladores a mano o al etiquetar `v*`.
     firmar (`firma::clave_privada`). Fixture nueva: `test_tercero_key.pem`,
     la clave de nadie, para probar que no abre. Se cierra así el callejón
     sin salida de escribir lo que no se sabía leer.
+  - **Comparar mira también las imágenes** (C-4, `comparar.rs`): `lee()`
+    suma a los bloques de texto las imágenes de cada página, con el
+    SHA-256 de sus bytes **tal como están escritos dentro del PDF**
+    (`FPDFImageObj_GetImageDataRaw`: el JPEG o el flate sin decodificar) y
+    su tamaño redondeado al punto. Son la misma imagen los mismos bytes
+    ocupando lo mismo: sustituir la foto cambia la huella y estirarla, el
+    tamaño; **haberla movido no es una diferencia**, por la razón por la
+    que tampoco lo es mover un párrafo. Las que no casan salen en
+    `rects_a`/`rects_b` con su rectángulo y en el texto como «(una
+    imagen)», porque un PDF no guarda de qué fichero salió. Dos versiones
+    de un folleto con la foto cambiada decían «sin diferencias», que es
+    peor que no comparar.
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (cada uno con su envoltorio en camelCase):
     - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la

@@ -15,6 +15,11 @@
 //!   la otra versión se marca entero. Diferenciar palabra a palabra
 //!   dentro de una línea daría rectángulos que no se corresponden con
 //!   ningún objeto del PDF y la interfaz no podría pintarlos donde están.
+//! - **Las imágenes también se comparan** (ciclo 10). Una imagen es la
+//!   misma si son los mismos bytes dentro del PDF y ocupa lo mismo: la
+//!   foto sustituida cambia de hash y la estirada, de tamaño. Que se haya
+//!   movido no es una diferencia, por la misma razón que mover un párrafo
+//!   no lo es: un renglón de más arriba baja todo lo de abajo.
 //!
 //! **No toca ninguno de los dos ficheros**: los abre de solo lectura, sin
 //! copia de trabajo y sin paso de deshacer.
@@ -41,10 +46,25 @@ pub struct Diferencia {
     pub texto_b: String,
 }
 
-/// El texto de una página, por bloques y ya normalizado para comparar.
+/// Lo comparable de una página: sus bloques de texto ya normalizados y sus
+/// imágenes con su huella.
 struct Pagina {
     bloques: Vec<(String, crate::Rect)>,
     palabras: std::collections::BTreeSet<String>,
+    imagenes: Vec<Imagen>,
+}
+
+/// Una imagen de la página, tal como se compara.
+struct Imagen {
+    /// SHA-256 de los bytes **tal como están escritos dentro del PDF**
+    /// (`FPDFImageObj_GetImageDataRaw`): el JPEG o el flate sin decodificar.
+    /// Dos ficheros distintos dan huellas distintas sin tener que
+    /// descomprimir nada.
+    huella: String,
+    /// Lo que ocupa, redondeado al punto: estirar una imagen es un cambio,
+    /// moverla no.
+    tamano: (i32, i32),
+    rect: crate::Rect,
 }
 
 /// Compara dos documentos y devuelve una entrada por página emparejada,
@@ -84,9 +104,44 @@ fn lee(path: &str) -> Result<Vec<Pagina>, String> {
             .iter()
             .flat_map(|(t, _)| palabras_de(t))
             .collect::<std::collections::BTreeSet<String>>();
-        out.push(Pagina { bloques, palabras });
+        let imagenes = imagenes_de(path, p)?;
+        out.push(Pagina { bloques, palabras, imagenes });
     }
     Ok(out)
+}
+
+/// Las imágenes de una página con su huella y su caja, en el espacio propio
+/// de la página, que es donde la interfaz las pinta.
+fn imagenes_de(path: &str, page_index: u16) -> Result<Vec<Imagen>, String> {
+    use pdfium_render::prelude::*;
+    use sha2::{Digest, Sha256};
+    crate::with_doc(path, |doc| {
+        let page = doc.pages().get(page_index).map_err(crate::mensaje_llano)?;
+        // espacio propio de la página: las cajas de los objetos no llevan
+        // la rotación y `page.height()` sí (ver `Geo`)
+        let geo = crate::Geo::de_pagina(&page).propia();
+        let objects = page.objects();
+        let mut out = Vec::new();
+        for i in 0..objects.len() {
+            let Ok(obj) = objects.get(i) else { continue };
+            let Some(img) = obj.as_image_object() else { continue };
+            let Ok(b) = obj.bounds() else { continue };
+            let rect = geo.pdf_rect_a_ui(&PdfRect::new(
+                b.bottom(),
+                b.left(),
+                b.top(),
+                b.right(),
+            ));
+            let bytes = img.get_raw_image_data().unwrap_or_default();
+            let huella = Sha256::digest(&bytes)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
+            let tamano = (rect.w.round() as i32, rect.h.round() as i32);
+            out.push(Imagen { huella, tamano, rect });
+        }
+        Ok(out)
+    })
 }
 
 /// Las palabras de un texto, normalizadas: minúsculas y sin puntuación.
@@ -165,9 +220,14 @@ fn solo_en_a(p: &Pagina, i: u16) -> Diferencia {
         tipo: "quitado".into(),
         pagina_a: Some(i),
         pagina_b: None,
-        rects_a: p.bloques.iter().map(|(_, r)| r.clone()).collect(),
+        rects_a: p
+            .bloques
+            .iter()
+            .map(|(_, r)| r.clone())
+            .chain(p.imagenes.iter().map(|i| i.rect.clone()))
+            .collect(),
         rects_b: Vec::new(),
-        texto_a: junta(&p.bloques),
+        texto_a: junta(&p.bloques, p.imagenes.len()),
         texto_b: String::new(),
     }
 }
@@ -178,18 +238,34 @@ fn solo_en_b(p: &Pagina, j: u16) -> Diferencia {
         pagina_a: None,
         pagina_b: Some(j),
         rects_a: Vec::new(),
-        rects_b: p.bloques.iter().map(|(_, r)| r.clone()).collect(),
+        rects_b: p
+            .bloques
+            .iter()
+            .map(|(_, r)| r.clone())
+            .chain(p.imagenes.iter().map(|i| i.rect.clone()))
+            .collect(),
         texto_a: String::new(),
-        texto_b: junta(&p.bloques),
+        texto_b: junta(&p.bloques, p.imagenes.len()),
     }
 }
 
-fn junta(bloques: &[(String, crate::Rect)]) -> String {
-    bloques
-        .iter()
-        .map(|(t, _)| t.as_str())
-        .collect::<Vec<_>>()
-        .join("\n")
+fn junta(bloques: &[(String, crate::Rect)], imagenes: usize) -> String {
+    let mut lineas: Vec<String> = bloques.iter().map(|(t, _)| t.clone()).collect();
+    if imagenes > 0 {
+        lineas.push(nombre_de_imagenes(imagenes));
+    }
+    lineas.join("\n")
+}
+
+/// Cómo se llama una imagen en la lista de diferencias: un PDF no guarda el
+/// nombre del fichero del que salió, así que lo honesto es decir cuántas
+/// son y no inventarse un título.
+fn nombre_de_imagenes(cuantas: usize) -> String {
+    if cuantas == 1 {
+        "(una imagen)".to_string()
+    } else {
+        format!("({cuantas} imágenes)")
+    }
 }
 
 /// Dos páginas que son la misma: qué bloques han cambiado. Un bloque que
@@ -224,6 +300,40 @@ fn compara_pagina(a: &Pagina, b: &Pagina, i: u16, j: u16) -> Diferencia {
             texto_b.push(texto.clone());
         }
     }
+
+    // y las imágenes: la misma imagen son los mismos bytes ocupando lo
+    // mismo. Una foto sustituida cambia de huella y una estirada, de
+    // tamaño; que se haya movido no cuenta, igual que con el texto
+    let mut usadas_b = vec![false; b.imagenes.len()];
+    let mut fuera_a = 0usize;
+    for ia in &a.imagenes {
+        match b
+            .imagenes
+            .iter()
+            .enumerate()
+            .find(|(z, ib)| !usadas_b[*z] && ib.huella == ia.huella && ib.tamano == ia.tamano)
+        {
+            Some((z, _)) => usadas_b[z] = true,
+            None => {
+                rects_a.push(ia.rect.clone());
+                fuera_a += 1;
+            }
+        }
+    }
+    let mut fuera_b = 0usize;
+    for (z, ib) in b.imagenes.iter().enumerate() {
+        if !usadas_b[z] {
+            rects_b.push(ib.rect.clone());
+            fuera_b += 1;
+        }
+    }
+    if fuera_a > 0 {
+        texto_a.push(nombre_de_imagenes(fuera_a));
+    }
+    if fuera_b > 0 {
+        texto_b.push(nombre_de_imagenes(fuera_b));
+    }
+
     Diferencia {
         tipo: if rects_a.is_empty() && rects_b.is_empty() {
             "igual".into()
@@ -246,6 +356,75 @@ mod tests {
 
     fn tipos(d: &[Diferencia]) -> Vec<&str> {
         d.iter().map(|x| x.tipo.as_str()).collect()
+    }
+
+    /// **Comparar también las imágenes** (C-4 del ciclo 10). Hasta aquí la
+    /// comparación solo miraba el texto: dos versiones de un folleto con
+    /// la foto cambiada salían como «sin diferencias», que es peor que no
+    /// comparar. Una imagen es la misma si son los mismos bytes ocupando
+    /// lo mismo; moverla no cuenta, igual que mover un párrafo.
+    #[test]
+    fn comparar_ve_una_foto_sustituida() {
+        let dir = std::env::temp_dir();
+        let uno = dir.join("comparar-foto-uno.pdf");
+        let dos = dir.join("comparar-foto-dos.pdf");
+        let tres = dir.join("comparar-foto-tres.pdf");
+        let roja = dir.join("comparar-foto-roja.png");
+        let azul = dir.join("comparar-foto-azul.png");
+        image::RgbaImage::from_pixel(60, 40, image::Rgba([200, 30, 30, 255]))
+            .save(&roja)
+            .expect("png rojo");
+        image::RgbaImage::from_pixel(60, 40, image::Rgba([30, 30, 200, 255]))
+            .save(&azul)
+            .expect("png azul");
+        let pon = |dest: &std::path::Path, foto: &std::path::Path, y: f32| {
+            crea_pdf(&["Folleto"], dest);
+            crate::imagenes::add_image(
+                dest.to_string_lossy().into_owned(),
+                0,
+                foto.to_string_lossy().into_owned(),
+                100.0,
+                y,
+            )
+            .expect("insertar la foto");
+        };
+        pon(&uno, &roja, 200.0);
+        pon(&dos, &azul, 200.0);
+        // el tercero es el primero con la misma foto en otro sitio
+        pon(&tres, &roja, 300.0);
+        let a = uno.to_string_lossy().into_owned();
+        let b = dos.to_string_lossy().into_owned();
+        let c = tres.to_string_lossy().into_owned();
+
+        let d = compare_pdf(a.clone(), b.clone()).expect("comparar");
+        assert_eq!(tipos(&d), vec!["cambiado"], "la foto sustituida es un cambio");
+        assert_eq!(d[0].rects_a.len(), 1, "el rectángulo de la foto que estaba");
+        assert_eq!(d[0].rects_b.len(), 1, "y el de la que ha llegado");
+        assert!(
+            d[0].texto_a.contains("imagen") && d[0].texto_b.contains("imagen"),
+            "la lista tiene que decir que la diferencia es una imagen: {:?} / {:?}",
+            d[0].texto_a,
+            d[0].texto_b
+        );
+        // el rect es el de la imagen, no el de la página entera
+        assert!(
+            d[0].rects_a[0].w < 100.0 && d[0].rects_a[0].h < 100.0,
+            "el rectángulo señala la imagen: {:?}",
+            d[0].rects_a[0]
+        );
+
+        // el mismo documento consigo mismo no tiene diferencias
+        assert_eq!(tipos(&compare_pdf(a.clone(), a.clone()).expect("comparar")), vec!["igual"]);
+        // y la misma foto en otro sitio tampoco: moverla no es cambiarla
+        assert_eq!(
+            tipos(&compare_pdf(a.clone(), c.clone()).expect("comparar")),
+            vec!["igual"],
+            "mover una imagen no es una diferencia, como mover un párrafo"
+        );
+
+        for f in [&uno, &dos, &tres, &roja, &azul] {
+            std::fs::remove_file(f).ok();
+        }
     }
 
     /// **Comparar dos PDF** (orden 6 del ciclo 9). Lo que hay que probar
