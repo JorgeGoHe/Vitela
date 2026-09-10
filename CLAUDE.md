@@ -1096,6 +1096,99 @@ compila los instaladores a mano o al etiquetar `v*`.
     ficheros—, así que no se ofrece un botón que no funcionaría; y el codo
     de dos tramos de la llamada necesita un punto más en el contrato de
     `add_callout`, que hoy solo acepta `punta`.
+- **La mitad de la UI del ciclo 8** (según el desarrollador de interfaz):
+  - Comandos que estrena la interfaz, con los nombres de argumento en
+    camelCase que exige el test cruzado:
+    - `borra_sesion(workPath)` **en las cuatro llamadas** (R45): el
+      envoltorio deja de declararlo opcional y de mandar `null`, y el fallo
+      va a `console.warn` en vez de tragarse. Un apunte que no se borraba
+      ofrecía recuperar lo que ya estaba guardado.
+    - `save_image_data(workPath, pageIndex, objectIndex, destPath)` (R46):
+      «Guardar como…» en el popover de la imagen, con `imagen-<pág>-<n>.png`
+      propuesto y la banda diciendo dónde ha quedado.
+    - `add_measure(workPath, pageIndex, points, text, color, closed, author)`
+      (R47): la medida puesta deja de ser `add_stroke` + `add_text_block`.
+      `closed` va a `true` en el área; el perímetro manda sus vértices sin
+      repetir el primero al final. `Pagina` ya no necesita el agrupador del
+      historial y su prop `onAgruparHistorial` se retiró.
+    - `create_form_fields(workPath, fields)` (R48): «Crear todos» es una
+      cirugía y no N llamadas con `squash_history` detrás. Los campos de
+      cada entrada de `fields` van en **snake_case** (`page_index`,
+      `export_value`, `props`): es una lista de estructuras anidadas.
+    - `recover_session()` devuelve **una lista** y `get_page_labels` /
+      `set_page_labels`, `add_bates`, `get_document_info`, `add_watermark`
+      con `detras`, `add_callout` con `codo`,
+      `add_file_attachment_annotation`, `export_form_data_xfdf` e
+      `import_form_data_xfdf` son los contratos nuevos que consume esta
+      mitad (ver cada función en `src/api.ts`).
+  - **Recuperación de varios y ⌘W** (H6): `sesionesRotas` es una lista; con
+    una, la banda es la de antes; con varias, «Recuperar todos» las abre
+    cada una en su pestaña y las marca como no guardadas, y «No guardar»
+    confirma una vez y descarta todas. La banda dice **cuándo** fue
+    (`cuandoLlano` en `tipos.ts`: «ayer a las 19:40»). ⌘W llama a
+    `closeDocument`, el mismo camino que la «×» de la pestaña y que
+    «Cerrar documento»; el evento `cerrar-solicitado` no se toca.
+  - **Seguir un marcador** espera al relayout del zoom y va a un destino
+    absoluto en un solo `scrollTo` (AC-072): antes el salto y el ajuste del
+    `top` competían y el usuario se quedaba en la página de partida.
+  - **Etiquetas de página**: `etiquetaDePagina` y `pagineoLlano`
+    (`tipos.ts`) convierten los tramos de `/PageLabels` en «ii (2)», que es
+    lo que dicen la píldora y las miniaturas; `aplicaRangoEtiquetas` compone
+    la lista entera al numerar un tramo y conserva lo que va detrás.
+    «Numerar páginas…» y «Numeración Bates…» viven en el panel de páginas,
+    que es el «Organizar páginas» de Acrobat, **sin id de menú nuevo**.
+  - **Propiedades**: `DialogoPropiedades` pinta debajo de los campos la
+    ficha de `get_document_info` (tamaño, versión, tamaño de página,
+    formulario, seguridad en llano y fuentes con su tipo). Se pide aparte de
+    `get_metadata`: si falla, los metadatos se siguen editando.
+  - **Reglas, guías y cuadrícula** (⌘R, ⌘; y ⌘'): capa propia
+    (`CapaGuias`), dentro de la página y sin tocar el orden de los
+    despachadores; solo cogen el ratón las dos reglas —de las que se
+    arrastra— y la guía, que se quita con doble clic. Las guías se guardan
+    en `localStorage` por ruta (`cargaGuias`/`guardaGuias`), como la escala
+    de medida: **no tocan el fichero** ni se imprimen.
+  - **Imprimir el resumen de comentarios**: `OpcionesImprimir` gana
+    `resumen` y `ordenResumen`; el PDF se compone con `export_comments_pdf`
+    junto a la copia de trabajo (`<work>-comentarios.pdf`, en el temporal
+    que barre el arranque), se abre con `open_pdf` para rasterizarlo y se
+    cierra al terminar. Ojo: `close_document` atenúa por dentro el menú
+    nativo, así que después hay que llamar a `set_menu_state(true)`.
+  - **Modo `adjunto`**: la herramienta «Adjuntar» del grupo de comentar. El
+    clic dice dónde va la chincheta y el diálogo del sistema, qué fichero.
+    Es la anotación de la página, distinta del adjunto del documento.
+  - **Iniciales**: la biblioteca de firmas estrena su segunda ranura. Cuáles
+    de las imágenes guardadas son iniciales se recuerda en `localStorage`
+    (`cargaIniciales`/`guardaIniciales`), porque el backend guarda imágenes
+    por nombre y no sabe de ranuras. Con iniciales guardadas, la fila de la
+    herramienta Firma enseña su botón, que las arma para estamparlas.
+  - **Zoom por niveles** (`NIVELES_ZOOM`, `nivelZoom`): 25, 33, 50, 66, 75,
+    100, 125, 150, 200, 400, 800, 1600, 2400 y 6400 %. El campo sigue
+    aceptando cualquier número entre los extremos.
+  - **Insertar PDF**: `DialogoInsertar` pregunta antes o después de qué
+    página, con `pdf_info` para contar lo que entra. El rango del documento
+    de origen se queda fuera: pediría un argumento nuevo en `insert_pdf_at`.
+  - **Codo de la llamada**: el arrastre sigue dando la recta; **a clics** se
+    ponen punta, codo y caja, con los puntos puestos a la vista, y el codo
+    viaja en el parámetro opcional.
+  - **Datos de formulario en XFDF**: «Exportar datos…» e «Importar datos…»
+    en la fila contextual del formulario, que solo sale cuando el documento
+    se puede rellenar. Importar dice cuántos campos ha rellenado y cuántos
+    valores no existían aquí.
+  - **Remates del QA del ciclo 7**: el tipo de una propuesta se conmuta con
+    la tecla T o con el conmutador de su etiqueta (texto ↔ casilla, con el
+    rect intacto); el «•» de la pestaña se apaga cuando ⌘Z devuelve el
+    documento al punto en que se abrió o se guardó (`puntosLimpiosRef`, un
+    `history_state` por copia de trabajo); el pie de «Crear PDF desde
+    imágenes» descuenta las filas ilegibles; el campo de renombrar una
+    propuesta lleva `aria-label`; y pulsar un campo de solo lectura lo dice
+    en la banda la primera vez, con su `/TU` si lo trae.
+  - **Ningún id de menú nuevo**: todo lo de este ciclo entra por el panel de
+    páginas, por la fila contextual o por un modo, así que el espejo del
+    menú nativo no cambia.
+  - **Lo que se queda fuera**: los sellos dinámicos y la galería, certificar
+    con `/DocMDP` y el doble clic que abre el adjunto de una página (haría
+    falta un comando que saque sus bytes; `open_attachment` es el del
+    documento).
 - **Menú nativo** (`menu.rs`): Archivo, Editar, Ver, Documento, Ventana y
   Ayuda en la barra del sistema, espejo del menú «Acciones» de la app —
   con esto la búsqueda de menús de macOS encuentra por fin «Marca de
@@ -1475,6 +1568,8 @@ compila los instaladores a mano o al etiquetar `v*`.
   ⌘B marcador aquí (con el texto seleccionado por título) · ⇧⌘H modo
   lectura · barra espaciadora mantenida, la Mano · ⌃Tab y ⇧⌃Tab, el
   documento siguiente y el anterior ·
+  ⌘W cierra la pestaña de delante (con su pregunta de cambios) · ⌘R las
+  reglas, ⌘; las guías y ⌘' la cuadrícula ·
   ⇧⌘N ir a la página · ⌘/ y F1 abren los atajos (la pantalla se lista a sí
   misma) · ←/→ página anterior y siguiente · Esc para la lectura, quita las
   coincidencias de búsqueda y, si no hay, sale de la herramienta · Supr
