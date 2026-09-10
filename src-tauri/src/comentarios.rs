@@ -151,45 +151,63 @@ pub fn set_annotation_state(
 }
 
 /// «Resumen de comentarios»: la lista entera del documento en un fichero de
-/// texto, para leerla fuera o mandarla por correo. Por ahora solo en llano
-/// (`formato: "txt"`); el FDF/XFDF que Acrobat también exporta **se deja
-/// para otro ciclo** y se dice aquí para que no se busque.
+/// texto, para leerla fuera o mandarla por correo. Por ahora solo en llano;
+/// el FDF/XFDF que Acrobat también exporta **se deja para otro ciclo** y se
+/// dice aquí para que no se busque. `formato` es opcional y solo admite
+/// `"txt"`.
+///
+/// `document_name` es **el nombre que se enseña en la cabecera**: `path` es
+/// siempre la copia de trabajo, y encabezar el fichero que se le manda a
+/// alguien con «Comentarios de vitela-doc-1789032860175765000.pdf» no le
+/// dice nada a nadie (AC-060). Sin él se deduce del nombre de la copia,
+/// que lleva dentro el del original; el nombre del temporal no sale nunca.
 ///
 /// Escribe fuera del documento, así que no muta nada ni deja paso de
 /// deshacer.
 #[tauri::command(async)]
-pub fn export_comments(path: String, dest_path: String, formato: String) -> Result<u32, String> {
-    if formato != "txt" {
+pub fn export_comments(
+    path: String,
+    dest_path: String,
+    formato: Option<String>,
+    document_name: Option<String>,
+) -> Result<u32, String> {
+    if formato.as_deref().is_some_and(|f| f != "txt") {
         return Err("De momento el resumen de comentarios solo sale en texto".into());
     }
     let comentarios = crate::anotaciones::get_document_annotations(path.clone())?;
     if comentarios.is_empty() {
         return Err("El documento no tiene comentarios que resumir".into());
     }
-    let nombre = std::path::Path::new(&path)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let nombre = nombre_de_documento(document_name.as_deref(), &path);
     let mut out = format!("Comentarios de {nombre}\n\n");
     let mut n = 0u32;
     for c in &comentarios {
-        // las respuestas van debajo de su comentario, con sangría
-        let sangria = if c.annot.in_reply_to.is_some() { "    " } else { "" };
-        out.push_str(&format!(
-            "{sangria}Página {} · {}",
-            c.page_index + 1,
-            tipo_en_llano(&c.annot.kind)
-        ));
+        // las respuestas van debajo de su comentario, con sangría y **sin
+        // repetir la página ni el tipo**, que son los del comentario al que
+        // contestan: en un resumen que se lee de arriba abajo eso es ruido,
+        // y Acrobat tampoco los repite
+        let respuesta = c.annot.in_reply_to.is_some();
+        let sangria = if respuesta { "    " } else { "" };
+        let mut cabecera: Vec<String> = Vec::new();
+        if respuesta {
+            cabecera.push("En respuesta".into());
+        } else {
+            cabecera.push(format!(
+                "Página {} · {}",
+                c.page_index + 1,
+                tipo_en_llano(&c.annot.kind)
+            ));
+        }
         if !c.annot.author.is_empty() {
-            out.push_str(&format!(" · {}", c.annot.author));
+            cabecera.push(c.annot.author.clone());
         }
         if !c.annot.modified.is_empty() {
-            out.push_str(&format!(" · {}", c.annot.modified));
+            cabecera.push(fecha_en_espanol(&c.annot.modified));
         }
         if !c.annot.state.is_empty() {
-            out.push_str(&format!(" · {}", estado_en_llano(&c.annot.state)));
+            cabecera.push(estado_en_llano(&c.annot.state).to_string());
         }
-        out.push('\n');
+        out.push_str(&format!("{sangria}{}\n", cabecera.join(" · ")));
         if !c.annot.contents.trim().is_empty() {
             for linea in c.annot.contents.lines() {
                 out.push_str(&format!("{sangria}  {linea}\n"));
@@ -202,6 +220,45 @@ pub fn export_comments(path: String, dest_path: String, formato: String) -> Resu
         crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}"))
     })?;
     Ok(n)
+}
+
+/// El nombre del documento para la cabecera del resumen: el que manda la UI
+/// (que puede ser la ruta del original entero) o, si no manda ninguno, el
+/// que lleva dentro la copia de trabajo — `vitela-<nombre>-<nanos>.pdf`, de
+/// donde sale `<nombre>.pdf`—. **El nombre del temporal no se enseña
+/// nunca**: no significa nada para quien recibe el fichero.
+fn nombre_de_documento(document_name: Option<&str>, path: &str) -> String {
+    let solo_fichero = |s: &str| {
+        std::path::Path::new(s)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| s.to_string())
+    };
+    if let Some(n) = document_name.map(str::trim).filter(|n| !n.is_empty()) {
+        return solo_fichero(n);
+    }
+    let fichero = solo_fichero(path);
+    if let Some(stem) = fichero
+        .strip_prefix("vitela-")
+        .and_then(|r| r.strip_suffix(".pdf"))
+    {
+        if let Some((nombre, nanos)) = stem.rsplit_once('-') {
+            if !nombre.is_empty() && !nanos.is_empty() && nanos.bytes().all(|b| b.is_ascii_digit())
+            {
+                return format!("{nombre}.pdf");
+            }
+        }
+    }
+    fichero
+}
+
+/// Una fecha ISO 8601 escrita como se escribe en español: «10/09/2026
+/// 00:25». El resumen se le manda a una persona, y
+/// `2026-09-10T00:25:56+02:00` es la lengua de la máquina.
+fn fecha_en_espanol(iso: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(iso)
+        .map(|d| d.format("%d/%m/%Y %H:%M").to_string())
+        .unwrap_or_else(|_| iso.to_string())
 }
 
 /// El tipo de anotación en la lengua del usuario: en el resumen no puede
@@ -441,7 +498,8 @@ mod tests {
         let n = export_comments(
             work.clone(),
             txt.to_string_lossy().into_owned(),
-            "txt".into(),
+            Some("txt".into()),
+            Some("/Users/ana/contratos/contrato.pdf".into()),
         )
         .expect("exportar");
         assert_eq!(n, 3, "dos notas y una respuesta");
@@ -452,14 +510,72 @@ mod tests {
         assert!(resumen.contains("Completado"), "el estado, en español");
         assert!(!resumen.contains("Completed"), "y no en el del spec");
         assert!(resumen.contains("Nota"), "el tipo, en llano");
+        // **AC-060**: la cabecera lleva el nombre del documento, no la ruta
+        // ni el temporal
         assert!(
-            resumen.contains("    Página 1"),
-            "la respuesta va sangrada bajo su comentario:\n{resumen}"
+            resumen.starts_with("Comentarios de contrato.pdf"),
+            "la cabecera: {}",
+            resumen.lines().next().unwrap_or("")
+        );
+        // **Distinto 4**: la respuesta va sangrada y NO repite la página ni
+        // el tipo de su comentario
+        assert!(
+            resumen.contains("    En respuesta · Jorge"),
+            "la respuesta va sangrada y sin repetir la cabecera:\n{resumen}"
+        );
+        assert_eq!(
+            resumen.matches("Página 1").count(),
+            1,
+            "la página se dice una vez, no también en la respuesta:\n{resumen}"
+        );
+        // y la fecha en español, no en ISO 8601
+        assert!(
+            !resumen.contains('T') || !resumen.contains("+0"),
+            "la fecha no sale en ISO:\n{resumen}"
+        );
+        assert!(
+            resumen.contains('/'),
+            "la fecha va como 10/09/2026 00:25:\n{resumen}"
         );
         // el documento no se ha tocado
         assert_eq!(get_document_annotations(work.clone()).expect("anots").len(), 3);
         for f in [&pdf, &txt] {
             std::fs::remove_file(f).ok();
         }
+    }
+
+    /// **AC-060.** Sin nombre de documento, la cabecera lo saca de la copia
+    /// de trabajo (`vitela-<nombre>-<nanos>.pdf`): el nombre del temporal,
+    /// con sus diecinueve dígitos, no le dice nada a quien recibe el
+    /// fichero.
+    #[test]
+    fn la_cabecera_del_resumen_no_ensena_nunca_el_nombre_del_temporal() {
+        assert_eq!(
+            nombre_de_documento(None, "/tmp/vitela-doc-1789032860175765000.pdf"),
+            "doc.pdf"
+        );
+        assert_eq!(
+            nombre_de_documento(None, "/tmp/vitela-contrato de alquiler-17890.pdf"),
+            "contrato de alquiler.pdf"
+        );
+        // el que manda la UI gana, y si manda la ruta entera se queda el
+        // nombre
+        assert_eq!(
+            nombre_de_documento(Some("/Users/ana/contrato.pdf"), "/tmp/vitela-doc-1.pdf"),
+            "contrato.pdf"
+        );
+        assert_eq!(nombre_de_documento(Some("  "), "/tmp/factura.pdf"), "factura.pdf");
+        // un fichero que no es una copia de trabajo se enseña tal cual
+        assert_eq!(nombre_de_documento(None, "/tmp/vitela-sin-nanos.pdf"), "vitela-sin-nanos.pdf");
+        assert_eq!(nombre_de_documento(None, "/tmp/factura.pdf"), "factura.pdf");
+    }
+
+    /// La fecha del resumen se escribe como se escribe en español.
+    #[test]
+    fn la_fecha_del_resumen_va_en_espanol() {
+        assert_eq!(fecha_en_espanol("2026-09-10T00:25:56+02:00"), "10/09/2026 00:25");
+        // lo que no se sepa leer se deja tal cual antes que inventarlo
+        assert_eq!(fecha_en_espanol(""), "");
+        assert_eq!(fecha_en_espanol("ayer"), "ayer");
     }
 }

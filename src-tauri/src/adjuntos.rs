@@ -293,17 +293,31 @@ pub fn set_layer_visible(work_path: String, index: u16, visible: bool) -> Result
             .and_then(|d| d.get(b"OCProperties"))
             .map_err(|_| "El documento no tiene capas".to_string())?
             .clone();
-        let d_ref = match &oc_ref {
-            Object::Reference(id) => doc
-                .get_object(*id)
-                .and_then(|o| o.as_dict())
-                .map_err(|e| e.to_string())?
-                .get(b"D")
-                .ok()
-                .cloned(),
-            Object::Dictionary(d) => d.get(b"D").ok().cloned(),
-            _ => None,
+        // `/OCProperties` puede venir **en línea** en el catálogo (legal, y
+        // frecuente en generadores sencillos): entonces no hay ningún
+        // objeto que modificar, así que se promueve a objeto propio. Antes
+        // se contestaba «no se pueden apagar desde aquí» —un mensaje que
+        // además sugería que había otro sitio donde sí, y no lo hay— y el
+        // panel se quedaba con casillas que no hacían nada (AC-056).
+        let oc_id = match oc_ref {
+            Object::Reference(id) => id,
+            Object::Dictionary(d) => {
+                let id = doc.add_object(Object::Dictionary(d));
+                doc.get_object_mut(root)
+                    .and_then(|o| o.as_dict_mut())
+                    .map_err(|e| e.to_string())?
+                    .set("OCProperties", Object::Reference(id));
+                id
+            }
+            _ => return Err("El documento no tiene capas".into()),
         };
+        let d_ref = doc
+            .get_object(oc_id)
+            .and_then(|o| o.as_dict())
+            .map_err(|e| e.to_string())?
+            .get(b"D")
+            .ok()
+            .cloned();
         let off = Object::Array(apagadas.into_iter().map(Object::Reference).collect());
         match d_ref {
             // la configuración por defecto es un objeto propio
@@ -315,14 +329,6 @@ pub fn set_layer_visible(work_path: String, index: u16, visible: bool) -> Result
             }
             // o va en línea dentro de /OCProperties
             _ => {
-                let oc_id = match oc_ref {
-                    Object::Reference(id) => id,
-                    _ => {
-                        return Err(
-                            "Las capas de este documento no se pueden apagar desde aquí".into()
-                        )
-                    }
-                };
                 let oc = doc
                     .get_object_mut(oc_id)
                     .and_then(|o| o.as_dict_mut())
@@ -799,6 +805,72 @@ mod tests {
 
         // ⌘Z la devuelve: es un cambio del documento, no de la vista
         crate::historial::undo(work.clone()).expect("deshacer");
+        assert!(list_layers(work.clone()).expect("listar")[0].visible);
+        assert!(hay_tinta(&work));
+        std::fs::remove_file(&pdf).ok();
+    }
+
+    /// **AC-056.** Con `/OCProperties` **en línea** en el catálogo —legal y
+    /// frecuente en generadores sencillos— las capas se listaban (así que
+    /// el panel pintaba sus casillas) y apagarlas contestaba «las capas de
+    /// este documento no se pueden apagar desde aquí», un mensaje que
+    /// además sugería que había otro sitio donde sí. Ahora el diccionario
+    /// se promueve a objeto propio y se apaga como cualquier otro.
+    #[test]
+    fn una_capa_se_apaga_tambien_con_ocproperties_en_linea() {
+        let dir = std::env::temp_dir();
+        let pdf = dir.join("capas-en-linea.pdf");
+        crea_pdf(&["Con capa en línea"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+
+        crate::cirugia(&work, |doc| {
+            let mut ocg = Dictionary::new();
+            ocg.set("Type", Object::Name(b"OCG".to_vec()));
+            ocg.set("Name", crate::documento::cadena_pdf("Cotas"));
+            let ocg_id = doc.add_object(Object::Dictionary(ocg));
+            // /D en línea DENTRO de un /OCProperties también en línea, que
+            // es exactamente el documento del informe de QA
+            let mut d = Dictionary::new();
+            d.set("ON", Object::Array(vec![Object::Reference(ocg_id)]));
+            d.set("Order", Object::Array(vec![Object::Reference(ocg_id)]));
+            let mut oc = Dictionary::new();
+            oc.set("OCGs", Object::Array(vec![Object::Reference(ocg_id)]));
+            oc.set("D", Object::Dictionary(d));
+            let root = doc.trailer.get(b"Root").and_then(|o| o.as_reference()).unwrap();
+            doc.get_object_mut(root)
+                .and_then(|o| o.as_dict_mut())
+                .unwrap()
+                .set("OCProperties", Object::Dictionary(oc));
+            let page_id = *doc.get_pages().get(&1).unwrap();
+            let contenido = doc.get_page_content(page_id).expect("contenido");
+            let mut nuevo = b"/OC /Capa0 BDC\n".to_vec();
+            nuevo.extend_from_slice(&contenido);
+            nuevo.extend_from_slice(b"\nEMC\n");
+            doc.change_page_content(page_id, nuevo).expect("contenido");
+            let page = doc.get_object_mut(page_id).and_then(|o| o.as_dict_mut()).unwrap();
+            let mut props = Dictionary::new();
+            props.set("Capa0", Object::Reference(ocg_id));
+            let mut recursos = page
+                .get(b"Resources")
+                .and_then(|o| o.as_dict())
+                .cloned()
+                .unwrap_or_default();
+            recursos.set("Properties", Object::Dictionary(props));
+            page.set("Resources", Object::Dictionary(recursos));
+            Ok(())
+        })
+        .expect("preparar el documento");
+
+        let capas = list_layers(work.clone()).expect("listar");
+        assert_eq!(capas.len(), 1, "la capa se lista: {capas:?}");
+        assert!(hay_tinta(&work));
+
+        set_layer_visible(work.clone(), 0, false).expect("apagar con /OCProperties en línea");
+        assert!(!list_layers(work.clone()).expect("listar")[0].visible);
+        assert!(!hay_tinta(&work), "apagarla tiene que quitarle la tinta");
+
+        // y se vuelve a encender, que es lo que hace la casilla al segundo clic
+        set_layer_visible(work.clone(), 0, true).expect("encender");
         assert!(list_layers(work.clone()).expect("listar")[0].visible);
         assert!(hay_tinta(&work));
         std::fs::remove_file(&pdf).ok();
