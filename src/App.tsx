@@ -101,6 +101,9 @@ import {
   type EstadoComentario,
   flattenPdf,
   getDocumentInfo,
+  getOpenAction,
+  setOpenAction,
+  type VistaInicial,
   type DocumentInfo,
   getMetadata,
   getPageLabels,
@@ -711,6 +714,9 @@ function App() {
   // fuentes y qué deja hacer la protección. Puede llegar después (o no
   // llegar), y el diálogo se abre igual
   const [propsFicha, setPropsFicha] = useState<DocumentInfo | null>(null);
+  // con qué cara se abre el documento: la única parte de las propiedades que
+  // además se escribe (`/OpenAction` y `/PageLayout`)
+  const [propsVista, setPropsVista] = useState<VistaInicial | null>(null);
   const [prefsAbiertas, setPrefsAbiertas] = useState(false);
   // sesiones que quedaron a medias en un cierre inesperado: una banda de una
   // línea, no un modal, que es como Vitela cuenta todo lo demás. Son varias
@@ -2185,21 +2191,34 @@ function App() {
     if (!workPath) return;
     try {
       setPropsFicha(null);
+      setPropsVista(null);
       setPropsDraft(await getMetadata(workPath));
       // la ficha va aparte: si falla, las propiedades que se escriben se
       // siguen pudiendo editar
       getDocumentInfo(workPath)
         .then(setPropsFicha)
         .catch(() => setPropsFicha(null));
+      // y la vista inicial, por lo mismo: un `/OpenAction` que no se sepa
+      // leer no puede llevarse por delante el resto del diálogo
+      getOpenAction(workPath)
+        .then(setPropsVista)
+        .catch(() => setPropsVista(null));
     } catch (e) {
       setError(String(e));
     }
   }
 
-  async function saveProperties(meta: Metadata) {
+  async function saveProperties(meta: Metadata, vista: VistaInicial | null) {
     if (!workPath) return;
     try {
       await setMetadata(workPath, meta);
+      // la vista inicial solo se escribe si se ha tocado: es otro paso de
+      // historial y no tiene por qué llevárselo quien solo cambia el título
+      const antes = propsVista;
+      if (vista && antes && JSON.stringify(vista) !== JSON.stringify(antes)) {
+        await setOpenAction(workPath, vista);
+        await historial.agrupar(2);
+      }
       setPropsDraft(null);
       setModified(true);
       refrescarHistorial();
@@ -4857,6 +4876,8 @@ function App() {
         <DialogoPropiedades
           initial={propsDraft}
           ficha={propsFicha}
+          vista={propsVista}
+          pageCount={pageCount}
           onSave={saveProperties}
           onClose={() => setPropsDraft(null)}
         />

@@ -1,7 +1,24 @@
 import { useState } from "react";
-import type { DocumentInfo, Metadata } from "../api";
+import type { DocumentInfo, Metadata, VistaInicial } from "../api";
 import { plural, tamanoFichero } from "../tipos";
 import { useModal } from "../hooks/useModal";
+
+/** Las opciones de zoom de arranque, con el nombre que usa la píldora. */
+const ZOOMS: [string, string][] = [
+  ["defecto", "La del visor (predeterminado)"],
+  ["pagina", "La página entera"],
+  ["ancho", "El ancho de la página"],
+  ["100", "Tamaño real (100 %)"],
+];
+
+/** Las cuatro disposiciones de Acrobat, más «la del visor». */
+const DISPOSICIONES: [string, string][] = [
+  ["defecto", "La del visor (predeterminada)"],
+  ["una", "Una sola página"],
+  ["continuo", "Continua"],
+  ["dos", "Dos páginas"],
+  ["dos-continuo", "Dos páginas, continua"],
+];
 
 /** Los puntos de un PDF son 1/72 de pulgada: en milímetros se reconoce el
  *  A4 y en pulgadas la carta, así que se dan los dos. */
@@ -25,24 +42,38 @@ function resumenPermisos(f: DocumentInfo): string {
 
 /** Propiedades del documento: los metadatos del diccionario `/Info`, que se
  *  escriben, y la ficha del fichero —tamaño, versión, fuentes, seguridad—,
- *  que solo se lee. Es lo que Acrobat reparte en cuatro pestañas, aquí en
- *  una sola columna: son quince líneas, no hacen falta pestañas. */
+ *  que solo se lee, más la **vista inicial**, que también se escribe. Es lo
+ *  que Acrobat reparte en cuatro pestañas, aquí en una sola columna: son
+ *  veinte líneas, no hacen falta pestañas. */
 export default function DialogoPropiedades({
   initial,
   ficha,
+  vista,
+  pageCount,
   onSave,
   onClose,
 }: {
   initial: Metadata;
   /** La ficha de solo lectura; puede no haber llegado todavía. */
   ficha: DocumentInfo | null;
-  onSave: (meta: Metadata) => void;
+  /** Con qué cara se abre el documento; puede no haber llegado todavía. */
+  vista: VistaInicial | null;
+  pageCount: number;
+  onSave: (meta: Metadata, vista: VistaInicial | null) => void;
   onClose: () => void;
 }) {
   const [meta, setMeta] = useState<Metadata>(initial);
+  const [v, setV] = useState<VistaInicial | null>(vista);
+  // la vista llega después que los metadatos (dos viajes distintos): en
+  // cuanto está, se recoge sin pisar lo que el usuario ya haya tocado
+  const [vistaVista, setVistaVista] = useState(vista);
+  if (vista !== vistaVista) {
+    setVistaVista(vista);
+    setV(vista);
+  }
   const { ref, onKeyDown } = useModal({
     onClose,
-    onConfirm: () => onSave(meta),
+    onConfirm: () => onSave(meta, v),
   });
 
   function campo(key: keyof Metadata, label: string) {
@@ -81,6 +112,73 @@ export default function DialogoPropiedades({
             {initial.creator && initial.producer && " · "}
             {initial.producer && `Generador: ${initial.producer}`}
           </p>
+        )}
+        {v && (
+          <>
+            <span className="card-label">Vista inicial</span>
+            <div className="fila-campos">
+              <label className="prop-field">
+                <span className="card-label">Abrir por la página</span>
+                <input
+                  type="number"
+                  className="stamp-input"
+                  style={{ width: 80 }}
+                  min={1}
+                  max={Math.max(1, pageCount)}
+                  value={v.page_index + 1}
+                  onChange={(e) =>
+                    setV({
+                      ...v,
+                      page_index: Math.min(
+                        Math.max(Number(e.target.value) - 1, 0),
+                        Math.max(0, pageCount - 1),
+                      ),
+                    })
+                  }
+                />
+              </label>
+              <label className="prop-field">
+                <span className="card-label">Zoom</span>
+                <select
+                  className="size-select"
+                  value={v.zoom}
+                  onChange={(e) => setV({ ...v, zoom: e.target.value })}
+                >
+                  {ZOOMS.map(([valor, etiqueta]) => (
+                    <option key={valor} value={valor}>
+                      {etiqueta}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <label className="prop-field">
+              <span className="card-label">Disposición de las páginas</span>
+              <select
+                className="size-select"
+                value={v.disposicion}
+                onChange={(e) => setV({ ...v, disposicion: e.target.value })}
+              >
+                {DISPOSICIONES.map(([valor, etiqueta]) => (
+                  <option key={valor} value={valor}>
+                    {etiqueta}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="opt-check">
+              <input
+                type="checkbox"
+                checked={v.marcadores}
+                onChange={(e) => setV({ ...v, marcadores: e.target.checked })}
+              />
+              Abrir con el panel de marcadores a la vista
+            </label>
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              Es con lo que se encuentra quien abra el documento, aquí y en
+              cualquier otro visor.
+            </p>
+          </>
         )}
         {ficha && (
           <>
@@ -131,7 +229,7 @@ export default function DialogoPropiedades({
           <button className="btn" onClick={onClose}>
             Cancelar
           </button>
-          <button className="btn btn-primary" onClick={() => onSave(meta)}>
+          <button className="btn btn-primary" onClick={() => onSave(meta, v)}>
             Guardar
           </button>
         </div>

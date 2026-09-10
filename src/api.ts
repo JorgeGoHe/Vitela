@@ -956,6 +956,38 @@ export function setPageLabels(
   return invoke("set_page_labels", { workPath, rangos });
 }
 
+/* ---- vista inicial (`/OpenAction` y `/PageLayout`) ---- */
+
+/** Con qué cara se abre el documento: la única parte de las propiedades que
+ *  además se escribe. `"defecto"` en el zoom y en la disposición es «lo que
+ *  diga el visor de quien lo abra», que es lo que trae un PDF normal y lo
+ *  que Acrobat llama «Predeterminado».
+ *
+ *  **Las claves van en snake_case**: es una estructura anidada y Tauri solo
+ *  traduce el camelCase de los argumentos de primer nivel, como el `props`
+ *  de `create_form_field` y los rangos de `set_page_labels`. */
+export type VistaInicial = {
+  /** Página de arranque, desde 0. */
+  page_index: number;
+  /** "defecto", "pagina" (la página entera), "ancho" o "100". */
+  zoom: string;
+  /** "defecto", "una", "continuo", "dos" o "dos-continuo". */
+  disposicion: string;
+  /** El panel de marcadores abierto al abrir el documento. */
+  marcadores: boolean;
+};
+
+export function getOpenAction(path: string): Promise<VistaInicial> {
+  return invoke("get_open_action", { path });
+}
+
+export function setOpenAction(
+  workPath: string,
+  vista: VistaInicial,
+): Promise<void> {
+  return invoke("set_open_action", { workPath, vista });
+}
+
 export type LinkInfo = {
   x: number;
   y: number;
