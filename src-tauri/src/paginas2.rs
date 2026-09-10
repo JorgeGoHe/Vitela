@@ -1042,11 +1042,15 @@ mod tests {
                 crate::documento::OutlineNode {
                     title: "Capítulo 1".into(),
                     page_index: Some(0),
+                    top: None,
+                    zoom: None,
                     children: vec![],
                 },
                 crate::documento::OutlineNode {
                     title: "Capítulo 2".into(),
                     page_index: Some(4),
+                    top: None,
+                    zoom: None,
                     children: vec![],
                 },
             ],
