@@ -115,6 +115,8 @@ import {
   type CampoPropuesto,
   exportCommentsPdf,
   exportCommentsXfdf,
+  exportFormDataXfdf,
+  importFormDataXfdf,
   importCommentsXfdf,
   type OrdenComentarios,
 } from "./api";
@@ -3422,6 +3424,56 @@ function App() {
     };
   }, [printPages]);
 
+  /** «Exportar datos…»: los valores de los campos en XFDF, que es lo que
+   *  entienden Acrobat y los gestores de formularios. */
+  async function exportarDatosFormulario() {
+    if (!workPath) return;
+    const dest = await save({
+      defaultPath: (originalPath ?? "formulario.pdf").replace(
+        /\.pdf$/i,
+        ".xfdf",
+      ),
+      filters: [{ name: "XFDF", extensions: ["xfdf"] }],
+      title: "Exportar los datos del formulario",
+    });
+    if (!dest) return;
+    try {
+      const cuantos = await exportFormDataXfdf(workPath, dest);
+      setNotice(
+        `${plural(cuantos, "campo exportado", "campos exportados")} · ${dest}`,
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  /** «Importar datos…»: rellena los campos con un XFDF. No crea campos, así
+   *  que se dice cuántos han entrado y cuántos no existían aquí. */
+  async function importarDatosFormulario() {
+    if (!workPath) return;
+    const sel = await open({
+      filters: [{ name: "XFDF", extensions: ["xfdf"] }],
+      multiple: false,
+      title: "Importar datos de formulario",
+    });
+    if (typeof sel !== "string") return;
+    try {
+      const r = await importFormDataXfdf(workPath, sel);
+      afterMutation(pageCount);
+      setNotice(
+        r.sin_campo > 0
+          ? `${plural(r.rellenados, "campo rellenado", "campos rellenados")} · ${plural(
+              r.sin_campo,
+              "valor del fichero no existe",
+              "valores del fichero no existen",
+            )} en este documento · ${MOD}Z lo deshace`
+          : `${plural(r.rellenados, "campo rellenado", "campos rellenados")} · ${MOD}Z lo deshace`,
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function exportImages() {
     if (!workPath) return;
     const dir = await open({
@@ -5109,6 +5161,8 @@ function App() {
         setStampCustom={herramienta.setStampCustom}
         stampColor={herramienta.stampColor}
         hayFormularios={hayFormularios}
+        onExportarDatos={exportarDatosFormulario}
+        onImportarDatos={importarDatosFormulario}
         resaltarCampos={resaltarCampos}
         setResaltarCampos={(v) => {
           guardaResaltarCampos(v);

@@ -95,6 +95,8 @@ export default function OpcionesHerramienta({
   hayFormularios,
   resaltarCampos,
   setResaltarCampos,
+  onExportarDatos,
+  onImportarDatos,
   freeTextColor,
   freeTextSize,
   setFreeTextSize,
@@ -163,6 +165,9 @@ export default function OpcionesHerramienta({
   hayFormularios: boolean;
   resaltarCampos: boolean;
   setResaltarCampos: (v: boolean) => void;
+  /** Datos del formulario en XFDF, de ida y de vuelta. */
+  onExportarDatos: () => void;
+  onImportarDatos: () => void;
   freeTextColor: string;
   freeTextSize: number;
   setFreeTextSize: (s: number) => void;
@@ -229,6 +234,22 @@ export default function OpcionesHerramienta({
             />
             Resaltar campos
           </label>
+          {/* «Exportar / Importar datos» de Acrobat: quien reparte un
+              formulario recibe respuestas en XFDF y las mete aquí */}
+          <button
+            className="btn"
+            title="Guardar lo que hay escrito en los campos, en XFDF"
+            onClick={onExportarDatos}
+          >
+            Exportar datos…
+          </button>
+          <button
+            className="btn"
+            title="Rellenar los campos con un XFDF (no crea campos nuevos)"
+            onClick={onImportarDatos}
+          >
+            Importar datos…
+          </button>
           <span className="opt-hint">
             Clic en un campo para rellenarlo · Tab salta al siguiente
           </span>

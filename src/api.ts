@@ -784,6 +784,29 @@ export function getMetadata(path: string): Promise<Metadata> {
   return invoke("get_metadata", { path });
 }
 
+/** Lo que ha entrado al importar datos de formulario: cuántos campos se
+ *  han rellenado y cuántos del fichero no existen en este documento —que es
+ *  la pregunta real de quien recibe las respuestas de un formulario—. */
+export type InformeXfdf = { rellenados: number; sin_campo: number };
+
+/** Escribe los valores de los campos en un XFDF, el formato que entienden
+ *  Acrobat y los gestores de formularios. */
+export function exportFormDataXfdf(
+  workPath: string,
+  destPath: string,
+): Promise<number> {
+  return invoke("export_form_data_xfdf", { workPath, destPath });
+}
+
+/** Rellena los campos con los valores de un XFDF. **No crea campos**: los
+ *  que no existan se cuentan y se dicen. Una sola mutación. */
+export function importFormDataXfdf(
+  workPath: string,
+  srcPath: string,
+): Promise<InformeXfdf> {
+  return invoke("import_form_data_xfdf", { workPath, srcPath });
+}
+
 /** Adjunta un fichero **a un punto de la página**, como comentario
  *  (`/FileAttachment` con el fichero embebido y una chincheta por
  *  apariencia). Es distinto del adjunto del documento (`add_attachment`),
