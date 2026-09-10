@@ -1040,6 +1040,11 @@ compila los instaladores a mano o al etiquetar `v*`.
     sin ninguna anotación tampoco lo paga. La copia se borra al terminar y
     el documento no se toca. El test mide **tinta** —píxeles que no son
     papel— de la hoja compuesta con marcas y sin ellas.
+  - **Buscar en una carpeta tiene puerta** (C-8): el id `buscar-en-carpeta`
+    entra en «Editar» de `menu::estructura()` con ⇧⌘F y **sin necesitar
+    documento abierto**, que es justo cuando se usa: antes de saber qué
+    fichero quieres. Hasta ahora la función solo se descubría por el atajo
+    o pasando el ratón por un botón «…».
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (cada uno con su envoltorio en camelCase):
     - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la
@@ -1477,7 +1482,8 @@ compila los instaladores a mano o al etiquetar `v*`.
     `reemplazar-paginas`, `extraer-paginas`, `dividir-documento`,
     `imprimir`.
   - Editar: `deshacer`, `rehacer`, `copiar`, `seleccionar-todo`,
-    `buscar`, `buscar-siguiente`, `buscar-anterior`, `preferencias`.
+    `buscar`, `buscar-siguiente`, `buscar-anterior`, `buscar-en-carpeta`,
+    `preferencias`.
   - Ver: `zoom-mas`, `zoom-menos`, `zoom-pagina`, `zoom-100`,
     `zoom-ancho`, `pagina-una`, `pagina-continua`, `pagina-dos`,
     `pagina-dos-continua`, `girar-vista-derecha`, `girar-vista-izquierda`,

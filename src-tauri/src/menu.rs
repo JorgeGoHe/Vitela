@@ -152,6 +152,14 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                     Some("Shift+CmdOrCtrl+G"),
                     true,
                 ),
+                // buscar en una carpeta es lo que se hace **antes** de saber
+                // qué fichero quieres: no necesita documento abierto
+                e(
+                    "buscar-en-carpeta",
+                    "Buscar en una carpeta…",
+                    Some("Shift+CmdOrCtrl+F"),
+                    false,
+                ),
                 sep(),
                 e("preferencias", "Preferencias…", Some("CmdOrCtrl+,"), false),
             ],
@@ -469,7 +477,15 @@ mod tests {
             .filter(|e| !e.necesita_documento)
             .map(|e| e.id)
             .collect();
-        for id in ["abrir", "preferencias", "atajos", "panel-lateral"] {
+        for id in [
+            "abrir",
+            "preferencias",
+            "atajos",
+            "panel-lateral",
+            // buscar en una carpeta se hace justamente cuando todavía no
+            // sabes qué documento quieres abrir
+            "buscar-en-carpeta",
+        ] {
             assert!(sueltas.contains(&id), "{id} tiene que valer sin documento");
         }
         for id in ["guardar", "imprimir", "firmar", "redactar"] {

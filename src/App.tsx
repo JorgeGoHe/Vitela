@@ -4493,6 +4493,10 @@ function App() {
       (document.querySelector(".search input") as HTMLInputElement)?.focus(),
     "buscar-siguiente": () => busqueda.gotoMatch(1),
     "buscar-anterior": () => busqueda.gotoMatch(-1),
+    // pendiente_ui C-8: lo enruta la mitad de la interfaz del ciclo 10, que
+    // abre el cajón de búsqueda en el ámbito «carpeta» también sin
+    // documento. El id ya existe en el menú nativo (menu.rs)
+    "buscar-en-carpeta": () => {},
     preferencias: () => setPrefsAbiertas(true),
     /* Ver */
     "zoom-mas": () => setZoom(nivelZoom(zoomNum, 1)),
