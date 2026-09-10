@@ -1879,6 +1879,21 @@ export function recoverSession(): Promise<Sesion[]> {
   return invoke("recover_session");
 }
 
+/** Lo que devuelve abrir o adoptar un documento. */
+export type DocumentoAbierto = {
+  page_count: number;
+  work_path: string;
+  had_password: boolean;
+};
+
+/** Recupera una sesión **reutilizando la copia que ya existe**, en vez de
+ *  copiarla otra vez como hace `open_pdf`. Sin esto, recuperar dejaba una
+ *  copia de la copia, el apunte indexado por la ruta vieja —que ya nadie
+ *  iba a borrar— y la banda volviendo a ofrecer un documento ya guardado. */
+export function adoptSession(workPath: string): Promise<DocumentoAbierto> {
+  return invoke("adopt_session", { workPath });
+}
+
 /* ---- menú nativo ---- */
 
 /** Avisa al backend de si hay documento abierto para que atenúe las

@@ -507,7 +507,6 @@ mod tests {
     /// excepción mientras las dos mitades se escriben en paralelo, y se
     /// quita al integrar.
     const NADIE_LLAMA: &[(&str, &str)] = &[
-        ("adopt_session", "ciclo 10: la UI recupera con recover_session/borra_sesion; adoptar la copia queda para el cierre"),
         ("set_signature_slot", "ciclo 10: la UI fija la ranura al guardar/importar; cambiarla después no tiene botón"),
         (
             "read_certificate",

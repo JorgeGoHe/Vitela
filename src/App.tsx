@@ -132,6 +132,8 @@ import {
   importFormDataXfdf,
   importCommentsXfdf,
   type OrdenComentarios,
+  adoptSession,
+  type DocumentoAbierto,
 } from "./api";
 import Pestanas from "./components/Pestanas";
 import DialogoComentarios, {
@@ -888,6 +890,11 @@ function App() {
      *  la copia de trabajo pero el original sigue siendo el de verdad, para
      *  que ⌘S no escriba en el temporal. */
     original?: string | null,
+    /** `path` YA es una copia de trabajo (recuperar una sesión): se adopta
+     *  tal cual con `adopt_session` en vez de copiarla otra vez. Copiar la
+     *  copia dejaba dos ficheros en el temporal y el apunte de la sesión
+     *  indexado por una ruta que ya nadie iba a borrar. */
+    adoptar?: boolean,
   ): Promise<string | null> {
     try {
       // los avisos son del documento que se deja atrás: no deben sobrevivir
@@ -906,11 +913,12 @@ function App() {
       if (originalPath === path && workPath) return workPath;
       const anterior = workPath;
       const vivo = anterior ? estadoDePestana() : null;
-      const info = await invoke<{
-        page_count: number;
-        work_path: string;
-        had_password: boolean;
-      }>("open_pdf", { path, password: password ?? null });
+      const info = adoptar
+        ? await adoptSession(path)
+        : await invoke<DocumentoAbierto>("open_pdf", {
+            path,
+            password: password ?? null,
+          });
       // el documento anterior NO se cierra: se queda en su pestaña, con su
       // copia de trabajo, su historial y el punto por el que se iba
       if (vivo) {
@@ -1120,7 +1128,13 @@ function App() {
     setSesionesRotas((v) => v.filter((s) => !lista.includes(s)));
     const abiertas: string[] = [];
     for (const s of lista) {
-      const work = await openPath(s.work_path, undefined, s.original_path);
+      // `s.work_path` ya es la copia de trabajo: se adopta, no se copia
+      const work = await openPath(
+        s.work_path,
+        undefined,
+        s.original_path,
+        true,
+      );
       if (!work) continue;
       abiertas.push(work);
       if (!s.original_path) setNombreProvisional("Documento recuperado");
