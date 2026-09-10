@@ -140,11 +140,30 @@ pub(crate) fn recupera_en(fichero: &std::path::Path) -> Vec<Sesion> {
     let (vivas, muertas): (Vec<Sesion>, Vec<Sesion>) = todas
         .into_iter()
         .partition(|s| s.modificado && std::path::Path::new(&s.work_path).is_file());
-    if !muertas.is_empty() {
-        // las que ya no se pueden recuperar no se vuelven a ofrecer
-        let _ = escribe(fichero, vivas.clone());
+    // **Un documento, un apunte** (AC-077): recuperar y volver a copiar la
+    // copia dejaba dos entradas del mismo original, y ofrecer dos veces el
+    // mismo documento es peor que no ofrecerlo. Se queda la más reciente,
+    // que es la que tiene el trabajo. Los apuntes sin original —un
+    // documento nuevo o combinado— no se pueden emparejar y se quedan
+    // todos: no hay forma de saber si son el mismo.
+    let mut unicas: Vec<Sesion> = Vec::new();
+    let mut repetidas: Vec<Sesion> = Vec::new();
+    for s in vivas {
+        let mismo = (!s.original_path.is_empty())
+            .then(|| unicas.iter().position(|o| o.original_path == s.original_path))
+            .flatten();
+        match mismo {
+            Some(i) if unicas[i].cuando >= s.cuando => repetidas.push(s),
+            Some(i) => repetidas.push(std::mem::replace(&mut unicas[i], s)),
+            None => unicas.push(s),
+        }
     }
-    vivas
+    if !muertas.is_empty() || !repetidas.is_empty() {
+        // las que ya no se pueden recuperar —o son otra copia de la misma
+        // cosa— no se vuelven a ofrecer
+        let _ = escribe(fichero, unicas.clone());
+    }
+    unicas
 }
 
 /// Las copias de trabajo apuntadas. Las usa el barrido de huérfanos del
@@ -231,6 +250,78 @@ mod tests {
         let f = std::env::temp_dir().join(format!("vitela-test-sesion-{nombre}.json"));
         let _ = std::fs::remove_file(&f);
         f
+    }
+
+    /// **AC-077 — recuperar no duplica el documento.** Recuperar pasaba la
+    /// copia recuperada por `open_pdf`, que **copia**: quedaban dos
+    /// apuntes del mismo original, guardar borraba solo el nuevo, la banda
+    /// volvía a ofrecer un documento ya guardado y la copia vieja se
+    /// quedaba en el temporal para siempre (el barrido de huérfanos la
+    /// respeta porque sigue apuntada).
+    ///
+    /// Dos remates: `adopt_session` reutiliza la copia en vez de copiarla,
+    /// y `recupera_en` no ofrece dos veces el mismo documento.
+    #[test]
+    fn recuperar_no_deja_dos_apuntes_del_mismo_documento() {
+        let f = fichero_de_prueba("duplicado");
+        let copia = std::env::temp_dir().join("vitela-test-sesion-dup-1.pdf");
+        let copia_de_la_copia = std::env::temp_dir().join("vitela-test-sesion-dup-2.pdf");
+        let otro = std::env::temp_dir().join("vitela-test-sesion-dup-otro.pdf");
+        for c in [&copia, &copia_de_la_copia, &otro] {
+            crate::tests::crea_pdf(&["Factura"], c);
+        }
+        let original = "/Users/jorge/facturas/factura.pdf";
+
+        apunta_en(&f, &copia.to_string_lossy(), original, true).expect("apuntar");
+        apunta_en(&f, &otro.to_string_lossy(), "/Users/jorge/libro.pdf", true)
+            .expect("apuntar el otro");
+        // esto es lo que dejaba recuperar con `open_pdf`: una copia de la
+        // copia, apuntada aparte y con el mismo original
+        apunta_en(&f, &copia_de_la_copia.to_string_lossy(), original, true)
+            .expect("apuntar la copia de la copia");
+
+        let ofrecidas = recupera_en(&f);
+        assert_eq!(
+            ofrecidas.len(),
+            2,
+            "un documento, un apunte: {ofrecidas:?}"
+        );
+        assert_eq!(
+            ofrecidas
+                .iter()
+                .filter(|s| s.original_path == original)
+                .count(),
+            1
+        );
+        // se queda la más reciente, que es la que tiene el trabajo
+        assert_eq!(
+            ofrecidas
+                .iter()
+                .find(|s| s.original_path == original)
+                .map(|s| s.work_path.clone()),
+            Some(copia_de_la_copia.to_string_lossy().into_owned())
+        );
+        // y el fichero ya no la vuelve a ofrecer en el arranque siguiente
+        assert_eq!(recupera_en(&f).len(), 2);
+
+        // adoptar la copia recuperada no hace otra: la `work_path` que se
+        // devuelve es la misma, así que el apunte que se borra al guardar
+        // es el que hay
+        let info = crate::adopt_session(copia.to_string_lossy().into_owned())
+            .expect("adoptar la copia");
+        assert_eq!(info.work_path, copia.to_string_lossy());
+        assert_eq!(info.page_count, 1);
+        crate::close_document(info.work_path).expect("cerrar");
+
+        // una copia que ya no está lo dice en llano
+        assert!(crate::adopt_session("/tmp/no-existe-vitela.pdf".into())
+            .unwrap_err()
+            .contains("no hay nada que recuperar"));
+
+        let _ = std::fs::remove_file(&f);
+        for c in [&copia, &copia_de_la_copia, &otro] {
+            let _ = std::fs::remove_file(c);
+        }
     }
 
     /// Un cierre bruto no se puede llevar el trabajo: la copia sigue en

@@ -309,6 +309,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "squash_history" => cmd!(historial::squash_history, { work_path: String, steps: u16 }),
         "autosave_state" => cmd!(crate::recuperacion::autosave_state, { work_path: String, original_path: Option<String>, modified: bool }),
         "borra_sesion" => cmd!(crate::recuperacion::borra_sesion, { work_path: String }),
+        "adopt_session" => cmd!(crate::adopt_session, { work_path: String }),
         "recover_session" => crate::recuperacion::recover_session()
             .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
         "list_recent" => crate::recientes::list_recent()
@@ -502,6 +503,11 @@ mod tests {
         (
             "save_page_attachment",
             "ciclo 9: «Guardar como…» del popover de la chincheta, ídem",
+        ),
+        (
+            "adopt_session",
+            "ciclo 9 (AC-077): recuperar una sesión adopta su copia en vez de \
+             copiarla; el cambio de `recuperarSesiones` llega con la interfaz",
         ),
         (
             "search_folder",

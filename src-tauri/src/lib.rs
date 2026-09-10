@@ -522,6 +522,44 @@ fn open_pdf(path: String, password: Option<String>) -> Result<DocumentInfo, Stri
     })
 }
 
+/// **Adoptar una copia de trabajo que ya existe** (AC-077): lo que hace
+/// falta para recuperar una sesión sin volver a copiarla.
+///
+/// `open_pdf` **copia** lo que se le da a un temporal nuevo, así que
+/// recuperar pasándole la copia recuperada dejaba una copia de la copia, el
+/// apunte de la sesión indexado por la ruta vieja —que ya nadie iba a
+/// borrar— y el barrido de huérfanos protegiendo un fichero que ya no
+/// servía para nada. La app volvía a ofrecer recuperar un documento que ya
+/// estaba guardado, que es lo que enseña a no fiarse de la banda.
+///
+/// Aquí la copia **se reutiliza tal cual**: se registra como copia abierta
+/// (para que `close_document` y la salida de la app se la lleven) y se
+/// devuelve lo mismo que `open_pdf`, con la misma `work_path` que traía el
+/// apunte. Así el apunte que se borra al guardar es el que hay.
+#[tauri::command(async)]
+fn adopt_session(work_path: String) -> Result<DocumentInfo, String> {
+    on_pdfium_thread(move || {
+        if !std::path::Path::new(&work_path).is_file() {
+            return Err("Esa copia de trabajo ya no está: no hay nada que recuperar".into());
+        }
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(|e| mensaje_apertura(&e, &work_path))?;
+        let page_count = doc.pages().len();
+        drop(doc);
+        copias_abiertas().insert(work_path.clone());
+        menu::refleja_documento(true);
+        Ok(DocumentInfo {
+            page_count,
+            work_path,
+            // la copia de trabajo está siempre en claro: si el original iba
+            // cifrado, se descifró al hacerla
+            had_password: false,
+        })
+    })
+}
+
 /// Renderiza una página a PNG (bytes) con el ancho pedido en píxeles.
 ///
 /// `con_anotaciones` es lo que Acrobat llama «Comentarios y formularios» en
@@ -1288,6 +1326,7 @@ pub fn run() {
             recuperacion::autosave_state,
             recuperacion::borra_sesion,
             recuperacion::recover_session,
+            adopt_session,
             recientes::list_recent,
             recientes::touch_recent,
             recientes::remove_recent,
