@@ -1354,4 +1354,293 @@ mod tests {
             "OPCIONALES_INDEBIDOS nombra parámetros que no existen: {inventados:?}"
         );
     }
+
+    /// **AC-074.** La tabla del `match` de `despachar` es una copia a mano
+    /// de las firmas de los comandos, y **nadie la cruzaba**: el ciclo 8
+    /// se pasó entero con `set_page_labels` esperando un `labels` que el
+    /// comando llama `rangos`, así que «Numerar páginas…» fallaba con un
+    /// 400 en toda sesión de QA por navegador y funcionaba en la app.
+    ///
+    /// Aquí se comparan nombre a nombre y `Option<>` a `Option<>` la tabla
+    /// del puente y las firmas `#[tauri::command]`. Los comandos que el
+    /// puente **atiende a mano** (los que necesitan una ventana, o los que
+    /// no llevan argumentos) van en `PUENTE_A_MANO` con su motivo.
+    const PUENTE_A_MANO: &[(&str, &str)] = &[
+        (
+            "set_menu_state",
+            "el puente no tiene ventana: el menú nativo no existe en el navegador",
+        ),
+        (
+            "confirmar_cierre",
+            "ídem: cerrar la ventana de verdad no es cosa del navegador de QA",
+        ),
+        ("ui_lista", "no lleva argumentos"),
+        ("cancel_search", "no lleva argumentos"),
+        ("list_stored_signatures", "no lleva argumentos"),
+        ("recover_session", "no lleva argumentos"),
+        ("list_recent", "no lleva argumentos"),
+        (
+            "set_page_labels",
+            "AC-074: el puente lo llamaba `labels` y el comando `rangos`; \
+             corregido en main, llega con el rebase",
+        ),
+    ];
+
+    /// Los argumentos que declara la tabla del puente, por comando.
+    fn argumentos_del_puente() -> std::collections::BTreeMap<String, Vec<Parametro>> {
+        let yo = fuente("puente_dev.rs");
+        let desde = yo.find("fn despachar").expect("sin despachar");
+        let hasta = yo[desde..]
+            .find("\n#[cfg(test)]")
+            .map(|i| desde + i)
+            .unwrap_or(yo.len());
+        let region = &yo[desde..hasta];
+        let mut out = std::collections::BTreeMap::new();
+        let mut i = 0;
+        while let Some(j) = region[i..].find("=> cmd!(") {
+            let j = i + j;
+            // el nombre del comando es la cadena que va justo delante
+            let antes = &region[..j];
+            let fin = antes.rfind('"').unwrap_or(0);
+            let ini = antes[..fin].rfind('"').unwrap_or(0);
+            let nombre = antes[ini + 1..fin].to_string();
+            i = j + 1;
+            let Some(llave) = region[j..].find('{').map(|k| j + k) else {
+                continue;
+            };
+            let Some(dentro) = hasta_cerrar(region, llave, '{', '}') else {
+                continue;
+            };
+            let params = trozos(dentro, &[','])
+                .into_iter()
+                .filter_map(|t| {
+                    let (nombre, tipo) = t.split_once(':')?;
+                    Some(Parametro {
+                        nombre: nombre.trim().to_string(),
+                        obligatorio: !tipo.trim().starts_with("Option<"),
+                    })
+                })
+                .collect();
+            out.insert(nombre, params);
+        }
+        assert!(
+            out.len() > 50,
+            "la tabla del puente se ha leído a medias: {}",
+            out.len()
+        );
+        out
+    }
+
+    #[test]
+    fn la_tabla_del_puente_dice_lo_mismo_que_las_firmas_de_los_comandos() {
+        let comandos = parametros_de_los_comandos();
+        let puente = argumentos_del_puente();
+        let mut fallos: Vec<String> = Vec::new();
+        for (nombre, args) in &puente {
+            if PUENTE_A_MANO.iter().any(|(n, _)| n == nombre) {
+                continue;
+            }
+            let Some(reales) = comandos.get(nombre) else {
+                fallos.push(format!("{nombre}: el puente lo despacha y no es un comando"));
+                continue;
+            };
+            let mios: Vec<&str> = args.iter().map(|p| p.nombre.as_str()).collect();
+            let suyos: Vec<&str> = reales.iter().map(|p| p.nombre.as_str()).collect();
+            if mios != suyos {
+                fallos.push(format!(
+                    "{nombre}: el puente dice {mios:?} y el comando {suyos:?}"
+                ));
+                continue;
+            }
+            for (a, b) in args.iter().zip(reales.iter()) {
+                if a.obligatorio != b.obligatorio {
+                    fallos.push(format!(
+                        "{nombre}: `{}` es {} en el comando y {} en el puente",
+                        a.nombre,
+                        if b.obligatorio { "obligatorio" } else { "opcional" },
+                        if a.obligatorio { "obligatorio" } else { "opcional" },
+                    ));
+                }
+            }
+        }
+        assert!(
+            fallos.is_empty(),
+            "la tabla del puente y las firmas de los comandos no dicen lo mismo, \
+             así que la sesión de QA por navegador falla donde la app funciona:\n  {}",
+            fallos.join("\n  ")
+        );
+        // y las excepciones no pueden envejecer: una que nombra un comando
+        // que ya no existe tapa el hueco del día que vuelva
+        let fantasmas: Vec<&str> = PUENTE_A_MANO
+            .iter()
+            .map(|(n, _)| *n)
+            .filter(|n| !comandos.contains_key(*n))
+            .collect();
+        assert!(
+            fantasmas.is_empty(),
+            "PUENTE_A_MANO nombra comandos que no existen: {fantasmas:?}"
+        );
+    }
+
+    /// **AC-075, la quinta costura: el tipo de retorno.** El test cruzado
+    /// comparaba nombres de argumento y nunca lo que el comando
+    /// **devuelve**. `get_page_labels` devuelve un objeto
+    /// `{ rangos, etiquetas }` y el envoltorio de `api.ts` lo declaraba
+    /// `RangoEtiquetas[]`: `invoke` devuelve lo que se le declare, `tsc` se
+    /// lo cree, y abrir cualquier PDF dejaba la ventana en blanco con un
+    /// `rangos is not iterable`.
+    ///
+    /// Lo que se exige aquí es lo mínimo que lo habría cazado: un comando
+    /// que devuelve una lista se declara como lista, y uno que devuelve un
+    /// `struct` con campos nombrados **no** se declara como lista.
+    const TIPOS_PENDIENTES: &[(&str, &str)] = &[(
+        "get_page_labels",
+        "AC-075: `api.ts` lo declaraba `RangoEtiquetas[]` y devuelve \
+         `{ rangos, etiquetas }`; corregido en main, llega con el rebase",
+    )];
+
+    /// Los `struct` con campos nombrados del core, que es lo que viaja a la
+    /// UI como objeto JSON.
+    fn structs_del_core() -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        for texto in fuentes_del_core() {
+            let mut i = 0;
+            while let Some(j) = texto[i..].find("pub struct ") {
+                let j = i + j + "pub struct ".len();
+                let resto = &texto[j..];
+                let fin = resto
+                    .find(|c: char| !c.is_alphanumeric() && c != '_')
+                    .unwrap_or(resto.len());
+                let nombre = &resto[..fin];
+                // solo los de campos nombrados: `struct X;` y `struct X(..)`
+                // no son objetos
+                if resto[fin..].trim_start().starts_with('{') && !nombre.is_empty() {
+                    out.insert(nombre.to_string());
+                }
+                i = j + fin;
+            }
+        }
+        out
+    }
+
+    /// Lo que devuelve cada comando: `"lista"`, `"objeto"` o `"otro"`.
+    fn retornos_de_los_comandos() -> std::collections::BTreeMap<String, &'static str> {
+        let structs = structs_del_core();
+        let mut out = std::collections::BTreeMap::new();
+        for texto in fuentes_del_core() {
+            let mut i = 0;
+            while let Some(j) = texto[i..].find("#[tauri::command") {
+                let j = i + j;
+                i = j + 1;
+                let Some(k) = texto[j..].find("fn ") else { continue };
+                let k = j + k + "fn ".len();
+                let Some(p) = texto[k..].find('(') else { continue };
+                let nombre = texto[k..k + p].trim().to_string();
+                let Some(cierra) = hasta_cerrar(&texto, k + p, '(', ')') else {
+                    continue;
+                };
+                let tras = &texto[k + p + cierra.len() + 2..];
+                let Some(flecha) = tras.find("->") else { continue };
+                let cuerpo = tras[flecha..].find('{').unwrap_or(tras.len());
+                let devuelve = tras[flecha + 2..flecha + cuerpo].trim();
+                let dentro = devuelve
+                    .strip_prefix("Result<")
+                    .and_then(|d| d.rfind(", String>").map(|f| d[..f].trim().to_string()))
+                    .unwrap_or_else(|| devuelve.to_string());
+                let clase = if dentro.starts_with("Vec<") {
+                    "lista"
+                } else {
+                    let simple = dentro.rsplit("::").next().unwrap_or(&dentro);
+                    if structs.contains(simple) {
+                        "objeto"
+                    } else {
+                        "otro"
+                    }
+                };
+                out.insert(nombre, clase);
+            }
+        }
+        out
+    }
+
+    /// Lo que declara devolver cada `invoke` de la UI: el `Promise<…>` de
+    /// la función que lo envuelve.
+    fn retornos_de_la_ui(fuentes: &[(String, String)]) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for (_, texto) in fuentes {
+            let mut i = 0;
+            while let Some(j) = texto[i..].find("Promise<") {
+                let j = i + j + "Promise".len();
+                i = j + 1;
+                let Some(tipo) = hasta_cerrar(texto, j, '<', '>') else {
+                    continue;
+                };
+                let tras = &texto[j + tipo.len() + 2..];
+                if !tras.trim_start().starts_with('{') {
+                    continue;
+                }
+                // el `invoke` de esa función: el primero del cuerpo
+                let cuerpo = &tras[..tras.len().min(1200)];
+                let Some(inv) = cuerpo.find("invoke") else { continue };
+                let Some(comilla) = cuerpo[inv..].find('"') else { continue };
+                let resto = &cuerpo[inv + comilla + 1..];
+                let Some(fin) = resto.find('"') else { continue };
+                out.push((resto[..fin].to_string(), tipo.trim().to_string()));
+            }
+        }
+        assert!(
+            out.len() > 50,
+            "se han leído {} envoltorios de la UI",
+            out.len()
+        );
+        out
+    }
+
+    #[test]
+    fn el_tipo_que_declara_la_ui_es_el_que_devuelve_el_comando() {
+        let retornos = retornos_de_los_comandos();
+        let fuentes = fuentes_de_la_ui();
+        let mut fallos: Vec<String> = Vec::new();
+        let mut vistos: Vec<String> = Vec::new();
+        for (cmd, tipo) in retornos_de_la_ui(&fuentes) {
+            let Some(clase) = retornos.get(&cmd) else { continue };
+            if TIPOS_PENDIENTES.iter().any(|(n, _)| *n == cmd) {
+                vistos.push(cmd.clone());
+                continue;
+            }
+            // `void`, `unknown` y `any` son «no miro lo que devuelve»: no
+            // se desarma nada y no hay nada que pueda reventar al pintar
+            if matches!(tipo.as_str(), "void" | "unknown" | "any") {
+                vistos.push(cmd);
+                continue;
+            }
+            let es_lista = tipo.ends_with("[]") || tipo.starts_with("Array<");
+            match (*clase, es_lista) {
+                ("lista", false) => fallos.push(format!(
+                    "{cmd}: el comando devuelve una lista y la UI declara `{tipo}`"
+                )),
+                ("objeto", true) => fallos.push(format!(
+                    "{cmd}: el comando devuelve un objeto y la UI declara `{tipo}`"
+                )),
+                _ => {}
+            }
+            vistos.push(cmd);
+        }
+        assert!(
+            fallos.is_empty(),
+            "el tipo que declara `api.ts` no es el que devuelve el comando, y \
+             `invoke` devuelve lo que se le declare —así que ni tsc ni el resto \
+             del test cruzado lo ven:\n  {}",
+            fallos.join("\n  ")
+        );
+        let fantasmas: Vec<&str> = TIPOS_PENDIENTES
+            .iter()
+            .map(|(n, _)| *n)
+            .filter(|n| !vistos.iter().any(|v| v == n))
+            .collect();
+        assert!(
+            fantasmas.is_empty(),
+            "TIPOS_PENDIENTES nombra comandos que la UI ya no envuelve: {fantasmas:?}"
+        );
+    }
 }
