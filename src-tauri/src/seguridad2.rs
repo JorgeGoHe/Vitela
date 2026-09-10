@@ -29,6 +29,17 @@ fn es_marca(annot: &Dictionary) -> bool {
         && annot.get(CLAVE).and_then(|o| o.as_name()).unwrap_or_default() == VALOR
 }
 
+/// ¿La anotación de este objeto es una marca de redacción? Es lo que
+/// distingue un `/Square` nuestro de censurar de un `/Square` que es un
+/// rectángulo dibujado con la herramienta de formas: los dos tienen el
+/// mismo subtipo y su apariencia la rehace cada uno por su lado.
+pub(crate) fn es_marca_por_id(doc: &LoDoc, id: lopdf::ObjectId) -> bool {
+    doc.get_object(id)
+        .and_then(|o| o.as_dict())
+        .map(es_marca)
+        .unwrap_or(false)
+}
+
 /// Apariencia de la marca: el borde rojo que se ve mientras es solo una
 /// propuesta. PDFium no escribe el `/AP` de las anotaciones de marcado, así
 /// que sin esto la marca no existiría fuera de Vitela.

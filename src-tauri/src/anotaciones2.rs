@@ -104,8 +104,18 @@ pub fn add_markup(
 }
 
 /// Forma geométrica entre dos puntos (coords de UI): rectángulo, elipse,
-/// línea o flecha. Va como anotación Ink con el path dentro para que
-/// renderice en cualquier visor y se pueda borrar individualmente.
+/// línea o flecha, **cada una con el subtipo que le toca del spec**:
+/// `/Square`, `/Circle` y `/Line` (la flecha, con su `/LE`).
+///
+/// Hasta el ciclo 9 las cuatro eran una anotación `Ink` con el dibujo
+/// dentro, porque pdfium-render 0.8 solo expone `objects_mut` en Ink y en
+/// Stamp. Esa excusa se retiró en el ciclo 8: `add_measure` y
+/// `add_file_attachment_annotation` ya escriben su anotación entera con
+/// lopdf y dibujan su `/AP` a mano, y es lo que se hace aquí. La
+/// diferencia se nota fuera de Vitela: un rectángulo es un rectángulo —se
+/// puede seleccionar, cambiar de color y redimensionar en Acrobat—, y no
+/// un garabato con forma de rectángulo. La goma, que es de los trazos,
+/// deja de llevárselas por delante.
 // la firma es el contrato con la UI: un argumento por propiedad de la forma
 #[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
@@ -122,111 +132,274 @@ pub fn add_shape(
     stroke_width: f32,
     author: Option<String>,
 ) -> Result<(), String> {
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let geo = Geo::de_pagina(&page).propia();
-        let stroke_color = color_de(stroke);
-        let width = PdfPoints::new(stroke_width.max(0.5));
-        let fill_color = fill.map(color_de);
-
-        // coords PDF (origen abajo-izquierda y sin rotar)
+    let subtipo = match kind.as_str() {
+        "rect" => "Square",
+        "ellipse" => "Circle",
+        "line" | "arrow" => "Line",
+        otro => return Err(format!("Forma desconocida: {otro}")),
+    };
+    let flecha = kind == "arrow";
+    let autor = crate::anotaciones::autor_o_sistema(author);
+    let fecha = crate::anotaciones::fecha_pdf_ahora();
+    let ancho = stroke_width.max(0.5);
+    crate::cirugia(&work_path, move |doc| {
+        use lopdf::{Dictionary, Object};
+        let page_id = *doc
+            .get_pages()
+            .get(&(page_index as u32 + 1))
+            .ok_or("Página fuera de rango")?;
+        let geo = crate::formularios2::geo_pagina(doc, page_id)?;
         let (px1, py1) = geo.ui_a_pdf(x1, y1);
         let (px2, py2) = geo.ui_a_pdf(x2, y2);
-        let bbox = PdfRect::new(
-            PdfPoints::new(py1.min(py2)),
-            PdfPoints::new(px1.min(px2)),
-            PdfPoints::new(py1.max(py2)),
-            PdfPoints::new(px1.max(px2)),
-        );
+        // el /Rect deja aire para el grosor del trazo y para la punta de la
+        // flecha, que se sale de la línea
+        let aire = ancho + if flecha { PUNTA + ancho * 2.0 } else { 1.0 };
+        let caja = [
+            px1.min(px2) - aire,
+            py1.min(py2) - aire,
+            px1.max(px2) + aire,
+            py1.max(py2) + aire,
+        ];
+        let linea = (subtipo == "Line").then_some([px1, py1, px2, py2]);
+        let trazo = componentes(stroke);
+        let relleno = fill.filter(|f| f[3] > 0).map(componentes);
 
-        let path = match kind.as_str() {
-            "rect" => PdfPagePathObject::new_rect(
-                &doc,
-                bbox,
-                Some(stroke_color),
-                Some(width),
-                fill_color,
-            )
-            .map_err(|e| e.to_string())?,
-            "ellipse" => PdfPagePathObject::new_ellipse(
-                &doc,
-                bbox,
-                Some(stroke_color),
-                Some(width),
-                fill_color,
-            )
-            .map_err(|e| e.to_string())?,
-            "line" => PdfPagePathObject::new_line(
-                &doc,
-                PdfPoints::new(px1),
-                PdfPoints::new(py1),
-                PdfPoints::new(px2),
-                PdfPoints::new(py2),
-                stroke_color,
-                width,
-            )
-            .map_err(|e| e.to_string())?,
-            "arrow" => {
-                let mut p = PdfPagePathObject::new(
-                    &doc,
-                    PdfPoints::new(px1),
-                    PdfPoints::new(py1),
-                    Some(stroke_color),
-                    Some(width),
-                    None,
-                )
-                .map_err(|e| e.to_string())?;
-                p.line_to(PdfPoints::new(px2), PdfPoints::new(py2))
-                    .map_err(|e| e.to_string())?;
-                // punta: dos segmentos a ±30° de la dirección de la línea
-                let ang = (py2 - py1).atan2(px2 - px1);
-                let head = (12.0 + stroke_width * 2.0).max(10.0);
+        let ap_id = apariencia_forma(doc, subtipo, caja, linea, trazo, relleno, ancho, flecha);
+        let mut annot = Dictionary::new();
+        annot.set("Type", Object::Name(b"Annot".to_vec()));
+        annot.set("Subtype", Object::Name(subtipo.as_bytes().to_vec()));
+        annot.set(
+            "Rect",
+            Object::Array(vec![
+                caja[0].into(),
+                caja[1].into(),
+                caja[2].into(),
+                caja[3].into(),
+            ]),
+        );
+        if let Some(l) = linea {
+            annot.set(
+                "L",
+                Object::Array(vec![l[0].into(), l[1].into(), l[2].into(), l[3].into()]),
+            );
+            annot.set(
+                "LE",
+                Object::Array(vec![
+                    Object::Name(b"None".to_vec()),
+                    Object::Name(if flecha { b"OpenArrow".to_vec() } else { b"None".to_vec() }),
+                ]),
+            );
+        }
+        // `/C` es el color del trazo y `/IC` el del relleno, que es como
+        // los llama el spec y como los lee cualquier visor
+        annot.set(
+            "C",
+            Object::Array(vec![trazo[0].into(), trazo[1].into(), trazo[2].into()]),
+        );
+        if let Some(ic) = relleno {
+            annot.set(
+                "IC",
+                Object::Array(vec![ic[0].into(), ic[1].into(), ic[2].into()]),
+            );
+        }
+        let mut bs = Dictionary::new();
+        bs.set("W", Object::Real(ancho));
+        bs.set("S", Object::Name(b"S".to_vec()));
+        annot.set("BS", Object::Dictionary(bs));
+        annot.set("F", 4i64); // Print
+        annot.set("T", crate::documento::cadena_pdf(&autor));
+        annot.set("CreationDate", Object::string_literal(fecha.clone()));
+        annot.set("M", Object::string_literal(fecha));
+        let mut ap = Dictionary::new();
+        ap.set("N", Object::Reference(ap_id));
+        annot.set("AP", Object::Dictionary(ap));
+        let annot_id = doc.add_object(annot);
+        crate::formularios2::anade_a_annots(doc, page_id, annot_id)
+    })
+}
+
+/// Largo de la punta de una flecha, en puntos.
+const PUNTA: f32 = 12.0;
+
+/// Un color de la UI en las tres componentes 0..1 que escribe el PDF.
+fn componentes(c: [u8; 4]) -> [f32; 3] {
+    [
+        c[0] as f32 / 255.0,
+        c[1] as f32 / 255.0,
+        c[2] as f32 / 255.0,
+    ]
+}
+
+/// El `/AP` de una forma, dibujado **en coordenadas de página** (`/BBox`
+/// igual al `/Rect`, como el de las marcas de texto y el de las medidas):
+/// PDFium no escribe la apariencia de estos subtipos, así que la dibujamos
+/// nosotros o la forma no existiría fuera de Vitela.
+#[allow(clippy::too_many_arguments)]
+fn apariencia_forma(
+    doc: &mut lopdf::Document,
+    subtipo: &str,
+    caja: [f32; 4],
+    linea: Option<[f32; 4]>,
+    trazo: [f32; 3],
+    relleno: Option<[f32; 3]>,
+    ancho: f32,
+    flecha: bool,
+) -> lopdf::ObjectId {
+    use lopdf::{Dictionary, Object, Stream};
+    let [r, g, b] = trazo;
+    let mut ops = format!("q {r:.4} {g:.4} {b:.4} RG {ancho:.2} w ");
+    if let Some([fr, fg, fb]) = relleno {
+        ops.push_str(&format!("{fr:.4} {fg:.4} {fb:.4} rg "));
+    }
+    let pintar = if relleno.is_some() { "B" } else { "S" };
+    match (subtipo, linea) {
+        ("Line", Some([x1, y1, x2, y2])) => {
+            ops.push_str(&format!("{x1:.2} {y1:.2} m {x2:.2} {y2:.2} l S "));
+            if flecha {
+                // la punta: dos segmentos a ±30° de la dirección de la línea
+                let ang = (y2 - y1).atan2(x2 - x1);
+                let largo = PUNTA + ancho * 2.0;
                 for delta in [std::f32::consts::PI / 6.0, -std::f32::consts::PI / 6.0] {
                     let a = ang + std::f32::consts::PI - delta;
-                    p.move_to(PdfPoints::new(px2), PdfPoints::new(py2))
-                        .map_err(|e| e.to_string())?;
-                    p.line_to(
-                        PdfPoints::new(px2 + head * a.cos()),
-                        PdfPoints::new(py2 + head * a.sin()),
-                    )
-                    .map_err(|e| e.to_string())?;
+                    ops.push_str(&format!(
+                        "{x2:.2} {y2:.2} m {:.2} {:.2} l S ",
+                        x2 + largo * a.cos(),
+                        y2 + largo * a.sin()
+                    ));
                 }
-                p
             }
-            otro => return Err(format!("Forma desconocida: {otro}")),
-        };
+        }
+        ("Circle", _) => {
+            // la elipse inscrita en la caja, con cuatro bézier (el 0,5523
+            // de siempre)
+            let m = ancho / 2.0;
+            let (x0, y0, x1, y1) = (caja[0] + m, caja[1] + m, caja[2] - m, caja[3] - m);
+            let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+            let (rx, ry) = ((x1 - x0) / 2.0, (y1 - y0) / 2.0);
+            let (kx, ky) = (rx * 0.5523, ry * 0.5523);
+            ops.push_str(&format!(
+                "{:.2} {cy:.2} m {:.2} {:.2} {:.2} {:.2} {cx:.2} {:.2} c \
+                 {:.2} {:.2} {:.2} {:.2} {:.2} {cy:.2} c \
+                 {:.2} {:.2} {:.2} {:.2} {cx:.2} {:.2} c \
+                 {:.2} {:.2} {:.2} {:.2} {:.2} {cy:.2} c {pintar} ",
+                cx - rx,
+                cx - rx,
+                cy + ky,
+                cx - kx,
+                cy + ry,
+                cy + ry,
+                cx + kx,
+                cy + ry,
+                cx + rx,
+                cy + ky,
+                cx + rx,
+                cx + rx,
+                cy - ky,
+                cx + kx,
+                cy - ry,
+                cy - ry,
+                cx - kx,
+                cy - ry,
+                cx - rx,
+                cy - ky,
+                cx - rx,
+            ));
+        }
+        _ => {
+            // `/Square`: el rectángulo por dentro del /Rect, dejando el
+            // grosor del trazo dentro de la caja
+            let m = ancho / 2.0 + PUNTA.min(0.0); // el aire ya está en la caja
+            let (x0, y0) = (caja[0] + m + 1.0, caja[1] + m + 1.0);
+            let (w, h) = (caja[2] - caja[0] - 2.0 * (m + 1.0), caja[3] - caja[1] - 2.0 * (m + 1.0));
+            ops.push_str(&format!("{x0:.2} {y0:.2} {w:.2} {h:.2} re {pintar} "));
+        }
+    }
+    ops.push_str("Q\n");
 
-        let mut annot = page
-            .annotations_mut()
-            .create_ink_annotation()
-            .map_err(|e| e.to_string())?;
-        annot.set_is_printed(true).map_err(|e| e.to_string())?;
-        // /C antes de añadir objetos (con /AP PDFium ya no deja fijarlo);
-        // es lo que lee get_annotations para pintar los overlays
-        annot
-            .set_stroke_color(stroke_color)
-            .map_err(|e| e.to_string())?;
-        let margin = stroke_width + 14.0;
-        annot
-            .set_bounds(PdfRect::new(
-                PdfPoints::new(bbox.bottom().value - margin),
-                PdfPoints::new(bbox.left().value - margin),
-                PdfPoints::new(bbox.top().value + margin),
-                PdfPoints::new(bbox.right().value + margin),
-            ))
-            .map_err(|e| e.to_string())?;
-        annot
-            .objects_mut()
-            .add_path_object(path)
-            .map_err(|e| e.to_string())?;
-        drop(page);
-        save_and_close(doc, &work_path)?;
-        remata_annot(&work_path, page_index, None, author)
-    }))
+    let mut d = Dictionary::new();
+    d.set("Type", Object::Name(b"XObject".to_vec()));
+    d.set("Subtype", Object::Name(b"Form".to_vec()));
+    d.set(
+        "BBox",
+        Object::Array(vec![
+            caja[0].into(),
+            caja[1].into(),
+            caja[2].into(),
+            caja[3].into(),
+        ]),
+    );
+    d.set("Resources", Object::Dictionary(Dictionary::new()));
+    doc.add_object(Object::Stream(Stream::new(d, ops.into_bytes())))
+}
+
+/// Rehace el `/AP` de una forma con el `/Rect` (y el `/L`) que tenga
+/// ahora. Es lo que llama `transform_annotation` al mover o estirar una:
+/// la apariencia se dibuja en coordenadas de página, así que hay que
+/// volver a dibujarla entera.
+pub(crate) fn regenera_forma(doc: &mut lopdf::Document, id: lopdf::ObjectId) -> Result<(), String> {
+    use lopdf::{Dictionary, Object};
+    let annot = doc
+        .get_object(id)
+        .and_then(|o| o.as_dict())
+        .map_err(|e| e.to_string())?
+        .clone();
+    let subtipo = annot
+        .get(b"Subtype")
+        .and_then(|o| o.as_name())
+        .unwrap_or_default()
+        .to_vec();
+    let subtipo = String::from_utf8_lossy(&subtipo).into_owned();
+    let numeros = |clave: &[u8]| -> Option<Vec<f32>> {
+        Some(
+            annot
+                .get(clave)
+                .and_then(|o| o.as_array())
+                .ok()?
+                .iter()
+                .filter_map(|o| o.as_float().ok().or_else(|| o.as_i64().ok().map(|n| n as f32)))
+                .collect(),
+        )
+    };
+    let rect = numeros(b"Rect").filter(|v| v.len() == 4).ok_or("La forma no tiene caja")?;
+    let caja = [
+        rect[0].min(rect[2]),
+        rect[1].min(rect[3]),
+        rect[0].max(rect[2]),
+        rect[1].max(rect[3]),
+    ];
+    let linea = numeros(b"L")
+        .filter(|v| v.len() == 4)
+        .map(|v| [v[0], v[1], v[2], v[3]]);
+    let color = |clave: &[u8]| -> Option<[f32; 3]> {
+        numeros(clave).filter(|v| v.len() >= 3).map(|v| [v[0], v[1], v[2]])
+    };
+    let trazo = color(b"C").unwrap_or([0.0, 0.0, 0.0]);
+    let relleno = color(b"IC");
+    let ancho = annot
+        .get(b"BS")
+        .and_then(|o| o.as_dict())
+        .ok()
+        .and_then(|bs| bs.get(b"W").ok())
+        .and_then(|o| o.as_float().ok().or_else(|| o.as_i64().ok().map(|n| n as f32)))
+        .unwrap_or(1.0)
+        .max(0.5);
+    let flecha = annot
+        .get(b"LE")
+        .and_then(|o| o.as_array())
+        .map(|a| {
+            a.iter()
+                .any(|o| o.as_name().map(|n| n != b"None").unwrap_or(false))
+        })
+        .unwrap_or(false);
+    let ap_id = apariencia_forma(doc, &subtipo, caja, linea, trazo, relleno, ancho, flecha);
+    let d = doc
+        .get_object_mut(id)
+        .and_then(|o| o.as_dict_mut())
+        .map_err(|e| e.to_string())?;
+    let mut ap = Dictionary::new();
+    ap.set("N", Object::Reference(ap_id));
+    d.set("AP", Object::Dictionary(ap));
+    Ok(())
 }
 
 /// Las tres plantillas de sello dinámico de Acrobat, cada una con su
@@ -897,10 +1070,15 @@ pub fn add_callout(
 /// prometiera uno. Aquí es una sola mutación.
 ///
 /// `points` va en el espacio propio de la página, como el resto de los
-/// comandos que escriben. No se escribe un diccionario `/Measure`: la
-/// escala la fija el usuario por documento en la interfaz, y un `/Measure`
-/// sin escala de verdad diría que el PDF trae una que no trae.
+/// comandos que escriben.
+///
+/// **La escala viaja con el documento** cuando la UI la manda (`escala`):
+/// se escribe el diccionario `/Measure` del spec, que es lo que hace que
+/// la medida siga siendo una medida en Acrobat y en cualquier otro visor.
+/// Sin `escala` no se escribe: un `/Measure` inventado diría que el PDF
+/// trae una escala que no trae, y eso es peor que no decir nada.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 pub fn add_measure(
     work_path: String,
     page_index: u16,
@@ -909,6 +1087,7 @@ pub fn add_measure(
     color: [u8; 4],
     closed: Option<bool>,
     author: Option<String>,
+    escala: Option<EscalaMedida>,
 ) -> Result<(), String> {
     if points.len() < 2 {
         return Err("Una medida necesita al menos dos puntos".into());
@@ -1000,9 +1179,86 @@ pub fn add_measure(
         let mut ap = Dictionary::new();
         ap.set("N", Object::Reference(ap_id));
         annot.set("AP", Object::Dictionary(ap));
+        if let Some(e) = &escala {
+            annot.set("Measure", Object::Dictionary(diccionario_measure(e)?));
+        }
         let annot_id = doc.add_object(annot);
         crate::formularios2::anade_a_annots(doc, page_id, annot_id)
     })
+}
+
+/// La escala del documento, tal como la fija el usuario en la interfaz:
+/// cuántas unidades de las suyas mide **un punto PDF** y cómo se llaman.
+///
+/// Es lo que hace falta para escribir el `/Measure` del spec: sin ella una
+/// medida es una raya con un número encima, y fuera de Vitela nadie sabe
+/// de qué son esos metros.
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct EscalaMedida {
+    /// Cuántas `unidad` mide un punto PDF (1/72 de pulgada). Con la escala
+    /// del papel y milímetros, 0,3528.
+    pub unidades_por_punto: f32,
+    /// Cómo se llama la unidad: «mm», «cm», «m», «ft»…
+    pub unidad: String,
+    /// La razón en llano, para el `/R` («1 cm = 2 m»). Es lo que enseña
+    /// Acrobat en su panel, y si no llega se compone del resto.
+    #[serde(default)]
+    pub razon: String,
+    /// Decimales con los que redondear (2 por defecto, como Acrobat).
+    #[serde(default)]
+    pub decimales: Option<u8>,
+}
+
+/// El diccionario `/Measure` (spec 12.9): el `/X` convierte del espacio del
+/// papel a las unidades del usuario y el `/D` y el `/A` dicen cómo se
+/// escriben la distancia y el área.
+fn diccionario_measure(e: &EscalaMedida) -> Result<lopdf::Dictionary, String> {
+    use lopdf::{Dictionary, Object};
+    if !(e.unidades_por_punto.is_finite() && e.unidades_por_punto > 0.0) {
+        return Err("La escala de la medida no vale".into());
+    }
+    let unidad = e.unidad.trim();
+    if unidad.is_empty() {
+        return Err("La escala de la medida necesita su unidad".into());
+    }
+    // el redondeo del spec va en potencias de diez: /D 100 son dos
+    // decimales, que es lo que pone Acrobat
+    let decimales = e.decimales.unwrap_or(2).min(6);
+    let denominador = 10i64.pow(decimales as u32);
+    let formato = |unidad: &str, c: f32| {
+        let mut d = Dictionary::new();
+        d.set("Type", Object::Name(b"NumberFormat".to_vec()));
+        d.set("U", crate::documento::cadena_pdf(unidad));
+        d.set("C", Object::Real(c));
+        d.set("F", Object::Name(b"D".to_vec()));
+        d.set("D", Object::Integer(denominador));
+        // el separador decimal de aquí: en un PDF español la coma es la
+        // coma, no un punto
+        d.set("RD", crate::documento::cadena_pdf(","));
+        d.set("RT", crate::documento::cadena_pdf(""));
+        d.set("SS", crate::documento::cadena_pdf(""));
+        Object::Dictionary(d)
+    };
+    let mut m = Dictionary::new();
+    m.set("Type", Object::Name(b"Measure".to_vec()));
+    // `/RL`: la única subclase de medida del spec, la de escala de dibujo
+    m.set("Subtype", Object::Name(b"RL".to_vec()));
+    let razon = if e.razon.trim().is_empty() {
+        format!("1 pt = {} {unidad}", e.unidades_por_punto)
+    } else {
+        e.razon.trim().to_string()
+    };
+    m.set("R", crate::documento::cadena_pdf(&razon));
+    m.set(
+        "X",
+        Object::Array(vec![formato(unidad, e.unidades_por_punto)]),
+    );
+    m.set("D", Object::Array(vec![formato(unidad, 1.0)]));
+    m.set(
+        "A",
+        Object::Array(vec![formato(&format!("{unidad}²"), 1.0)]),
+    );
+    Ok(m)
 }
 
 /// El `/AP` de una medida, dibujado **en coordenadas de página** (`/BBox`
@@ -1115,6 +1371,41 @@ fn flecha(desde: (f32, f32), hacia: (f32, f32), color: [f32; 3]) -> Vec<u8> {
 /// Le aplica a la línea de una llamada (`/CL`) y a los márgenes de su caja
 /// (`/RD`) la misma transformación que se le ha aplicado al `/Rect`: sin
 /// esto, arrastrar el cuadro dejaba la punta donde estaba.
+/// Aplica al `/L` de una forma `/Line` la misma transformación que se le
+/// ha aplicado al `/Rect`: los dos puntos de la raya viven ahí, y sin esto
+/// la caja se movería y la raya se quedaría donde estaba.
+fn mueve_la_linea(
+    doc: &mut lopdf::Document,
+    id: lopdf::ObjectId,
+    (sx, sy, e, f): (f32, f32, f32, f32),
+) -> Result<(), String> {
+    use lopdf::Object;
+    let annot = doc
+        .get_object(id)
+        .and_then(|o| o.as_dict())
+        .map_err(|err| err.to_string())?
+        .clone();
+    let l: Vec<f32> = match annot.get(b"L").and_then(|o| o.as_array()) {
+        Ok(a) => a
+            .iter()
+            .filter_map(|o| o.as_float().ok().or_else(|| o.as_i64().ok().map(|n| n as f32)))
+            .collect(),
+        Err(_) => return Ok(()),
+    };
+    if l.len() != 4 {
+        return Ok(());
+    }
+    let movida: Vec<Object> = l
+        .chunks(2)
+        .flat_map(|c| [(c[0] * sx + e).into(), (c[1] * sy + f).into()])
+        .collect();
+    doc.get_object_mut(id)
+        .and_then(|o| o.as_dict_mut())
+        .map_err(|err| err.to_string())?
+        .set("L", Object::Array(movida));
+    Ok(())
+}
+
 fn mueve_la_llamada(
     doc: &mut lopdf::Document,
     id: lopdf::ObjectId,
@@ -1546,7 +1837,10 @@ pub fn transform_annotation(
         let geo = Geo::de_pagina(&page).propia();
         let pedido = geo.ui_rect_a_pdf(&Rect { x, y, w, h });
         let es_freetext;
-        let es_square;
+        // las formas y las marcas de redacción son los subtipos que
+        // dibujamos nosotros: su apariencia va en coordenadas de página y
+        // hay que rehacerla con el tamaño nuevo
+        let es_forma;
         // la transformación que se le aplica al rect, para aplicársela
         // también a la línea de una llamada
         let movimiento;
@@ -1557,7 +1851,12 @@ pub fn transform_annotation(
                 .map_err(|e| e.to_string())?;
             let tipo = annot.annotation_type();
             es_freetext = tipo == PdfPageAnnotationType::FreeText;
-            es_square = tipo == PdfPageAnnotationType::Square;
+            es_forma = matches!(
+                tipo,
+                PdfPageAnnotationType::Square
+                    | PdfPageAnnotationType::Circle
+                    | PdfPageAnnotationType::Line
+            );
             // el icono de la nota no se estira: se lleva su caja entera a la
             // esquina nueva, como el post-it de Acrobat
             let solo_mover = tipo == PdfPageAnnotationType::Text;
@@ -1591,7 +1890,7 @@ pub fn transform_annotation(
             // apariencia se dibuja (o se redibuja) desde el /Rect
             let interno = annot.as_stamp_annotation_mut().is_some()
                 || annot.as_ink_annotation_mut().is_some();
-            if !interno && !solo_mover && !es_freetext && !es_square {
+            if !interno && !solo_mover && !es_freetext && !es_forma {
                 return Err("Esta anotación no se puede transformar".into());
             }
             if interno {
@@ -1622,11 +1921,18 @@ pub fn transform_annotation(
                 crate::anotaciones::regenera_freetext(doc, id)
             })?;
         }
-        if es_square {
-            // lo mismo con el borde rojo de la marca de redacción
+        if es_forma {
+            // lo mismo con el borde rojo de una marca de redacción y con el
+            // dibujo de una forma. La línea de una forma `/Line` lleva sus
+            // dos puntos en el `/L`, que se mueven con el rect: sin eso, la
+            // caja iría a un sitio y la raya se quedaría en otro
             crate::cirugia_en_hilo(&work_path, |doc| {
                 let id = crate::anotaciones::annot_id(doc, page_index, annot_index as usize)?;
-                crate::seguridad2::regenera_marca(doc, id)
+                if crate::seguridad2::es_marca_por_id(doc, id) {
+                    return crate::seguridad2::regenera_marca(doc, id);
+                }
+                mueve_la_linea(doc, id, movimiento)?;
+                regenera_forma(doc, id)
             })?;
         }
         // mover un comentario actualiza su fecha de modificación (Acrobat);
@@ -1929,6 +2235,7 @@ mod tests {
             [200, 40, 40, 255],
             None,
             Some("Jorge".into()),
+            None,
         )
         .expect("dejar la medida puesta");
 
@@ -1971,6 +2278,7 @@ mod tests {
             [40, 120, 200, 255],
             Some(true),
             None,
+            None,
         )
         .expect("dejar puesta el área");
         let anots = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar");
@@ -1985,6 +2293,7 @@ mod tests {
             [40, 120, 200, 255],
             None,
             None,
+            None,
         )
         .expect("dejar puesto el perímetro");
         let anots = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar");
@@ -1995,8 +2304,98 @@ mod tests {
             "el perímetro es una polilínea: {anots:?}"
         );
 
+        // **La escala viaja con el documento** (orden 8 del QA del ciclo 8):
+        // con `escala`, la medida lleva su `/Measure` y sigue siendo una
+        // medida fuera de Vitela
+        add_measure(
+            work.clone(),
+            0,
+            vec![[100.0, 600.0], [300.0, 600.0]],
+            "5,00 m".into(),
+            [40, 120, 200, 255],
+            None,
+            None,
+            Some(EscalaMedida {
+                unidades_por_punto: 0.025,
+                unidad: "m".into(),
+                razon: "1 cm = 2 m".into(),
+                decimales: None,
+            }),
+        )
+        .expect("medida con escala");
+        let doc = lopdf::Document::load(&work).expect("cargar");
+        let page_id = *doc.get_pages().get(&1).expect("página 1");
+        let annots = doc
+            .get_object(page_id)
+            .and_then(|o| o.as_dict())
+            .and_then(|d| d.get(b"Annots"))
+            .and_then(|o| o.as_array())
+            .expect("Annots")
+            .clone();
+        let ultima = doc
+            .get_object(annots.last().unwrap().as_reference().expect("ref"))
+            .and_then(|o| o.as_dict())
+            .expect("annot");
+        let measure = ultima
+            .get(b"Measure")
+            .and_then(|o| o.as_dict())
+            .expect("la medida con escala lleva su /Measure");
+        assert_eq!(
+            measure.get(b"Subtype").and_then(|o| o.as_name()).unwrap_or(b""),
+            b"RL"
+        );
+        assert_eq!(
+            crate::anotaciones::texto_de_cadena_pdf(measure.get(b"R").expect("/R")),
+            "1 cm = 2 m",
+            "la razón que enseña Acrobat en su panel"
+        );
+        let x = measure
+            .get(b"X")
+            .and_then(|o| o.as_array())
+            .expect("/X")
+            .first()
+            .and_then(|o| o.as_dict().ok())
+            .expect("el formato del eje");
+        assert!(
+            x.get(b"C")
+                .and_then(|o| o.as_float())
+                .map(|c| (c - 0.025).abs() < 1e-6)
+                .unwrap_or(false),
+            "el factor de conversión es el que manda la UI: {x:?}"
+        );
+        assert_eq!(
+            crate::anotaciones::texto_de_cadena_pdf(x.get(b"U").expect("/U")),
+            "m"
+        );
+        // y sin escala **no** se escribe: un /Measure inventado diría que
+        // el PDF trae una escala que no trae
+        let primera = doc
+            .get_object(annots[0].as_reference().expect("ref"))
+            .and_then(|o| o.as_dict())
+            .expect("annot");
+        assert!(primera.get(b"Measure").is_err());
+
+        // una escala sin unidad o sin factor se dice antes de escribir nada
+        assert!(add_measure(
+            work.clone(),
+            0,
+            vec![[1.0, 1.0], [2.0, 2.0]],
+            "x".into(),
+            [0, 0, 0, 255],
+            None,
+            None,
+            Some(EscalaMedida {
+                unidades_por_punto: 0.0,
+                unidad: "m".into(),
+                razon: String::new(),
+                decimales: None,
+            }),
+        )
+        .unwrap_err()
+        .contains("escala"));
+
         // dos puntos como mínimo, y algo que decir
-        assert!(add_measure(work.clone(), 0, vec![[1.0, 1.0]], "x".into(), [0, 0, 0, 255], None, None)
+        assert!(add_measure(work.clone(), 0, vec![[1.0, 1.0]], "x".into(), [0, 0, 0, 255], None, None, None)
             .is_err());
         assert!(add_measure(
             work.clone(),
@@ -2004,6 +2403,7 @@ mod tests {
             vec![[1.0, 1.0], [2.0, 2.0]],
             "  ".into(),
             [0, 0, 0, 255],
+            None,
             None,
             None
         )
@@ -2484,6 +2884,101 @@ mod tests {
             Some([192, 57, 43, 255]),
             "el color debe leerse aunque el render haya generado AP"
         );
+    }
+
+    #[test]
+    fn cada_forma_lleva_su_subtipo_del_spec_y_se_sigue_viendo() {
+        let pdf = std::env::temp_dir().join("anotaciones2-shapes-subtipo.pdf");
+        crea_pdf(&["Página"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+        for (kind, x) in [("rect", 60.0), ("ellipse", 200.0), ("line", 340.0), ("arrow", 440.0)] {
+            add_shape(
+                work.clone(),
+                0,
+                kind.into(),
+                x,
+                300.0,
+                x + 80.0,
+                380.0,
+                [200, 0, 0, 255],
+                None,
+                2.0,
+                Some("Jorge".into()),
+            )
+            .unwrap_or_else(|e| panic!("{kind}: {e}"));
+        }
+
+        // cada una con el subtipo que le toca, y la flecha con su /LE
+        let doc = lopdf::Document::load(&work).expect("cargar");
+        let page_id = *doc.get_pages().get(&1).expect("página 1");
+        let annots = doc
+            .get_object(page_id)
+            .and_then(|o| o.as_dict())
+            .and_then(|d| d.get(b"Annots"))
+            .and_then(|o| o.as_array())
+            .expect("Annots")
+            .clone();
+        let subtipo = |i: usize| {
+            let d = doc
+                .get_object(annots[i].as_reference().expect("ref"))
+                .and_then(|o| o.as_dict())
+                .expect("annot");
+            String::from_utf8_lossy(d.get(b"Subtype").and_then(|o| o.as_name()).unwrap_or(b""))
+                .into_owned()
+        };
+        assert_eq!(subtipo(0), "Square", "el rectángulo es un /Square");
+        assert_eq!(subtipo(1), "Circle", "la elipse es un /Circle");
+        assert_eq!(subtipo(2), "Line", "la línea es una /Line");
+        assert_eq!(subtipo(3), "Line");
+        let flecha = doc
+            .get_object(annots[3].as_reference().expect("ref"))
+            .and_then(|o| o.as_dict())
+            .expect("annot");
+        let le = flecha.get(b"LE").and_then(|o| o.as_array()).expect("/LE");
+        assert!(
+            le.iter()
+                .any(|o| o.as_name().map(|n| n == b"OpenArrow").unwrap_or(false)),
+            "la flecha necesita su punta en el /LE: {le:?}"
+        );
+        // y la línea a secas no lleva punta
+        let recta = doc
+            .get_object(annots[2].as_reference().expect("ref"))
+            .and_then(|o| o.as_dict())
+            .expect("annot");
+        assert!(recta
+            .get(b"LE")
+            .and_then(|o| o.as_array())
+            .expect("/LE")
+            .iter()
+            .all(|o| o.as_name().map(|n| n == b"None").unwrap_or(false)));
+
+        // siguen siendo comentarios, con su autor y su color
+        let listadas = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar");
+        assert_eq!(listadas.len(), 4);
+        assert!(listadas.iter().all(|a| a.author == "Jorge"));
+        assert!(listadas.iter().all(|a| a.color == Some([200, 0, 0, 255])));
+
+        // **y se siguen viendo**: el /AP lo dibujamos nosotros, así que
+        // esto es lo único que dice si el cambio de subtipo ha valido
+        for (i, (x, y)) in [(60.0, 300.0), (240.0, 300.0), (340.0, 300.0), (440.0, 300.0)]
+            .into_iter()
+            .enumerate()
+        {
+            assert!(
+                hay_tinta(&work, x, y) || hay_tinta(&work, x + 40.0, y + 40.0),
+                "la forma {i} no se ve en el render"
+            );
+        }
+
+        // mover una la lleva entera: la caja y, en la línea, sus dos puntos
+        transform_annotation(work.clone(), 0, 2, 100.0, 500.0, 90.0, 90.0).expect("mover");
+        let movida = &crate::anotaciones::get_annotations(work.clone(), 0).expect("listar")[2];
+        assert!((movida.x - 100.0).abs() < 1.0 && (movida.y - 500.0).abs() < 1.0);
+        assert!(
+            hay_tinta(&work, 145.0, 545.0),
+            "la línea movida no se dibuja donde ha caído su caja"
+        );
+        std::fs::remove_file(&pdf).ok();
     }
 
     #[test]
