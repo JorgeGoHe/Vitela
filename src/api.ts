@@ -1728,6 +1728,25 @@ export type FirmaAvanzada = {
 
 const SIN_AVANZADO: Required<FirmaAvanzada> = { tsaUrl: null, ltv: false };
 
+/** El sello de una autoridad de tiempo, tal como se enseña. */
+export type SelloDeTiempo = { fecha: string; autoridad: string };
+
+/** Lo que contesta firmar, certificar o firmar con .p12: **qué ha pasado de
+ *  verdad**, no lo que se pidió. Firmar sin sello no es un fallo —la firma
+ *  vale igual y su fecha es la del reloj de quien firmó—, pero anunciar un
+ *  sello por haberlo pedido sí es mentir. */
+export type InformeFirma = {
+  /** ¿Lleva sello de tiempo de una autoridad? */
+  sellada: boolean;
+  /** Quién responde por esa hora y cuál es. */
+  sello?: SelloDeTiempo | null;
+  /** En llano, por qué la firma ha salido sin sello (vacío si no hay nada
+   *  que contar). */
+  aviso: string;
+  /** ¿Se han archivado los certificados de la cadena en el `/DSS`? */
+  ltv: boolean;
+};
+
 /** Los servidores de tiempo públicos que se ofrecen en el desplegable. Se
  *  puede escribir otro: la lista es un atajo, no una jaula. */
 export const TSA_CONOCIDAS: { url: string; nombre: string }[] = [
@@ -1747,7 +1766,7 @@ export function signPdf(
     reason?: string | null;
   } & AparienciaFirma &
     FirmaAvanzada,
-): Promise<void> {
+): Promise<InformeFirma> {
   return invoke("sign_pdf", {
     reason: null,
     ...SIN_APARIENCIA,
@@ -1777,7 +1796,7 @@ export function certifyPdf(
     reason?: string | null;
   } & AparienciaFirma &
     FirmaAvanzada,
-): Promise<void> {
+): Promise<InformeFirma> {
   return invoke("certify_pdf", {
     certPemPath: null,
     keyPemPath: null,
@@ -1800,7 +1819,7 @@ export function signPdfP12(
     reason?: string | null;
   } & AparienciaFirma &
     FirmaAvanzada,
-): Promise<void> {
+): Promise<InformeFirma> {
   return invoke("sign_pdf_p12", {
     reason: null,
     ...SIN_APARIENCIA,

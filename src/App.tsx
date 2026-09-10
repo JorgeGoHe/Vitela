@@ -135,6 +135,7 @@ import {
   adoptSession,
   type DocumentoAbierto,
   type FirmaGuardada,
+  type InformeFirma,
 } from "./api";
 import Pestanas from "./components/Pestanas";
 import DialogoComentarios, {
@@ -155,6 +156,7 @@ import {
   pagineoLlano,
   type RangoEtiquetas,
   estadoDeFirma,
+  fechaAnotacion,
   fechaLarga,
   permisosCertificacion,
   type NivelFirma,
@@ -4360,6 +4362,25 @@ function App() {
     [setNotice],
   );
 
+  /**
+   * Lo que se dice del sello de tiempo **después** de firmar: lo que ha
+   * pasado, no lo que se pidió. La banda decía «· con sello de tiempo» por
+   * haber marcado la casilla, así que podía anunciar un sello que no está;
+   * el comando devuelve el informe con la autoridad y la hora de verdad y
+   * es ese el que se lee.
+   */
+  function selloLlano(informe: InformeFirma, pedido: boolean): string {
+    let frase = "";
+    if (informe.sellada && informe.sello) {
+      frase = ` · hora sellada por ${informe.sello.autoridad} el ${fechaAnotacion(informe.sello.fecha)}`;
+    } else if (informe.sellada) {
+      frase = " · con sello de tiempo";
+    } else if (pedido) {
+      frase = " · sin sello de tiempo: la fecha es la de tu reloj";
+    }
+    return frase;
+  }
+
   /** Firma con lo recogido en el diálogo y escribe una copia firmada. El
    *  destino se pide al final: nadie elige carpeta para descubrir después
    *  que faltaba el certificado (U-13). */
@@ -4387,7 +4408,7 @@ function App() {
     try {
       if (certificando) {
         setNotice("Certificando…", { persistente: true });
-        await certifyPdf({
+        const informe = await certifyPdf({
           workPath,
           destPath: destino,
           nivel: d.nivel,
@@ -4403,39 +4424,35 @@ function App() {
         setCertificando(false);
         setFirmaDraft({ ...d, password: "" });
         setNotice(
-          `Certificado y guardado en ${destino} · ${permisosCertificacion(d.nivel)}`,
+          `Certificado y guardado en ${destino} · ${permisosCertificacion(d.nivel)}${selloLlano(informe, !!avanzado.tsaUrl)}`,
         );
         return;
       }
       setNotice("Firmando…", { persistente: true });
-      if (esP12) {
-        await signPdfP12({
-          workPath,
-          destPath: destino,
-          p12Path: d.certPath,
-          password: d.password,
-          reason: d.reason.trim() || null,
-          ...apariencia,
-          ...avanzado,
-        });
-      } else {
-        await signPdf({
-          workPath,
-          destPath: destino,
-          certPemPath: d.certPath,
-          keyPemPath: d.keyPath,
-          reason: d.reason.trim() || null,
-          ...apariencia,
-          ...avanzado,
-        });
-      }
+      const informe = esP12
+        ? await signPdfP12({
+            workPath,
+            destPath: destino,
+            p12Path: d.certPath,
+            password: d.password,
+            reason: d.reason.trim() || null,
+            ...apariencia,
+            ...avanzado,
+          })
+        : await signPdf({
+            workPath,
+            destPath: destino,
+            certPemPath: d.certPath,
+            keyPemPath: d.keyPath,
+            reason: d.reason.trim() || null,
+            ...apariencia,
+            ...avanzado,
+          });
       setFirmaRect(null);
       // la contraseña del certificado no se queda en memoria más de lo justo
       setFirmaDraft({ ...d, password: "" });
       setNotice(
-        `Firmado y guardado en ${destino}${
-          avanzado.tsaUrl ? " · con sello de tiempo" : ""
-        }`,
+        `Firmado y guardado en ${destino}${selloLlano(informe, !!avanzado.tsaUrl)}`,
       );
     } catch (e) {
       setNotice(null);
