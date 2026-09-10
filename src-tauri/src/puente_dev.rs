@@ -226,7 +226,9 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "split_pdf" => cmd!(paginas2::split_pdf, { work_path: String, dest_dir: String, modo: String, cada: Option<u16> }),
         "merge_many" => cmd!(paginas2::merge_many, { work_path: String, others: Vec<String>, at: Option<u16> }),
         "crop_page" => cmd!(paginas2::crop_page, { work_path: String, page_index: u16, rect: crate::Rect, all_pages: bool }),
-        "add_watermark" => cmd!(paginas2::add_watermark, { work_path: String, text: String, font_size: f32, color: [u8; 4], diagonal: bool, position: Option<String>, page_indices: Option<Vec<u16>>, image_png: Option<String>, opacity: Option<f32>, rotation: Option<f32> }),
+        "add_watermark" => cmd!(paginas2::add_watermark, { work_path: String, text: String, font_size: f32, color: [u8; 4], diagonal: bool, position: Option<String>, page_indices: Option<Vec<u16>>, image_png: Option<String>, opacity: Option<f32>, rotation: Option<f32>, detras: Option<bool> }),
+        "add_background" => cmd!(paginas2::add_background, { work_path: String, color: Option<[u8; 4]>, image_png: Option<String>, opacity: Option<f32>, page_indices: Option<Vec<u16>> }),
+        "remove_background" => cmd!(paginas2::remove_background, { work_path: String }),
         "remove_marginal_text" => cmd!(paginas2::remove_marginal_text, { work_path: String, zona: String, dry_run: bool }),
         "add_header_footer" => cmd!(paginas2::add_header_footer, { work_path: String, header_left: Option<String>, header_center: Option<String>, header_right: Option<String>, footer_left: Option<String>, footer_center: Option<String>, footer_right: Option<String>, font_size: f32, page_indices: Option<Vec<u16>> }),
         "get_outline" => cmd!(documento::get_outline, { path: String }),
@@ -456,6 +458,8 @@ mod tests {
         ("save_image_data", "pendiente_ui — R46 del ciclo 8: «Guardar imagen como…» en el popover de la imagen"),
         ("add_measure", "pendiente_ui — R47 del ciclo 8: «Dejar la medida puesta» deja add_stroke + add_text_block"),
         ("create_form_fields", "pendiente_ui — R48 del ciclo 8: las propuestas se aceptan en una cirugía, no en N llamadas fundidas"),
+        ("add_background", "pendiente_ui — tanda 3 del ciclo 8: «Editar PDF ▸ Fondo», color o imagen debajo del contenido"),
+        ("remove_background", "pendiente_ui — tanda 3 del ciclo 8: va con el diálogo del fondo, como «Quitar marca de agua»"),
     ];
 
     /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada
@@ -469,7 +473,11 @@ mod tests {
     /// del backend sin vía de acceso: existe, está probada y el usuario no
     /// puede llegar a ella. Fue el estado exacto de `char_spacing` durante
     /// un ciclo entero. La lista tiene que quedar vacía al cerrar el ciclo.
-    const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[];
+    const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[(
+        "add_watermark",
+        "detras",
+        "pendiente_ui — tanda 3 del ciclo 8: la casilla «detrás del contenido» del diálogo de la marca de agua",
+    )];
 
     /// **R45b.** Parámetros **obligatorios** en Rust que el envoltorio de
     /// `api.ts` declara opcionales (`workPath?: string`, un tipo que admite

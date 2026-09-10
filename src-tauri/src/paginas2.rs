@@ -411,6 +411,7 @@ pub fn add_watermark(
     image_png: Option<String>,
     opacity: Option<f32>,
     rotation: Option<f32>,
+    detras: Option<bool>,
 ) -> Result<(), String> {
     let text = text.trim().to_string();
     let imagen = match image_png {
@@ -432,6 +433,7 @@ pub fn add_watermark(
     let pos = position.unwrap_or_else(|| "c".into());
     let opacidad = opacity.unwrap_or(OPACIDAD_MARCA).clamp(0.05, 1.0);
     let giro = rotation.unwrap_or(if diagonal { 45.0 } else { 0.0 });
+    let detras = detras.unwrap_or(false);
     mutacion(work_path, move |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
@@ -461,6 +463,7 @@ pub fn add_watermark(
             let mut page = doc.pages().get(i).map_err(|e| e.to_string())?;
             let page_w = page.width().value;
             let page_h = page.height().value;
+            let habia = page.objects().len();
             // ancho y alto del objeto sin girar, y su centro
             let (w, h, cx, cy) = match &imagen {
                 Some(img) => {
@@ -516,10 +519,192 @@ pub fn add_watermark(
                         .map_err(|e| e.to_string())?;
                 }
             }
+            if detras {
+                manda_al_fondo(&mut page, habia)?;
+            }
             page.regenerate_content().map_err(|e| e.to_string())?;
         }
         save_and_close(doc, &work_path)?;
         Ok(())
+    }))
+}
+
+/// Deja el **último** objeto de la página el primero, que es el que se
+/// pinta debajo de todo lo demás: `habia` es cuántos objetos tenía la
+/// página antes de añadirlo.
+///
+/// pdfium-render 0.8 no expone insertar por índice, así que se hace como en
+/// `reorder_image`: se pasan por detrás los `habia` objetos de antes, en su
+/// mismo orden. **Nunca se suelta un objeto sacado** —su `Drop` llama a
+/// `FPDFPageObj_Destroy` y PDFium casca—: `add_object` se lo lleva.
+fn manda_al_fondo(page: &mut PdfPage, habia: usize) -> Result<(), String> {
+    for _ in 0..habia {
+        let otro = page
+            .objects_mut()
+            .remove_object_at_index(0)
+            .map_err(crate::mensaje_llano)?;
+        page.objects_mut().add_object(otro).map_err(crate::mensaje_llano)?;
+    }
+    Ok(())
+}
+
+/// **El fondo del documento** (Acrobat: «Editar PDF ▸ Fondo»): un color o
+/// una imagen **debajo** del contenido, no encima. Es lo que distingue un
+/// fondo de una marca de agua, y es la razón de que hasta ahora no se
+/// pudiera hacer con `add_watermark`: todo objeto añadido a una página va
+/// al final de su lista, que es lo que se pinta último y, por tanto,
+/// encima.
+///
+/// El color se pinta como un rectángulo del tamaño de la caja de la
+/// página; la imagen se ajusta sin deformarla y se centra, como hace
+/// Acrobat con «Ajustar a la página». `opacity` va de 0,05 a 1 (por
+/// defecto, opaco: un fondo translúcido sobre papel blanco no se ve).
+///
+/// Una sola mutación para el rango entero, así que un ⌘Z quita el fondo de
+/// todas las páginas.
+#[tauri::command(async)]
+pub fn add_background(
+    work_path: String,
+    color: Option<[u8; 4]>,
+    image_png: Option<String>,
+    opacity: Option<f32>,
+    page_indices: Option<Vec<u16>>,
+) -> Result<(), String> {
+    let imagen = match image_png {
+        Some(b64) => {
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64.split(',').next_back().unwrap_or_default())
+                .map_err(|_| "La imagen del fondo no se ha podido leer")?;
+            Some(
+                image::load_from_memory(&bytes)
+                    .map_err(|e| format!("La imagen del fondo no vale: {e}"))?,
+            )
+        }
+        None => None,
+    };
+    if color.is_none() && imagen.is_none() {
+        return Err("Elige un color o una imagen para el fondo".into());
+    }
+    let opacidad = opacity.unwrap_or(1.0).clamp(0.05, 1.0);
+    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(crate::mensaje_llano)?;
+        // la imagen lleva la opacidad en su propio alfa, que es lo que deja
+        // el /SMask escrito y se ve igual en cualquier visor
+        let imagen = imagen.as_ref().map(|img| {
+            let mut rgba = img.to_rgba8();
+            for p in rgba.pixels_mut() {
+                p.0[3] = (p.0[3] as f32 * opacidad).round() as u8;
+            }
+            image::DynamicImage::ImageRgba8(rgba)
+        });
+        let alpha = (opacidad * 255.0).round().clamp(1.0, 255.0) as u8;
+        for i in paginas_pedidas(doc.pages().len(), &page_indices) {
+            let mut page = doc.pages().get(i).map_err(crate::mensaje_llano)?;
+            let (page_w, page_h) = (page.width().value, page.height().value);
+            let habia = page.objects().len();
+            match (&imagen, color) {
+                (Some(img), _) => {
+                    let (iw, ih) = (img.width() as f32, img.height() as f32);
+                    let escala = (page_w / iw).min(page_h / ih);
+                    let (w, h) = (iw * escala, ih * escala);
+                    let mut obj = PdfPageImageObject::new_with_size(
+                        &doc,
+                        img,
+                        PdfPoints::new(w),
+                        PdfPoints::new(h),
+                    )
+                    .map_err(crate::mensaje_llano)?;
+                    obj.translate(
+                        PdfPoints::new((page_w - w) / 2.0),
+                        PdfPoints::new((page_h - h) / 2.0),
+                    )
+                    .map_err(crate::mensaje_llano)?;
+                    page.objects_mut()
+                        .add_image_object(obj)
+                        .map_err(crate::mensaje_llano)?;
+                }
+                (None, Some(c)) => {
+                    let obj = PdfPagePathObject::new_rect(
+                        &doc,
+                        PdfRect::new_from_values(0.0, 0.0, page_h, page_w),
+                        None,
+                        None,
+                        Some(PdfColor::new(c[0], c[1], c[2], alpha)),
+                    )
+                    .map_err(crate::mensaje_llano)?;
+                    page.objects_mut()
+                        .add_path_object(obj)
+                        .map_err(crate::mensaje_llano)?;
+                }
+                (None, None) => unreachable!("se comprueba arriba"),
+            }
+            manda_al_fondo(&mut page, habia)?;
+            page.regenerate_content().map_err(crate::mensaje_llano)?;
+        }
+        save_and_close(doc, &work_path)?;
+        Ok(())
+    }))
+}
+
+/// Quita el fondo: el **primer** objeto de cada página cuando ocupa la
+/// página entera —un rectángulo relleno o una imagen—, que es exactamente
+/// lo que deja [`add_background`]. Devuelve de cuántas páginas lo ha
+/// quitado.
+///
+/// Es la misma clase de criba que `remove_marginal_text`: un PDF no marca
+/// sus objetos como «fondo», así que se reconoce por dónde está (el
+/// primero, debajo de todo) y por lo que ocupa (la página entera). Un
+/// documento escaneado —una sola imagen a página completa— es justo el caso
+/// límite, y por eso la interfaz tiene que preguntar antes.
+#[tauri::command(async)]
+pub fn remove_background(work_path: String) -> Result<u16, String> {
+    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
+        let pdfium = pdfium()?;
+        let doc = pdfium
+            .load_pdf_from_file(&work_path, None)
+            .map_err(crate::mensaje_llano)?;
+        let mut quitados = 0u16;
+        for i in 0..doc.pages().len() {
+            let mut page = doc.pages().get(i).map_err(crate::mensaje_llano)?;
+            let (page_w, page_h) = (page.width().value, page.height().value);
+            let es_fondo = {
+                let objects = page.objects();
+                match objects.get(0) {
+                    Err(_) => false,
+                    Ok(obj) => {
+                        let cabe = obj.as_path_object().is_some() || obj.as_image_object().is_some();
+                        let toda = obj
+                            .bounds()
+                            .map(|b| {
+                                b.width().value >= page_w - 1.0 && b.height().value >= page_h - 1.0
+                            })
+                            .unwrap_or(false);
+                        cabe && toda
+                    }
+                }
+            };
+            if !es_fondo {
+                continue;
+            }
+            // el objeto sacado NO se suelta: su Drop lo destruiría en PDFium
+            let fuera = page
+                .objects_mut()
+                .remove_object_at_index(0)
+                .map_err(crate::mensaje_llano)?;
+            std::mem::forget(fuera);
+            page.regenerate_content().map_err(crate::mensaje_llano)?;
+            quitados += 1;
+        }
+        if quitados == 0 {
+            crate::historial::retira_paso(&work_path);
+            return Ok(0);
+        }
+        save_and_close(doc, &work_path)?;
+        Ok(quitados)
     }))
 }
 
@@ -613,6 +798,86 @@ pub fn add_header_footer(
 
 #[cfg(test)]
 mod tests {
+
+    /// **Fondo.** Acrobat separa el fondo de la marca de agua por dónde se
+    /// pinta: el fondo **debajo** del contenido y la marca encima. En un PDF
+    /// eso es el orden de los objetos de la página, y todo lo que se añade
+    /// va al final —o sea, encima—, que es por lo que esto no se podía
+    /// hacer con `add_watermark`.
+    ///
+    /// Se comprueba en el render, que es lo único que no miente: con el
+    /// fondo puesto, el texto de la página **se sigue leyendo** (queda
+    /// tinta oscura encima del color), y el objeto que se ha añadido es el
+    /// primero de la página.
+    #[test]
+    fn el_fondo_va_debajo_del_texto_y_la_marca_de_agua_puede_ir_debajo_tambien() {
+        let pdf = std::env::temp_dir().join("paginas2-fondo.pdf");
+        crea_pdf(&["Contenido uno", "Contenido dos"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+        let objetos = |p: u16| {
+            crate::on_pdfium_thread({
+                let work = work.clone();
+                move || {
+                    crate::with_doc(&work, |doc| {
+                        let page = doc.pages().get(p).map_err(|e| e.to_string())?;
+                        Ok((0..page.objects().len())
+                            .filter_map(|i| page.objects().get(i).ok())
+                            .map(|o| format!("{:?}", o.object_type()))
+                            .collect::<Vec<_>>())
+                    })
+                }
+            })
+            .expect("objetos")
+        };
+        let antes = objetos(0).len();
+
+        add_background(work.clone(), Some([250, 240, 180, 255]), None, None, None)
+            .expect("fondo de color");
+        let ahora = objetos(0);
+        assert_eq!(ahora.len(), antes + 1, "un objeto más: {ahora:?}");
+        assert_eq!(ahora[0], "Path", "y va el primero, debajo de todo: {ahora:?}");
+
+        // el color se ve y el texto se sigue leyendo encima
+        let png = crate::render_page_png(work.clone(), 0, 300, true).expect("render");
+        let img = image::load_from_memory(&png).expect("PNG").to_rgba8();
+        assert!(
+            img.pixels().any(|x| x.0[0] > 230 && x.0[1] > 220 && x.0[2] < 220),
+            "el color del fondo tiene que verse"
+        );
+        assert!(
+            img.pixels().any(|x| x.0[0] < 100 && x.0[1] < 100),
+            "y el texto tiene que seguir encima"
+        );
+        assert!(textos(&work)[0].contains("Contenido uno"));
+
+        // quitarlo lo quita de las dos páginas, y quitarlo dos veces no es
+        // un error ni gasta un paso de deshacer
+        assert_eq!(remove_background(work.clone()).expect("quitar"), 2);
+        assert_eq!(objetos(0).len(), antes);
+        let pasos_antes = pasos(&work);
+        assert_eq!(remove_background(work.clone()).expect("quitar de nuevo"), 0);
+        assert_eq!(pasos(&work), pasos_antes, "sin fondo que quitar, sin paso");
+
+        // y la marca de agua «detrás del contenido» hace lo mismo con su texto
+        add_watermark(
+            work.clone(),
+            "BORRADOR".into(),
+            60.0,
+            [200, 30, 30, 90],
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(true),
+        )
+        .expect("marca detrás");
+        let ahora = objetos(0);
+        assert_eq!(ahora[0], "Text", "la marca de agua detrás va la primera: {ahora:?}");
+        assert!(textos(&work)[0].contains("BORRADOR"));
+        std::fs::remove_file(&pdf).ok();
+    }
 
     /// **G6.** Un PDF desde unas fotos: una página por imagen, ajustada sin
     /// deformarla y centrada, con el margen de media pulgada de Acrobat.
@@ -825,6 +1090,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("marca");
         add_header_footer(
@@ -874,6 +1140,7 @@ mod tests {
             [200, 30, 30, 255],
             false,
             Some("se".into()),
+            None,
             None,
             None,
             None,
@@ -939,6 +1206,7 @@ mod tests {
             60.0,
             [200, 30, 30, 90],
             true,
+            None,
             None,
             None,
             None,
@@ -1154,6 +1422,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("marca en dos páginas");
         assert_eq!(pasos(&work), antes + 1, "el lote entero es UN paso");
@@ -1213,6 +1482,7 @@ mod tests {
             Some(b64),
             Some(0.3),
             Some(45.0),
+            None,
         )
         .expect("marca de imagen");
         assert!(
