@@ -679,7 +679,7 @@ compila los instaladores a mano o al etiquetar `v*`.
     `<Entrada>` del menú «Acciones» tenga su **etiqueta** en `estructura()`
     (las entradas de la app no llevan id), con dos listas de excepciones
     —`NO_VAN_EN_LA_BARRA` y `EQUIVALENTES`— que fallan también cuando
-    envejecen. `Entrada::ep` marca `pendiente_ui`.
+    envejecen.
   - **R37, la tercera forma de desencontrarse** (`puente_dev.rs`): un
     `Option<T>` que ningún `invoke` manda jamás es una función escrita,
     probada y sin camino hasta el usuario (fue el estado de `char_spacing`
@@ -1133,6 +1133,13 @@ compila los instaladores a mano o al etiquetar `v*`.
     con `false`, corregir ese bloque **le cambia la letra**, porque su
     fuente no va dentro del documento y hay que sustituirla por la más
     parecida. La tarjeta de edición lo dice antes, no después.
+  - **Higiene de documentación** (C-13): `Entrada::pendiente_ui` se va del
+    árbol. Nadie lo ponía desde que `fn ep` desapareció en la integración
+    del ciclo 9, y una marca que solo vivía dentro del backend solo la veía
+    el backend; lo que se usa mientras tanto está en «Menú nativo». El
+    doc-comment de `add_stamp` decía que con
+    `dinamico` el `text` «no se usa», y el código sí lo usa: es la palabra
+    grande, y la línea compuesta va debajo.
   - **Un mensaje con carreras de espacios dentro** (C-9): un literal partido
     en varias líneas sin la barra invertida se lleva el sangrado del código
     dentro de la frase, y eso lo lee el usuario. El aviso del PDF cifrado
@@ -1623,10 +1630,10 @@ compila los instaladores a mano o al etiquetar `v*`.
   visor no es del DOM**: la pinta Vitela sobre las cajas de glifos de
   PDFium. En la app empaquetada no copiaban nada. Ahora emiten
   `menu-accion` como el resto y la UI hace lo mismo que su atajo.
-  La marca temporal `Entrada::pendiente_ui` dice que la mitad de la UI de
-  ese id llega en otra rama: el test cruzado avisa por stderr en vez de
-  fallar, y **se le quita al integrar**. Los ids —**la única lista**, la
-  que enruta la UI, cruzada por un test— son:
+  Mientras la mitad de la UI de un id llega en otra rama, el id se enruta
+  con un no-op comentado en `accionesMenu`, que se ve al revisar: una marca
+  dentro del backend solo la veía el backend. Los ids —**la única lista**,
+  la que enruta la UI, cruzada por un test— son:
   - Archivo: `abrir`, `abrir-reciente`, `crear-desde-imagenes`,
     `guardar`, `guardar-como`,
     `cerrar-documento`, `anadir-pdf`, `insertar-pdf`, `combinar-ficheros`,

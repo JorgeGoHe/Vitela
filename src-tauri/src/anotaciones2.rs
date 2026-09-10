@@ -436,11 +436,13 @@ pub(crate) fn compone_dinamico(plantilla: &str, autor: &str) -> String {
 /// Sello de texto (APROBADO, BORRADOR…): anotación Stamp con un borde y el
 /// texto dentro, centrado en el punto dado (coords de UI).
 ///
-/// Con `dinamico` es un **sello dinámico** de los de Acrobat: el texto lo
-/// compone el backend con el nombre de quien estampa y la fecha y la hora
-/// del momento (ver [`compone_dinamico`]), y entonces `text` no se usa.
-/// Componerlo aquí y no en la interfaz es lo que hace que el sello diga la
-/// verdad: el reloj y el autor de los comentarios ya viven de este lado.
+/// Con `dinamico` es un **sello dinámico** de los de Acrobat: `text` sigue
+/// siendo la palabra grande («APROBADO») y `dinamico` es la segunda línea,
+/// más pequeña, que compone el backend con el nombre de quien estampa y la
+/// fecha y la hora del momento (ver [`compone_dinamico`]). Componerla aquí
+/// y no en la interfaz es lo que hace que el sello diga la verdad: el reloj
+/// y el autor de los comentarios ya viven de este lado. Si no hay palabra
+/// grande, la línea compuesta **es** el sello.
 // la firma es el contrato con la UI: un argumento por propiedad del sello
 #[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]

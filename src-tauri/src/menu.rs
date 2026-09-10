@@ -36,14 +36,6 @@ pub(crate) struct Entrada {
     pub atajo: Option<&'static str>,
     /// Se apaga cuando no hay documento abierto, en vez de desaparecer.
     pub necesita_documento: bool,
-    /// **Temporal, y se quita al integrar.** La mitad de la UI de este id
-    /// llega en otra rama: el ciclo se desarrolla en paralelo y el backend
-    /// va primero. El test cruzado lo avisa por stderr en vez de fallar; en
-    /// cuanto la UI lo enruta se le quita la marca y el test vuelve a
-    /// exigirlo, que es lo que evita que una entrada de menú se quede
-    /// muerta sin que nadie se entere.
-    #[allow(dead_code)] // lo lee el test cruzado; se va con la marca
-    pub pendiente_ui: bool,
 }
 
 /// Entrada que resuelve el sistema, no la UI: no tiene id ni emite evento.
@@ -88,7 +80,6 @@ fn e(
         etiqueta,
         atajo,
         necesita_documento,
-        pendiente_ui: false,
     })
 }
 
@@ -627,32 +618,19 @@ mod tests {
         let fuentes = fuentes_de_la_ui();
         let de_la_ui = ids_que_enruta_la_ui(&fuentes);
         let del_menu = ids();
-        let pendientes: Vec<&str> = entradas()
-            .iter()
-            .filter(|e| e.pendiente_ui)
-            .map(|e| e.id)
-            .collect();
         let faltan: Vec<&str> = del_menu
             .iter()
             .copied()
-            .filter(|id| !de_la_ui.iter().any(|k| k == id) && !pendientes.contains(id))
+            .filter(|id| !de_la_ui.iter().any(|k| k == id))
             .collect();
+        // no hay marca de «pendiente» que valga: mientras la mitad de la UI
+        // de un id llega en otra rama, el id se enruta con un no-op
+        // comentado en `accionesMenu`, que se ve en la revisión. Una marca
+        // dentro del backend solo la veía el backend
         assert!(
             faltan.is_empty(),
             "la UI no enruta estos ids del menú nativo: {faltan:?}"
         );
-        // los marcados como pendientes avisan pero no bloquean: su mitad de
-        // la UI llega en otra rama y al integrar se les quita la marca
-        let sin_enrutar: Vec<&&str> = pendientes
-            .iter()
-            .filter(|id| !de_la_ui.iter().any(|k| k == **id))
-            .collect();
-        if !sin_enrutar.is_empty() {
-            eprintln!(
-                "[aviso] ids del menú que la UI todavía no enruta (marcados \
-                 `pendiente_ui`, quitar la marca al integrar): {sin_enrutar:?}"
-            );
-        }
         let sobran: Vec<&String> = de_la_ui
             .iter()
             .filter(|k| !del_menu.contains(&k.as_str()))
