@@ -1117,6 +1117,22 @@ compila los instaladores a mano o al etiquetar `v*`.
     certificado» enseñe a sus destinatarios por su nombre y no por el del
     fichero: quien cifra para tres personas tiene que poder comprobar que
     son las tres personas. No abre ningún PDF.
+  - **Los remates viejos** (C-12): `export_pages_png` acepta
+    `page_indices` —el bloque «Páginas» del diálogo existe desde el ciclo 2
+    y lo usaban imprimir, la marca de agua y Word; aquí no llegaba, así que
+    exportar imágenes de un documento de doscientas páginas era exportar
+    doscientas—, y el nombre del fichero lleva el número que la página
+    tiene en el documento, no su sitio en el rango. `crop_page` acepta
+    `margenes { arriba, abajo, izq, der }` en puntos, que es el diálogo de
+    Acrobat: mandan sobre el `rect` y con `all_pages` se calculan **para
+    cada página**, así que un documento que mezcla tamaños sale bien. **Los
+    tamaños de papel se quedan fuera a propósito**: llevar una página a A4
+    no es recortarla —habría que escalar el contenido, que un recorte nunca
+    hace, o cortar lo que sobra sin que nadie lo elija—; eso es «Cambiar el
+    tamaño de página», otra operación. Y `TextBlock` gana `reescribible`:
+    con `false`, corregir ese bloque **le cambia la letra**, porque su
+    fuente no va dentro del documento y hay que sustituirla por la más
+    parecida. La tarjeta de edición lo dice antes, no después.
   - **Un mensaje con carreras de espacios dentro** (C-9): un literal partido
     en varias líneas sin la barra invertida se lleva el sangrado del código
     dentro de la frase, y eso lo lee el usuario. El aviso del PDF cifrado

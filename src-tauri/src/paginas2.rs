@@ -267,20 +267,57 @@ pub fn insert_pdf_at(
     }))
 }
 
+/// **Cuánto se quita por cada lado**, en puntos PDF (72 por pulgada). La
+/// interfaz convierte de milímetros o de pulgadas antes de mandarlo: aquí
+/// solo hay una unidad, que es la del documento.
+///
+/// Las claves van tal cual —es una estructura anidada y Tauri solo traduce
+/// el camelCase de los argumentos de primer nivel—.
+#[derive(serde::Deserialize, Debug, Clone, Copy, Default)]
+pub struct Margenes {
+    #[serde(default)]
+    pub arriba: f32,
+    #[serde(default)]
+    pub abajo: f32,
+    #[serde(default)]
+    pub izq: f32,
+    #[serde(default)]
+    pub der: f32,
+}
+
 /// Recorta una página (o todas) al rect dado en coords de UI. En vez de
 /// fijar solo el CropBox (que desplazaría el origen y desalinearía todas las
 /// coordenadas de la UI), se normaliza: se traslada el contenido y las
 /// anotaciones y se reescriben MediaBox y CropBox a (0,0,w,h). El contenido
 /// fuera del área no se elimina (solo deja de mostrarse), como en Acrobat.
+///
+/// Con `margenes` se recorta **por medida** en vez de por arrastre, que es
+/// lo que pide Acrobat en su diálogo: cuánto se quita de arriba, de abajo,
+/// de la izquierda y de la derecha, en puntos. Manda sobre el `rect` y, con
+/// `all_pages`, se calcula **para cada página**, así que un documento que
+/// mezcla tamaños sale bien; un `rect` fijo no puede hacer eso.
+///
+/// **Los tamaños de papel se quedan fuera a propósito**: llevar una página
+/// a A4 no es recortarla —o hay que escalar el contenido, que un recorte
+/// nunca hace, o hay que cortar lo que sobra sin que nadie lo haya
+/// elegido—. Es «Cambiar el tamaño de página», otra operación.
 #[tauri::command(async)]
 pub fn crop_page(
     work_path: String,
     page_index: u16,
     rect: Rect,
     all_pages: bool,
+    margenes: Option<Margenes>,
 ) -> Result<(), String> {
-    if rect.w < 24.0 || rect.h < 24.0 {
+    if margenes.is_none() && (rect.w < 24.0 || rect.h < 24.0) {
         return Err("El área de recorte es demasiado pequeña".into());
+    }
+    if let Some(m) = margenes {
+        if m.arriba < 0.0 || m.abajo < 0.0 || m.izq < 0.0 || m.der < 0.0 {
+            return Err("Un margen no puede ser negativo: para agrandar una página \
+                        hay que cambiar su tamaño, no recortarla"
+                .into());
+        }
     }
     mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
@@ -296,11 +333,30 @@ pub fn crop_page(
             let mut page = doc.pages().get(i).map_err(|e| e.to_string())?;
             let page_w = page.width().value;
             let page_h = page.height().value;
+            // por medida, el área se calcula para ESTA página: con varias
+            // de tamaños distintos, un rect fijo recortaría mal todas menos
+            // una
+            let area = match margenes {
+                Some(m) => Rect {
+                    x: m.izq,
+                    y: m.arriba,
+                    w: page_w - m.izq - m.der,
+                    h: page_h - m.arriba - m.abajo,
+                },
+                None => rect.clone(),
+            };
+            if area.w < 24.0 || area.h < 24.0 {
+                return Err(format!(
+                    "Con esos márgenes la página {} se queda casi sin nada: quita menos \
+                     por los lados",
+                    i as u32 + 1
+                ));
+            }
             // rect en coords PDF de esta página, dentro de sus límites
-            let x0 = rect.x.clamp(0.0, page_w - 1.0);
-            let y_top = rect.y.clamp(0.0, page_h - 1.0);
-            let w = rect.w.min(page_w - x0);
-            let h = rect.h.min(page_h - y_top);
+            let x0 = area.x.clamp(0.0, page_w - 1.0);
+            let y_top = area.y.clamp(0.0, page_h - 1.0);
+            let w = area.w.min(page_w - x0);
+            let h = area.h.min(page_h - y_top);
             let y0 = page_h - y_top - h; // borde inferior en coords PDF
             {
                 let objects = page.objects_mut();
@@ -743,6 +799,72 @@ pub fn add_bates(
 mod tests {
     use super::*;
     use crate::tests::crea_pdf;
+
+    /// Tamaño de cada página tal como se ve.
+    fn tamanos(path: &str) -> Vec<(f32, f32)> {
+        crate::on_pdfium_thread({
+            let path = path.to_string();
+            move || {
+                crate::with_doc(&path, |doc| {
+                    Ok(doc
+                        .pages()
+                        .iter()
+                        .map(|p| (p.width().value, p.height().value))
+                        .collect())
+                })
+            }
+        })
+        .expect("tamaños")
+    }
+
+    /// **Recortar por medida** (C-12). Acrobat pide cuánto se quita de cada
+    /// lado; Vitela solo sabía recortar arrastrando un rectángulo, que no
+    /// sirve para dejar todas las páginas iguales ni para quitar un margen
+    /// de impresión exacto. Con `all_pages`, el área se calcula **para cada
+    /// página**: un documento que mezcla tamaños sale bien, y un rect fijo
+    /// no puede hacer eso.
+    #[test]
+    fn recortar_por_margenes_quita_lo_mismo_de_cada_lado_en_todas_las_paginas() {
+        let pdf = std::env::temp_dir().join("paginas2-recorte-margenes.pdf");
+        crea_pdf(&["Uno", "Dos", "Tres"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        let antes = tamanos(&work);
+
+        crop_page(
+            work.clone(),
+            0,
+            crate::Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 },
+            true,
+            Some(Margenes { arriba: 36.0, abajo: 36.0, izq: 20.0, der: 20.0 }),
+        )
+        .expect("recortar por márgenes");
+
+        for (i, ((w0, h0), (w1, h1))) in antes.iter().zip(tamanos(&work).iter()).enumerate() {
+            assert!(
+                (w1 - (w0 - 40.0)).abs() < 0.5 && (h1 - (h0 - 72.0)).abs() < 0.5,
+                "la página {} pasa de {w0}×{h0} a {w1}×{h1}",
+                i + 1
+            );
+        }
+        // y se deshace de una vez, como cualquier mutación
+        crate::historial::undo(work.clone()).expect("deshacer");
+        assert_eq!(tamanos(&work), antes);
+
+        // un margen que se lo come todo se dice en llano y nombra la página
+        let e = crop_page(
+            work.clone(),
+            0,
+            crate::Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 },
+            true,
+            Some(Margenes { arriba: 500.0, abajo: 500.0, izq: 0.0, der: 0.0 }),
+        )
+        .unwrap_err();
+        assert!(e.contains("página 1") && e.contains("márgenes"), "{e}");
+        // y no ha tocado nada
+        assert_eq!(tamanos(&work), antes);
+
+        std::fs::remove_file(&pdf).ok();
+    }
 
     fn textos(path: &str) -> Vec<String> {
         on_pdfium_thread({

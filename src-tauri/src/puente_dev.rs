@@ -260,7 +260,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "replace_pages" => cmd!(paginas2::replace_pages, { work_path: String, page_indices: Vec<u16>, other_path: String, other_indices: Option<Vec<u16>> }),
         "split_pdf" => cmd!(paginas2::split_pdf, { work_path: String, dest_dir: String, modo: String, cada: Option<u16> }),
         "merge_many" => cmd!(paginas2::merge_many, { work_path: String, others: Vec<String>, at: Option<u16> }),
-        "crop_page" => cmd!(paginas2::crop_page, { work_path: String, page_index: u16, rect: crate::Rect, all_pages: bool }),
+        "crop_page" => cmd!(paginas2::crop_page, { work_path: String, page_index: u16, rect: crate::Rect, all_pages: bool, margenes: Option<paginas2::Margenes> }),
         "add_watermark" => cmd!(paginas2::add_watermark, { work_path: String, text: String, font_size: f32, color: [u8; 4], diagonal: bool, position: Option<String>, page_indices: Option<Vec<u16>>, image_png: Option<String>, opacity: Option<f32>, rotation: Option<f32>, detras: Option<bool> }),
         "add_bates" => cmd!(paginas2::add_bates, { work_path: String, prefijo: String, sufijo: String, digitos: u8, empieza_en: u32, position: Option<String>, font_size: Option<f32>, page_indices: Option<Vec<u16>> }),
         "remove_marginal_text" => cmd!(paginas2::remove_marginal_text, { work_path: String, zona: String, dry_run: bool }),
@@ -300,7 +300,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "save_page_attachment" => cmd!(crate::adjuntos::save_page_attachment, { path: String, page_index: u16, annot_index: u16, dest_path: String }),
         "list_layers" => cmd!(crate::adjuntos::list_layers, { path: String }),
         "set_layer_visible" => cmd!(crate::adjuntos::set_layer_visible, { work_path: String, index: u16, visible: bool }),
-        "export_pages_png" => cmd!(exportar::export_pages_png, { path: String, dest_dir: String, dpi: u16, format: String }),
+        "export_pages_png" => cmd!(exportar::export_pages_png, { path: String, dest_dir: String, dpi: u16, format: String, page_indices: Option<Vec<u16>> }),
         "export_text" => cmd!(exportar::export_text, { path: String, dest_path: String }),
         "export_docx" => cmd!(exportar::export_docx, { work_path: String, dest_path: String, page_indices: Option<Vec<u16>> }),
         "compress_pdf" => cmd!(exportar::compress_pdf, { work_path: String, quality: u8, max_dpi: u16, quitar_adjuntos: Option<bool>, quitar_metadatos: Option<bool>, aplanar_formularios: Option<bool> }),
@@ -538,6 +538,18 @@ mod tests {
             "open_pdf",
             "key_password",
             "pendiente_ui: lo manda la UI en C-3 del ciclo 10, la contraseña del .p12",
+        ),
+        (
+            "export_pages_png",
+            "page_indices",
+            "pendiente_ui: lo manda la UI en C-12 del ciclo 10, con el bloque \
+             `RangoPaginas` que ya usan imprimir, la marca de agua y Word",
+        ),
+        (
+            "crop_page",
+            "margenes",
+            "pendiente_ui: lo manda la UI en C-12 del ciclo 10, los márgenes numéricos \
+             del diálogo de recortar",
         ),
     ];
 

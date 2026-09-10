@@ -26,6 +26,25 @@ pub struct TextBlock {
     /// color real el botón «A» («el color que ya tenga») ni conservarlo al
     /// corregir un párrafo de varias líneas.
     pub color: [u8; 4],
+    /// **Corregir este bloque conserva su letra**: su fuente va incrustada
+    /// en el documento, o es una de las catorce que cualquier visor tiene.
+    ///
+    /// Con `false`, reescribirlo cambia el aspecto: la fuente no está
+    /// dentro del fichero y hay que sustituirla por la más parecida que
+    /// haya (`fuente_por_nombre`). Eso se puede hacer, pero **hay que
+    /// decirlo antes**, no después: el usuario corregía una errata y le
+    /// cambiaba el tipo de letra del párrafo sin que nadie le avisara.
+    pub reescribible: bool,
+}
+
+/// Las catorce fuentes estándar del PDF: cualquier visor las tiene, así que
+/// un documento no las incrusta y reescribir su texto no cambia nada de lo
+/// que se ve.
+fn es_estandar(familia: &str) -> bool {
+    let f = familia.to_lowercase();
+    ["helvetica", "arial", "times", "courier", "symbol", "zapf"]
+        .iter()
+        .any(|n| f.contains(n))
 }
 
 /// Directorios de fuentes TTF del sistema, por plataforma.
@@ -227,6 +246,9 @@ pub(crate) fn bloques_de(doc: &PdfDocument<'static>, page_index: u16) -> Vec<Tex
             negrita: estilo.0,
             cursiva: estilo.1,
             color: [c.red(), c.green(), c.blue(), c.alpha()],
+            // ante la duda, que no salte el aviso: acusar en falso a un
+            // texto de que va a cambiar de letra es peor que callarse
+            reescribible: fuente.is_embedded().unwrap_or(true) || es_estandar(&cruda),
         });
     }
     out
@@ -1369,6 +1391,37 @@ pub fn delete_text_block(work_path: String, page_index: u16, object_index: u32) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Corregir un texto puede cambiarle la letra, y hay que decirlo
+    /// antes** (C-12). Si la fuente del bloque no va dentro del documento,
+    /// reescribirlo la sustituye por la más parecida que haya: se puede
+    /// hacer, pero el usuario corregía una errata y le cambiaba el tipo de
+    /// letra del párrafo sin que nadie le avisara. `reescribible` es lo
+    /// que la tarjeta de edición necesita para poner esa media frase.
+    #[test]
+    fn un_bloque_dice_si_corregirlo_conserva_su_letra() {
+        let pdf = std::env::temp_dir().join("texto-reescribible.pdf");
+        crate::tests::crea_pdf(&["Con Helvetica de las de siempre"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        let bloques = get_text_blocks(work.clone(), 0).expect("bloques");
+        assert!(!bloques.is_empty());
+        assert!(
+            bloques[0].reescribible,
+            "una de las catorce estándar se reescribe sin cambiar nada: {:?}",
+            bloques[0].font_family
+        );
+
+        // las catorce del spec se reconocen por familia, escriba PDFium el
+        // nombre que escriba en cada build
+        for f in ["Helvetica", "Arial-BoldMT", "TimesNewRomanPSMT", "Courier New", "Symbol"] {
+            assert!(es_estandar(f), "«{f}» es una de las estándar");
+        }
+        for f in ["Gill Sans MT", "Whitney-Book", "FGHIJK+Minion Pro"] {
+            assert!(!es_estandar(f), "«{f}» no la tiene cualquier visor");
+        }
+
+        std::fs::remove_file(&pdf).ok();
+    }
     #[allow(unused_imports)]
     use crate::tests::{crea_pdf, textos_de};
     #[allow(unused_imports)]

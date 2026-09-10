@@ -7,14 +7,24 @@ use pdfium_render::prelude::*;
 use serde::Serialize;
 use std::io::Cursor;
 
-/// Exporta todas las páginas como PNG o JPEG al directorio dado, a la
-/// resolución pedida. Devuelve las rutas escritas.
+/// Exporta páginas como PNG o JPEG al directorio dado, a la resolución
+/// pedida. Devuelve las rutas escritas.
+///
+/// `page_indices` es el rango que se exporta; sin él, todas. El bloque
+/// «Páginas» del diálogo existe desde el ciclo 2 y lo usaban imprimir, la
+/// marca de agua y Word: aquí no llegaba, así que exportar imágenes de un
+/// documento de doscientas páginas era exportar doscientas.
+///
+/// El nombre del fichero lleva **el número de la página en el documento**,
+/// no su posición en el rango: quien exporta la 12 y la 40 espera
+/// `pagina-012` y `pagina-040`.
 #[tauri::command(async)]
 pub fn export_pages_png(
     path: String,
     dest_dir: String,
     dpi: u16,
     format: String,
+    page_indices: Option<Vec<u16>>,
 ) -> Result<Vec<String>, String> {
     let dpi = dpi.clamp(72, 600) as f32;
     on_pdfium_thread(move || {
@@ -26,7 +36,21 @@ pub fn export_pages_png(
             };
             let mut out = Vec::new();
             let total = doc.pages().len();
-            for i in 0..total {
+            let elegidas: Vec<u16> = match &page_indices {
+                Some(v) if !v.is_empty() => {
+                    let fuera: Vec<u16> = v.iter().copied().filter(|i| *i >= total).collect();
+                    if !fuera.is_empty() {
+                        return Err(format!(
+                            "El documento tiene {total} {}: no se puede exportar la {}",
+                            if total == 1 { "página" } else { "páginas" },
+                            fuera[0] as u32 + 1
+                        ));
+                    }
+                    v.clone()
+                }
+                _ => (0..total).collect(),
+            };
+            for i in elegidas {
                 let page = doc.pages().get(i).map_err(|e| e.to_string())?;
                 let width = (page.width().value / 72.0 * dpi).round() as i32;
                 let bitmap = page
@@ -1224,19 +1248,45 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let pdf = dir.join("doc.pdf");
-        crea_pdf(&["Uno", "Dos"], &pdf);
+        crea_pdf(&["Uno", "Dos", "Tres", "Cuatro"], &pdf);
         let rutas = export_pages_png(
             pdf.to_string_lossy().to_string(),
             dir.to_string_lossy().to_string(),
             96,
             "png".into(),
+            None,
         )
         .expect("exportar imágenes");
-        assert_eq!(rutas.len(), 2);
+        assert_eq!(rutas.len(), 4, "sin rango, el documento entero");
         for r in &rutas {
             let img = image::open(r).expect("PNG legible");
             assert!(img.width() > 500);
         }
+
+        // **con rango**: solo las que se piden, y con el número que tienen
+        // en el documento, no con su posición en el rango
+        let rutas = export_pages_png(
+            pdf.to_string_lossy().to_string(),
+            dir.to_string_lossy().to_string(),
+            96,
+            "png".into(),
+            Some(vec![1, 3]),
+        )
+        .expect("exportar el rango");
+        assert_eq!(rutas.len(), 2);
+        assert!(rutas[0].ends_with("pagina-002.png"), "{rutas:?}");
+        assert!(rutas[1].ends_with("pagina-004.png"), "{rutas:?}");
+
+        // y una página que no está se dice en llano, sin escribir nada
+        let e = export_pages_png(
+            pdf.to_string_lossy().to_string(),
+            dir.to_string_lossy().to_string(),
+            96,
+            "png".into(),
+            Some(vec![9]),
+        )
+        .unwrap_err();
+        assert!(e.contains("la 10"), "{e}");
         let txt = dir.join("doc.txt");
         export_text(
             pdf.to_string_lossy().to_string(),
