@@ -184,42 +184,150 @@ pub fn rotate_pages(
     }))
 }
 
-/// Mueve una página a otra posición reconstruyendo el documento en el nuevo
-/// orden (FPDF_ImportPages respeta el orden del rango dado).
+/// Mueve una página a otra posición **reordenando el árbol de páginas en
+/// el sitio** (AC-093).
+///
+/// Antes reconstruía el documento: creaba uno vacío con `create_new_pdf()`
+/// y le copiaba las páginas. Eso copia las páginas y **deja atrás el
+/// catálogo entero** —marcadores, `/PageLabels`, `/Names →
+/// /EmbeddedFiles`, `/OpenAction`, `/PageLayout`, `/PageMode`, `/AcroForm`
+/// y `/OCProperties`—, así que subir una página en el panel se llevaba por
+/// delante la numeración, los adjuntos, la vista inicial y el formulario,
+/// sin decir nada. Era la única de las nueve operaciones de páginas que
+/// reconstruía desde cero.
+///
+/// Reordenar es reescribir el `/Kids`, que es lo único que dice en qué
+/// orden van las páginas: no se toca ni una anotación, no hay que esquivar
+/// el ciclo `/Popup` ↔ `/Parent` de AC-046 y es más rápido.
 #[tauri::command(async)]
 pub fn move_page(work_path: String, from_index: u16, to_index: u16) -> Result<(), String> {
     if from_index == to_index {
         return Ok(());
     }
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        // AC-046: importar de una copia sin las ventanas de las notas
-        // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
-        let fuente = crate::anotaciones::fuente_importable(&work_path);
-        let doc = pdfium
-            .load_pdf_from_file(fuente.ruta(), None)
-            .map_err(|e| e.to_string())?;
-        let count = doc.pages().len();
-        if from_index >= count || to_index >= count {
+    crate::cirugia(&work_path.clone(), move |doc| {
+        let paginas: Vec<lopdf::ObjectId> = doc.get_pages().into_values().collect();
+        let count = paginas.len();
+        if from_index as usize >= count || to_index as usize >= count {
             return Err("Índice de página fuera de rango".into());
         }
-        let mut order: Vec<u16> = (0..count).collect();
-        let moved = order.remove(from_index as usize);
-        order.insert(to_index as usize, moved);
-        let range = order
-            .iter()
-            .map(|i| (i + 1).to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-        let mut new_doc = pdfium.create_new_pdf().map_err(|e| e.to_string())?;
-        new_doc
-            .pages_mut()
-            .copy_pages_from_document(&doc, &range, 0)
-            .map_err(|e| e.to_string())?;
-        drop(doc);
-        save_and_close(new_doc, &work_path)?;
-        crate::anotaciones::repon_popups_en(&work_path)
-    }))
+        let mut orden = paginas;
+        let movida = orden.remove(from_index as usize);
+        orden.insert(to_index as usize, movida);
+        reordena_paginas(doc, &orden)
+    })
+}
+
+/// Las claves que una página **hereda** de los nodos de arriba del árbol.
+/// Antes de aplanar hay que bajarlas a cada página, o una perdería su
+/// tamaño o su giro por el camino.
+const HEREDADOS: [&[u8]; 4] = [b"Resources", b"MediaBox", b"CropBox", b"Rotate"];
+
+/// Deja el árbol de páginas con las páginas en el orden dado, colgando
+/// todas de la raíz. Lo demás del documento no se toca.
+pub(crate) fn reordena_paginas(
+    doc: &mut lopdf::Document,
+    orden: &[lopdf::ObjectId],
+) -> Result<(), String> {
+    use lopdf::Object;
+    let raiz = doc
+        .catalog()
+        .and_then(|c| c.get(b"Pages"))
+        .and_then(|o| o.as_reference())
+        .map_err(|_| "Este documento no tiene árbol de páginas".to_string())?;
+    for id in orden {
+        for clave in HEREDADOS {
+            let tiene = doc
+                .get_object(*id)
+                .and_then(|o| o.as_dict())
+                .map(|d| d.get(clave).is_ok())
+                .unwrap_or(false);
+            if tiene {
+                continue;
+            }
+            let Some(valor) = hereda_de_arriba(doc, *id, clave) else {
+                continue;
+            };
+            if let Ok(d) = doc.get_object_mut(*id).and_then(|o| o.as_dict_mut()) {
+                d.set(String::from_utf8_lossy(clave).into_owned(), valor);
+            }
+        }
+    }
+    let intermedios = nodos_intermedios(doc, raiz);
+    for id in orden {
+        if let Ok(d) = doc.get_object_mut(*id).and_then(|o| o.as_dict_mut()) {
+            d.set("Parent", Object::Reference(raiz));
+        }
+    }
+    let kids: Vec<Object> = orden.iter().map(|id| Object::Reference(*id)).collect();
+    let cuantas = kids.len() as i64;
+    let d = doc
+        .get_object_mut(raiz)
+        .and_then(|o| o.as_dict_mut())
+        .map_err(|_| "Este documento no tiene árbol de páginas".to_string())?;
+    d.set("Kids", Object::Array(kids));
+    d.set("Count", cuantas);
+    // los nodos intermedios se quedan sin nadie que los mire
+    for id in intermedios {
+        doc.objects.remove(&id);
+    }
+    Ok(())
+}
+
+/// El primer valor de `clave` que hay subiendo por los `/Parent`, sin
+/// contar la propia página.
+fn hereda_de_arriba(
+    doc: &lopdf::Document,
+    page_id: lopdf::ObjectId,
+    clave: &[u8],
+) -> Option<lopdf::Object> {
+    let mut actual = page_id;
+    for _ in 0..32 {
+        let padre = doc
+            .get_object(actual)
+            .and_then(|o| o.as_dict())
+            .and_then(|d| d.get(b"Parent"))
+            .and_then(|o| o.as_reference())
+            .ok()?;
+        if let Ok(v) = doc.get_object(padre).and_then(|o| o.as_dict()).and_then(|d| d.get(clave)) {
+            return Some(v.clone());
+        }
+        actual = padre;
+    }
+    None
+}
+
+/// Los nodos `/Pages` que cuelgan de la raíz, que es lo que queda huérfano
+/// al aplanar el árbol. Con corte de ciclos, como todos los recorridos.
+fn nodos_intermedios(doc: &lopdf::Document, raiz: lopdf::ObjectId) -> Vec<lopdf::ObjectId> {
+    let mut out = Vec::new();
+    let mut pila = vec![raiz];
+    let mut vistos = vec![raiz];
+    while let Some(id) = pila.pop() {
+        let Ok(Ok(kids)) = doc
+            .get_object(id)
+            .and_then(|o| o.as_dict())
+            .map(|d| d.get(b"Kids").and_then(|o| o.as_array()))
+        else {
+            continue;
+        };
+        for kid in kids {
+            let Ok(hijo) = kid.as_reference() else { continue };
+            if vistos.contains(&hijo) {
+                continue;
+            }
+            vistos.push(hijo);
+            let es_nodo = doc
+                .get_object(hijo)
+                .and_then(|o| o.as_dict())
+                .map(|d| matches!(d.get(b"Type").and_then(|o| o.as_name()), Ok(b"Pages")))
+                .unwrap_or(false);
+            if es_nodo {
+                out.push(hijo);
+                pila.push(hijo);
+            }
+        }
+    }
+    out
 }
 
 /// Añade todas las páginas de otro PDF al final y devuelve el nuevo total.
@@ -371,6 +479,241 @@ pub fn extract_each_page(
 
 #[cfg(test)]
 mod tests {
+
+    /// Lo que cuelga del catálogo y que ninguna operación de páginas puede
+    /// llevarse por delante: marcador, numeración, adjunto, vista inicial y
+    /// formulario. Devuelve cuántos de los cinco siguen ahí.
+    fn supervivientes(work: &str) -> Vec<&'static str> {
+        let mut vivos = Vec::new();
+        if !crate::documento::get_outline(work.to_string())
+            .expect("marcadores")
+            .is_empty()
+        {
+            vivos.push("marcador");
+        }
+        if !crate::documento::get_page_labels(work.to_string())
+            .expect("etiquetas")
+            .rangos
+            .is_empty()
+        {
+            vivos.push("numeracion");
+        }
+        if !crate::adjuntos::list_attachments(work.to_string())
+            .expect("adjuntos")
+            .is_empty()
+        {
+            vivos.push("adjunto");
+        }
+        if crate::documento::get_open_action(work.to_string())
+            .expect("vista")
+            .page_index
+            .is_some()
+        {
+            vivos.push("vista");
+        }
+        let doc = lopdf::Document::load(work).expect("cargar");
+        if doc
+            .catalog()
+            .ok()
+            .and_then(|c| c.get(b"AcroForm").ok())
+            .is_some()
+        {
+            vivos.push("formulario");
+        }
+        vivos
+    }
+
+    /// Un documento de ocho páginas con las cinco cosas colgando del
+    /// catálogo, listo para pasarle por encima una operación de páginas.
+    fn documento_con_de_todo(nombre: &str) -> String {
+        let dir = std::env::temp_dir();
+        let pdf = dir.join(nombre);
+        let textos: Vec<String> = (1..=8).map(|i| format!("Página {i}")).collect();
+        let refs: Vec<&str> = textos.iter().map(|s| s.as_str()).collect();
+        crate::tests::crea_pdf(&refs, &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        crate::documento::set_outline(
+            work.clone(),
+            vec![crate::documento::OutlineNode {
+                title: "Capítulo 1".into(),
+                page_index: Some(0),
+                top: None,
+                zoom: None,
+                children: Vec::new(),
+            }],
+        )
+        .expect("marcador");
+        crate::documento::set_page_labels(
+            work.clone(),
+            vec![crate::documento::RangoEtiqueta {
+                desde: 0,
+                estilo: "romano_min".into(),
+                prefijo: String::new(),
+                empieza_en: 1,
+            }],
+        )
+        .expect("numeración");
+        let nota = dir.join(format!("{nombre}-nota.txt"));
+        std::fs::write(&nota, b"una nota").expect("nota");
+        crate::adjuntos::add_attachment(
+            work.clone(),
+            nota.to_string_lossy().into_owned(),
+            None,
+        )
+        .expect("adjunto");
+        crate::documento::set_open_action(
+            work.clone(),
+            crate::documento::VistaInicial {
+                page_index: Some(1),
+                top: None,
+                zoom: None,
+                ajuste: "pagina".into(),
+                disposicion: "continuo".into(),
+                panel: String::new(),
+                marcadores: None,
+            },
+        )
+        .expect("vista inicial");
+        crate::formularios2::create_form_field(
+            work.clone(),
+            0,
+            "text".into(),
+            crate::Rect { x: 60.0, y: 300.0, w: 180.0, h: 22.0 },
+            "nombre".into(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("campo");
+        assert_eq!(
+            supervivientes(&work).len(),
+            5,
+            "el documento de partida tiene que llevar las cinco cosas"
+        );
+        work
+    }
+
+    /// **AC-093, crítico.** Subir una página en el panel destruía los
+    /// marcadores, la numeración, los adjuntos, la vista inicial y el
+    /// formulario: `move_page` reconstruía el documento con
+    /// `create_new_pdf()` y el catálogo entero se quedaba en el viejo. ⌘Z
+    /// lo devolvía —es una instantánea—, pero quien reordenaba y guardaba
+    /// lo perdía para siempre y sin aviso.
+    ///
+    /// El test recorre **las nueve operaciones de páginas**, no solo la que
+    /// falló: son las nueve las que tienen que dejar el documento entero.
+    #[test]
+    fn ninguna_operacion_de_paginas_se_lleva_lo_que_cuelga_del_catalogo() {
+        let dir = std::env::temp_dir();
+        let otro = dir.join("paginas-catalogo-otro.pdf");
+        crate::tests::crea_pdf(&["Uno", "Dos"], &otro);
+        let o = otro.to_string_lossy().into_owned();
+
+        type Operacion = (&'static str, Box<dyn Fn(&str)>);
+        let ops: Vec<Operacion> = vec![
+            (
+                "move_page",
+                Box::new(|w: &str| super::move_page(w.to_string(), 0, 3).expect("mover")),
+            ),
+            (
+                "delete_page",
+                Box::new(|w: &str| {
+                    super::delete_page(w.to_string(), 2).expect("borrar");
+                }),
+            ),
+            (
+                "rotate_page",
+                Box::new(|w: &str| super::rotate_page(w.to_string(), 1).expect("girar")),
+            ),
+            (
+                "duplicate_page",
+                Box::new(|w: &str| {
+                    crate::paginas2::duplicate_page(w.to_string(), 1).expect("duplicar");
+                }),
+            ),
+            (
+                "add_blank_page",
+                Box::new(|w: &str| {
+                    crate::paginas2::add_blank_page(w.to_string(), 1).expect("en blanco");
+                }),
+            ),
+            (
+                "merge_pdf",
+                Box::new(move |w: &str| {
+                    super::merge_pdf(w.to_string(), o.clone()).expect("unir");
+                }),
+            ),
+            (
+                "delete_pages",
+                Box::new(|w: &str| {
+                    super::delete_pages(w.to_string(), vec![5, 6]).expect("borrar lote");
+                }),
+            ),
+            (
+                "rotate_pages",
+                Box::new(|w: &str| {
+                    super::rotate_pages(w.to_string(), vec![0, 1], 1).expect("girar lote");
+                }),
+            ),
+            (
+                "extract_pages",
+                Box::new(|w: &str| {
+                    let fuera = std::env::temp_dir().join("paginas-catalogo-extraidas.pdf");
+                    super::extract_pages(
+                        w.to_string(),
+                        vec![6, 7],
+                        fuera.to_string_lossy().into_owned(),
+                        Some(true),
+                    )
+                    .expect("extraer");
+                    std::fs::remove_file(&fuera).ok();
+                }),
+            ),
+        ];
+
+        for (nombre, op) in ops {
+            let work = documento_con_de_todo(&format!("paginas-catalogo-{nombre}.pdf"));
+            op(&work);
+            let vivos = supervivientes(&work);
+            assert_eq!(
+                vivos.len(),
+                5,
+                "«{nombre}» se ha llevado por delante lo que cuelga del catálogo; \
+                 sobreviven {vivos:?}"
+            );
+            std::fs::remove_file(&work).ok();
+        }
+        std::fs::remove_file(&otro).ok();
+    }
+
+    /// Y reordenar reordena de verdad: la página que se sube queda donde se
+    /// suelta y las demás se corren, con su contenido.
+    #[test]
+    fn mover_una_pagina_la_deja_donde_se_suelta() {
+        let dir = std::env::temp_dir();
+        let pdf = dir.join("paginas-mover-orden.pdf");
+        crate::tests::crea_pdf(&["Uno", "Dos", "Tres", "Cuatro"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        let texto = |i: u16| {
+            crate::busqueda::get_page_text(work.clone(), i)
+                .expect("texto")
+                .chars
+                .iter()
+                .map(|c| c.ch.as_str())
+                .collect::<String>()
+        };
+        super::move_page(work.clone(), 0, 2).expect("mover");
+        assert_eq!(texto(0), "Dos");
+        assert_eq!(texto(1), "Tres");
+        assert_eq!(texto(2), "Uno");
+        assert_eq!(texto(3), "Cuatro");
+        // y al revés
+        super::move_page(work.clone(), 2, 0).expect("devolver");
+        assert_eq!(texto(0), "Uno");
+        assert_eq!(texto(3), "Cuatro");
+        std::fs::remove_file(&pdf).ok();
+    }
 
     /// **AC-049.** «Extraer y eliminar del original» con **todas** las
     /// páginas escribía los ficheros y solo después daba el error, así que

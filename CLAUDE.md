@@ -1024,6 +1024,25 @@ compila los instaladores a mano o al etiquetar `v*`.
     abra en Word. El `.docx` se queda como está —texto, estilo, color e
     imágenes en su sitio—, dicho antes de elegir destino.
 - Comandos del ciclo 10 (el de cierre):
+  - **Reordenar una página no puede vaciar el catálogo** (AC-093, crítico):
+    `move_page` reconstruía el documento con `create_new_pdf()` y
+    `copy_pages_from_document`, que copia las páginas y deja atrás
+    `/Outlines`, `/PageLabels`, `/Names → /EmbeddedFiles`, `/OpenAction`,
+    `/PageLayout`, `/PageMode`, `/AcroForm` y `/OCProperties`: subir una
+    página en el panel se llevaba por delante marcadores, numeración,
+    adjuntos, vista inicial y formulario, sin decir nada. Era la única de
+    las nueve operaciones de páginas que reconstruía desde cero. Ahora
+    reordena **en el sitio** con lopdf (`reordena_paginas`, en
+    `paginas.rs`): reescribe el `/Kids` de la raíz, cuelga todas las
+    páginas de ella y, antes de aplanar el árbol, **baja a cada página lo
+    que heredaba** de los nodos de arriba (`/Resources`, `/MediaBox`,
+    `/CropBox`, `/Rotate`) para que ninguna pierda su tamaño ni su giro.
+    Los nodos intermedios que quedan huérfanos se van. De paso no toca
+    ninguna anotación y no tiene que esquivar el ciclo `/Popup` ↔
+    `/Parent` de AC-046. El test recorre **las nueve** operaciones de
+    páginas y exige que las cinco cosas del catálogo sigan ahí después de
+    cada una.
+
   - **Un mensaje con carreras de espacios dentro** (C-9): un literal partido
     en varias líneas sin la barra invertida se lleva el sangrado del código
     dentro de la frase, y eso lo lee el usuario. El aviso del PDF cifrado
