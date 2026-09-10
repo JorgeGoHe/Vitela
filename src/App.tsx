@@ -124,6 +124,7 @@ import {
   type ModoPagina,
   type OpcionesImprimir,
   cargaResaltarCampos,
+  copyToClipboard,
   formateaRango,
   hexToRgba,
   guardaResaltarCampos,
@@ -256,9 +257,13 @@ function resumenFirmas(firmas: FirmaInfo[]): string {
 type Vista = { page: number; scrollTop: number; zoom: Zoom };
 
 /** Reenvía una pulsación ⌘/Ctrl+tecla a los listeners globales (entradas
- *  del menú nativo cuyo atajo captura el sistema antes que el webview). */
-function reenviaTecla(key: string) {
-  window.dispatchEvent(
+ *  del menú nativo cuyo atajo captura el sistema antes que el webview).
+ *  Devuelve **si alguien la ha atendido**: los listeners que actúan llaman
+ *  a `preventDefault`, así que el valor de `dispatchEvent` distingue «lo ha
+ *  hecho la página» de «el gesto se ha perdido», que es lo que antes pasaba
+ *  en silencio con la entrada del menú viva. */
+function reenviaTecla(key: string): boolean {
+  return !window.dispatchEvent(
     new KeyboardEvent("keydown", {
       key,
       metaKey: ES_MAC,
@@ -267,6 +272,30 @@ function reenviaTecla(key: string) {
       cancelable: true,
     }),
   );
+}
+
+/** El campo de texto que tiene el foco, si lo hay: es donde está mirando el
+ *  usuario y donde tienen que actuar Copiar y Seleccionar todo. */
+function campoConFoco(): HTMLInputElement | HTMLTextAreaElement | null {
+  const el = document.activeElement;
+  return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement
+    ? el
+    : null;
+}
+
+/** Lo que hay seleccionado dentro de un campo. Un `input type="number"` no
+ *  deja leer el rango (el navegador lanza), así que se pregunta con red. */
+function seleccionDeCampo(
+  campo: HTMLInputElement | HTMLTextAreaElement,
+): string {
+  try {
+    return campo.value.slice(
+      campo.selectionStart ?? 0,
+      campo.selectionEnd ?? 0,
+    );
+  } catch {
+    return "";
+  }
 }
 
 function App() {
@@ -2902,6 +2931,53 @@ function App() {
    * entradas llevan acelerador, así que en macOS el sistema se queda con ⌘C
    * y ⌘A antes que el webview y sin estos handlers dejarían de funcionar.
    */
+  /** «Editar ▸ Copiar»: copia lo que esté seleccionado, esté donde esté,
+   *  que es lo que hace Acrobat. El evento sintético de `reenviaTecla` no
+   *  tiene acción por defecto, así que con el foco en un campo el navegador
+   *  no copiaba nada y la entrada del menú no hacía absolutamente nada. */
+  function copiarDelMenu() {
+    const campo = campoConFoco();
+    if (campo) {
+      const texto = seleccionDeCampo(campo);
+      if (texto) {
+        copyToClipboard(texto);
+        setNotice("Texto copiado");
+      } else {
+        setNotice("No hay nada seleccionado en este campo");
+      }
+      return;
+    }
+    // lo seleccionado en la propia interfaz (un aviso, una tarjeta)
+    const enPantalla = window.getSelection()?.toString() ?? "";
+    if (enPantalla.trim() !== "") {
+      copyToClipboard(enPantalla);
+      setNotice("Texto copiado");
+      return;
+    }
+    // la selección del visor la pinta Vitela sobre las cajas de glifos de
+    // PDFium y no es del DOM: la copia su propio listener
+    if (!reenviaTecla("c")) {
+      setNotice("Selecciona antes el texto que quieres copiar");
+    }
+  }
+
+  /** «Editar ▸ Seleccionar todo»: el campo con el foco, y si no lo hay, el
+   *  texto de la página que se está leyendo. */
+  function seleccionarTodoDelMenu() {
+    const campo = campoConFoco();
+    if (campo) {
+      campo.select();
+      return;
+    }
+    if (!reenviaTecla("a")) {
+      setNotice(
+        pageCount === 0
+          ? "Abre antes un documento"
+          : "Esta página no tiene texto que seleccionar",
+      );
+    }
+  }
+
   const accionesMenu: Record<string, () => void> = {
     /* Archivo */
     abrir: openFile,
@@ -2985,10 +3061,11 @@ function App() {
     "exportar-texto": exportPlainText,
     "exportar-word": () => setWordAsk(true),
     // Copiar y Seleccionar todo: el menú nativo se queda con ⌘C y ⌘A antes
-    // que el webview y la selección del visor no es del DOM, así que la
-    // entrada del menú reenvía la tecla a los listeners de siempre
-    copiar: () => reenviaTecla("c"),
-    "seleccionar-todo": () => reenviaTecla("a"),
+    // que el webview, así que las dos entradas actúan donde esté mirando el
+    // usuario —el campo con el foco, si lo hay— y solo si no hay ninguno
+    // reenvían la tecla al visor, cuya selección no es del DOM
+    copiar: copiarDelMenu,
+    "seleccionar-todo": seleccionarTodoDelMenu,
     comprimir: () => setCompressOpen(true),
     /* Ayuda */
     atajos: () => setAtajosAbiertos(true),
