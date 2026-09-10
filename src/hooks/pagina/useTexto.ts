@@ -192,25 +192,20 @@ export function useTexto(ctx: {
     }
   }
 
-  /** El bloque ocupa más de una línea: entonces hay párrafo que recolocar y
-   *  el reflujo tiene sentido. Un rótulo de una línea se reescribe como
-   *  siempre. */
-  function esParrafo(b: TextBlock, texto: string): boolean {
-    return b.h > b.font_size * 1.5 || b.text.includes("\n") || texto.includes("\n");
-  }
-
   async function submitBlockDraft() {
     if (!workPath || !blockDraft) return;
-    const parrafo = esParrafo(blockDraft.block, blockDraft.text);
     try {
       const informe = await editTextBlock({
         workPath,
         pageIndex: index,
         objectIndex: blockDraft.block.object_index,
+        // SOLO el texto del bloque tocado, que es lo que se ha estado
+        // escribiendo en el cuadro: quien reconoce el párrafo, lo reparte y
+        // coloca las líneas de abajo es el backend, que es el único que
+        // sabe dónde acaba. Mandarle aquí el párrafo entero —o decidir
+        // aquí si lo hay— es lo que borraba las líneas de debajo
         newText: blockDraft.text,
-        // el párrafo se reparte de nuevo al ancho que tenía; una línea
-        // suelta se reescribe como siempre
-        reflow: parrafo,
+        reflow: true,
         ...formato,
       });
       setBlockDraft(null);

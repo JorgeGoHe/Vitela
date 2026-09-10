@@ -170,14 +170,14 @@ export default function CapaTexto({
             {" · "}
             {Math.round(blockDraft.block.font_size)} pt
           </span>
-          {/* se dice ANTES de teclear, no después de haber escrito un
-              párrafo: al guardar, el texto se reparte de nuevo al ancho que
-              tiene el bloque y las líneas de abajo suben o bajan */}
-          {blockDraft.block.h > blockDraft.block.font_size * 1.5 && (
-            <span className="opt-hint">
-              Al guardar se recoloca el párrafo entero al ancho que tiene.
-            </span>
-          )}
+          {/* se dice ANTES de teclear, no después de haber escrito: al
+              guardar, el párrafo al que pertenece esta línea se reparte de
+              nuevo a su ancho y las líneas de abajo suben o bajan. Lo hace
+              el motor, que es quien sabe dónde acaba el párrafo */}
+          <span className="opt-hint">
+            Al guardar, el párrafo se recoloca a su ancho · ⇧Enter parte la
+            línea
+          </span>
           <textarea
             autoFocus
             value={blockDraft.text}
