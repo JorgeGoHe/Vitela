@@ -1182,6 +1182,7 @@ pub fn run() {
             documento::set_outline,
             documento::pdf_info,
             documento::get_metadata,
+            documento::get_document_info,
             documento::get_page_labels,
             documento::set_page_labels,
             documento::set_metadata,

@@ -420,7 +420,7 @@ pub fn pdf_info(path: String) -> Result<PdfInfo, String> {
 
 /// ¿Trae el fichero un diccionario `/Encrypt`? Es lo único que se puede
 /// mirar cuando el documento no se deja parsear.
-fn trae_encrypt(path: &str) -> bool {
+pub(crate) fn trae_encrypt(path: &str) -> bool {
     std::fs::read(path)
         .map(|b| b.windows(8).any(|w| w == b"/Encrypt"))
         .unwrap_or(false)
@@ -1315,6 +1315,79 @@ mod tests_etiquetas {
         std::fs::remove_file(&pdf).ok();
     }
 
+    /// **Propiedades del documento.** «¿Por qué este PDF pesa 40 MB?» y
+    /// «¿por qué en tu ordenador se ve con otra letra?» se contestan aquí,
+    /// y por eso las fuentes con su tipo y su incrustación no son un
+    /// detalle técnico: son la respuesta. Es la pantalla de ⌘D de Acrobat.
+    #[test]
+    fn la_ficha_del_documento_dice_las_fuentes_el_tamano_y_lo_que_deja_hacer() {
+        let pdf = std::env::temp_dir().join("documento-ficha.pdf");
+        crea_pdf(&["Una página", "Y otra"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+
+        let ficha = get_document_info(work.clone()).expect("ficha");
+        assert_eq!(ficha.page_count, 2);
+        assert!(ficha.bytes > 0, "el peso es el del fichero");
+        assert!(ficha.version.starts_with("1."), "versión del PDF: {}", ficha.version);
+        assert!((ficha.page_width - 595.0).abs() < 2.0, "A4: {}", ficha.page_width);
+        assert!(ficha.paginas_iguales, "las dos páginas miden lo mismo");
+        assert!(!ficha.tiene_formulario);
+        assert_eq!(ficha.firmas, 0);
+        assert!(!ficha.fuentes.is_empty(), "el texto tiene que usar alguna fuente");
+        assert!(
+            ficha.fuentes.iter().all(|f| !f.nombre.is_empty() && f.tipo != "desconocida"),
+            "cada fuente con su nombre y su tipo: {:?}",
+            ficha.fuentes
+        );
+        // sin cifrar y sin protección puesta, el documento lo deja todo
+        assert_eq!(
+            ficha.seguridad,
+            SeguridadInfo {
+                cifrado: false,
+                pendiente: false,
+                imprimir: true,
+                copiar: true,
+                editar: true,
+            }
+        );
+
+        // un campo y una firma se cuentan aparte: un PDF que solo lleva una
+        // firma no es «un documento que se puede rellenar»
+        crate::formularios2::create_form_field(
+            work.clone(),
+            0,
+            "text".into(),
+            crate::Rect { x: 80.0, y: 200.0, w: 160.0, h: 20.0 },
+            "nombre".into(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("campo");
+        let ficha = get_document_info(work.clone()).expect("ficha");
+        assert!(ficha.tiene_formulario, "ahora sí se puede rellenar");
+
+        // y la protección puesta esperando a Guardar se cuenta como lo que
+        // es: todavía no cifrado, pero lo estará
+        crate::seguridad::encrypt_pdf(
+            work.clone(),
+            None,
+            "secreta".into(),
+            None,
+            Some(crate::seguridad::Permisos {
+                imprimir: true,
+                copiar: false,
+                editar: false,
+            }),
+        )
+        .expect("proteger al guardar");
+        let s = get_document_info(work.clone()).expect("ficha").seguridad;
+        assert!(s.pendiente && !s.cifrado, "todavía no está cifrado: {s:?}");
+        assert!(s.imprimir && !s.copiar && !s.editar, "{s:?}");
+        std::fs::remove_file(&pdf).ok();
+    }
+
     /// Los números que se enseñan, uno a uno. Un romano mal escrito no lo
     /// canta nadie hasta que alguien imprime el índice.
     #[test]
@@ -1329,4 +1402,222 @@ mod tests_etiquetas {
             assert_eq!(letras(n), esperado, "{n}");
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Propiedades del documento: lo que Acrobat enseña en ⌘D
+// ---------------------------------------------------------------------------
+
+/// Una fuente del documento, como la lista Acrobat en «Propiedades ▸
+/// Fuentes»: el nombre sin el prefijo del subconjunto, qué clase de fuente
+/// es y **si viaja dentro del fichero**.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FuenteInfo {
+    pub nombre: String,
+    /// «TrueType», «Type 1», «Type 3» o «compuesta» (Type 0), en llano.
+    pub tipo: String,
+    /// Con `false`, el visor la sustituye por otra parecida: el documento se
+    /// ve distinto en otro ordenador, y es la respuesta a media docena de
+    /// preguntas que empiezan por «esto no me sale como a ti».
+    pub incrustada: bool,
+    /// Solo van los glifos que se usan (el prefijo `ABCDEF+` del spec). Es
+    /// lo normal y es lo que hace que un PDF de 40 MB no pese 400.
+    pub subconjunto: bool,
+}
+
+/// Qué deja hacer el documento. Sale de la máscara `/P` del spec, la misma
+/// que compone `encrypt_pdf`.
+#[derive(Serialize, Debug, Default, PartialEq, Eq)]
+pub struct SeguridadInfo {
+    /// El fichero **en el disco** va cifrado.
+    pub cifrado: bool,
+    /// Hay protección puesta esperando a Guardar (ver «Protección»): el
+    /// documento todavía no está cifrado, pero lo estará.
+    pub pendiente: bool,
+    pub imprimir: bool,
+    pub copiar: bool,
+    pub editar: bool,
+}
+
+/// La ficha entera de un documento: lo que Acrobat reparte por las cuatro
+/// pestañas de ⌘D.
+#[derive(Serialize, Debug)]
+pub struct DocumentoInfo {
+    pub page_count: u16,
+    pub bytes: u64,
+    /// La versión del PDF («1.7»), que es lo que decide qué entiende un
+    /// visor viejo.
+    pub version: String,
+    /// Tamaño de la primera página **ya rotado**, en puntos.
+    pub page_width: f32,
+    pub page_height: f32,
+    /// Con `false`, el documento mezcla tamaños de página y la interfaz lo
+    /// dice: «210 × 297 mm (la primera; hay más tamaños)».
+    pub paginas_iguales: bool,
+    pub tiene_formulario: bool,
+    /// Cuántos campos de firma hay, que no son campos de formulario.
+    pub firmas: u16,
+    pub fuentes: Vec<FuenteInfo>,
+    pub seguridad: SeguridadInfo,
+}
+
+/// El nombre de una fuente sin el prefijo de subconjunto (`ABCDEF+Arial`),
+/// y si lo llevaba.
+fn nombre_de_fuente(base: &str) -> (String, bool) {
+    match base.split_once('+') {
+        Some((prefijo, resto))
+            if prefijo.len() == 6 && prefijo.bytes().all(|b| b.is_ascii_uppercase()) =>
+        {
+            (resto.to_string(), true)
+        }
+        _ => (base.to_string(), false),
+    }
+}
+
+/// El `/Subtype` de una fuente, dicho como lo dice Acrobat.
+fn tipo_de_fuente(subtype: &str) -> String {
+    match subtype {
+        "TrueType" => "TrueType",
+        "Type1" | "MMType1" => "Type 1",
+        "Type3" => "Type 3",
+        "Type0" => "compuesta",
+        _ => "desconocida",
+    }
+    .to_string()
+}
+
+/// Las fuentes que usa el documento, sin repetir. Se recorren los recursos
+/// de cada página: una fuente que no está en ningún `/Resources` no se usa,
+/// aunque el fichero la lleve dentro.
+fn fuentes_del_documento(doc: &LoDoc) -> Vec<FuenteInfo> {
+    let mut out: Vec<FuenteInfo> = Vec::new();
+    for (_, page_id) in doc.get_pages() {
+        let Ok((propios, heredados)) = doc.get_page_resources(page_id) else {
+            continue;
+        };
+        let mut dicts: Vec<Dictionary> = propios.cloned().into_iter().collect();
+        for id in heredados {
+            if let Ok(d) = doc.get_object(id).and_then(|o| o.as_dict()) {
+                dicts.push(d.clone());
+            }
+        }
+        for recursos in dicts {
+            let Ok(fuentes) = recursos.get(b"Font").map(|o| resuelve(doc, o)) else {
+                continue;
+            };
+            let Ok(fuentes) = fuentes.as_dict() else { continue };
+            for (_, obj) in fuentes.iter() {
+                let Ok(f) = resuelve(doc, obj).as_dict() else { continue };
+                let subtype = f
+                    .get(b"Subtype")
+                    .and_then(|o| o.as_name())
+                    .ok()
+                    .map(|n| String::from_utf8_lossy(n).into_owned())
+                    .unwrap_or_default();
+                let base = f
+                    .get(b"BaseFont")
+                    .and_then(|o| o.as_name())
+                    .ok()
+                    .map(|n| String::from_utf8_lossy(n).into_owned())
+                    .unwrap_or_else(|| "sin nombre".into());
+                // en una Type 0 el descriptor cuelga de la fuente
+                // descendiente, no de ella
+                let descriptor = match f.get(b"DescendantFonts").map(|o| resuelve(doc, o)) {
+                    Ok(Object::Array(a)) if !a.is_empty() => resuelve(doc, &a[0])
+                        .as_dict()
+                        .ok()
+                        .and_then(|d| d.get(b"FontDescriptor").ok().map(|o| resuelve(doc, o))),
+                    _ => f.get(b"FontDescriptor").ok().map(|o| resuelve(doc, o)),
+                };
+                let incrustada = descriptor
+                    .and_then(|d| d.as_dict().ok())
+                    .map(|d| {
+                        [b"FontFile".as_slice(), b"FontFile2", b"FontFile3"]
+                            .iter()
+                            .any(|k| d.has(k))
+                    })
+                    // una Type 3 lleva los glifos dibujados en el propio
+                    // documento: no hay fichero que incrustar y no se
+                    // sustituye por ninguna otra
+                    .unwrap_or(subtype == "Type3");
+                let (nombre, subconjunto) = nombre_de_fuente(&base);
+                let ficha = FuenteInfo {
+                    nombre,
+                    tipo: tipo_de_fuente(&subtype),
+                    incrustada,
+                    subconjunto,
+                };
+                if !out.contains(&ficha) {
+                    out.push(ficha);
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// La ficha del documento: número y tamaño de páginas, peso, versión del
+/// PDF, formulario, firmas, **las fuentes con su tipo y si van incrustadas**
+/// y el resumen de seguridad.
+///
+/// Es la pantalla que en Acrobat contesta «¿por qué este PDF pesa 40 MB?» y
+/// «¿por qué en tu ordenador se ve con otra letra?», y por eso las fuentes
+/// no son un detalle técnico: son la respuesta.
+///
+/// Solo lectura. La seguridad que se dice es la del **fichero de esta
+/// ruta** más la protección que esté puesta esperando a Guardar: la copia
+/// de trabajo nunca va cifrada (si lo fuera, PDFium pediría la contraseña
+/// en cada render), así que lo honesto es decir lo que se escribirá.
+#[tauri::command(async)]
+pub fn get_document_info(path: String) -> Result<DocumentoInfo, String> {
+    let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    let proteccion = crate::seguridad::permisos_puestos(&path);
+    on_pdfium_thread(move || {
+        let (page_count, page_width, page_height, paginas_iguales) = with_doc(&path, |doc| {
+            let paginas = doc.pages();
+            let n = paginas.len();
+            let primera = paginas.get(0).ok();
+            let (w, h) = primera
+                .as_ref()
+                .map(|p| (p.width().value, p.height().value))
+                .unwrap_or((0.0, 0.0));
+            let iguales = (0..n).filter_map(|i| paginas.get(i).ok()).all(|p| {
+                (p.width().value - w).abs() < 1.0 && (p.height().value - h).abs() < 1.0
+            });
+            Ok((n, w, h, iguales))
+        })?;
+        crate::with_lopdf(&path, |doc| {
+            let catalogo = doc.catalog().ok();
+            let acroform = catalogo
+                .and_then(|c| c.get(b"AcroForm").ok())
+                .map(|o| resuelve(doc, o))
+                .and_then(|o| o.as_dict().ok());
+            let campos = acroform
+                .and_then(|f| f.get(b"Fields").ok())
+                .map(|o| resuelve(doc, o))
+                .and_then(|o| o.as_array().ok());
+            let mut firmas = 0u16;
+            let mut otros = 0u16;
+            for c in campos.map(|v| v.as_slice()).unwrap_or_default() {
+                let Ok(d) = resuelve(doc, c).as_dict() else { continue };
+                match d.get(b"FT").and_then(|o| o.as_name()) {
+                    Ok(t) if t == b"Sig" => firmas += 1,
+                    _ => otros += 1,
+                }
+            }
+            Ok(DocumentoInfo {
+                page_count,
+                bytes,
+                version: doc.version.clone(),
+                page_width,
+                page_height,
+                paginas_iguales,
+                tiene_formulario: otros > 0,
+                firmas,
+                fuentes: fuentes_del_documento(doc),
+                seguridad: proteccion,
+            })
+        })
+    })
 }

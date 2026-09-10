@@ -196,6 +196,26 @@ pub(crate) fn proteccion_de(work_path: &str) -> Option<Proteccion> {
     protecciones().get(work_path).cloned()
 }
 
+/// El resumen de seguridad para «Propiedades»: qué deja hacer el documento
+/// de esta ruta.
+///
+/// La copia de trabajo **nunca va cifrada** —si lo fuera, PDFium pediría la
+/// contraseña en cada render—, así que lo que se dice es: si el fichero de
+/// esa ruta lleva `/Encrypt` en el disco, y qué protección hay puesta
+/// esperando a Guardar. Sin protección puesta, un PDF sin cifrar lo deja
+/// hacer todo, que es lo que hay que contestar.
+pub(crate) fn permisos_puestos(path: &str) -> crate::documento::SeguridadInfo {
+    let puesta = proteccion_de(path);
+    let permisos = puesta.as_ref().map(|p| p.permisos).unwrap_or_default();
+    crate::documento::SeguridadInfo {
+        cifrado: crate::documento::trae_encrypt(path),
+        pendiente: puesta.is_some(),
+        imprimir: permisos.imprimir,
+        copiar: permisos.copiar,
+        editar: permisos.editar,
+    }
+}
+
 /// Olvida la protección de una copia de trabajo que se cierra.
 pub(crate) fn olvida_proteccion(work_path: &str) {
     protecciones().remove(work_path);

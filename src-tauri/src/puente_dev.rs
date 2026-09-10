@@ -236,6 +236,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "set_outline" => cmd!(documento::set_outline, { work_path: String, nodes: Vec<documento::OutlineNode> }),
         "pdf_info" => cmd!(documento::pdf_info, { path: String }),
         "get_metadata" => cmd!(documento::get_metadata, { path: String }),
+        "get_document_info" => cmd!(documento::get_document_info, { path: String }),
         "get_page_labels" => cmd!(documento::get_page_labels, { path: String }),
         "set_page_labels" => cmd!(documento::set_page_labels, { work_path: String, labels: Vec<documento::RangoEtiqueta> }),
         "set_metadata" => cmd!(documento::set_metadata, { work_path: String, meta: documento::Metadata }),
@@ -466,6 +467,7 @@ mod tests {
         ("get_page_labels", "pendiente_ui — tanda 3 del ciclo 8: la píldora y las miniaturas dirán «ii (2)»"),
         ("set_page_labels", "pendiente_ui — tanda 3 del ciclo 8: «Organizar páginas ▸ Numerar páginas»"),
         ("add_bates", "pendiente_ui — tanda 3 del ciclo 8: el diálogo de Bates completo (prefijo, sufijo, dígitos, inicio y rango)"),
+        ("get_document_info", "pendiente_ui — tanda 3 del ciclo 8: las propiedades ampliadas de ⌘D (fuentes, tamaños y seguridad)"),
     ];
 
     /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada
