@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { DocumentInfo, Metadata, VistaInicial } from "../api";
-import { plural, tamanoFichero } from "../tipos";
+import { fechaLarga, plural, tamanoFichero } from "../tipos";
 import { useModal } from "../hooks/useModal";
 
 /** Las opciones de zoom de arranque, con el nombre que usa la píldora. */
@@ -108,9 +108,9 @@ export default function DialogoPropiedades({
         {campo("keywords", "Palabras clave")}
         {(initial.creator || initial.producer) && (
           <p className="modal-file">
-            {initial.creator && `Creado con: ${initial.creator}`}
+            {initial.creator && `Aplicación: ${initial.creator}`}
             {initial.creator && initial.producer && " · "}
-            {initial.producer && `Generador: ${initial.producer}`}
+            {initial.producer && `Generador de PDF: ${initial.producer}`}
           </p>
         )}
         {v && (
@@ -197,6 +197,19 @@ export default function DialogoPropiedades({
                   {tamanoPagina(ficha.page_width, ficha.page_height)}
                 </span>
               </li>
+              {/* las dos fechas del /Info: «cuándo se hizo esto» es la
+                  pregunta que se le hace a las propiedades de un documento */}
+              {ficha.creado && (
+                <li>
+                  Creado el <span className="dato">{fechaLarga(ficha.creado)}</span>
+                </li>
+              )}
+              {ficha.modificado && (
+                <li>
+                  Modificado el{" "}
+                  <span className="dato">{fechaLarga(ficha.modificado)}</span>
+                </li>
+              )}
               <li>
                 Formulario: {ficha.formulario ? "sí, se puede rellenar" : "no"}
               </li>

@@ -9,7 +9,7 @@
  * se enteran de que existe.
  */
 import { useRef, type MouseEvent } from "react";
-import type { Guias } from "../../tipos";
+import type { Ejes } from "../../tipos";
 
 /** Grosor de las reglas, en píxeles de pantalla. */
 const REGLA = 16;
@@ -18,14 +18,17 @@ type Props = {
   reglas: boolean;
   cuadricula: boolean;
   guiasVisibles: boolean;
-  guias: Guias;
+  /** Las guías que se ven en esta página (las suyas y las del documento). */
+  guias: Ejes;
+  /** Índice de la página: una guía es de la hoja en la que se pone. */
+  pagina: number;
   /** Milímetros por punto: la escala del documento si se ha fijado. */
   escalaMm: number;
   scale: number;
   displayWidth: number;
   displayHeight: number;
-  onGuia: (eje: "v" | "h", valor: number) => void;
-  onQuitarGuia: (eje: "v" | "h", valor: number) => void;
+  onGuia: (eje: "v" | "h", valor: number, pagina: number, todas: boolean) => void;
+  onQuitarGuia: (eje: "v" | "h", valor: number, pagina: number) => void;
 };
 
 /** Las marcas de una regla: una cada 10 mm de los de verdad, con su cifra
@@ -43,6 +46,7 @@ export default function CapaGuias({
   cuadricula,
   guiasVisibles,
   guias,
+  pagina,
   escalaMm,
   scale,
   displayWidth,
@@ -80,7 +84,9 @@ export default function CapaGuias({
           ? (ev.clientX - caja.left) / scale
           : (ev.clientY - caja.top) / scale;
       if (valor < 0 || valor > (ejeArrastre === "v" ? anchoPt : altoPt)) return;
-      onGuia(ejeArrastre, Math.round(valor * 10) / 10);
+      // con ⌥ la guía vale para todo el documento; sin él, para esta hoja,
+      // que es como funcionan en Acrobat
+      onGuia(ejeArrastre, Math.round(valor * 10) / 10, pagina, ev.altKey);
     }
     window.addEventListener("mousemove", mover);
     window.addEventListener("mouseup", soltar);
@@ -106,7 +112,7 @@ export default function CapaGuias({
             onMouseDown={(e) => e.stopPropagation()}
             onDoubleClick={(e) => {
               e.stopPropagation();
-              onQuitarGuia("v", x);
+              onQuitarGuia("v", x, pagina);
             }}
           />
         ))}
@@ -120,7 +126,7 @@ export default function CapaGuias({
             onMouseDown={(e) => e.stopPropagation()}
             onDoubleClick={(e) => {
               e.stopPropagation();
-              onQuitarGuia("h", y);
+              onQuitarGuia("h", y, pagina);
             }}
           />
         ))}
@@ -129,7 +135,7 @@ export default function CapaGuias({
           <div
             className="regla regla-h"
             style={{ height: REGLA, left: 0, right: 0, top: -REGLA }}
-            title="Arrastra hacia abajo para dejar una guía"
+            title="Arrastra hacia abajo para dejar una guía en esta página (⌥ para todas)"
             onMouseDown={(e) => empiezaGuia(e, "h")}
           >
             {marcas(anchoPt, escalaMm).map((x, i) => (
@@ -147,7 +153,7 @@ export default function CapaGuias({
           <div
             className="regla regla-v"
             style={{ width: REGLA, top: 0, bottom: 0, left: -REGLA }}
-            title="Arrastra hacia la derecha para dejar una guía"
+            title="Arrastra hacia la derecha para dejar una guía en esta página (⌥ para todas)"
             onMouseDown={(e) => empiezaGuia(e, "v")}
           >
             {marcas(altoPt, escalaMm).map((y, i) => (

@@ -947,6 +947,12 @@ export type DocumentInfo = {
   /** Qué deja hacer el `/P` del documento. */
   permisos: Permisos;
   fuentes: FuenteInfo[];
+  /** Cuándo se creó y cuándo se tocó por última vez (el `/CreationDate` y
+   *  el `/ModDate` del `/Info`, o el XMP), en ISO 8601. Opcionales: un
+   *  backend que no los traiga deja esas dos líneas fuera del diálogo en
+   *  vez de enseñar un hueco. */
+  creado?: string;
+  modificado?: string;
 };
 
 /** La ficha completa del documento abierto (solo lectura). Contesta a «¿por

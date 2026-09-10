@@ -7,7 +7,8 @@
 import { memo, useEffect, useRef, useState } from "react";
 import {
   charIndexAt,
-  type Guias,
+  type Ejes,
+  ajustaACuadricula,
   type Mode,
   type PageSize,
   type Rect,
@@ -161,11 +162,15 @@ type Props = {
   /** Andamio: reglas, guías y cuadrícula. No tocan el fichero. */
   reglas: boolean;
   cuadricula: boolean;
+  /** Lo que se coloca cae en la cuadrícula (⇧⌘U). */
+  ajustarCuadricula: boolean;
   guiasVisibles: boolean;
-  guias: Guias;
+  /** Las guías que se ven en ESTA página: las suyas y las del documento. */
+  guias: Ejes;
   escalaMm: number;
-  onGuia: (eje: "v" | "h", valor: number) => void;
-  onQuitarGuia: (eje: "v" | "h", valor: number) => void;
+  /** Deja una guía en esta página, o en todas si se soltó con ⌥. */
+  onGuia: (eje: "v" | "h", valor: number, pagina: number, todas: boolean) => void;
+  onQuitarGuia: (eje: "v" | "h", valor: number, pagina: number) => void;
   /** Quita una marca de esta página (la lista la lleva App). */
   quitarMarca: (page: number, annotIndex: number) => void;
   /** La lista de marcas ha cambiado: que App la relea. */
@@ -219,6 +224,7 @@ function Pagina({
   onPropuestaTipo,
   reglas,
   cuadricula,
+  ajustarCuadricula,
   guiasVisibles,
   guias,
   escalaMm,
@@ -445,9 +451,19 @@ function Pagina({
     hitRef.current?.scrollIntoView({ block: "center", inline: "center" });
   }, [matches, currentGroup, imgSrc]);
 
+  /** El punto del gesto en coordenadas de la página, ajustado a la
+   *  cuadrícula cuando está encendida y pedido el ajuste (⇧⌘U). Solo con una
+   *  herramienta en la mano: en modo Seleccionar el ratón sirve para señalar
+   *  texto, y ahí ajustar sería estorbar. */
+  function punto(e: React.MouseEvent<HTMLDivElement>) {
+    const p = pagePoint(e, scale, viewRotation);
+    if (!ajustarCuadricula || !cuadricula || mode === "select") return p;
+    return ajustaACuadricula(p, 10 / Math.max(0.0001, escalaMm));
+  }
+
   function onMouseDown(e: React.MouseEvent<HTMLDivElement>) {
     if (e.button !== 0) return;
-    const { x, y } = pagePoint(e, scale, viewRotation);
+    const { x, y } = punto(e);
     if (mode === "draw") {
       // la goma es un conmutador del mismo modo, no un modo aparte
       if (tool.goma) {
@@ -583,7 +599,7 @@ function Pagina({
     if (!(e.buttons & 1)) return;
     if (mode === "select" && anotaciones.annotActionRef.current) {
       const a = anotaciones.annotActionRef.current;
-      const { x, y } = pagePoint(e, scale, viewRotation);
+      const { x, y } = punto(e);
       const dx = x - a.startX;
       const dy = y - a.startY;
       if (Math.abs(dx) + Math.abs(dy) > 1) a.moved = true;
@@ -599,7 +615,7 @@ function Pagina({
     }
     if (mode === "image" && imagenes.imgActionRef.current) {
       const a = imagenes.imgActionRef.current;
-      const { x, y } = pagePoint(e, scale, viewRotation);
+      const { x, y } = punto(e);
       const dx = x - a.startX;
       const dy = y - a.startY;
       if (Math.abs(dx) + Math.abs(dy) > 1) a.moved = true;
@@ -613,7 +629,7 @@ function Pagina({
     }
     if (mode === "edit" && texto.txtActionRef.current) {
       const a = texto.txtActionRef.current;
-      const { x, y } = pagePoint(e, scale, viewRotation);
+      const { x, y } = punto(e);
       const dx = x - a.startX;
       const dy = y - a.startY;
       if (Math.abs(dx) + Math.abs(dy) > 1) a.moved = true;
@@ -627,7 +643,7 @@ function Pagina({
     }
     if (mode === "draw") {
       if (tool.goma) {
-        const p = pagePoint(e, scale, viewRotation);
+        const p = punto(e);
         anotaciones.setGomaPos(p);
         const start = anotaciones.gomaStartRef.current;
         if (!start) return;
@@ -637,7 +653,7 @@ function Pagina({
         return;
       }
       if (anotaciones.strokeLiveRef.current.length === 0) return;
-      const { x, y } = pagePoint(e, scale, viewRotation);
+      const { x, y } = punto(e);
       anotaciones.strokeLiveRef.current = [...anotaciones.strokeLiveRef.current, [x, y]];
       anotaciones.setStrokePts(anotaciones.strokeLiveRef.current);
       return;
@@ -645,7 +661,7 @@ function Pagina({
     if (mode === "firmar" || (mode === "stamp" && activeSig)) {
       const start = areas.sigDragRef.current;
       if (!activeSig || !start) return;
-      const { x, y } = pagePoint(e, scale, viewRotation);
+      const { x, y } = punto(e);
       const w = Math.abs(x - start.x);
       if (w < 4) return;
       const h = w * activeSig.ratio;
@@ -662,7 +678,7 @@ function Pagina({
     if (mode === "shape") {
       const start = anotaciones.shapeStartRef.current;
       if (!start) return;
-      const { x, y } = pagePoint(e, scale, viewRotation);
+      const { x, y } = punto(e);
       const d = { x1: start.x, y1: start.y, x2: x, y2: y };
       anotaciones.shapeLiveRef.current = d;
       anotaciones.setShapeDraft(d);
@@ -671,7 +687,7 @@ function Pagina({
     if (mode === "medir") {
       const start = medida.medidaStartRef.current;
       if (!start) return;
-      const { x, y } = pagePoint(e, scale, viewRotation);
+      const { x, y } = punto(e);
       const d = { x1: start.x, y1: start.y, x2: x, y2: y };
       medida.medidaLiveRef.current = d;
       medida.setMedidaDraft(d);
@@ -680,7 +696,7 @@ function Pagina({
     if (mode === "crop") {
       const start = areas.cropStartRef.current;
       if (!start) return;
-      const { x, y } = pagePoint(e, scale, viewRotation);
+      const { x, y } = punto(e);
       areas.setCropDraft({
         x: Math.min(x, start.x),
         y: Math.min(y, start.y),
@@ -692,7 +708,7 @@ function Pagina({
     if (mode === "redact") {
       const start = areas.redactStartRef.current;
       if (!start) return;
-      const { x, y } = pagePoint(e, scale, viewRotation);
+      const { x, y } = punto(e);
       const d = {
         x: Math.min(x, start.x),
         y: Math.min(y, start.y),
@@ -706,7 +722,7 @@ function Pagina({
     if (mode === "firma-cert") {
       const start = areas.certStartRef.current;
       if (!start) return;
-      const { x, y } = pagePoint(e, scale, viewRotation);
+      const { x, y } = punto(e);
       const d = {
         x: Math.min(x, start.x),
         y: Math.min(y, start.y),
@@ -720,7 +736,7 @@ function Pagina({
     if (mode === "freetext") {
       const start = anotaciones.freeTextStartRef.current;
       if (!start) return;
-      const { x, y } = pagePoint(e, scale, viewRotation);
+      const { x, y } = punto(e);
       const d = {
         x: Math.min(x, start.x),
         y: Math.min(y, start.y),
@@ -735,7 +751,7 @@ function Pagina({
     if (mode === "callout") {
       const start = anotaciones.calloutStartRef.current;
       if (!start) return;
-      const { x, y } = pagePoint(e, scale, viewRotation);
+      const { x, y } = punto(e);
       const d = cajaLlamada(start, { x, y }, size);
       anotaciones.calloutLiveRef.current = d;
       anotaciones.setCalloutDraft(d);
@@ -744,7 +760,7 @@ function Pagina({
     if (mode === "form-new" || mode === "link-new") {
       const start = (mode === "form-new" ? formularios.formStartRef : enlaces.linkStartRef).current;
       if (!start) return;
-      const { x, y } = pagePoint(e, scale, viewRotation);
+      const { x, y } = punto(e);
       const d = {
         x: Math.min(x, start.x),
         y: Math.min(y, start.y),
@@ -768,7 +784,7 @@ function Pagina({
       Math.abs(e.clientY - down.y) < 4
     )
       return;
-    const { x, y } = pagePoint(e, scale, viewRotation);
+    const { x, y } = punto(e);
     const idx = charIndexAt(seleccion.pageText, x, y);
     if (idx === null) return;
     const a = seleccion.anchorRef.current;
@@ -1077,6 +1093,7 @@ function Pagina({
             cuadricula={cuadricula}
             guiasVisibles={guiasVisibles}
             guias={guias}
+            pagina={index}
             escalaMm={escalaMm}
             scale={scale}
             displayWidth={displayWidth}

@@ -1067,9 +1067,25 @@ const CLAVE_GUIAS = "editorPdf.guias";
  *  (su x) y `h` las horizontales (su y). **No tocan el fichero**: son el
  *  andamio de quien coloca sellos y campos, así que viven donde vive la
  *  escala de medida, en `localStorage` y por ruta. */
-export type Guias = { v: number[]; h: number[] };
+/** Las guías de una página o del documento entero. */
+export type Ejes = { v: number[]; h: number[] };
 
-export const SIN_GUIAS: Guias = { v: [], h: [] };
+/** Guías de un documento: **las de cada página** —que es como funcionan en
+ *  Acrobat, donde una guía es de la hoja en la que se pone— más las que
+ *  valen para todas, que se dejan con ⌥ al soltar. */
+export type Guias = Ejes & { paginas: Record<number, Ejes> };
+
+export const SIN_GUIAS: Guias = { v: [], h: [], paginas: {} };
+
+/** Las guías que se ven en una página: las suyas y las de todo el
+ *  documento, juntas y sin repetir. */
+export function guiasDePagina(guias: Guias, pagina: number): Ejes {
+  const suyas = guias.paginas[pagina] ?? { v: [], h: [] };
+  return {
+    v: [...new Set([...guias.v, ...suyas.v])],
+    h: [...new Set([...guias.h, ...suyas.h])],
+  };
+}
 
 export function cargaGuias(path: string | null): Guias {
   if (!path) return SIN_GUIAS;
@@ -1078,7 +1094,14 @@ export function cargaGuias(path: string | null): Guias {
     const g = todas[path];
     const nums = (x: unknown) =>
       Array.isArray(x) ? x.filter((n) => Number.isFinite(n)) : [];
-    return { v: nums(g?.v), h: nums(g?.h) };
+    const paginas: Record<number, Ejes> = {};
+    // el formato de antes no tenía páginas: sus guías eran de todo el
+    // documento y ahí se quedan
+    for (const [k, v] of Object.entries(g?.paginas ?? {})) {
+      const e = v as { v?: unknown; h?: unknown };
+      paginas[Number(k)] = { v: nums(e?.v), h: nums(e?.h) };
+    }
+    return { v: nums(g?.v), h: nums(g?.h), paginas };
   } catch {
     return SIN_GUIAS;
   }
@@ -1088,12 +1111,32 @@ export function guardaGuias(path: string | null, guias: Guias) {
   if (!path) return;
   try {
     const todas = JSON.parse(localStorage.getItem(CLAVE_GUIAS) ?? "{}");
-    if (guias.v.length === 0 && guias.h.length === 0) delete todas[path];
+    const vacias =
+      guias.v.length === 0 &&
+      guias.h.length === 0 &&
+      Object.values(guias.paginas).every(
+        (e) => e.v.length === 0 && e.h.length === 0,
+      );
+    if (vacias) delete todas[path];
     else todas[path] = guias;
     localStorage.setItem(CLAVE_GUIAS, JSON.stringify(todas));
   } catch {
     /* sin localStorage las guías valen para esta sesión y ya */
   }
+}
+
+/** Un punto ajustado a la cuadrícula, para lo que se coloca con ella
+ *  encendida (⇧⌘U). El paso es el mismo que pinta `CapaGuias`: 10 mm de los
+ *  de verdad, o de papel si el documento no tiene escala. */
+export function ajustaACuadricula(
+  p: { x: number; y: number },
+  pasoPt: number,
+): { x: number; y: number } {
+  if (!(pasoPt > 0)) return p;
+  return {
+    x: Math.round(p.x / pasoPt) * pasoPt,
+    y: Math.round(p.y / pasoPt) * pasoPt,
+  };
 }
 
 const CLAVE_ESCALA = "editorPdf.escala";

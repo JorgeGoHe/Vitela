@@ -163,6 +163,7 @@ import {
   guardaGuias,
   type Guias,
   SIN_GUIAS,
+  guiasDePagina,
   cargaResaltarCampos,
   copyToClipboard,
   guardaEscala,
@@ -231,11 +232,13 @@ const BASE_WIDTH = 900;
 /** Los niveles de zoom de Acrobat. ⌘+ y ⌘− saltan de uno al siguiente; el
  *  campo del zoom sigue aceptando cualquier número entre los extremos. */
 const NIVELES_ZOOM = [
-  0.25, 0.3333, 0.5, 0.6667, 0.75, 1, 1.25, 1.5, 2, 4, 8, 16, 24, 64,
+  0.08, 0.12, 0.25, 0.3333, 0.5, 0.6667, 0.75, 1, 1.25, 1.5, 2, 4, 8, 16, 24,
+  64,
 ];
-/** Zoom válido: del 25 % al 6400 %, redondeado al 1 % (por debajo del 1 %
- *  el redondeo se comía los niveles finos, así que a partir del 100 % se
- *  redondea al entero). */
+/** Zoom válido: del 8 % al 6400 %, redondeado al 1 % (por debajo del 1 % el
+ *  redondeo se comía los niveles finos, así que a partir del 100 % se
+ *  redondea al entero). El 8 % y el 12 % son los de Acrobat y son los que
+ *  dejan ver un cartel A0 entero de una vez. */
 function recortaZoom(z: number): number {
   const tope = NIVELES_ZOOM[NIVELES_ZOOM.length - 1];
   return Math.min(tope, Math.max(NIVELES_ZOOM[0], Math.round(z * 100) / 100));
@@ -764,6 +767,8 @@ function App() {
   // fichero ni se imprimen; las guías se guardan por ruta, como la escala
   const [reglas, setReglas] = useState(false);
   const [cuadricula, setCuadricula] = useState(false);
+  // «ajustar a la cuadrícula» (⇧⌘U): lo que se coloca cae en la cuadrícula
+  const [ajustarCuadricula, setAjustarCuadricula] = useState(false);
   const [guiasVisibles, setGuiasVisibles] = useState(true);
   // el andamio tenía tres atajos y ninguna puerta: quien no leía la pantalla
   // de atajos no sabía que existía
@@ -778,10 +783,24 @@ function App() {
   );
   /** Deja una guía nueva. Van por ruta, así que el andamio de un plano
    *  sigue ahí la próxima vez que se abra el documento. */
+  /** Deja una guía nueva **en su página**, que es como funcionan en
+   *  Acrobat; con ⌥ al soltar vale para todo el documento. */
   const ponGuia = useCallback(
-    (eje: "v" | "h", valor: number) => {
+    (eje: "v" | "h", valor: number, pagina: number, todas: boolean) => {
       setGuias((g) => {
-        const siguiente = { ...g, [eje]: [...g[eje], valor] };
+        const siguiente: Guias = todas
+          ? { ...g, [eje]: [...g[eje], valor] }
+          : {
+              ...g,
+              paginas: {
+                ...g.paginas,
+                [pagina]: {
+                  v: [...(g.paginas[pagina]?.v ?? [])],
+                  h: [...(g.paginas[pagina]?.h ?? [])],
+                  [eje]: [...(g.paginas[pagina]?.[eje] ?? []), valor],
+                },
+              },
+            };
         guardaGuias(originalPath, siguiente);
         return siguiente;
       });
@@ -789,10 +808,25 @@ function App() {
     },
     [originalPath],
   );
+  /** Quitar una guía la quita de su página **y** de las de todo el
+   *  documento: es la misma raya, la ponga quien la ponga. */
   const quitaGuia = useCallback(
-    (eje: "v" | "h", valor: number) => {
+    (eje: "v" | "h", valor: number, pagina: number) => {
       setGuias((g) => {
-        const siguiente = { ...g, [eje]: g[eje].filter((v) => v !== valor) };
+        const suyas = g.paginas[pagina];
+        const siguiente: Guias = {
+          ...g,
+          [eje]: g[eje].filter((v) => v !== valor),
+          paginas: suyas
+            ? {
+                ...g.paginas,
+                [pagina]: {
+                  ...suyas,
+                  [eje]: suyas[eje].filter((v) => v !== valor),
+                },
+              }
+            : g.paginas,
+        };
         guardaGuias(originalPath, siguiente);
         return siguiente;
       });
@@ -2363,7 +2397,22 @@ function App() {
       } else if (mod && e.key === ";" && pageCount > 0) {
         e.preventDefault();
         setGuiasVisibles((v) => !v);
-      } else if (mod && e.key === "'" && pageCount > 0) {
+      } else if (mod && e.shiftKey && (e.key === "u" || e.key === "U") && pageCount > 0) {
+        // ⇧⌘U: ajustar a la cuadrícula, el atajo de Acrobat
+        e.preventDefault();
+        setAjustarCuadricula((v) => !v);
+        setNotice(
+          ajustarCuadricula
+            ? "Lo que coloques ya no se ajusta a la cuadrícula"
+            : "Lo que coloques se ajustará a la cuadrícula",
+        );
+      } else if (
+        mod &&
+        ((e.key === "u" || e.key === "U") || e.key === "'") &&
+        pageCount > 0
+      ) {
+        // ⌘U es el de Acrobat; ⌘' se queda como alias, que es el que llevaba
+        // Vitela desde el ciclo 8
         e.preventDefault();
         setCuadricula((v) => !v);
       } else if (mod && e.shiftKey && (e.key === "l" || e.key === "L")) {
@@ -4275,6 +4324,9 @@ function App() {
     "mostrar-cuadricula": () => {
       if (pageCount > 0) setCuadricula((v) => !v);
     },
+    "ajustar-cuadricula": () => {
+      if (pageCount > 0) setAjustarCuadricula((v) => !v);
+    },
     /* Documento */
     "organizar-paginas": () => abrirPestana("paginas"),
     "recortar-pagina": () => {
@@ -5721,8 +5773,9 @@ function App() {
                   onPropuestaTipo={cambiaTipoPropuesta}
                   reglas={reglas}
                   cuadricula={cuadricula}
+                  ajustarCuadricula={ajustarCuadricula}
                   guiasVisibles={guiasVisibles}
-                  guias={guias}
+                  guias={guiasDePagina(guias, i)}
                   escalaMm={escalaMm}
                   onGuia={ponGuia}
                   onQuitarGuia={quitaGuia}
@@ -5819,7 +5872,7 @@ function App() {
                   className="pill-input"
                   inputMode="numeric"
                   autoFocus
-                  aria-label="Porcentaje de zoom (25 a 6400)"
+                  aria-label="Porcentaje de zoom (8 a 6400)"
                   value={zoomDraft}
                   onFocus={(e) => e.currentTarget.select()}
                   onChange={(e) =>
@@ -5948,7 +6001,24 @@ function App() {
                           onChange={() => setCuadricula((v) => !v)}
                         />
                         <span className="menu-texto">Cuadrícula</span>
-                        <span className="menu-atajo dato">{MOD}&apos;</span>
+                        <span className="menu-atajo dato">{MOD}U</span>
+                      </label>
+                      <label
+                        className={`opt-check${cuadricula ? "" : " disabled"}`}
+                        title={
+                          cuadricula
+                            ? "Lo que coloques cae en la cuadrícula"
+                            : "Enciende antes la cuadrícula"
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          checked={ajustarCuadricula}
+                          disabled={!cuadricula}
+                          onChange={() => setAjustarCuadricula((v) => !v)}
+                        />
+                        <span className="menu-texto">Ajustar a la cuadrícula</span>
+                        <span className="menu-atajo dato">⇧{MOD}U</span>
                       </label>
                       <span className="opt-hint bm-hint">
                         Andamio para colocar: no toca el fichero ni se imprime.
