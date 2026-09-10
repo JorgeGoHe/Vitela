@@ -279,12 +279,17 @@ pub fn edit_text_block(
     color: Option<[u8; 4]>,
     align: Option<String>,
     line_height: Option<f32>,
+    char_spacing: Option<f32>,
 ) -> Result<(), String> {
+    let tc = espaciado(char_spacing);
     mutacion(work_path, move |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
             .map_err(|e| e.to_string())?;
+        // los bloques a los que hay que escribirles el `Tc`, por su ordinal
+        // entre los objetos de texto de la página (ver `escribe_espaciado`)
+        let mut ordinales: Vec<usize> = Vec::new();
         let mut lineas = new_text.lines();
         let primera = lineas.next().unwrap_or("").to_string();
         let resto: Vec<String> = lineas.map(|l| l.to_string()).collect();
@@ -292,6 +297,9 @@ pub fn edit_text_block(
         // 1) reescribir la primera línea y leer familia/tamaño/posición
         let (familia, font_size, base_x, base_y, color_viejo) = {
             let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            if tc.is_some() {
+                ordinales.push(ordinal_de_texto(&page, object_index as usize));
+            }
             let mut obj = page
                 .objects_mut()
                 .get(object_index as usize)
@@ -351,6 +359,7 @@ pub fn edit_text_block(
             let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
             let line_h = font_size.value * interlineado(line_height);
             let [r, g, b, a] = color.unwrap_or(color_viejo);
+            let mut anadidas = 0usize;
             for (i, linea) in resto.iter().enumerate() {
                 if linea.trim().is_empty() {
                     continue;
@@ -369,11 +378,25 @@ pub fn edit_text_block(
                 page.objects_mut()
                     .add_text_object(nuevo)
                     .map_err(|e| e.to_string())?;
+                anadidas += 1;
             }
             page.regenerate_content().map_err(|e| e.to_string())?;
+            // las líneas nuevas se han añadido al final de la página, así
+            // que son los últimos objetos de texto
+            if tc.is_some() && anadidas > 0 {
+                let total = cuantos_textos(&page);
+                ordinales.extend((total - anadidas)..total);
+            }
             drop(page);
         }
         save_and_close(doc, &work_path)?;
+        // el espaciado entre caracteres, en un segundo pase con lopdf:
+        // pdfium-render 0.8 no expone el estado de texto del objeto
+        if let Some(tc) = tc {
+            crate::cirugia_en_hilo(&work_path, |doc| {
+                escribe_espaciado(doc, page_index, &ordinales, tc)
+            })?;
+        }
         Ok(())
     }))
 }
@@ -497,11 +520,13 @@ pub fn add_text_block(
     color: Option<[u8; 4]>,
     align: Option<String>,
     line_height: Option<f32>,
+    char_spacing: Option<f32>,
 ) -> Result<(), String> {
     if text.trim().is_empty() {
         return Err("El texto está vacío".into());
     }
     let font_size = font_size.clamp(6.0, 96.0);
+    let tc = espaciado(char_spacing);
     mutacion(work_path, move |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
@@ -521,6 +546,7 @@ pub fn add_text_block(
         let (derecha, abajo) = vista.ejes();
         let ancla = vista.propia().ui_a_pdf(x, y);
         let line_h = font_size * interlineado(line_height);
+        let mut anadidas = 0usize;
         for (i, linea) in text.lines().enumerate() {
             if linea.trim().is_empty() {
                 continue;
@@ -553,10 +579,24 @@ pub fn add_text_block(
             page.objects_mut()
                 .add_text_object(obj)
                 .map_err(|e| e.to_string())?;
+            anadidas += 1;
         }
         page.regenerate_content().map_err(|e| e.to_string())?;
+        // los objetos nuevos van al final de la página: son los últimos
+        // bloques de texto del content stream
+        let ordinales: Vec<usize> = if tc.is_some() && anadidas > 0 {
+            let total = cuantos_textos(&page);
+            ((total - anadidas)..total).collect()
+        } else {
+            Vec::new()
+        };
         drop(page);
         save_and_close(doc, &work_path)?;
+        if let Some(tc) = tc {
+            crate::cirugia_en_hilo(&work_path, |doc| {
+                escribe_espaciado(doc, page_index, &ordinales, tc)
+            })?;
+        }
         Ok(())
     }))
 }
@@ -568,6 +608,186 @@ pub fn add_text_block(
 /// cada uno.
 fn interlineado(line_height: Option<f32>) -> f32 {
     line_height.unwrap_or(1.2).clamp(0.6, 4.0)
+}
+
+/// El espaciado entre caracteres pedido, ya acotado, o `None` cuando no hay
+/// nada que escribir (el operador `Tc` por defecto es 0 y PDFium no lo
+/// emite: no escribirlo es exactamente lo mismo que escribir `0 Tc`).
+fn espaciado(char_spacing: Option<f32>) -> Option<f32> {
+    match char_spacing {
+        Some(v) if v.abs() > 0.001 => Some(v.clamp(-20.0, 100.0)),
+        _ => None,
+    }
+}
+
+/// Cuántos objetos de texto hay en la página antes de `hasta` (excluido).
+/// Es el ordinal del bloque entre los bloques de texto, que es lo que
+/// cuenta en el content stream: PDFium escribe un `BT … ET` por objeto de
+/// texto y en el mismo orden que la lista de objetos de la página.
+fn ordinal_de_texto(page: &PdfPage, hasta: usize) -> usize {
+    let objetos = page.objects();
+    (0..hasta.min(objetos.len()))
+        .filter(|i| {
+            objetos
+                .get(*i)
+                .ok()
+                .is_some_and(|o| o.as_text_object().is_some())
+        })
+        .count()
+}
+
+/// Cuántos objetos de texto tiene la página en total.
+fn cuantos_textos(page: &PdfPage) -> usize {
+    ordinal_de_texto(page, page.objects().len())
+}
+
+/// Un byte «regular» del content stream: ni espacio ni delimitador. Los
+/// tokens (`BT`, `ET`, `Tj`, los números) están hechos de estos.
+fn regular(b: u8) -> bool {
+    !matches!(
+        b,
+        b'\0' | b'\t' | b'\n' | 0x0c | b'\r' | b' ' | b'(' | b')' | b'<' | b'>' | b'[' | b']'
+            | b'{' | b'}' | b'/' | b'%'
+    )
+}
+
+/// Escribe `<tc> Tc` justo detrás del `BT` de los bloques cuyo ordinal está
+/// en `ordinales`, y `0 Tc` antes de su `ET` para que el espaciado no se
+/// escape al resto de la página (`Tc` es estado gráfico, no del bloque).
+///
+/// Se hace **a mano sobre los bytes** y no con `Content::decode`: el
+/// analizador de contenido de lopdf 0.34 no entiende las imágenes en línea
+/// (`BI … ID … EI`) y en un PDF de fuera se atragantaría; recorriendo los
+/// bytes —saltando cadenas, hexadecimales y comentarios— lo demás se
+/// conserva byte a byte y esto no puede fallar. Devuelve el contenido
+/// nuevo, cuántos `BT` ha visto y si ha cambiado algo.
+fn inserta_tc(datos: &[u8], desde: usize, ordinales: &[usize], tc: f32) -> (Vec<u8>, usize, bool) {
+    let mut out = Vec::with_capacity(datos.len() + 32);
+    let mut i = 0usize;
+    let mut n = desde;
+    let mut dentro = false;
+    let mut cambiado = false;
+    while i < datos.len() {
+        match datos[i] {
+            // comentario: hasta el final de la línea
+            b'%' => {
+                let ini = i;
+                while i < datos.len() && datos[i] != b'\n' && datos[i] != b'\r' {
+                    i += 1;
+                }
+                out.extend_from_slice(&datos[ini..i]);
+            }
+            // cadena literal, con anidamiento y escapes
+            b'(' => {
+                let ini = i;
+                let mut nivel = 0i32;
+                while i < datos.len() {
+                    match datos[i] {
+                        b'\\' => i += 1,
+                        b'(' => nivel += 1,
+                        b')' => {
+                            nivel -= 1;
+                            if nivel == 0 {
+                                i += 1;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                out.extend_from_slice(&datos[ini..i.min(datos.len())]);
+            }
+            // `<<` abre diccionario; `<` solo, una cadena hexadecimal
+            b'<' => {
+                let ini = i;
+                if datos.get(i + 1) == Some(&b'<') {
+                    i += 2;
+                } else {
+                    while i < datos.len() && datos[i] != b'>' {
+                        i += 1;
+                    }
+                    i = (i + 1).min(datos.len());
+                }
+                out.extend_from_slice(&datos[ini..i]);
+            }
+            b if regular(b) => {
+                let ini = i;
+                while i < datos.len() && regular(datos[i]) {
+                    i += 1;
+                }
+                let token = &datos[ini..i];
+                if token == b"BT" {
+                    let toca = ordinales.contains(&n);
+                    n += 1;
+                    out.extend_from_slice(token);
+                    if toca {
+                        out.extend_from_slice(format!(" {tc} Tc").as_bytes());
+                        dentro = true;
+                        cambiado = true;
+                    }
+                } else if token == b"ET" && dentro {
+                    out.extend_from_slice(b"0 Tc ");
+                    out.extend_from_slice(token);
+                    dentro = false;
+                } else {
+                    out.extend_from_slice(token);
+                }
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    (out, n, cambiado)
+}
+
+/// Escribe el espaciado entre caracteres de unos bloques de la página.
+///
+/// pdfium-render 0.8 no expone el estado de texto de un objeto (no hay
+/// `set_char_spacing` ni nada equivalente en toda su API), así que el
+/// operador se escribe con lopdf en un segundo pase, por el mismo camino
+/// con el que `anotaciones::escribe_apariencia_marca` escribe lo que PDFium
+/// no escribe. Se hace **stream a stream**, sin refundirlos, para no tocar
+/// lo que no hay que tocar.
+///
+/// Ojo: `FPDF_GenerateContent` **no vuelve a escribir el `Tc`** cuando
+/// PDFium regenera el content stream de la página, así que mover o estirar
+/// después ese bloque se lleva el espaciado por delante. La UI lo manda en
+/// cada corrección, que es cuando el usuario lo elige.
+pub(crate) fn escribe_espaciado(
+    doc: &mut lopdf::Document,
+    page_index: u16,
+    ordinales: &[usize],
+    tc: f32,
+) -> Result<(), String> {
+    if ordinales.is_empty() {
+        return Ok(());
+    }
+    let paginas = doc.get_pages();
+    let pid = *paginas
+        .get(&(page_index as u32 + 1))
+        .ok_or("La página no existe")?;
+    let mut vistos = 0usize;
+    let mut escritos = Vec::new();
+    for id in doc.get_page_contents(pid) {
+        let Ok(stream) = doc.get_object(id).and_then(lopdf::Object::as_stream) else {
+            continue;
+        };
+        let datos = stream
+            .decompressed_content()
+            .unwrap_or_else(|_| stream.content.clone());
+        let (nuevo, ahora, cambiado) = inserta_tc(&datos, vistos, ordinales, tc);
+        vistos = ahora;
+        if cambiado {
+            escritos.push((id, nuevo));
+        }
+    }
+    for (id, nuevo) in escritos {
+        doc.change_content_stream(id, nuevo);
+    }
+    Ok(())
 }
 
 /// Mueve un bloque de texto a un punto de la página, como se arrastra una
@@ -733,6 +953,123 @@ mod tests {
         assert_eq!(normaliza_familia("Georgia"), "Georgia");
     }
 
+    /// **R24.** El espaciado entre caracteres es un mando de la fila
+    /// contextual que hasta el ciclo 5 no llegaba a ninguna parte: Tauri
+    /// descartaba la clave y el comando devolvía `Ok`. Ahora se escribe el
+    /// operador `Tc` con lopdf (pdfium-render 0.8 no expone el estado de
+    /// texto del objeto) y el texto se separa de verdad: PDFium lo lee al
+    /// medir la caja del bloque.
+    #[test]
+    fn el_espaciado_entre_caracteres_separa_el_texto_y_deja_el_operador_escrito() {
+        let tmp = std::env::temp_dir().join("texto-espaciado-tc.pdf");
+        crea_pdf(&["Texto original"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        let antes = get_text_blocks(work.clone(), 0).expect("bloques")[0].clone();
+
+        edit_text_block(
+            work.clone(),
+            0,
+            antes.object_index,
+            "Texto original".into(),
+            None,
+            None,
+            None,
+            Some(2.0),
+        )
+        .expect("corregir con espaciado");
+
+        // el operador está en el content stream, con su valor
+        let doc = lopdf::Document::load(&work).expect("releer con lopdf");
+        let pid = doc.get_pages()[&1];
+        let contenido = String::from_utf8_lossy(
+            &doc.get_page_content(pid).expect("content stream"),
+        )
+        .into_owned();
+        assert!(contenido.contains("2 Tc"), "el content stream: {contenido}");
+        // y no se escapa al resto de la página
+        assert!(contenido.contains("0 Tc"), "el espaciado se cierra antes del ET");
+
+        // y el texto se ha separado: 2 pt por cada hueco entre caracteres
+        let despues = get_text_blocks(work.clone(), 0).expect("bloques")[0].clone();
+        let huecos = antes.text.chars().count() as f32;
+        let crecimiento = despues.w - antes.w;
+        assert!(
+            (crecimiento - 2.0 * huecos).abs() < 3.0,
+            "con 2 pt de espaciado el bloque debía crecer ~{:.1} pt y ha crecido {crecimiento:.1}",
+            2.0 * huecos
+        );
+
+        // sin espaciado (o con 0) el operador no se escribe: `Tc` vale 0 por
+        // defecto y ensuciar el stream por nada no ayuda a nadie
+        edit_text_block(work.clone(), 0, antes.object_index, "Texto original".into(), None, None, None, None)
+            .expect("corregir sin espaciado");
+        let doc = lopdf::Document::load(&work).expect("releer");
+        let pid = doc.get_pages()[&1];
+        let contenido = String::from_utf8_lossy(&doc.get_page_content(pid).unwrap()).into_owned();
+        assert!(!contenido.contains(" Tc"), "sin pedirlo no se escribe: {contenido}");
+        let vuelta = get_text_blocks(work.clone(), 0).expect("bloques")[0].clone();
+        assert!(
+            (vuelta.w - antes.w).abs() < 1.0,
+            "el bloque vuelve a su ancho: {:.1} → {:.1}",
+            antes.w,
+            vuelta.w
+        );
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// **R24.** El texto nuevo también lo acepta, y en un bloque de varias
+    /// líneas lo llevan todas: las líneas 2..n son objetos aparte y sin
+    /// esto la primera salía separada y las demás juntas.
+    #[test]
+    fn el_texto_nuevo_de_varias_lineas_lleva_el_espaciado_en_todas() {
+        let tmp = std::env::temp_dir().join("texto-espaciado-nuevo.pdf");
+        crea_pdf(&["Contenido previo"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        add_text_block(
+            work.clone(),
+            0,
+            80.0,
+            300.0,
+            "Primera linea\nSegunda linea".into(),
+            12.0,
+            None,
+            None,
+            None,
+            None,
+            Some(3.0),
+        )
+        .expect("añadir con espaciado");
+
+        let doc = lopdf::Document::load(&work).expect("releer");
+        let pid = doc.get_pages()[&1];
+        let contenido =
+            String::from_utf8_lossy(&doc.get_page_content(pid).unwrap()).into_owned();
+        assert_eq!(
+            contenido.matches("3 Tc").count(),
+            2,
+            "una por línea: {contenido}"
+        );
+        // el bloque que ya estaba no se toca
+        let bloques = get_text_blocks(work.clone(), 0).expect("bloques");
+        let previo = bloques
+            .iter()
+            .find(|b| b.text.contains("Contenido"))
+            .expect("el bloque previo");
+        let ancho_normal = previo.w;
+        let nuevas: Vec<_> = bloques.iter().filter(|b| b.text.contains("linea")).collect();
+        assert_eq!(nuevas.len(), 2, "dos líneas");
+        for l in &nuevas {
+            assert!(
+                l.w > l.text.chars().count() as f32 * 3.0,
+                "la línea {:?} mide {:.1} y con 3 pt por hueco tenía que ser más ancha",
+                l.text,
+                l.w
+            );
+        }
+        assert!(ancho_normal > 0.0);
+        std::fs::remove_file(&tmp).ok();
+    }
+
     #[test]
     fn edicion_de_texto() {
         let tmp = std::env::temp_dir().join("editor_pdf_test_edicion.pdf");
@@ -756,7 +1093,7 @@ mod tests {
             "Texto editado".into(),
             None,
             None,
-            None)
+            None, None)
         .expect("editar bloque");
         let t = textos_de(&tmp);
         assert!(t[0].contains("Texto editado"), "tras editar: {t:?}");
@@ -788,7 +1125,7 @@ mod tests {
             None,
             None,
             None,
-            None)
+            None, None)
         .expect("añadir texto");
 
         let t = textos_de(&tmp).join(" ");
@@ -811,7 +1148,7 @@ mod tests {
         );
 
         // el texto vacío debe rechazarse
-        assert!(add_text_block(work.clone(), 0, 0.0, 0.0, "  ".into(), 12.0, None, None, None, None).is_err());
+        assert!(add_text_block(work.clone(), 0, 0.0, 0.0, "  ".into(), 12.0, None, None, None, None, None).is_err());
 
         std::fs::remove_file(&tmp).ok();
     }
@@ -919,6 +1256,7 @@ mod tests {
             Some([220, 20, 20, 255]),
             None,
             None,
+            None,
         )
         .expect("añadir en rojo");
         let rojo = get_text_blocks(work.clone(), 0)
@@ -937,6 +1275,7 @@ mod tests {
             None,
             None,
             Some(2.0),
+            None,
         )
         .expect("corregir");
         let bloques = get_text_blocks(work.clone(), 0).expect("bloques");
@@ -968,6 +1307,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("corregir con el interlineado de siempre");
         let bloques = get_text_blocks(work.clone(), 0).expect("bloques");
@@ -993,7 +1333,7 @@ mod tests {
 
         // fuente automática primero (solo hay Helvetica en la página, sin
         // empates): debe detectar la dominante
-        add_text_block(work.clone(), 0, 60.0, 400.0, "Detectada".into(), 12.0, None, None, None, None)
+        add_text_block(work.clone(), 0, 60.0, 400.0, "Detectada".into(), 12.0, None, None, None, None, None)
             .expect("añadir automática");
         let blocks = get_text_blocks(work.clone(), 0).expect("listar");
         let auto = blocks
@@ -1015,7 +1355,7 @@ mod tests {
             Some("Times Bold".into()),
             None,
             None,
-            None)
+            None, None)
         .expect("añadir con Times");
         let blocks = get_text_blocks(work.clone(), 0).expect("relistar");
         let serif = blocks
@@ -1045,7 +1385,7 @@ mod tests {
             "Primera línea\nSegunda línea\nTercera".into(),
             None,
             None,
-            None)
+            None, None)
         .expect("editar multilínea");
 
         let t = textos_de(&tmp).join(" ");
@@ -1091,7 +1431,7 @@ mod tests {
                 270 => (s.height - vy, vx),
                 _ => (vx, vy),
             };
-            add_text_block(work.clone(), 0, px, py, "NUEVO".into(), 24.0, None, None, None, None)
+            add_text_block(work.clone(), 0, px, py, "NUEVO".into(), 24.0, None, None, None, None, None)
                 .expect("añadir texto");
 
             let bloques = get_text_blocks(work.clone(), 0).expect("bloques");
@@ -1308,7 +1648,7 @@ mod tests {
                 None,
                 Some([200, 20, 20, 255]),
                 align,
-                None)
+                None, None)
             .expect("añadir texto");
         }
         let bloques = get_text_blocks(work.clone(), 0).expect("listar");
@@ -1357,7 +1697,7 @@ mod tests {
             "Izquierda".into(),
             Some([20, 20, 200, 255]),
             None,
-            None)
+            None, None)
         .expect("recolorear");
         let png = crate::render_page_png(work.clone(), 0, 600, true).expect("render");
         let img = image::load_from_memory(&png).expect("PNG").to_rgba8();
@@ -1386,7 +1726,7 @@ mod tests {
             None,
             None,
             Some("centro".into()),
-            None)
+            None, None)
         .expect("añadir");
         let b = get_text_blocks(work.clone(), 0)
             .expect("listar")
@@ -1401,7 +1741,7 @@ mod tests {
             "Un texto bastante más largo".into(),
             None,
             Some("centro".into()),
-            None)
+            None, None)
         .expect("corregir");
         let b = get_text_blocks(work.clone(), 0)
             .expect("listar")
@@ -1417,3 +1757,4 @@ mod tests {
         std::fs::remove_file(&tmp).ok();
     }
 }
+

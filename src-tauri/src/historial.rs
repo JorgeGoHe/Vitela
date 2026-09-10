@@ -383,7 +383,7 @@ mod tests {
             esperados += 1;
             assert_eq!(history_state(work.to_string()).unwrap().undo, esperados);
         };
-        crate::texto::add_text_block(work.clone(), 0, 60.0, 400.0, "Nuevo".into(), 12.0, None, None, None, None)
+        crate::texto::add_text_block(work.clone(), 0, 60.0, 400.0, "Nuevo".into(), 12.0, None, None, None, None, None)
             .unwrap();
         cuenta(&work);
         crate::anotaciones2::add_stamp(work.clone(), 0, "OK".into(), [200, 0, 0, 255], 200.0, 200.0, 20.0, None)
