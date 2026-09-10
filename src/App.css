@@ -3176,6 +3176,39 @@ textarea {
   flex-shrink: 0;
 }
 
+/* la hoja dibujada del diálogo de imprimir: dónde cae cada página con la
+   composición elegida. Papel con sus divisiones, nada más */
+.previa-hoja {
+  display: grid;
+  gap: 2px;
+  width: 96px;
+  aspect-ratio: 1 / 1.414;
+  padding: 3px;
+  background: #fcfbf7;
+  border: 1px solid var(--fg-muted);
+  border-radius: 3px;
+}
+
+.previa-hoja.apaisada {
+  aspect-ratio: 1.414 / 1;
+  grid-template-columns: 1fr 1fr;
+}
+
+.previa-celda {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #6f6a5c;
+  background: color-mix(in srgb, #6f6a5c 10%, transparent);
+  border-radius: 2px;
+}
+
+.previa-hoja.con-borde .previa-celda {
+  border: 1px solid #6f6a5c;
+}
+
 /* la lista de «elegir uno a uno» de la recuperación: una fila por
    documento, con su fecha y sus dos salidas */
 .recuperar-lista {

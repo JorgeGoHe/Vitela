@@ -35,6 +35,7 @@ import { abrirRuta, open, save, openUrl } from "./dialogos";
 import {
   addBlankPage,
   removeMarginalText,
+  composePrint,
   addBackground,
   removeBackground,
   addHeaderFooter,
@@ -3502,6 +3503,50 @@ function App() {
     }
   }
 
+  /** Las hojas de una composición —folleto, varias por hoja o póster—, ya
+   *  rasterizadas. El backend compone un PDF temporal con las páginas
+   *  nuevas y aquí se pinta como cualquier otro: imprimir sigue siendo
+   *  pintar lo que rasteriza el backend, y el documento no se toca. */
+  async function hojasCompuestas(
+    o: OpcionesImprimir,
+    idx: number[],
+    dpi: number,
+  ): Promise<{ src: string }[]> {
+    if (!workPath) return [];
+    const dest = await composePrint(workPath, o.composicion, {
+      page_indices: idx,
+      ...o.comp,
+    });
+    const info = await invoke<{ page_count: number; work_path: string }>(
+      "open_pdf",
+      { path: dest, password: null },
+    );
+    try {
+      const sizes = await invoke<PageSize[]>("get_page_sizes", {
+        path: info.work_path,
+      });
+      const hojas: { src: string }[] = [];
+      for (let i = 0; i < info.page_count; i++) {
+        const anchoPt = sizes[i]?.width ?? 595;
+        hojas.push({
+          src: await renderPageSrc(
+            info.work_path,
+            i,
+            Math.round((anchoPt * dpi) / 72),
+          ),
+        });
+      }
+      return hojas;
+    } finally {
+      await invoke("close_document", { workPath: info.work_path }).catch(
+        () => {},
+      );
+      // `close_document` atenúa por dentro el menú nativo y aquí sigue
+      // habiendo documento abierto
+      setMenuState(true).catch(() => {});
+    }
+  }
+
   /** Rasteriza solo el rango pedido y abre el diálogo del sistema. El bucle
    *  se puede cancelar desde la propia banda de progreso; al cancelar se
    *  liberan los blobs y no se abre nada. */
@@ -3534,6 +3579,16 @@ function App() {
         dato: `0 / ${idx.length}`,
         accion: cancelar,
       });
+      // con composición las hojas no son las páginas: las compone el
+      // backend en un PDF aparte y se pintan tal cual
+      if (o.composicion !== "ninguna") {
+        setNotice("Componiendo las hojas…", {
+          persistente: true,
+          accion: cancelar,
+        });
+        for (const hoja of await hojasCompuestas(o, idx, dpi))
+          listas.push(hoja);
+      } else {
       for (let n = 0; n < idx.length; n++) {
         if (señal.cancelado) break;
         const i = idx[n];
@@ -3557,6 +3612,7 @@ function App() {
           dato: `${n + 1} / ${idx.length}`,
           accion: cancelar,
         });
+      }
       }
       // el resumen de comentarios va detrás del documento, como la casilla
       // de Acrobat: se compone con el mismo comando que lo exporta y se

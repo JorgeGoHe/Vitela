@@ -4,7 +4,9 @@
  */
 import type {
   EstadoFirma,
+  ModoComposicion,
   NivelCertificacion,
+  OpcionesComposicion,
   OrdenComentarios,
   RangoEtiquetas,
   Rgba,
@@ -427,6 +429,56 @@ export type OpcionesImprimir = {
   resumen: boolean;
   /** En qué orden va ese resumen; «por página» es el de Acrobat. */
   ordenResumen: OrdenComentarios;
+  /** Cómo se montan las páginas en el papel: una por hoja («ninguna»),
+   *  varias por hoja, folleto o póster. */
+  composicion: ModoComposicion;
+  /** Los ajustes de las tres composiciones, en snake_case porque viajan
+   *  como una estructura anidada. */
+  comp: Omit<OpcionesComposicion, "page_indices">;
+};
+
+/** Cuántas **hojas de papel** salen de una composición. Es el dato que hace
+ *  falta para decidir —«8 páginas → 2 hojas»—, y en folleto no coincide con
+ *  el número de caras: cada hoja lleva dos páginas por cada lado. */
+export function hojasDeComposicion(
+  modo: ModoComposicion,
+  comp: Omit<OpcionesComposicion, "page_indices">,
+  paginas: number,
+): number {
+  if (paginas === 0) return 0;
+  if (modo === "nup")
+    return Math.ceil(paginas / Math.max(1, comp.por_hoja));
+  if (modo === "folleto") {
+    const hojas = Math.ceil(paginas / 4);
+    return comp.caras === "ambas" ? hojas : hojas;
+  }
+  if (modo === "poster") {
+    const trozos = Math.max(1, Math.ceil(comp.escala / 100));
+    return paginas * trozos * trozos;
+  }
+  return paginas;
+}
+
+/** El orden en el que van las páginas en la **primera hoja** de un folleto,
+ *  que es lo que enseña la vista previa: con 8 páginas, 8-1 por delante y
+ *  2-7 por detrás. Sin esto, «folleto» es magia negra. */
+export function caraDeFolleto(paginas: number): [number, number] {
+  const total = Math.ceil(paginas / 4) * 4;
+  return [total, 1];
+}
+
+export const COMPOSICION_POR_DEFECTO: Omit<
+  OpcionesComposicion,
+  "page_indices"
+> = {
+  por_hoja: 2,
+  orden: "horizontal",
+  borde: false,
+  encuadernacion: "izquierda",
+  caras: "ambas",
+  escala: 200,
+  solape_mm: 0,
+  marcas: false,
 };
 
 /** Las páginas que salen de las opciones del diálogo, ya filtradas por
@@ -459,6 +511,8 @@ export const IMPRIMIR_POR_DEFECTO: OpcionesImprimir = {
   conMarcas: true,
   resumen: false,
   ordenResumen: "pagina",
+  composicion: "ninguna",
+  comp: COMPOSICION_POR_DEFECTO,
 };
 
 /* ---- ajuste de línea del cuadro de texto (FreeText) ---- */

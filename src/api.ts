@@ -1008,6 +1008,44 @@ export function setPageLabels(
   return invoke("set_page_labels", { workPath, rangos });
 }
 
+/* ---- composición de impresión: folleto, N-up y póster ---- */
+
+/** Las tres composiciones de Acrobat, más «ninguna», que es imprimir una
+ *  página por hoja como hasta ahora. */
+export type ModoComposicion = "ninguna" | "nup" | "folleto" | "poster";
+
+/** Lo que necesita cada composición. Va como **una sola estructura
+ *  anidada** con todos los campos, así que sus claves van en snake_case:
+ *  Tauri solo traduce el camelCase de los argumentos de primer nivel. */
+export type OpcionesComposicion = {
+  /** Páginas que entran, en orden (las del rango del diálogo). */
+  page_indices: number[];
+  /** N-up: cuántas por hoja (2, 4, 6, 9 o 16) y en qué orden se recorren. */
+  por_hoja: number;
+  orden: "horizontal" | "vertical";
+  /** El borde de cada página, que es la casilla de Acrobat. */
+  borde: boolean;
+  /** Folleto: por dónde se grapa y qué caras salen. */
+  encuadernacion: "izquierda" | "derecha";
+  caras: "ambas" | "anverso" | "reverso";
+  /** Póster: a cuánto se amplía, cuánto se solapan las hojas y si se
+   *  imprimen las marcas de corte. */
+  escala: number;
+  solape_mm: number;
+  marcas: boolean;
+};
+
+/** Compone las páginas nuevas —folleto, varias por hoja o póster— en un PDF
+ *  temporal y devuelve su ruta. **No toca el documento**: lo que se compone
+ *  es lo que se va a imprimir, y se rasteriza por el camino de siempre. */
+export function composePrint(
+  workPath: string,
+  modo: ModoComposicion,
+  opciones: OpcionesComposicion,
+): Promise<string> {
+  return invoke("compose_print", { workPath, modo, opciones });
+}
+
 /* ---- vista inicial (`/OpenAction` y `/PageLayout`) ---- */
 
 /** Con qué cara se abre el documento: la única parte de las propiedades que
