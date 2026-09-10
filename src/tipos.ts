@@ -812,6 +812,27 @@ export function aplicaRangoEtiquetas(
 
 /* ---- opciones de búsqueda (persistidas en localStorage) ---- */
 
+/* ---- iniciales: la segunda ranura de la biblioteca de firmas ---- */
+
+const CLAVE_INICIALES = "editorPdf.iniciales";
+
+/** Qué entradas de la biblioteca son las iniciales y no la firma entera.
+ *  La biblioteca del backend guarda imágenes por nombre y no sabe de
+ *  ranuras; cuál es cuál es una preferencia de esta máquina, como el resto
+ *  de la memoria de la interfaz. */
+export function cargaIniciales(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(CLAVE_INICIALES) ?? "[]");
+    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function guardaIniciales(ids: string[]): void {
+  localStorage.setItem(CLAVE_INICIALES, JSON.stringify(ids));
+}
+
 const CLAVE_BUSQUEDA = "editorPdf.opcionesBusqueda";
 
 export type OpcionesBusqueda = { matchCase: boolean; wholeWord: boolean };

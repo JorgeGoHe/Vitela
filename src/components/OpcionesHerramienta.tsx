@@ -73,6 +73,8 @@ export default function OpcionesHerramienta({
   onPararLectura,
   medidaTipo,
   setMedidaTipo,
+  hayIniciales,
+  onIniciales,
   medidaDejar,
   setMedidaDejar,
   calibrando,
@@ -135,6 +137,10 @@ export default function OpcionesHerramienta({
   /** Modo «Medir». */
   medidaTipo: "distancia" | "perimetro" | "area";
   setMedidaTipo: (v: "distancia" | "perimetro" | "area") => void;
+  /** Hay iniciales guardadas en la biblioteca. */
+  hayIniciales: boolean;
+  /** Arma las iniciales para estamparlas con un clic. */
+  onIniciales: () => void;
   medidaDejar: boolean;
   setMedidaDejar: (v: boolean) => void;
   calibrando: boolean;
@@ -374,6 +380,18 @@ export default function OpcionesHerramienta({
             <Icon name="textbox" size={14} />
             Texto
           </button>
+          {/* las iniciales son lo que se pone en CADA página de un contrato:
+              su propio botón, sin pasar por la biblioteca cada vez */}
+          {hayIniciales && (
+            <button
+              className="btn"
+              title="Estampar tus iniciales · clic en la página para colocarlas"
+              onClick={onIniciales}
+            >
+              <Icon name="sign" size={14} />
+              Iniciales
+            </button>
+          )}
           <div className="swatches" role="group" aria-label="Color de la marca">
             {SHAPE_COLORS.map((c) => (
               <button

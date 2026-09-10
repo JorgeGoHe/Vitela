@@ -296,6 +296,12 @@ textarea {
   border-radius: 6px;
 }
 
+/* las dos ranuras de la biblioteca de firmas, dentro del popover */
+.sign-ranuras {
+  align-self: flex-start;
+  margin-bottom: 4px;
+}
+
 .segmented .btn.on {
   background: var(--card-bg);
   color: var(--accent);

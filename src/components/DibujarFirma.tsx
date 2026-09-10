@@ -16,16 +16,21 @@ const COLORS: { value: string; label: string }[] = [
  * data:) junto con el nombre elegido.
  */
 export default function DibujarFirma({
+  ranura = "firma",
   onSave,
   onClose,
 }: {
+  /** Qué se está dibujando: la firma entera o las iniciales. */
+  ranura?: "firma" | "iniciales";
   onSave: (name: string, pngBase64: string) => void;
   onClose: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const drawingRef = useRef(false);
   const lastRef = useRef<{ x: number; y: number } | null>(null);
-  const [name, setName] = useState("Mi firma");
+  const [name, setName] = useState(
+    ranura === "iniciales" ? "Mis iniciales" : "Mi firma",
+  );
   const [color, setColor] = useState(
     () => cargaColores().firmaTrazo ?? COLORS[0].value,
   );
@@ -148,13 +153,15 @@ export default function DibujarFirma({
         className="modal modal-firma"
         role="dialog"
         aria-modal="true"
-        aria-label="Dibujar firma"
+        aria-label={
+          ranura === "iniciales" ? "Dibujar iniciales" : "Dibujar firma"
+        }
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
         ref={modalRef}
         tabIndex={-1}
       >
-        <h3>Dibujar firma</h3>
+        <h3>{ranura === "iniciales" ? "Dibujar iniciales" : "Dibujar firma"}</h3>
         <canvas
           ref={canvasRef}
           className="firma-canvas"

@@ -682,6 +682,7 @@ function App() {
   const [atajosAbiertos, setAtajosAbiertos] = useState(false);
   const {
     firmas,
+    iniciales,
     activeSig,
     setActiveSig,
     drawingSig,
@@ -4090,6 +4091,15 @@ function App() {
     },
   ];
 
+  /** «Iniciales» de la fila de firmar: arma la última guardada para
+   *  estamparla con un clic, sin pasar por la biblioteca en cada página. */
+  function armarIniciales() {
+    const f = firmas.find((x) => iniciales.includes(x.id));
+    if (!f) return;
+    setMode("firmar");
+    pickSignature(f);
+  }
+
   function selectMode(m: Mode) {
     setMode((cur) => (cur === m ? "select" : m));
     setActiveSig(null);
@@ -4487,16 +4497,24 @@ function App() {
       {mode === "firmar" && !activeSig && !drawingSig && !herramienta.fillMark && (
         <PanelFirmas
           firmas={firmas}
+          iniciales={iniciales}
           onPick={pickSignature}
           onUpload={uploadSignature}
-          onDraw={() => setDrawingSig(true)}
+          onDraw={(ranura) => setDrawingSig(ranura)}
           onDelete={removeSignature}
           onClose={() => selectMode("select")}
         />
       )}
       {drawingSig && (
         <DibujarFirma
-          onSave={saveDrawnSignature}
+          ranura={drawingSig === "iniciales" ? "iniciales" : "firma"}
+          onSave={(nombre, png) =>
+            saveDrawnSignature(
+              nombre,
+              png,
+              drawingSig === "iniciales" ? "iniciales" : "firma",
+            )
+          }
           onClose={() => setDrawingSig(false)}
         />
       )}
@@ -4972,6 +4990,8 @@ function App() {
         paginaLeida={lectura.paginaLeida}
         onPausarLectura={lectura.pausar}
         onPararLectura={lectura.parar}
+        hayIniciales={iniciales.length > 0}
+        onIniciales={armarIniciales}
         medidaTipo={herramienta.medidaTipo}
         setMedidaTipo={herramienta.setMedidaTipo}
         medidaDejar={herramienta.medidaDejar}
