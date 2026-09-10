@@ -1445,7 +1445,7 @@ fn recolorea_objetos(
         save_and_close(doc, work_path)
     } else {
         drop(doc);
-        crate::invalidate_doc_cache();
+        crate::invalidate_doc_cache(work_path);
         Ok(())
     }
 }

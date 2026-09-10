@@ -1511,7 +1511,7 @@ pub fn remove_marginal_text(
         }
         if dry_run {
             drop(doc);
-            crate::invalidate_doc_cache();
+            crate::invalidate_doc_cache(&work_path);
         } else {
             save_and_close(doc, &work_path)?;
         }

@@ -215,7 +215,7 @@ pub fn remove_encryption(work_path: String) -> Result<(), String> {
     crate::historial::mutacion(work_path, |work_path| {
         olvida_proteccion(&work_path);
         on_pdfium_thread(move || {
-            invalidate_doc_cache();
+            invalidate_doc_cache(&work_path);
             let mut doc = LoDoc::load(&work_path).map_err(|e| {
                 crate::mensaje_llano(format!("No se ha podido leer el documento: {e}"))
             })?;
@@ -285,7 +285,7 @@ pub(crate) fn cifra_a(
     // lee la copia de trabajo: en el hilo de PDFium y con el caché
     // invalidado, para no competir con una mutación concurrente
     on_pdfium_thread(move || {
-        invalidate_doc_cache();
+        invalidate_doc_cache(&work_path);
         let mut doc = LoDoc::load(&work_path).map_err(|e| {
             crate::mensaje_llano(format!("No se ha podido leer el documento: {e}"))
         })?;
@@ -862,7 +862,7 @@ fn prepara_para_aplanar(work_path: &str) -> Result<(), String> {
 pub fn flatten_pdf(work_path: String) -> Result<(), String> {
     mutacion(work_path, |work_path| on_pdfium_thread(move || {
         // el caché puede tener el fichero abierto: cerrarlo antes del rename
-        invalidate_doc_cache();
+        invalidate_doc_cache(&work_path);
         prepara_para_aplanar(&work_path)?;
         let pdfium = pdfium()?;
         let doc = pdfium
@@ -937,7 +937,7 @@ pub fn redact_area(
         if dry_run {
             drop(page);
             drop(doc);
-            invalidate_doc_cache();
+            invalidate_doc_cache(&work_path);
             return Ok(RedactReport { textos, imagenes });
         }
         for &i in caen.iter().rev() {

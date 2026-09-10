@@ -52,9 +52,19 @@ pub(crate) fn on_pdfium_thread<R: Send + 'static>(f: impl FnOnce() -> R + Send +
 thread_local! {
     static EN_HILO_PDFIUM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static PDFIUM: RefCell<Option<&'static Pdfium>> = const { RefCell::new(None) };
-    static DOC_CACHE: RefCell<Option<(String, PdfDocument<'static>)>> = const { RefCell::new(None) };
-    static LOPDF_CACHE: RefCell<Option<(String, lopdf::Document)>> = const { RefCell::new(None) };
+    static DOC_CACHE: RefCell<Vec<(String, PdfDocument<'static>)>> = const { RefCell::new(Vec::new()) };
+    static LOPDF_CACHE: RefCell<Vec<(String, lopdf::Document)>> = const { RefCell::new(Vec::new()) };
 }
+
+/// Cuántos documentos se quedan abiertos en el caché del hilo de PDFium.
+///
+/// Hasta el ciclo 6 era **uno**: abrir el segundo cerraba el primero, así
+/// que trabajar con dos documentos a la vez recargaba el otro en cada
+/// comando. Con un tope pequeño se atiende el uso de verdad —un documento y
+/// el que se está mirando al lado— sin comerse la memoria de un PDF de
+/// 400 MB por pestaña: pasado el tope se suelta el que lleva más tiempo sin
+/// tocarse, y recargarlo cuesta milisegundos.
+const DOCUMENTOS_EN_CACHE: usize = 4;
 
 /// Instancia única de PDFium, creada una sola vez y viva todo el proceso.
 /// Solo debe llamarse desde el hilo de PDFium (dentro de `on_pdfium_thread`).
@@ -96,15 +106,36 @@ pub(crate) fn with_doc<R>(
 ) -> Result<R, String> {
     DOC_CACHE.with(|cell| {
         let mut cache = cell.borrow_mut();
-        let stale = !matches!(cache.as_ref(), Some((p, _)) if p == path);
-        if stale {
-            let doc = pdfium()?
+        let i = coloca(&mut cache, path, || {
+            pdfium()?
                 .load_pdf_from_file(path, None)
-                .map_err(mensaje_llano)?;
-            *cache = Some((path.to_string(), doc));
-        }
-        f(&cache.as_ref().unwrap().1).map_err(mensaje_llano)
+                .map_err(mensaje_llano)
+        })?;
+        f(&cache[i].1).map_err(mensaje_llano)
     })
+}
+
+/// Deja el documento de `path` cargado en el caché y devuelve dónde está.
+/// El que se usa se va al final, así que el que se suelta al llegar al tope
+/// es siempre el que lleva más tiempo sin tocarse.
+fn coloca<T>(
+    cache: &mut Vec<(String, T)>,
+    path: &str,
+    carga: impl FnOnce() -> Result<T, String>,
+) -> Result<usize, String> {
+    if let Some(i) = cache.iter().position(|(p, _)| p == path) {
+        let entrada = cache.remove(i);
+        cache.push(entrada);
+        return Ok(cache.len() - 1);
+    }
+    let doc = carga()?;
+    // se suelta ANTES de meter el nuevo: así nunca hay más documentos
+    // abiertos de los que dice el tope
+    while cache.len() >= DOCUMENTOS_EN_CACHE {
+        cache.remove(0);
+    }
+    cache.push((path.to_string(), doc));
+    Ok(cache.len() - 1)
 }
 
 /// Igual que `with_doc` pero con el documento parseado por lopdf (para lo
@@ -115,20 +146,24 @@ pub(crate) fn with_lopdf<R>(
 ) -> Result<R, String> {
     LOPDF_CACHE.with(|cell| {
         let mut cache = cell.borrow_mut();
-        let stale = !matches!(cache.as_ref(), Some((p, _)) if p == path);
-        if stale {
-            let doc = lopdf::Document::load(path)
-                .map_err(|e| mensaje_llano(format!("No se ha podido leer el PDF: {e}")))?;
-            *cache = Some((path.to_string(), doc));
-        }
-        f(&cache.as_ref().unwrap().1).map_err(mensaje_llano)
+        let i = coloca(&mut cache, path, || {
+            lopdf::Document::load(path)
+                .map_err(|e| mensaje_llano(format!("No se ha podido leer el PDF: {e}")))
+        })?;
+        f(&cache[i].1).map_err(mensaje_llano)
     })
 }
 
-/// Descarta los documentos cacheados. Llamar tras cualquier mutación en disco.
-pub(crate) fn invalidate_doc_cache() {
-    DOC_CACHE.with(|cell| *cell.borrow_mut() = None);
-    LOPDF_CACHE.with(|cell| *cell.borrow_mut() = None);
+/// Suelta **ese** documento del caché. Llamar tras cualquier mutación en
+/// disco: PDFium lee el fichero de forma perezosa mientras lo tiene
+/// abierto, y en Windows no se puede renombrar encima de un fichero abierto.
+///
+/// Es por documento desde el ciclo 7: con el caché de uno solo, tocar un
+/// documento obligaba a recargar el otro, y con varios abiertos eso es
+/// recargar un PDF entero en cada comando.
+pub(crate) fn invalidate_doc_cache(path: &str) {
+    DOC_CACHE.with(|cell| cell.borrow_mut().retain(|(p, _)| p != path));
+    LOPDF_CACHE.with(|cell| cell.borrow_mut().retain(|(p, _)| p != path));
 }
 
 #[derive(Serialize, Debug)]
@@ -153,7 +188,7 @@ fn copias_abiertas() -> std::sync::MutexGuard<'static, std::collections::HashSet
 /// Borra la copia de trabajo y sus instantáneas de historial. Debe llamarse
 /// desde el hilo de PDFium (invalida el caché antes de borrar).
 fn borra_copia(work_path: &str) {
-    invalidate_doc_cache();
+    invalidate_doc_cache(work_path);
     seguridad::olvida_proteccion(work_path);
     historial::limpia(work_path);
     let _ = std::fs::remove_file(work_path);
@@ -282,7 +317,7 @@ pub(crate) fn save_and_close(doc: PdfDocument<'static>, path: &str) -> Result<()
     let tmp = format!("{path}.tmp");
     doc.save_to_file(&tmp).map_err(mensaje_llano)?;
     drop(doc);
-    invalidate_doc_cache();
+    invalidate_doc_cache(path);
     std::fs::rename(&tmp, path).map_err(mensaje_llano)
 }
 
@@ -309,7 +344,7 @@ pub(crate) fn cirugia_en_hilo(
     work_path: &str,
     f: impl FnOnce(&mut lopdf::Document) -> Result<(), String>,
 ) -> Result<(), String> {
-    invalidate_doc_cache();
+    invalidate_doc_cache(work_path);
     let mut doc = lopdf::Document::load(work_path)
         .map_err(|e| mensaje_llano(format!("No se ha podido leer el PDF: {e}")))?;
     if doc.is_encrypted() {
@@ -782,7 +817,7 @@ fn firmar_en_hilo(
     apariencia: firma::Apariencia,
 ) -> Result<(), String> {
     on_pdfium_thread(move || {
-        invalidate_doc_cache();
+        invalidate_doc_cache(&work_path);
         firma::sign(&work_path, &dest_path, &cred, reason, &apariencia).map_err(mensaje_llano)
     })
 }
@@ -866,7 +901,7 @@ fn save_pdf(work_path: String, dest_path: String) -> Result<(), String> {
     }
     // en el hilo de PDFium: nadie puede estar renombrando la copia a la vez
     on_pdfium_thread(move || {
-        invalidate_doc_cache();
+        invalidate_doc_cache(&work_path);
         copia_firmando(&work_path, &dest_path)
     })
 }
@@ -1240,6 +1275,111 @@ pub(crate) mod tests {
         let llano = "El área de recorte es demasiado pequeña";
         assert_eq!(mensaje_llano(llano), llano);
         assert_eq!(mensaje_llano(mensaje_llano(llano)), llano);
+    }
+
+    /// **H6.** El hilo de PDFium deja de dar por hecho que hay **un**
+    /// documento abierto: su caché es un mapa por copia de trabajo con un
+    /// tope pequeño. Hasta el ciclo 6, abrir el segundo echaba al primero,
+    /// así que trabajar con dos a la vez recargaba el otro en cada comando.
+    ///
+    /// Lo que este test defiende no es la velocidad, es que **no se pisan**:
+    /// mutar uno no toca al otro, ni a su historial, ni a su copia.
+    #[test]
+    fn dos_documentos_abiertos_a_la_vez_no_se_pisan() {
+        let dir = std::env::temp_dir();
+        let uno = dir.join("h6-uno.pdf");
+        let otro = dir.join("h6-otro.pdf");
+        crea_pdf(&["Uno A", "Uno B", "Uno C"], &uno);
+        crea_pdf(&["Otro A", "Otro B"], &otro);
+
+        let a = open_pdf(uno.to_string_lossy().into_owned(), None).expect("abrir el primero");
+        let b = open_pdf(otro.to_string_lossy().into_owned(), None).expect("abrir el segundo");
+        assert_eq!(a.page_count, 3);
+        assert_eq!(b.page_count, 2);
+
+        // los dos se leen, alternando, sin echar al otro
+        for _ in 0..3 {
+            assert_eq!(get_page_sizes(a.work_path.clone()).expect("tamaños").len(), 3);
+            assert_eq!(get_page_sizes(b.work_path.clone()).expect("tamaños").len(), 2);
+        }
+
+        // mutar el primero no toca al segundo
+        paginas::delete_page(a.work_path.clone(), 0).expect("borrar una página del primero");
+        assert_eq!(get_page_sizes(a.work_path.clone()).expect("tamaños").len(), 2);
+        assert_eq!(
+            get_page_sizes(b.work_path.clone()).expect("tamaños").len(),
+            2,
+            "el segundo se queda como estaba"
+        );
+        assert_eq!(
+            historial::history_state(b.work_path.clone()).expect("historial").undo,
+            0,
+            "y sin un paso de deshacer que no ha pedido nadie"
+        );
+
+        // ⌘Z en el primero tampoco
+        historial::undo(a.work_path.clone()).expect("deshacer en el primero");
+        assert_eq!(get_page_sizes(a.work_path.clone()).expect("tamaños").len(), 3);
+        assert_eq!(get_page_sizes(b.work_path.clone()).expect("tamaños").len(), 2);
+        assert!(
+            crate::tests::textos_de(std::path::Path::new(&b.work_path))[0].contains("Otro A"),
+            "el segundo sigue diciendo lo suyo"
+        );
+
+        // cerrar el primero se lleva su copia y deja la del segundo
+        close_document(a.work_path.clone()).expect("cerrar el primero");
+        assert!(!std::path::Path::new(&a.work_path).exists(), "su copia se va");
+        assert!(
+            std::path::Path::new(&b.work_path).exists(),
+            "la del segundo no se toca"
+        );
+        assert_eq!(
+            get_page_sizes(b.work_path.clone()).expect("tamaños").len(),
+            2,
+            "y el segundo sigue funcionando con el primero cerrado"
+        );
+
+        close_document(b.work_path.clone()).expect("cerrar el segundo");
+        std::fs::remove_file(&uno).ok();
+        std::fs::remove_file(&otro).ok();
+    }
+
+    /// **H6.** El caché tiene tope: pasado él se suelta el documento que
+    /// lleva más tiempo **sin tocarse**, no el primero que se abrió. Un PDF
+    /// de 400 MB por pestaña no cabe en la memoria de nadie, y recargarlo
+    /// cuesta milisegundos.
+    ///
+    /// Se prueba sobre `coloca`, que es donde está la decisión: el caché de
+    /// verdad vive en el hilo de PDFium, que **lo comparten todos los tests**
+    /// (corren en paralelo), así que mirarlo por dentro sería una carrera.
+    #[test]
+    fn el_cache_suelta_el_documento_que_lleva_mas_tiempo_sin_tocarse() {
+        let mut cache: Vec<(String, u32)> = Vec::new();
+        let mut n = 0u32;
+        let mut abre = |cache: &mut Vec<(String, u32)>, nombre: &str| {
+            n += 1;
+            let orden = n;
+            coloca(cache, nombre, || Ok(orden)).expect("colocar")
+        };
+        for i in 0..DOCUMENTOS_EN_CACHE {
+            abre(&mut cache, &format!("doc{i}"));
+        }
+        assert_eq!(cache.len(), DOCUMENTOS_EN_CACHE);
+        // volver a usar el primero lo pasa al final, que es el sitio del
+        // más reciente
+        let i = abre(&mut cache, "doc0");
+        assert_eq!(i, cache.len() - 1);
+        assert_eq!(cache.len(), DOCUMENTOS_EN_CACHE, "no se ha vuelto a cargar");
+        assert_eq!(cache[i].1, 1, "y es el mismo documento, no otro cargado de nuevo");
+
+        // uno más: se suelta el que llevaba más tiempo sin tocarse, que ya
+        // no es el primero
+        abre(&mut cache, "otro");
+        assert_eq!(cache.len(), DOCUMENTOS_EN_CACHE, "el tope se respeta");
+        let nombres: Vec<&str> = cache.iter().map(|(p, _)| p.as_str()).collect();
+        assert!(nombres.contains(&"doc0"), "el que se volvió a usar sigue: {nombres:?}");
+        assert!(!nombres.contains(&"doc1"), "el más viejo se ha soltado: {nombres:?}");
+        assert!(nombres.contains(&"otro"), "y el nuevo ha entrado: {nombres:?}");
     }
 
     /// **R44b (AC-070).** CLAUDE.md se escribe a dos manos —cada ciclo lo

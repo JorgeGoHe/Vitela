@@ -81,7 +81,7 @@ pub(crate) fn borra_instantaneas_en_disco(work_path: &str) {
 fn empuja(work_path: &str) -> Result<(), String> {
     let work_path = work_path.to_string();
     on_pdfium_thread(move || {
-        invalidate_doc_cache();
+        invalidate_doc_cache(&work_path);
         let tam = std::fs::metadata(&work_path)
             .map_err(crate::mensaje_llano)?
             .len();
@@ -167,7 +167,7 @@ fn estado(work_path: &str) -> Result<HistoryState, String> {
 /// contraria. Primero se copia (nunca hay un instante sin `work_path`) y
 /// luego se renombra encima, con el caché invalidado.
 fn intercambia(work_path: &str, hacia_atras: bool) -> Result<HistoryState, String> {
-    invalidate_doc_cache();
+    invalidate_doc_cache(work_path);
     let origen = con(work_path, |h| {
         let pila = if hacia_atras { &mut h.deshacer } else { &mut h.rehacer };
         pila.pop()

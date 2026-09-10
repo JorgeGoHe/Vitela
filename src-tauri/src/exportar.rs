@@ -235,7 +235,7 @@ pub fn compress_pdf(work_path: String, quality: u8, max_dpi: u16) -> Result<Comp
             let _ = std::fs::remove_file(&tmp);
             return Err(SIN_REDUCIR.into());
         }
-        invalidate_doc_cache();
+        invalidate_doc_cache(&work_path);
         std::fs::rename(&tmp, &work_path).map_err(|e| e.to_string())?;
         Ok(CompressReport {
             antes,
