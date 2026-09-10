@@ -1273,9 +1273,12 @@ export function autosaveState(
   return invoke("autosave_state", { workPath, originalPath, modified });
 }
 
-/** Borra el apunte: se cierra limpiamente, o el usuario descarta. */
-export function borraSesion(): Promise<void> {
-  return invoke("borra_sesion");
+/** Borra el apunte: se cierra limpiamente, o el usuario descarta. Con
+ *  `workPath` solo se borra si el apunte es de **ese** documento, que es lo
+ *  que hace falta con varios abiertos: cerrar uno no puede llevarse por
+ *  delante la sesión sin guardar de otro. */
+export function borraSesion(workPath?: string | null): Promise<void> {
+  return invoke("borra_sesion", { workPath: workPath ?? null });
 }
 
 /** La sesión que quedó a medias, si la hubo. */

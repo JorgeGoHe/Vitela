@@ -922,7 +922,8 @@ textarea {
    y queda el documento»— y vuelve al acercar el ratón al borde inferior */
 .app.presentacion .toolbar,
 .app.presentacion .sidebar,
-.app.presentacion .tool-options {
+.app.presentacion .tool-options,
+.app.presentacion .pestanas {
   display: none;
 }
 
@@ -1015,11 +1016,81 @@ textarea {
   cursor: grabbing;
 }
 
+/* ---------- fila de pestañas (solo con más de un documento) ---------- */
+
+.pestanas {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 0 8px;
+  background: var(--bg-chrome);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex: 0 0 auto;
+}
+
+.pestana {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  color: var(--fg-muted);
+  font-size: 13px;
+  cursor: default;
+  white-space: nowrap;
+}
+
+.pestana:hover {
+  background: var(--btn-hover);
+}
+
+.pestana.on {
+  background: var(--card-bg);
+  border-color: var(--border);
+  color: var(--fg);
+}
+
+.pestana-nombre {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* el punto de «tiene cambios sin guardar», el mismo de la barra */
+.pestana-punto {
+  color: var(--accent);
+}
+
+.pestana-cerrar {
+  display: flex;
+  align-items: center;
+  visibility: hidden;
+  padding: 1px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.pestana:hover .pestana-cerrar,
+.pestana.on .pestana-cerrar {
+  visibility: visible;
+}
+
+.pestana-cerrar:hover {
+  background: var(--btn-active);
+}
+
 /* «Modo lectura»: lo mismo que esconde la presentación, pero la ventana se
    queda como está y la píldora no se va (es la salida) */
 .app.lectura .toolbar,
 .app.lectura .sidebar,
-.app.lectura .tool-options {
+.app.lectura .tool-options,
+.app.lectura .pestanas {
   display: none;
 }
 .app.presentacion .nav-pill {

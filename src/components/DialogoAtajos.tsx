@@ -30,6 +30,11 @@ const GRUPOS: { titulo: string; atajos: Atajo[] }[] = [
       [atajo("S"), "Guardar"],
       [atajo("S", "shift cmd"), "Guardar como"],
       [atajo("P"), "Imprimir"],
+      // ⌃Tab no lleva ⌘ en ningún sistema: se escribe a mano
+      [
+        ES_MAC ? "⌃Tab · ⇧⌃Tab" : "Ctrl+Tab · Ctrl+Shift+Tab",
+        "Documento siguiente y anterior (con varios abiertos)",
+      ],
     ],
   },
   {

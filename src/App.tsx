@@ -112,6 +112,7 @@ import {
   importCommentsXfdf,
   type OrdenComentarios,
 } from "./api";
+import Pestanas from "./components/Pestanas";
 import DialogoComentarios, {
   type FormatoComentarios,
 } from "./components/DialogoComentarios";
@@ -308,6 +309,40 @@ function resumenFirmas(firmas: FirmaInfo[]): string {
 /** Punto de lectura al que vuelve ⌥←: página, scroll y zoom. */
 type Vista = { page: number; scrollTop: number; zoom: Zoom };
 
+/** Un documento abierto. Todo lo demás —tamaños de página, miniaturas,
+ *  marcadores, comentarios, adjuntos, capas, firmas— se relee solo, porque
+ *  cuelga de `workPath` y de `docVersion`: lo que hay que guardar es lo que
+ *  nadie puede volver a calcular, empezando por dónde se estaba leyendo. */
+type Pestana = {
+  id: number;
+  workPath: string;
+  originalPath: string | null;
+  nombreProvisional: string | null;
+  pageCount: number;
+  modified: boolean;
+  hadPassword: boolean;
+  docPassword: string | null;
+  protegido: boolean;
+  protPendiente: boolean;
+  escalaMm: number;
+  /** La vista: la página, el zoom, el scroll y el panel abierto. */
+  pageIndex: number;
+  zoom: Zoom;
+  scrollTop: number;
+  viewRotation: number;
+  sidebarTab: PestanaSidebar;
+  vistasAtras: Vista[];
+  vistasAdelante: Vista[];
+};
+
+type PestanaSidebar =
+  | "paginas"
+  | "marcadores"
+  | "comentarios"
+  | "firmas"
+  | "adjuntos"
+  | "capas";
+
 /** Reenvía una pulsación ⌘/Ctrl+tecla a los listeners globales (entradas
  *  del menú nativo cuyo atajo captura el sistema antes que el webview).
  *  Devuelve **si alguien la ha atendido**: los listeners que actúan llaman
@@ -449,9 +484,7 @@ function App() {
     textos: number;
   } | null>(null);
   const [hfOpen, setHfOpen] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<
-    "paginas" | "marcadores" | "comentarios" | "firmas" | "adjuntos" | "capas"
-  >("paginas");
+  const [sidebarTab, setSidebarTab] = useState<PestanaSidebar>("paginas");
   // lo que el documento lleva dentro y hasta ahora solo se sabía borrar: sus
   // pestañas salen únicamente cuando hay algo que enseñar (con seis fijas a
   // 200 px no cabe ninguna)
@@ -538,6 +571,13 @@ function App() {
   const [propuestaActual, setPropuestaActual] = useState<number | null>(null);
   // «Exportar comentarios…»: el formato se pregunta antes de pedir destino
   const [comentariosAsk, setComentariosAsk] = useState(false);
+  // Documentos abiertos. La fila de pestañas solo sale con más de uno; con
+  // uno, la app se ve exactamente igual que antes de que existieran. El
+  // estado del documento ACTIVO vive en los `useState` de siempre: aquí se
+  // guarda el de los demás, y el del activo se vuelca al cambiar de pestaña
+  const [pestanas, setPestanas] = useState<Pestana[]>([]);
+  const [pestanaActiva, setPestanaActiva] = useState<number | null>(null);
+  const proximaPestanaRef = useRef(1);
   const [redactAsk, setRedactAsk] = useState<RedactReport | null>(null);
   const [sanitizeAsk, setSanitizeAsk] = useState<SanitizeReport | null>(null);
   // enlace externo pendiente de confirmar (los URI del PDF no son de fiar)
@@ -657,14 +697,30 @@ function App() {
       // a la apertura de otro
       setError(null);
       setNotice(null);
+      // ya abierto: se trae su pestaña a pantalla en vez de abrirlo dos
+      // veces, que es lo que hace Acrobat
+      const yaAbierto = pestanas.find(
+        (p) => p.id !== pestanaActiva && p.originalPath === path,
+      );
+      if (yaAbierto) {
+        eligePestana(yaAbierto.id);
+        return yaAbierto.workPath;
+      }
+      if (originalPath === path && workPath) return workPath;
       const anterior = workPath;
+      const vivo = anterior ? estadoDePestana() : null;
       const info = await invoke<{
         page_count: number;
         work_path: string;
         had_password: boolean;
       }>("open_pdf", { path, password: password ?? null });
-      // la copia de trabajo del documento anterior ya no sirve: borrarla
-      if (anterior) invoke("close_document", { workPath: anterior }).catch(() => {});
+      // el documento anterior NO se cierra: se queda en su pestaña, con su
+      // copia de trabajo, su historial y el punto por el que se iba
+      if (vivo) {
+        setPestanas((v) =>
+          v.map((p) => (p.id === pestanaActiva ? { ...p, ...vivo } : p)),
+        );
+      }
       // solo ahora se retira el documento anterior: si la apertura falla
       // (no es un PDF, contraseña cancelada) tiene que seguir intacto
       setThumbs([]);
@@ -710,6 +766,30 @@ function App() {
       else if (prefs.zoomInicial === "100") setZoom(1);
       else setZoom(cargaZoom());
       setDocVersion((v) => v + 1);
+      // su pestaña. La fila solo se pinta a partir de la segunda
+      const id = proximaPestanaRef.current++;
+      const nueva: Pestana = {
+        id,
+        workPath: info.work_path,
+        originalPath: original !== undefined ? original : path,
+        nombreProvisional: null,
+        pageCount: info.page_count,
+        modified: false,
+        hadPassword: info.had_password,
+        docPassword: info.had_password ? (password ?? null) : null,
+        protegido: info.had_password,
+        protPendiente: false,
+        escalaMm: cargaEscala(original !== undefined ? original : path),
+        pageIndex: 0,
+        zoom: "ajuste",
+        scrollTop: 0,
+        viewRotation: 0,
+        sidebarTab: "paginas",
+        vistasAtras: [],
+        vistasAdelante: [],
+      };
+      setPestanas((v) => [...v, nueva]);
+      setPestanaActiva(id);
       // la sesión sin guardar sigue esperando, pero ya no en mitad de la
       // pantalla: se pliega al botón «Recuperar…» de la barra
       setSesionPlegada(true);
@@ -818,22 +898,20 @@ function App() {
 
   /** Abre la copia de trabajo que quedó, conservando su fichero original:
    *  ⌘S escribe donde el usuario espera y no en el temporal. */
-  function recuperarSesion(s: Sesion) {
+  async function recuperarSesion(s: Sesion) {
     setSesionRota(null);
-    conCambiosGuardados(async () => {
-      const work = await openPath(s.work_path, undefined, s.original_path);
-      if (!work) {
-        setError("La copia con los cambios ya no está: no se ha podido recuperar");
-        return;
-      }
-      if (!s.original_path) setNombreProvisional("Documento recuperado");
-      setModified(true);
-      setNotice(
-        s.original_path
-          ? `Recuperados los cambios sin guardar de ${s.original_path}`
-          : "Recuperado el documento sin guardar",
-      );
-    });
+    const work = await openPath(s.work_path, undefined, s.original_path);
+    if (!work) {
+      setError("La copia con los cambios ya no está: no se ha podido recuperar");
+      return;
+    }
+    if (!s.original_path) setNombreProvisional("Documento recuperado");
+    setModified(true);
+    setNotice(
+      s.original_path
+        ? `Recuperados los cambios sin guardar de ${s.original_path}`
+        : "Recuperado el documento sin guardar",
+    );
   }
 
   /** No guardar: se borra la copia y el apunte, y se dice. Es el único
@@ -847,25 +925,23 @@ function App() {
     setNotice("Descartados los cambios sin guardar de la sesión anterior");
   }
 
-  /** Abre un fichero comprobando antes los cambios sin guardar. */
+  /** Abre un fichero. Con pestañas no hay nada que preguntar: el documento
+   *  que estaba abierto se queda en la suya, con sus cambios; la pregunta
+   *  de «cambios sin guardar» es del **cierre**, no de la apertura. */
   function abrirComprobando(path: string) {
-    conCambiosGuardados(() => {
-      openPath(path);
-    });
+    openPath(path);
   }
 
   /** Abre un reciente. Si ya no está donde decía, se quita de la lista en
    *  vez de dejar la entrada rota invitando a volver a pulsarla. */
-  function abrirReciente(path: string) {
-    conCambiosGuardados(async () => {
-      if (await openPath(path)) return;
-      const lista = await listRecent().catch(() => [] as Reciente[]);
-      const entrada = lista.find((r) => r.path === path);
-      if (!entrada || entrada.exists) return;
-      await removeRecent(path).catch(() => {});
-      refrescarRecientes();
-      setError(`Ya no está en ${path}; lo he quitado de recientes`);
-    });
+  async function abrirReciente(path: string) {
+    if (await openPath(path)) return;
+    const lista = await listRecent().catch(() => [] as Reciente[]);
+    const entrada = lista.find((r) => r.path === path);
+    if (!entrada || entrada.exists) return;
+    await removeRecent(path).catch(() => {});
+    refrescarRecientes();
+    setError(`Ya no está en ${path}; lo he quitado de recientes`);
   }
 
   /** «Archivo ▸ Abrir reciente…» del menú nativo: la lista vive en el menú
@@ -918,29 +994,27 @@ function App() {
   /** Abre el primero de los soltados y le añade el resto al final. */
   async function abrirYUnir(pdfs: string[]) {
     setDropAsk(null);
-    conCambiosGuardados(async () => {
-      const work = await openPath(pdfs[0]);
-      if (!work) return;
-      try {
-        let count = 0;
-        for (const otro of pdfs.slice(1)) {
-          count = await invoke<number>("merge_pdf", {
-            workPath: work,
-            otherPath: otro,
-          });
-        }
-        // un solo paso de deshacer para toda la unión
-        if (pdfs.length > 2) await historial.agrupar(pdfs.length - 1);
-        afterMutation(count);
-        // documento nuevo, como el «Combinar archivos» de Acrobat: sin ruta,
-        // así que ⌘S pide destino y ninguno de los originales corre peligro
-        setOriginalPath(null);
-        setNombreProvisional("Documento combinado");
-        setNotice(`${pdfs.length} PDF unidos en un documento nuevo`);
-      } catch (e) {
-        setError(String(e));
+    const work = await openPath(pdfs[0]);
+    if (!work) return;
+    try {
+      let count = 0;
+      for (const otro of pdfs.slice(1)) {
+        count = await invoke<number>("merge_pdf", {
+          workPath: work,
+          otherPath: otro,
+        });
       }
-    });
+      // un solo paso de deshacer para toda la unión
+      if (pdfs.length > 2) await historial.agrupar(pdfs.length - 1);
+      afterMutation(count);
+      // documento nuevo, como el «Combinar archivos» de Acrobat: sin ruta,
+      // así que ⌘S pide destino y ninguno de los originales corre peligro
+      setOriginalPath(null);
+      setNombreProvisional("Documento combinado");
+      setNotice(`${pdfs.length} PDF unidos en un documento nuevo`);
+    } catch (e) {
+      setError(String(e));
+    }
   }
 
   /** Deja que la ventana se cierre de verdad (el backend frenó el cierre). */
@@ -949,16 +1023,36 @@ function App() {
   }
 
   /** Guarda y, solo si el guardado ha ido bien, cierra. */
+  /** Guarda el documento que se ve y, si quedan otros con cambios, pasa al
+   *  siguiente y vuelve a preguntar: salir no puede llevarse por delante el
+   *  trabajo de una pestaña que no se estaba mirando. */
   async function guardarYSalir() {
     const ok = await guardar();
     if (!ok) return;
+    const otro = pestanas.find((p) => p.id !== pestanaActiva && p.modified);
+    if (otro) {
+      eligePestana(otro.id);
+      return;
+    }
     setCerrarAsk(false);
     confirmarCierre();
   }
 
+  /** Documentos con cambios sin guardar, contando el que está en pantalla:
+   *  al salir hay que preguntar por todos, no solo por el que se ve. */
+  function sucios(): number {
+    return (
+      pestanas.filter((p) => p.id !== pestanaActiva && p.modified).length +
+      (modified ? 1 : 0)
+    );
+  }
+
   const cerrarRef = useRef<() => void>(() => {});
   cerrarRef.current = () => {
-    if (modified) setCerrarAsk(true);
+    // el evento no dice si ha sido ⌘W, el botón rojo o ⌘Q, así que se trata
+    // como lo que puede ser lo más grave: cerrar la app. Se pregunta por
+    // TODOS los documentos con cambios, y se sale cuando no queda ninguno
+    if (sucios() > 0) setCerrarAsk(true);
     else confirmarCierre();
   };
 
@@ -1020,6 +1114,127 @@ function App() {
     });
   }
 
+  /** El estado del documento activo, tal como está ahora mismo: es lo que
+   *  se guarda al cambiar de pestaña para que volver a ella devuelva la
+   *  vista donde se dejó. */
+  function estadoDePestana(): Omit<Pestana, "id" | "workPath"> {
+    return {
+      originalPath,
+      nombreProvisional,
+      pageCount,
+      modified,
+      hadPassword,
+      docPassword,
+      protegido,
+      protPendiente,
+      escalaMm,
+      pageIndex,
+      zoom,
+      scrollTop: viewerRef.current?.scrollTop ?? 0,
+      viewRotation,
+      sidebarTab,
+      vistasAtras,
+      vistasAdelante,
+    };
+  }
+
+  /** Deja en pantalla el documento de una pestaña. Lo derivado —tamaños,
+   *  miniaturas, marcadores, comentarios, adjuntos, capas, firmas y los
+   *  contadores de deshacer— cuelga de `workPath` y de `docVersion`, así
+   *  que se relee solo. */
+  function aplicaPestana(p: Pestana) {
+    setError(null);
+    setNotice(null);
+    busqueda.limpiar(true);
+    setThumbs([]);
+    setPageSizes([]);
+    setPageVersions([]);
+    setPaginasSel(new Set());
+    setAnnotSel(null);
+    setPropuestas([]);
+    setPropuestaActual(null);
+    setMode("select");
+    setActiveSig(null);
+    setBandaFirmas(false);
+    setHayFormularios(false);
+    setWorkPath(p.workPath);
+    setOriginalPath(p.originalPath);
+    setNombreProvisional(p.nombreProvisional);
+    setPageCount(p.pageCount);
+    setModified(p.modified);
+    setHadPassword(p.hadPassword);
+    setDocPassword(p.docPassword);
+    setProtegido(p.protegido);
+    setProtPendiente(p.protPendiente);
+    setMantenerClave(null);
+    setEscalaMm(p.escalaMm);
+    setPageIndex(p.pageIndex);
+    setZoom(p.zoom);
+    setViewRotation(p.viewRotation);
+    setSidebarTab(p.sidebarTab);
+    setVistasAtras(p.vistasAtras);
+    setVistasAdelante(p.vistasAdelante);
+    setDocVersion((v) => v + 1);
+    // el scroll, cuando el visor ya tiene el alto de este documento
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() =>
+        viewerRef.current?.scrollTo({ top: p.scrollTop }),
+      ),
+    );
+  }
+
+  /** Cambia de documento guardando el punto de lectura del que se deja. */
+  function eligePestana(id: number) {
+    if (id === pestanaActiva) return;
+    const destino = pestanas.find((p) => p.id === id);
+    if (!destino) return;
+    const vivo = estadoDePestana();
+    setPestanas((v) =>
+      v.map((p) => (p.id === pestanaActiva ? { ...p, ...vivo } : p)),
+    );
+    setPestanaActiva(id);
+    aplicaPestana(destino);
+  }
+
+  /** ⌃Tab y ⇧⌃Tab: la pestaña siguiente y la anterior, en círculo. */
+  function rotaPestana(delta: number) {
+    if (pestanas.length < 2) return;
+    const i = pestanas.findIndex((p) => p.id === pestanaActiva);
+    if (i < 0) return;
+    const j = (i + delta + pestanas.length) % pestanas.length;
+    eligePestana(pestanas[j].id);
+  }
+
+  /** Cierra una pestaña que NO es la activa: no hay nada que preguntar de
+   *  la que está en pantalla, así que este camino es directo. */
+  function cierraPestanaInactiva(id: number) {
+    const victima = pestanas.find((p) => p.id === id);
+    if (!victima) return;
+    setPestanas((v) => v.filter((p) => p.id !== id));
+    invoke("close_document", { workPath: victima.workPath }).catch(() => {});
+  }
+
+  /** La «×» de una pestaña: si es la activa, es el cierre de siempre (con
+   *  su pregunta de cambios sin guardar); si es otra, se pregunta por ella
+   *  solo cuando tiene cambios, y se cierra sin traerla a pantalla. */
+  function cierraPestana(id: number) {
+    if (id === pestanaActiva) {
+      closeDocument();
+      return;
+    }
+    const victima = pestanas.find((p) => p.id === id);
+    if (!victima) return;
+    if (victima.modified) {
+      // la pregunta es sobre un documento que no se está viendo: se trae a
+      // pantalla **y entonces** se pregunta, para que nadie descarte a
+      // ciegas el trabajo de otra pestaña
+      eligePestana(id);
+      setUnsavedAsk(() => cerrarDocumento);
+      return;
+    }
+    cierraPestanaInactiva(id);
+  }
+
   /** Cierra el documento (preguntando si hay cambios sin guardar). */
   function closeDocument() {
     if (!workPath) return;
@@ -1027,10 +1242,24 @@ function App() {
     conCambiosGuardados(cerrarDocumento);
   }
 
-  /** Vuelve al estado vacío y borra la copia de trabajo. */
+  /** Cierra el documento activo y borra su copia de trabajo. Si quedaba
+   *  otro abierto, se pasa a él; si no, se vuelve al estado vacío. */
   function cerrarDocumento() {
     if (!workPath) return;
     const anterior = workPath;
+    const restantes = pestanas.filter((p) => p.id !== pestanaActiva);
+    if (restantes.length > 0) {
+      setPestanas(restantes);
+      setPestanaActiva(restantes[0].id);
+      aplicaPestana(restantes[0]);
+      borraSesion(anterior).catch(() => {});
+      invoke("close_document", { workPath: anterior }).catch((e) =>
+        setError(String(e)),
+      );
+      return;
+    }
+    setPestanas([]);
+    setPestanaActiva(null);
     setError(null);
     setNotice(null);
     setWorkPath(null);
@@ -1072,39 +1301,36 @@ function App() {
     invoke("close_document", { workPath: anterior }).catch((e) => setError(String(e)));
   }
 
-  function openFile() {
-    // el diálogo nativo se abre solo después de decidir qué hacer con los
-    // cambios pendientes
-    conCambiosGuardados(async () => {
-      const selected = await open({
-        filters: [{ name: "PDF", extensions: ["pdf"] }],
-        multiple: true,
-      });
-      if (typeof selected === "string") {
-        await openPath(selected);
-        return;
-      }
-      // varios a la vez: el mismo trato que soltarlos sobre la ventana
-      if (!Array.isArray(selected) || selected.length === 0) return;
-      if (selected.length === 1) {
-        await openPath(selected[0]);
-        return;
-      }
-      setDropAsk(selected);
+  async function openFile() {
+    // sin preguntar por los cambios: el documento abierto no se va a
+    // ninguna parte, se queda en su pestaña
+    const selected = await open({
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+      multiple: true,
     });
+    if (typeof selected === "string") {
+      await openPath(selected);
+      return;
+    }
+    // varios a la vez: el mismo trato que soltarlos sobre la ventana
+    if (!Array.isArray(selected) || selected.length === 0) return;
+    if (selected.length === 1) {
+      await openPath(selected[0]);
+      return;
+    }
+    setDropAsk(selected);
   }
 
-  /** Abre el primero de varios y deja el resto a mano en recientes, en vez
-   *  de descartarlos en silencio. */
-  async function abrirPrimeroYRecordar(pdfs: string[]) {
+  /** Los abre todos, **cada uno en su pestaña**: elegir cinco PDF y
+   *  quedarse con uno era perder cuatro gestos. Se abren en el orden en que
+   *  se eligieron y manda el primero. */
+  async function abrirTodosEnPestanas(pdfs: string[]) {
     setDropAsk(null);
-    // primero los demás: así el que se abre queda arriba de la lista
-    for (const otro of pdfs.slice(1)) {
-      await touchRecent(otro).catch(() => {});
+    for (const uno of pdfs) {
+      await openPath(uno);
     }
-    abrirComprobando(pdfs[0]);
     setNotice(
-      `${pdfs.length - 1} PDF más en Recientes, dentro de «Acciones»`,
+      `${plural(pdfs.length, "documento abierto", "documentos abiertos")} · ⌃Tab cambia de pestaña`,
     );
   }
 
@@ -1828,6 +2054,14 @@ function App() {
       } else if (mod && !e.shiftKey && (e.key === "l" || e.key === "L") && pageCount > 0) {
         e.preventDefault();
         cambiaPantallaCompleta(!pantallaCompleta);
+      } else if (e.ctrlKey && !e.metaKey && !e.altKey && e.key === "Tab") {
+        // ⌃Tab y ⇧⌃Tab rotan entre documentos, como las pestañas de
+        // Acrobat. ⌘1…⌘9 NO saltan a la pestaña N: ⌘1 y ⌘2 son el zoom de
+        // Acrobat y pesan más que un atajo que casi nadie usa
+        if (pestanas.length > 1) {
+          e.preventDefault();
+          rotaPestana(e.shiftKey ? -1 : 1);
+        }
       } else if (
         mod &&
         e.shiftKey &&
@@ -3839,6 +4073,32 @@ function App() {
         </div>
       </header>
 
+      {/* la fila solo existe a partir del segundo documento: con uno, la app
+          se ve exactamente igual que antes de que hubiera pestañas */}
+      <Pestanas
+        pestanas={pestanas.map((p) =>
+          p.id === pestanaActiva
+            ? {
+                id: p.id,
+                nombre: fileName ?? "Documento",
+                ruta: originalPath,
+                modificado: modified,
+              }
+            : {
+                id: p.id,
+                nombre:
+                  p.originalPath?.split(/[\\/]/).pop() ??
+                  p.nombreProvisional ??
+                  "Documento",
+                ruta: p.originalPath,
+                modificado: p.modified,
+              },
+        )}
+        activa={pestanaActiva}
+        onElegir={eligePestana}
+        onCerrar={cierraPestana}
+      />
+
       {error && (
         <div className="banner-error">
           <p title={error}>{error}</p>
@@ -4163,6 +4423,8 @@ function App() {
             <p className="modal-file" style={{ whiteSpace: "normal" }}>
               ¿Quieres guardar los cambios en {fileName ?? "el documento"}{" "}
               antes de salir? Si no los guardas se pierden.
+              {sucios() > 1 &&
+                ` Hay ${sucios()} documentos abiertos con cambios sin guardar; se pregunta por cada uno.`}
             </p>
           }
           textoConfirmar="Guardar y salir"
@@ -4218,15 +4480,14 @@ function App() {
           titulo={`Has elegido ${dropAsk.length} PDF`}
           cuerpo={
             <p className="modal-file" style={{ whiteSpace: "normal" }}>
-              Puedes abrir solo el primero ({dropAsk[0].split(/[\\/]/).pop()})
-              —los demás quedan en Recientes— o unirlos todos en un documento
-              nuevo, en el orden en que los has elegido.
+              Puedes abrirlos todos, cada uno en su pestaña, o unirlos en un
+              documento nuevo, en el orden en que los has elegido.
             </p>
           }
           textoConfirmar="Unirlos en uno"
           secundario={{
-            texto: "Abrir el primero",
-            onClick: () => abrirPrimeroYRecordar(dropAsk),
+            texto: "Abrirlos todos",
+            onClick: () => abrirTodosEnPestanas(dropAsk),
           }}
           onConfirm={() => abrirYUnir(dropAsk)}
           onClose={() => setDropAsk(null)}
