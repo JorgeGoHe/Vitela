@@ -57,8 +57,10 @@ export function getTextBlocks(
 export type Alineacion = "izq" | "centro" | "der";
 
 /** Texto nuevo en un punto de la página (contenido, no anotación).
- *  `lineHeight` y `charSpacing` son los operadores `TL` y `Tc`; sin ellos,
- *  los de siempre. */
+ *  `lineHeight` es la distancia a la que se coloca cada línea: en un PDF no
+ *  hay párrafos, las líneas son objetos, así que el interlineado no es el
+ *  operador `TL` sino dónde se pone el objeto siguiente. Sin él, el de
+ *  siempre. */
 export function addTextBlock(args: {
   workPath: string;
   pageIndex: number;
@@ -70,14 +72,12 @@ export function addTextBlock(args: {
   color?: Rgba | null;
   align?: Alineacion | null;
   lineHeight?: number | null;
-  charSpacing?: number | null;
 }): Promise<void> {
   return invoke("add_text_block", {
     font: null,
     color: null,
     align: null,
     lineHeight: null,
-    charSpacing: null,
     ...args,
   });
 }
@@ -92,13 +92,11 @@ export function editTextBlock(args: {
   color?: Rgba | null;
   align?: Alineacion | null;
   lineHeight?: number | null;
-  charSpacing?: number | null;
 }): Promise<void> {
   return invoke("edit_text_block", {
     color: null,
     align: null,
     lineHeight: null,
-    charSpacing: null,
     ...args,
   });
 }

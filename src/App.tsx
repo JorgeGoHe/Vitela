@@ -3946,8 +3946,6 @@ function App() {
         textAlign={herramienta.textAlign}
         textLineHeight={herramienta.textLineHeight}
         setTextLineHeight={herramienta.setTextLineHeight}
-        textCharSpacing={herramienta.textCharSpacing}
-        setTextCharSpacing={herramienta.setTextCharSpacing}
         setTextAlign={herramienta.setTextAlign}
         fillMark={herramienta.fillMark}
         setFillMark={herramienta.setFillMark}

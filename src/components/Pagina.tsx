@@ -57,10 +57,10 @@ export type ToolProps = {
   /** Color del texto del documento; `null` = el que ya tenga. */
   textColor: string | null;
   textAlign: Alineacion | null;
-  /** Interlineado y espaciado entre caracteres (`TL` y `Tc`); `null` = los
-   *  que traiga el documento. */
+  /** Interlineado: a qué distancia se coloca cada línea, que en un PDF es
+   *  dónde va el objeto siguiente y no un operador. `null` = el del
+   *  documento. */
   textLineHeight: number | null;
-  textCharSpacing: number | null;
   /** Avisa a la fila contextual del color real del bloque seleccionado, que
    *  es lo que pinta el swatch «el que ya tenga». */
   onTextBlockPicked: (color: string | null) => void;
