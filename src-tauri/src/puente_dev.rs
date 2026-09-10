@@ -316,6 +316,57 @@ mod tests {
         assert_eq!(COLA_DIALOGOS.lock().unwrap().pop_front(), None);
     }
 
+    /// El fuente sin comentarios (`//…` y `/*…*/`), respetando lo que vaya
+    /// entre comillas. Todo lo que este test lee —llamadas, tipos y objetos
+    /// literales— se analiza sobre el texto limpio: una coma o un `;`
+    /// dentro de un comentario partía los bloques por la mitad.
+    fn sin_comentarios(texto: &str) -> String {
+        let b = texto.as_bytes();
+        let mut out: Vec<u8> = Vec::with_capacity(b.len());
+        let mut comilla: Option<u8> = None;
+        let mut i = 0;
+        while i < b.len() {
+            let c = b[i];
+            match comilla {
+                Some(q) => {
+                    out.push(c);
+                    if c == b'\\' && i + 1 < b.len() {
+                        out.push(b[i + 1]);
+                        i += 2;
+                        continue;
+                    }
+                    if c == q {
+                        comilla = None;
+                    }
+                    i += 1;
+                }
+                None if c == b'"' || c == b'\'' || c == b'`' => {
+                    comilla = Some(c);
+                    out.push(c);
+                    i += 1;
+                }
+                None if c == b'/' && b.get(i + 1) == Some(&b'/') => {
+                    while i < b.len() && b[i] != b'\n' {
+                        i += 1;
+                    }
+                }
+                None if c == b'/' && b.get(i + 1) == Some(&b'*') => {
+                    i += 2;
+                    while i + 1 < b.len() && !(b[i] == b'*' && b[i + 1] == b'/') {
+                        i += 1;
+                    }
+                    i = (i + 2).min(b.len());
+                    out.push(b' ');
+                }
+                None => {
+                    out.push(c);
+                    i += 1;
+                }
+            }
+        }
+        String::from_utf8(out).unwrap_or_else(|_| texto.to_string())
+    }
+
     /// El código de la UI (`src/`), leído entero: los ficheros `.ts` y
     /// `.tsx` con su ruta.
     fn fuentes_de_la_ui() -> Vec<(String, String)> {
@@ -328,7 +379,10 @@ mod tests {
                 } else if matches!(ruta.extension().and_then(|s| s.to_str()), Some("ts") | Some("tsx"))
                 {
                     if let Ok(texto) = std::fs::read_to_string(&ruta) {
-                        out.push((ruta.to_string_lossy().into_owned(), texto));
+                        // sin comentarios: un `invoke` de ejemplo dentro de
+                        // un doc-comment no es una llamada, y un `;` o una
+                        // coma dentro de un comentario partía los tipos
+                        out.push((ruta.to_string_lossy().into_owned(), sin_comentarios(&texto)));
                     }
                 }
             }
@@ -382,9 +436,295 @@ mod tests {
         nombres
     }
 
-    /// Los comandos que la UI llama de verdad: `invoke("x", …)`, con o sin
-    /// parámetro de tipo (`invoke<PageText>("get_page_text", …)`).
-    fn comandos_que_llama_la_ui(fuentes: &[(String, String)]) -> Vec<(String, String)> {
+    /// Comandos registrados que la UI **todavía** no llama, con su motivo.
+    /// La lista tiene que estar vacía al cerrar un ciclo: un comando que
+    /// nadie llama es trabajo que no ha llegado al usuario. Se admite una
+    /// excepción mientras las dos mitades se escriben en paralelo, y se
+    /// quita al integrar.
+    const NADIE_LLAMA: &[(&str, &str)] = &[
+        ("pdf_from_images", "pendiente_ui: R26 lo lleva a Archivo y al estado vacío"),
+    ];
+
+    /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada
+    /// es una función rota que el usuario no puede usar, así que la lista
+    /// tiene que quedar vacía: está aquí solo mientras el arreglo vive en
+    /// la otra mitad.
+    const ARGUMENTOS_PENDIENTES: &[(&str, &str)] = &[(
+        "reorder_image",
+        "pendiente_ui: `api.ts` manda `imageIndex` y el comando espera \
+         `objectIndex`, como sus cinco hermanos de imagen; hasta que la UI lo \
+         corrija, «Traer al frente» y «Enviar al fondo» no llegan al backend",
+    )];
+
+    /// Llamadas cuyos argumentos no son un objeto literal y el test no
+    /// puede leer (`invoke("render_page", args, opts)`, que arma el objeto
+    /// según las opciones). Se enumeran para que no crezcan en silencio.
+    const SIN_LEER: &[&str] = &["render_page"];
+
+    /// Un parámetro de un comando del backend: su nombre en snake_case y si
+    /// es obligatorio (los `Option<T>` no lo son: un `invoke` que no mande
+    /// el campo tiene que funcionar).
+    struct Parametro {
+        nombre: String,
+        obligatorio: bool,
+    }
+
+    /// Los ficheros de Rust del core, con su texto.
+    fn fuentes_del_core() -> Vec<String> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut out = Vec::new();
+        let Ok(entradas) = std::fs::read_dir(&dir) else {
+            panic!("no se ha encontrado el core en {dir:?}")
+        };
+        for e in entradas.flatten() {
+            let ruta = e.path();
+            if ruta.extension().and_then(|s| s.to_str()) == Some("rs") {
+                if let Ok(t) = std::fs::read_to_string(&ruta) {
+                    out.push(t);
+                }
+            }
+        }
+        out
+    }
+
+    /// El trozo entre paréntesis (o llaves, o corchetes) que abre en `desde`,
+    /// contando anidamiento y saltándose lo que haya dentro de comillas.
+    fn hasta_cerrar(texto: &str, desde: usize, abre: char, cierra: char) -> Option<&str> {
+        let bytes = texto.as_bytes();
+        let mut nivel = 0i32;
+        let mut i = desde;
+        let mut comilla: Option<u8> = None;
+        while i < bytes.len() {
+            let b = bytes[i];
+            match comilla {
+                Some(c) => {
+                    if b == b'\\' {
+                        i += 2;
+                        continue;
+                    }
+                    if b == c {
+                        comilla = None;
+                    }
+                }
+                None => {
+                    if b == b'"' || b == b'\'' || b == b'`' {
+                        comilla = Some(b);
+                    } else if b as char == abre {
+                        nivel += 1;
+                    } else if b as char == cierra {
+                        nivel -= 1;
+                        if nivel == 0 {
+                            return Some(&texto[desde + 1..i]);
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// Parte una lista por el separador que se le diga, **al nivel de
+    /// arriba**: lo que va dentro de paréntesis, llaves, corchetes o
+    /// comillas no cuenta.
+    fn trozos(texto: &str, separadores: &[char]) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut actual = String::new();
+        let mut nivel = 0i32;
+        let mut comilla: Option<char> = None;
+        let mut escapa = false;
+        for c in texto.chars() {
+            if let Some(q) = comilla {
+                actual.push(c);
+                if escapa {
+                    escapa = false;
+                } else if c == '\\' {
+                    escapa = true;
+                } else if c == q {
+                    comilla = None;
+                }
+                continue;
+            }
+            match c {
+                '"' | '\'' | '`' => {
+                    comilla = Some(c);
+                    actual.push(c);
+                }
+                '(' | '[' | '{' | '<' => {
+                    nivel += 1;
+                    actual.push(c);
+                }
+                ')' | ']' | '}' | '>' => {
+                    nivel -= 1;
+                    actual.push(c);
+                }
+                c if nivel == 0 && separadores.contains(&c) => {
+                    out.push(actual.trim().to_string());
+                    actual = String::new();
+                }
+                c => actual.push(c),
+            }
+        }
+        if !actual.trim().is_empty() {
+            out.push(actual.trim().to_string());
+        }
+        out.retain(|t| !t.is_empty());
+        out
+    }
+
+    /// Los parámetros de cada `#[tauri::command]` del core, leídos del
+    /// propio fuente. Los que inyecta Tauri (el `AppHandle`) no los manda la
+    /// UI y no cuentan.
+    fn parametros_de_los_comandos() -> std::collections::BTreeMap<String, Vec<Parametro>> {
+        let mut out = std::collections::BTreeMap::new();
+        for texto in fuentes_del_core() {
+            let mut i = 0;
+            while let Some(j) = texto[i..].find("#[tauri::command") {
+                let j = i + j;
+                i = j + 1;
+                let Some(k) = texto[j..].find("fn ") else { continue };
+                let k = j + k + "fn ".len();
+                let Some(p) = texto[k..].find('(') else { continue };
+                let nombre = texto[k..k + p].trim().to_string();
+                let Some(dentro) = hasta_cerrar(&texto, k + p, '(', ')') else {
+                    continue;
+                };
+                let params = trozos(dentro, &[','])
+                    .into_iter()
+                    .filter_map(|t| {
+                        let (nombre, tipo) = t.split_once(':')?;
+                        let tipo = tipo.trim();
+                        if tipo.contains("AppHandle") || tipo.contains("Window") {
+                            return None;
+                        }
+                        Some(Parametro {
+                            nombre: nombre.trim().to_string(),
+                            obligatorio: !tipo.starts_with("Option<"),
+                        })
+                    })
+                    .collect();
+                out.insert(nombre, params);
+            }
+        }
+        assert!(
+            out.len() > 50,
+            "los comandos se han leído a medias: {}",
+            out.len()
+        );
+        out
+    }
+
+    /// Las claves de un bloque `{ … }` de TypeScript, sea un tipo
+    /// (`{ workPath: string; pageIndex?: number }`) o un objeto literal
+    /// (`{ workPath, pageIndex: 0 }`). Devuelve también los `...spread` que
+    /// no ha sabido resolver quien llama.
+    fn claves_del_bloque(bloque: &str) -> (Vec<String>, Vec<String>) {
+        let mut claves = Vec::new();
+        let mut spreads = Vec::new();
+        for t in trozos(bloque, &[',', ';']) {
+            let t = t.trim();
+            // los comentarios de línea de un tipo se cuelan en el trozo
+            let t: String = t
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.starts_with("//") && !l.starts_with('*') && !l.starts_with("/*"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let t = t.trim();
+            if let Some(nombre) = t.strip_prefix("...") {
+                spreads.push(nombre.trim().to_string());
+                continue;
+            }
+            let clave = t.split_once(':').map(|(k, _)| k).unwrap_or(t);
+            let clave = clave.trim().trim_end_matches('?').trim();
+            if clave.is_empty() || !clave.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                continue;
+            }
+            claves.push(clave.to_string());
+        }
+        (claves, spreads)
+    }
+
+    /// Resuelve un `...NOMBRE`: el objeto o el tipo con ese nombre declarado
+    /// en el mismo fichero (`const SIN_APARIENCIA = { … }`,
+    /// `type AparienciaFirma = { … }`), o el parámetro de la función que
+    /// envuelve al `invoke` (`function x(args: { … } & Otro)`), que es el
+    /// patrón de `api.ts`.
+    fn resuelve_spread(texto: &str, antes_de: usize, nombre: &str) -> Option<Vec<String>> {
+        // 1) el parámetro de la función que envuelve: el `nombre: {` más
+        //    cercano hacia atrás
+        let aguja = format!("{nombre}: {{");
+        if let Some(pos) = texto[..antes_de].rfind(&aguja) {
+            let abre = pos + aguja.len() - 1;
+            if let Some(bloque) = hasta_cerrar(texto, abre, '{', '}') {
+                let mut claves = claves_del_bloque(bloque).0;
+                // `args: { … } & AparienciaFirma`: la intersección también
+                // trae claves, y son las que faltaban
+                let tras = &texto[abre + bloque.len() + 2..];
+                let mut resto = tras.trim_start();
+                while let Some(r) = resto.strip_prefix('&') {
+                    let r = r.trim_start();
+                    let fin = r
+                        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                        .unwrap_or(r.len());
+                    let tipo = &r[..fin];
+                    if let Some(mas) = declaracion(texto, tipo) {
+                        claves.extend(mas);
+                    }
+                    resto = r[fin..].trim_start();
+                }
+                return Some(claves);
+            }
+        }
+        // 2) una declaración del fichero
+        declaracion(texto, nombre)
+    }
+
+    /// Las claves del `type X = { … }` o `const X… = { … }` del fichero.
+    fn declaracion(texto: &str, nombre: &str) -> Option<Vec<String>> {
+        for aguja in [format!("type {nombre} ="), format!("const {nombre}")] {
+            let Some(pos) = texto.find(&aguja) else { continue };
+            let tras = &texto[pos..];
+            let Some(abre) = tras.find('{') else { continue };
+            // que la llave sea de esa declaración y no de la siguiente
+            if tras[..abre].contains(';') {
+                continue;
+            }
+            if let Some(bloque) = hasta_cerrar(tras, abre, '{', '}') {
+                return Some(claves_del_bloque(bloque).0);
+            }
+        }
+        None
+    }
+
+    /// De `pageIndex` a `page_index`: es lo que hace Tauri con los
+    /// argumentos que llegan de JavaScript.
+    fn a_snake(camel: &str) -> String {
+        let mut out = String::new();
+        for c in camel.chars() {
+            if c.is_ascii_uppercase() {
+                out.push('_');
+                out.push(c.to_ascii_lowercase());
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// Una llamada `invoke("cmd", { … })` de la UI, con las claves que
+    /// manda. `completa` es falso cuando hay un `...spread` que el test no
+    /// ha sabido resolver: entonces se comprueba lo que se ve, pero no se
+    /// puede exigir que estén todos los argumentos obligatorios.
+    struct Llamada {
+        comando: String,
+        fichero: String,
+        claves: Vec<String>,
+        completa: bool,
+    }
+
+    /// Los `invoke("…", { … })` de la UI con sus argumentos.
+    fn llamadas_de_la_ui(fuentes: &[(String, String)]) -> Vec<Llamada> {
         let mut fuera = Vec::new();
         for (fichero, texto) in fuentes {
             let bytes = texto.as_bytes();
@@ -409,8 +749,44 @@ mod tests {
                 let Some(tras) = resto.strip_prefix("(") else { continue };
                 let tras = tras.trim_start();
                 let Some(tras) = tras.strip_prefix('"') else { continue };
-                let Some((nombre, _)) = tras.split_once('"') else { continue };
-                fuera.push((nombre.to_string(), fichero.clone()));
+                let Some((comando, _)) = tras.split_once('"') else { continue };
+                // dónde empieza el objeto de argumentos, si lo hay
+                let pos_nombre = texto.len() - tras.len();
+                let tras_nombre = &texto[pos_nombre + comando.len() + 1..];
+                let despues = tras_nombre.trim_start();
+                let (claves, completa) = match despues.strip_prefix(',') {
+                    None => (Vec::new(), true),
+                    Some(d) => {
+                        let d = d.trim_start();
+                        if !d.starts_with('{') {
+                            // argumentos que no son un objeto literal: no se
+                            // pueden leer, pero tampoco los hay en la UI
+                            (Vec::new(), false)
+                        } else {
+                            let abre = texto.len() - d.len();
+                            match hasta_cerrar(texto, abre, '{', '}') {
+                                None => (Vec::new(), false),
+                                Some(bloque) => {
+                                    let (mut claves, spreads) = claves_del_bloque(bloque);
+                                    let mut completa = true;
+                                    for s in spreads {
+                                        match resuelve_spread(texto, abre, &s) {
+                                            Some(mas) => claves.extend(mas),
+                                            None => completa = false,
+                                        }
+                                    }
+                                    (claves, completa)
+                                }
+                            }
+                        }
+                    }
+                };
+                fuera.push(Llamada {
+                    comando: comando.to_string(),
+                    fichero: fichero.clone(),
+                    claves,
+                    completa,
+                });
             }
         }
         fuera
@@ -428,16 +804,17 @@ mod tests {
     /// verdad no existe) o si la UI llama a algo que no está registrado (un
     /// error en tiempo de ejecución que solo salta al pulsar ese botón).
     ///
-    /// Los comandos que nadie llama **avisan pero no fallan**: hay funciones
-    /// que se registran antes de que la UI las use (`unmark_all_redactions`
-    /// esperó un ciclo entero). El aviso sale por stderr con
-    /// `cargo test -- --nocapture`.
+    /// Desde el ciclo 6 falla también **un comando que nadie llama**: un
+    /// `eprintln!` en un CI con salida larga no lo lee nadie, y por eso el
+    /// ciclo 5 se cerró creyendo que «Crear PDF desde imágenes» estaba
+    /// hecho. Lo que está a medio integrar va en `NADIE_LLAMA` con su
+    /// motivo, y esa lista tiene que quedar vacía al cerrar el ciclo.
     #[test]
     fn los_comandos_estan_en_el_handler_en_el_puente_y_en_la_ui() {
         let handler = comandos_del_handler();
         let puente = comandos_del_puente();
         let fuentes = fuentes_de_la_ui();
-        let ui = comandos_que_llama_la_ui(&fuentes);
+        let llamadas = llamadas_de_la_ui(&fuentes);
 
         let sin_puente: Vec<&String> = handler.iter().filter(|c| !puente.contains(c)).collect();
         assert!(
@@ -452,10 +829,10 @@ mod tests {
              así que en la app de verdad no existen: {sin_handler:?}"
         );
 
-        let inventados: Vec<String> = ui
+        let inventados: Vec<String> = llamadas
             .iter()
-            .filter(|(c, _)| !handler.contains(c))
-            .map(|(c, f)| format!("{c} ({f})"))
+            .filter(|l| !handler.contains(&l.comando))
+            .map(|l| format!("{} ({})", l.comando, l.fichero))
             .collect();
         assert!(
             inventados.is_empty(),
@@ -464,12 +841,96 @@ mod tests {
 
         let nadie: Vec<&String> = handler
             .iter()
-            .filter(|c| !ui.iter().any(|(u, _)| u == *c))
+            .filter(|c| !llamadas.iter().any(|l| &l.comando == *c))
+            .filter(|c| !NADIE_LLAMA.iter().any(|(n, _)| *n == c.as_str()))
             .collect();
-        if !nadie.is_empty() {
-            eprintln!(
-                "[aviso] comandos registrados que la UI no llama todavía: {nadie:?}"
-            );
+        assert!(
+            nadie.is_empty(),
+            "estos comandos están registrados y la UI no los llama, así que \
+             el usuario no puede llegar a ellos: {nadie:?}. Si están a medio \
+             integrar, van en NADIE_LLAMA con su motivo"
+        );
+        let sobra: Vec<&str> = NADIE_LLAMA
+            .iter()
+            .filter(|(n, _)| llamadas.iter().any(|l| l.comando == *n))
+            .map(|(n, _)| *n)
+            .collect();
+        assert!(
+            sobra.is_empty(),
+            "la UI ya llama a estos comandos: fuera de NADIE_LLAMA {sobra:?}"
+        );
+        let fantasmas: Vec<&str> = NADIE_LLAMA
+            .iter()
+            .filter(|(n, _)| !handler.contains(&n.to_string()))
+            .map(|(n, _)| *n)
+            .collect();
+        assert!(
+            fantasmas.is_empty(),
+            "NADIE_LLAMA nombra comandos que no existen: {fantasmas:?}"
+        );
+    }
+
+    /// **R25.** El mismo cruce, un nivel más abajo: los **nombres de
+    /// argumento**. El ciclo 5 integró media función de espaciado entre
+    /// caracteres porque la UI mandaba `charSpacing` y el comando no lo
+    /// tenía: Tauri descarta en silencio las claves que no conoce y el
+    /// comando devuelve `Ok` sin hacer nada. Aquí se cruzan los parámetros
+    /// de cada `#[tauri::command]` (en camelCase, que es como los manda
+    /// JavaScript) con las claves del objeto de cada `invoke`.
+    ///
+    /// Los `Option<T>` no son obligatorios: un `invoke` que no mande el
+    /// campo tiene que funcionar. Lo que Tauri inyecta (el `AppHandle`) no
+    /// lo manda nadie y no cuenta.
+    #[test]
+    fn los_argumentos_de_cada_invoke_son_los_del_comando() {
+        let comandos = parametros_de_los_comandos();
+        let fuentes = fuentes_de_la_ui();
+        let llamadas = llamadas_de_la_ui(&fuentes);
+        assert!(llamadas.len() > 50, "se han leído {} invoke", llamadas.len());
+
+        let ilegibles: Vec<&str> = llamadas
+            .iter()
+            .filter(|l| !l.completa && !SIN_LEER.contains(&l.comando.as_str()))
+            .map(|l| l.comando.as_str())
+            .collect();
+        assert!(
+            ilegibles.is_empty(),
+            "estos `invoke` no mandan un objeto literal, así que este test no              los puede cruzar: {ilegibles:?}. Si tiene que ser así, van en              SIN_LEER; si no, el objeto se escribe en el propio `invoke`"
+        );
+
+        let mut fallos: Vec<String> = Vec::new();
+        for l in &llamadas {
+            let Some(params) = comandos.get(&l.comando) else { continue };
+            if ARGUMENTOS_PENDIENTES.iter().any(|(c, _)| *c == l.comando) {
+                continue;
+            }
+            let mandadas: Vec<String> = l.claves.iter().map(|c| a_snake(c)).collect();
+            for clave in &mandadas {
+                if !params.iter().any(|p| &p.nombre == clave) {
+                    fallos.push(format!(
+                        "{} manda `{clave}`, que {} no tiene (Tauri lo descarta en silencio) — {}",
+                        l.comando, l.comando, l.fichero
+                    ));
+                }
+            }
+            if !l.completa {
+                continue;
+            }
+            for p in params.iter().filter(|p| p.obligatorio) {
+                if !mandadas.contains(&p.nombre) {
+                    fallos.push(format!(
+                        "{} no recibe `{}`, que es obligatorio — {}",
+                        l.comando, p.nombre, l.fichero
+                    ));
+                }
+            }
         }
+        fallos.sort();
+        fallos.dedup();
+        assert!(
+            fallos.is_empty(),
+            "los argumentos de la UI y los de los comandos no dicen lo mismo:\n  {}",
+            fallos.join("\n  ")
+        );
     }
 }
