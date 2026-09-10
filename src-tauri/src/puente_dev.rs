@@ -492,9 +492,9 @@ mod tests {
             "pendiente_ui — R52 del ciclo 8: el segundo clic pone el codo y el tercero la caja",
         ),
         (
-        "add_watermark",
-        "detras",
-        "pendiente_ui — tanda 3 del ciclo 8: la casilla «detrás del contenido» del diálogo de la marca de agua",
+            "add_watermark",
+            "detras",
+            "pendiente_ui — tanda 3 del ciclo 8: la casilla «detrás del contenido» de la marca de agua",
         ),
     ];
 

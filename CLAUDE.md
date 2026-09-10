@@ -387,13 +387,13 @@ compila los instaladores a mano o al etiquetar `v*`.
     `{total}` siguen siendo los del documento, no los del rango.
   - **Autoguardado y recuperación** (`recuperacion.rs`):
     `autosave_state(work_path, original_path?, modified)` apunta un
-    `sesion.json` en `DIR_DATOS` con la copia viva; `borra_sesion(work_path?)`
-    lo borra al cerrar bien o al descartar (con `work_path`, solo si el
-    apunte es de ese documento); `recover_session()` → `Option<Sesion>` al
-    arrancar, y solo si había cambios sin guardar y la copia sigue en el
-    disco. El barrido de huérfanos respeta la copia apuntada y sus
-    instantáneas. La copia de trabajo ya sobrevivía al cierre bruto: lo que
-    faltaba era el apunte de que existía y no se había guardado.
+    `sesion.json` en `DIR_DATOS` con la copia viva; `borra_sesion` lo borra
+    al cerrar bien o al descartar; `recover_session()` al arrancar, y solo
+    lo que tenía cambios sin guardar y cuya copia sigue en el disco. El
+    barrido de huérfanos las respeta. La copia de trabajo ya sobrevivía al
+    cierre bruto: lo que faltaba era el apunte de que existía y no se había
+    guardado. **Desde el ciclo 8 es una lista**, una entrada por documento
+    abierto (ver abajo).
   - `add_text_block` y `edit_text_block` aceptan `color: Option<[u8;4]>` y
     `align: Option<String>` («izq»/«centro»/«der»). En un PDF no hay
     operador de alineación: se coloca el origen del objeto (y al corregir
@@ -635,11 +635,10 @@ compila los instaladores a mano o al etiquetar `v*`.
     que mira a la punta y la flecha la dibuja el `/AP`.
     `transform_annotation` le aplica al `/CL` y al `/RD` la misma
     transformación que al `/Rect`, así que arrastrar el cuadro arrastra la
-    punta. `erase_ink(work_path, page_index, annot_index, rect)` quita del
-    trazo los tramos que **tocan** el rectángulo (recorte de
-    Liang-Barsky) trabajando sobre el `/AP`, que es donde vive el dibujo
-    del Ink (PDFium no escribe `/InkList`), y devuelve si ha quedado algo;
-    si no queda nada, el comentario se va.
+    punta. La goma quita del trazo los tramos que **tocan** el rectángulo
+    (recorte de Liang-Barsky) trabajando sobre el `/AP`, que es donde vive
+    el dibujo del Ink (PDFium no escribe `/InkList`); si no queda nada, el
+    comentario se va.
   - **Resumen de comentarios** (`comentarios.rs`):
     `export_comments(work_path, dest_path, document_name?)` —sin `formato`,
     que solo admitía `"txt"`—. La cabecera lleva el nombre que mande la UI
@@ -763,7 +762,107 @@ compila los instaladores a mano o al etiquetar `v*`.
   - **Un test para CLAUDE.md** (AC-070): ninguna línea de más de cuarenta
     caracteres puede aparecer dos veces. El documento lo tocan cada ciclo
     las dos ramas sobre los mismos párrafos, y dos veces seguidas se coló
-    la misma línea pegada detrás de su versión nueva.
+    la misma línea pegada detrás de su versión nueva. Ampliado en el
+    ciclo 8 (ver abajo), porque un duplicado parafraseado no lo cazaba.
+- Comandos del ciclo 8:
+  - **La cuarta costura del test cruzado** (`puente_dev`, R45b): un
+    parámetro **obligatorio** en Rust que el envoltorio de `api.ts` declara
+    opcional —un `?:`, un tipo que admite `null` o un `?? null` escrito en
+    el propio `invoke`— hace fallar el test. Tauri no sabe deserializar un
+    `String` desde `null`, así que el comando devuelve error, la llamada se
+    lo traga y la función no pasa: fue el estado de `borra_sesion` durante
+    el ciclo 7 y por eso el apunte de sesión se quedaba puesto tras
+    guardar. Lo que esté a medio integrar va en `OPCIONALES_INDEBIDOS`
+    (comando, parámetro, motivo), que también falla cuando envejece.
+  - **La recuperación es una lista** (`recuperacion.rs`, H6b): `sesion.json`
+    guarda `{ "sesiones": [...] }` con una entrada por copia de trabajo.
+    `autosave_state` actualiza **solo la suya** (con pestañas, apuntar el
+    documento de delante ya no borra el de detrás), `borra_sesion`
+    (`work_path` obligatorio) quita solo esa entrada —sin ruta, todas, que
+    es cerrar la app—, `recover_session` devuelve `Vec<Sesion>` con las que
+    tienen cambios y copia viva, y `copias_apuntadas()` protege **todas**
+    del barrido de huérfanos. Un fichero del formato viejo (un objeto
+    suelto) se lee como una lista de uno: `Apuntes` no lleva
+    `serde(default)` en su campo justamente para distinguirlos.
+  - **Un campo de formulario no es un comentario** (AC-071):
+    `get_document_annotations` filtra por
+    `comentarios2::es_comentario(subtipo)`, la misma criba que ya usaba el
+    XFDF. Antes los `/Widget` y los `/Link` salían en el panel, contaban en
+    «N comentarios», aparecían en el `.txt` y en el resumen en PDF y **Supr
+    los borraba**. La comparación no mira mayúsculas: el spec escribe
+    `/StrikeOut` y `/PolyLine` donde PDFium dice `Strikeout` y `Polyline`.
+  - **El test de CLAUDE.md, por palabras** (R47b y R50b, AC-073): además de
+    la línea larga repetida, falla si **una decena de palabras seguidas**
+    aparece dos veces (texto normalizado: minúsculas, sin tildes, sin
+    puntuación y sin bloques de código) y si **la lista de ids del menú**
+    repite alguno o no dice lo mismo que `menu::estructura()`. El duplicado
+    del ciclo 7 estaba parafraseado y empezaba a mitad de frase, así que ni
+    la línea ni el párrafo coincidían.
+  - `get_page_labels(path)` / `set_page_labels(work_path, rangos)`
+    (`documento.rs`): el `/PageLabels` del catálogo, que es «Organizar
+    páginas ▸ Más ▸ Numerar páginas». Cada rango es `{ desde, estilo,
+    prefijo, empieza_en }` con estilo `arabigo`, `romano`, `romano_min`,
+    `letra`, `letra_min` o `ninguno`; **las claves van en snake_case**,
+    como el `props` de `create_form_field`. `get_page_labels` devuelve
+    además **la etiqueta compuesta de cada página**, a propósito: si la
+    compusiera la interfaz habría dos implementaciones de los números
+    romanos. Escribir la lista vacía quita la numeración.
+  - `add_watermark` gana `detras`: el **fondo** del documento es la marca de
+    agua debajo del contenido. Todo objeto añadido a una página va al final
+    de su lista —o sea, encima—, así que se manda al fondo pasando por
+    detrás los que ya estaban, en su mismo orden (`manda_al_fondo`, como
+    «enviar al fondo» de una imagen; el objeto que se saca nunca se suelta).
+  - `add_bates(work_path, prefijo, sufijo, digitos, empieza_en, position?,
+    font_size?, page_indices?)` → cuántas páginas ha numerado
+    (`paginas2.rs`): el diálogo entero de Acrobat, con sus defectos (seis
+    dígitos, empieza en 1, abajo a la derecha; `position` usa los códigos
+    de la marca de agua). El correlativo **cuenta folios numerados, no
+    páginas**: numerar tres páginas sueltas escribe 1, 2 y 3. Los dígitos
+    no recortan un número que no quepa.
+  - `get_document_info(path)` (`documento.rs`): la pantalla de ⌘D de
+    Acrobat —páginas, peso, versión del PDF, tamaño de página y si el
+    documento mezcla tamaños, formulario, firmas, `cifrado`,
+    `proteccion_pendiente`, `permisos` y **las fuentes con su tipo y si van
+    incrustadas**—. Las fuentes se recorren por los recursos de cada
+    página; el nombre sale sin el prefijo del subconjunto y se dice aparte
+    que lo es; una Type 0 tiene su descriptor en la fuente descendiente y
+    una Type 3 lleva los glifos dentro. «Protegido» es una sola cosa para
+    quien lo lee: el fichero cifrado en el disco y la protección esperando
+    a Guardar cuentan igual.
+  - `add_file_attachment_annotation(work_path, page_index, punto, src_path,
+    author?)` (`adjuntos.rs`): la chincheta de «Comentar ▸ Adjuntar
+    archivo», **distinta del adjunto del documento**: está en una página,
+    sale en el panel de comentarios y su `/AP` lo dibujamos nosotros
+    (PDFium no escribe el de este subtipo). Borrarla **se lleva los
+    bytes**: `remove_annotation` poda el documento cuando lo que quita es
+    un adjunto, o el fichero seguiría pesando lo mismo.
+  - **La protección viaja en el paso de historial** (R51, ver
+    «Protección»): cada instantánea guarda la que había y `undo`/`redo` la
+    reponen, así que quitar la contraseña se deshace entero.
+  - `add_callout` gana `codo: Option<[f32; 2]>` (R52): el `/CL` de tres
+    puntos de Acrobat. La línea se ancla al lado de la caja que mira al
+    codo y el `/Rect` abarca los tres puntos, que es lo que hace que
+    arrastrar el cuadro se lleve la línea entera. Sin codo, la recta.
+  - `export_form_data_xfdf(work_path, dest_path)` → cuántos campos e
+    `import_form_data_xfdf(work_path, src_path)` → `{ rellenados,
+    sin_campo }` (`formularios2.rs`): los datos del formulario fuera del
+    PDF, por el recorrido que estrenó el XFDF de los comentarios. El nombre
+    de cada campo es el completo (los `/T` unidos con puntos) y un grupo de
+    radios es **un** campo; los `/Sig` no salen. Importar **rellena y no
+    crea campos** y dice cuántas respuestas no se han podido colocar, que
+    es la pregunta de quien recibe las de una versión anterior.
+  - `certify_pdf(work_path, dest_path, nivel, …)` (`firma.rs`): la firma
+    más el `/DocMDP` que dice qué se puede cambiar después sin romperla
+    (1 = nada, 2 = rellenar y firmar, 3 = además comentar), con el `/Perms`
+    del catálogo señalando cuál es. **Solo la primera firma puede
+    certificar**: el `/DocMDP` avala el documento entero y detrás de otra
+    firma hay bytes que esta no ha visto.
+  - `erase_ink` se va del árbol: `erase_ink_area` hace el pase entero en
+    una mutación desde el ciclo 7 y un `#[tauri::command]` sobre una
+    función sin registrar es una trampa para quien venga.
+  - `cerrar-documento` estrena el acelerador **⌘W** (`menu.rs`). Cierra la
+    **pestaña**, no la ventana: `cerrar-solicitado` sigue sin saber quién
+    lo disparó, así que quien decide es la interfaz, que sabe cuántas hay.
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (cada uno con su envoltorio en camelCase):
     - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la
@@ -1057,9 +1156,10 @@ compila los instaladores a mano o al etiquetar `v*`.
   comandos (PDFium pediría la contraseña en cada render) y el documento en
   pantalla dejaría de funcionar. La anotación vive en un mapa por
   `work_path` (`proteccion_de` / `olvida_proteccion`, que llama
-  `borra_copia` al cerrar) y por eso **no entra en el historial**: ⌘Z no la
-  quita, la quita `remove_encryption` (que sí pasa por `mutacion`, así que
-  deja su paso). **Un PDF firmado no se cifra**: cifrar reescribe el
+  `borra_copia` al cerrar) y **desde el ciclo 8 viaja dentro del paso de
+  historial** (R51): quitarla con `remove_encryption` deja su paso y ⌘Z la
+  devuelve, contraseña incluida. Antes deshacer devolvía el fichero y no la
+  contraseña, y el siguiente Guardar escribía en claro. **Un PDF firmado no se cifra**: cifrar reescribe el
   documento y movería el `/ByteRange`, así que `encrypt_pdf` (con
   `dest_path` y sin él) y `save_pdf` con protección anotada se niegan con
   `firma::AVISO_FIRMADO` en vez de romper la firma.
@@ -1477,6 +1577,14 @@ compila los instaladores a mano o al etiquetar `v*`.
    con destino fino y ⌘B, comentarios que salen en tres formatos (texto,
    resumen en PDF y XFDF) y vuelven a entrar, medir con las tres
    herramientas de Acrobat, modo lectura y herramienta Mano
+10. ✅ El documento como objeto: etiquetas de página (`/PageLabels`), fondo
+   (la marca de agua debajo del contenido), numeración Bates completa y las
+   propiedades de ⌘D con las fuentes y la seguridad. Recuperación de varios
+   documentos a la vez (una entrada por pestaña) y ⌘W. Un fichero adjunto
+   **como comentario** (`/FileAttachment`), la llamada con codo, y los
+   datos de un formulario que salen y vuelven en XFDF. Certificar con
+   `/DocMDP`, que es lo que distingue «firmado» de «esta es la versión
+   buena»
 
 ## Convenciones
 
