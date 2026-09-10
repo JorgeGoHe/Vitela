@@ -84,6 +84,9 @@ export type ToolProps = {
    *  dónde va el objeto siguiente y no un operador. `null` = el del
    *  documento. */
   textLineHeight: number | null;
+  /** Espaciado entre caracteres en puntos (operador `Tc`): 0 es lo normal,
+   *  que es de donde parte Acrobat. */
+  textCharSpacing: number;
   /** Avisa a la fila contextual del color real del bloque seleccionado, que
    *  es lo que pinta el swatch «el que ya tenga». */
   onTextBlockPicked: (color: string | null) => void;

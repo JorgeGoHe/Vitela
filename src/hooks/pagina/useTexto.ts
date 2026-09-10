@@ -60,6 +60,7 @@ export function useTexto(ctx: {
     color: tool.textColor ? hexToRgba(tool.textColor) : null,
     align: tool.textAlign,
     lineHeight: tool.textLineHeight,
+    charSpacing: tool.textCharSpacing,
   };
   const [textBlocks, setTextBlocks] = useState<TextBlock[]>([]);
   const [blockDraft, setBlockDraft] = useState<{

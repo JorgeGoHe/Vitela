@@ -22,6 +22,15 @@ const INTERLINEADOS: [number, string][] = [
   [2, "Doble"],
 ];
 
+/** Espaciado entre caracteres en puntos (operador `Tc`). Acrobat parte de 0
+ *  y lo llama «Normal»: separar las letras es la excepción, no el estado. */
+const ESPACIADOS: [number, string][] = [
+  [0, "Normal"],
+  [0.5, "0,5 pt"],
+  [1, "1 pt"],
+  [2, "2 pt"],
+];
+
 /** Los tres botones de alineación, con la etiqueta que entiende el backend. */
 const ALINEACIONES: [Alineacion, string, string][] = [
   ["izq", "Izq.", "Alinear a la izquierda"],
@@ -87,6 +96,8 @@ export default function OpcionesHerramienta({
   setTextAlign,
   textLineHeight,
   setTextLineHeight,
+  textCharSpacing,
+  setTextCharSpacing,
   fillMark,
   setFillMark,
   fillColor,
@@ -151,6 +162,8 @@ export default function OpcionesHerramienta({
   setTextAlign: (a: Alineacion | null) => void;
   textLineHeight: number | null;
   setTextLineHeight: (v: number | null) => void;
+  textCharSpacing: number;
+  setTextCharSpacing: (v: number) => void;
   fillMark: MarcaRellenar | null;
   setFillMark: (m: MarcaRellenar | null) => void;
   fillColor: string;
@@ -291,10 +304,10 @@ export default function OpcionesHerramienta({
               </button>
             ))}
           </div>
-          {/* interlineado: el de la barra de formato de un procesador de
-              textos. El espaciado entre caracteres de Acrobat no está: el
-              motor no escribe el operador `Tc` y un mando sin efecto es
-              peor que no tenerlo */}
+          {/* interlineado y espaciado entre caracteres: los dos que Acrobat
+              pone en la misma fila. El interlineado se resuelve colocando
+              el objeto de la línea siguiente; el espaciado sí es un
+              operador del PDF (`Tc`) y lo escribe el backend */}
           <select
             className="size-select"
             title="Interlineado"
@@ -308,6 +321,19 @@ export default function OpcionesHerramienta({
             {INTERLINEADOS.map(([v, etiqueta]) => (
               <option key={v} value={v}>
                 {etiqueta}
+              </option>
+            ))}
+          </select>
+          <select
+            className="size-select"
+            title="Espaciado entre caracteres: separa las letras entre sí; 0 es lo normal"
+            aria-label="Espaciado entre caracteres"
+            value={textCharSpacing}
+            onChange={(e) => setTextCharSpacing(Number(e.target.value))}
+          >
+            {ESPACIADOS.map(([v, etiqueta]) => (
+              <option key={v} value={v}>
+                Espaciado: {etiqueta}
               </option>
             ))}
           </select>

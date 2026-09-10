@@ -49,10 +49,11 @@ export function useHerramienta(
   const [textColor, setTextColor] = useState<string | null>(null);
   const [textAlign, setTextAlign] = useState<Alineacion | null>(null);
   // interlineado: la distancia a la que se coloca cada línea (en un PDF las
-  // líneas son objetos, no hay párrafos). `null` es «el del documento».
-  // El espaciado entre caracteres (`Tc`) NO está: el motor no lo escribe y
-  // un mando que no hace nada es peor que no tenerlo
+  // líneas son objetos, no hay párrafos). `null` es «el del documento»
   const [textLineHeight, setTextLineHeight] = useState<number | null>(null);
+  // espaciado entre caracteres: ese sí es un operador (`Tc`) y lo escribe el
+  // backend con lopdf. Arranca en 0 —«Normal»— como el panel de Acrobat
+  const [textCharSpacing, setTextCharSpacing] = useState(0);
   // el color real del bloque que está seleccionado: es lo que pinta el
   // swatch «A» («el que ya tenga»), que hasta ahora era una letra gris
   const [textColorBloque, setTextColorBloque] = useState<string | null>(null);
@@ -126,6 +127,7 @@ export function useHerramienta(
       textColor,
       textAlign,
       textLineHeight,
+      textCharSpacing,
       goma,
       gomaAncho,
       medidaTipo,
@@ -158,6 +160,7 @@ export function useHerramienta(
       textColor,
       textAlign,
       textLineHeight,
+      textCharSpacing,
       goma,
       gomaAncho,
       medidaTipo,
@@ -200,6 +203,8 @@ export function useHerramienta(
     setTextAlign,
     textLineHeight,
     setTextLineHeight,
+    textCharSpacing,
+    setTextCharSpacing,
     goma,
     setGoma,
     gomaAncho,

@@ -60,7 +60,11 @@ export type Alineacion = "izq" | "centro" | "der";
  *  `lineHeight` es la distancia a la que se coloca cada línea: en un PDF no
  *  hay párrafos, las líneas son objetos, así que el interlineado no es el
  *  operador `TL` sino dónde se pone el objeto siguiente. Sin él, el de
- *  siempre. */
+ *  siempre.
+ *
+ *  `charSpacing` sí es un operador, el `Tc`, y lo escribe un segundo pase
+ *  con lopdf dentro de la misma mutación: separa las letras entre sí, en
+ *  puntos, y 0 es lo normal. */
 export function addTextBlock(args: {
   workPath: string;
   pageIndex: number;
@@ -72,12 +76,14 @@ export function addTextBlock(args: {
   color?: Rgba | null;
   align?: Alineacion | null;
   lineHeight?: number | null;
+  charSpacing?: number | null;
 }): Promise<void> {
   return invoke("add_text_block", {
     font: null,
     color: null,
     align: null,
     lineHeight: null,
+    charSpacing: null,
     ...args,
   });
 }
@@ -97,12 +103,14 @@ export function editTextBlock(args: {
   color?: Rgba | null;
   align?: Alineacion | null;
   lineHeight?: number | null;
+  charSpacing?: number | null;
   reflow?: boolean | null;
 }): Promise<void> {
   return invoke("edit_text_block", {
     color: null,
     align: null,
     lineHeight: null,
+    charSpacing: null,
     reflow: null,
     ...args,
   });
