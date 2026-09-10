@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useModal } from "../hooks/useModal";
+import type { OrdenComentarios } from "../api";
 import {
   paginasImprimibles,
   parseRango,
@@ -116,6 +117,7 @@ export default function DialogoImprimir({
         {!rangoVacio && !sinPaginas && (
           <span className="dato">
             {plural(hojas, "hoja", "hojas")} de {pageCount}
+            {o.resumen && " · más el resumen de comentarios"}
           </span>
         )}
         {sinPaginas && (
@@ -170,6 +172,31 @@ export default function DialogoImprimir({
           <option value="marcas">Documento y marcas</option>
           <option value="solo">Solo el documento</option>
         </select>
+        {/* la casilla de Acrobat: detrás del documento, una hoja con una
+            fila por comentario, que es lo que se lleva a una reunión */}
+        <label className="opt-check">
+          <input
+            type="checkbox"
+            checked={o.resumen}
+            onChange={(e) => cambia({ resumen: e.target.checked })}
+          />
+          Imprimir el resumen de comentarios
+        </label>
+        {o.resumen && (
+          <select
+            className="size-select"
+            aria-label="Orden del resumen de comentarios"
+            value={o.ordenResumen}
+            onChange={(e) =>
+              cambia({ ordenResumen: e.target.value as OrdenComentarios })
+            }
+          >
+            <option value="pagina">Por página</option>
+            <option value="autor">Por autor</option>
+            <option value="fecha">Por fecha</option>
+            <option value="tipo">Por tipo</option>
+          </select>
+        )}
 
         <div className="card-actions">
           <button className="btn" onClick={onClose}>

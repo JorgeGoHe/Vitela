@@ -3161,6 +3161,53 @@ function App() {
     return paginasImprimibles(o, pageCount, pageIndex);
   }
 
+  /** Las hojas del resumen de comentarios, ya rasterizadas. El PDF del
+   *  resumen se escribe junto a la copia de trabajo —en el temporal, donde
+   *  el barrido de huérfanos se lo lleva— y se abre para pintarlo, porque
+   *  imprimir es pintar y la UI solo sabe pintar lo que le rasteriza el
+   *  backend. */
+  async function hojasDelResumen(
+    orden: OrdenComentarios,
+    dpi: number,
+  ): Promise<string[]> {
+    if (!workPath) return [];
+    const dest = `${workPath.replace(/\.pdf$/i, "")}-comentarios.pdf`;
+    await exportCommentsPdf(
+      workPath,
+      dest,
+      orden,
+      originalPath?.split(/[\\/]/).pop(),
+    );
+    const info = await invoke<{ page_count: number; work_path: string }>(
+      "open_pdf",
+      { path: dest, password: null },
+    );
+    try {
+      const sizes = await invoke<PageSize[]>("get_page_sizes", {
+        path: info.work_path,
+      });
+      const hojas: string[] = [];
+      for (let i = 0; i < info.page_count; i++) {
+        const anchoPt = sizes[i]?.width ?? 595;
+        hojas.push(
+          await renderPageSrc(
+            info.work_path,
+            i,
+            Math.round((anchoPt * dpi) / 72),
+          ),
+        );
+      }
+      return hojas;
+    } finally {
+      await invoke("close_document", { workPath: info.work_path }).catch(
+        () => {},
+      );
+      // `close_document` atenúa por dentro el menú nativo, y aquí sigue
+      // habiendo documento abierto
+      setMenuState(true).catch(() => {});
+    }
+  }
+
   /** Rasteriza solo el rango pedido y abre el diálogo del sistema. El bucle
    *  se puede cancelar desde la propia banda de progreso; al cancelar se
    *  liberan los blobs y no se abre nada. */
@@ -3216,6 +3263,26 @@ function App() {
           dato: `${n + 1} / ${idx.length}`,
           accion: cancelar,
         });
+      }
+      // el resumen de comentarios va detrás del documento, como la casilla
+      // de Acrobat: se compone con el mismo comando que lo exporta y se
+      // rasteriza igual que las demás hojas
+      if (o.resumen && !señal.cancelado) {
+        setNotice("Componiendo el resumen de comentarios…", {
+          persistente: true,
+          accion: cancelar,
+        });
+        try {
+          for (const src of await hojasDelResumen(o.ordenResumen, dpi))
+            listas.push({ src });
+        } catch (e) {
+          // sin resumen se imprime igual el documento: no se tira el trabajo
+          // ya rasterizado por una hoja de más
+          console.warn("no se ha podido componer el resumen:", e);
+          setError(
+            "No se ha podido componer el resumen de comentarios; se imprime solo el documento",
+          );
+        }
       }
       if (señal.cancelado) {
         soltar();

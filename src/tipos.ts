@@ -2,7 +2,12 @@
  * Tipos y utilidades compartidos entre el visor (App) y las páginas
  * individuales (components/Pagina).
  */
-import type { EstadoFirma, RangoEtiquetas, Rgba } from "./api";
+import type {
+  EstadoFirma,
+  OrdenComentarios,
+  RangoEtiquetas,
+  Rgba,
+} from "./api";
 export type { RangoEtiquetas };
 
 /** La app corre en macOS: cambia el modificador de los atajos y cómo se
@@ -357,6 +362,11 @@ export type OpcionesImprimir = {
   porcentaje: number;
   /** «Documento y marcas»: con los comentarios y los campos rellenados. */
   conMarcas: boolean;
+  /** Detrás del documento, el resumen de comentarios (una fila por
+   *  comentario), que es la casilla de Acrobat. */
+  resumen: boolean;
+  /** En qué orden va ese resumen; «por página» es el de Acrobat. */
+  ordenResumen: OrdenComentarios;
 };
 
 /** Las páginas que salen de las opciones del diálogo, ya filtradas por
@@ -387,6 +397,8 @@ export const IMPRIMIR_POR_DEFECTO: OpcionesImprimir = {
   escala: "ajustar",
   porcentaje: 100,
   conMarcas: true,
+  resumen: false,
+  ordenResumen: "pagina",
 };
 
 /* ---- ajuste de línea del cuadro de texto (FreeText) ---- */
