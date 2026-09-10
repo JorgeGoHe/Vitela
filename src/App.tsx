@@ -1857,18 +1857,26 @@ function App() {
    *  `saltarA`, así que ⌥← vuelve a donde se estaba. */
   function seguirMarcador(n: OutlineNode) {
     if (n.page_index === null) return;
-    if (n.zoom && n.zoom > 0) setZoom(n.zoom);
-    saltarA(n.page_index);
-    if (n.top === null) return;
+    const destino = n.page_index;
     const top = n.top;
-    // el scroll se ajusta cuando el visor ya tiene el alto del zoom nuevo
+    if (n.zoom && n.zoom > 0) setZoom(n.zoom);
+    saltarA(destino);
+    // El salto entero espera al relayout del zoom, no solo el `top`: con un
+    // zoom distinto del de ahora, el `scrollIntoView` de `saltarA` mide con
+    // las alturas viejas y el relayout lo deja en el principio del
+    // documento. Aquí se calcula el destino **absoluto** y se hace UN solo
+    // `scrollTo`, así que da igual de dónde venga el usuario (AC-072).
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
-        const el = pageElsRef.current.get(n.page_index as number);
-        const s = pageSizes[n.page_index as number];
-        if (!el || !s) return;
-        const escala = el.getBoundingClientRect().height / s.height;
-        viewerRef.current?.scrollBy({ top: top * escala });
+        const visor = viewerRef.current;
+        const el = pageElsRef.current.get(destino);
+        const s = pageSizes[destino];
+        if (!visor || !el) return;
+        const caja = el.getBoundingClientRect();
+        const cajaVisor = visor.getBoundingClientRect();
+        const arriba = visor.scrollTop + caja.top - cajaVisor.top;
+        const escala = s ? caja.height / s.height : 1;
+        visor.scrollTo({ top: arriba + (top ?? 0) * escala });
       }),
     );
   }
