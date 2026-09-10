@@ -383,6 +383,232 @@ fn poda(work_path: &str, adjuntos: bool, metadatos: bool) -> Result<u32, String>
     Ok(quitados.load(std::sync::atomic::Ordering::Relaxed))
 }
 
+/// Un rango de páginas tal como llega de la interfaz: una lista de índices
+/// (base 0) o la sintaxis de siempre, `"1-3, 8"` en base 1. Se admiten las
+/// dos porque los dos diálogos que hay lo mandan de forma distinta y el
+/// backend no es quien para obligar a nadie a cambiar el suyo.
+#[derive(serde::Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum Rango {
+    Indices(Vec<u16>),
+    Texto(String),
+}
+
+impl Rango {
+    /// Los índices (base 0) que caen dentro de un documento de `total`
+    /// páginas, en orden y sin repetir.
+    fn indices(&self, total: u16) -> Vec<u16> {
+        let mut v: Vec<u16> = match self {
+            Rango::Indices(v) => v.clone(),
+            Rango::Texto(t) => {
+                let mut out = Vec::new();
+                for trozo in t.split([',', ';']) {
+                    let trozo = trozo.trim();
+                    if trozo.is_empty() {
+                        continue;
+                    }
+                    match trozo.split_once('-') {
+                        Some((a, b)) => {
+                            let a: u16 = a.trim().parse().unwrap_or(1);
+                            let b: u16 = b.trim().parse().unwrap_or(total);
+                            for n in a.min(b)..=a.max(b) {
+                                out.push(n.saturating_sub(1));
+                            }
+                        }
+                        None => {
+                            if let Ok(n) = trozo.parse::<u16>() {
+                                out.push(n.saturating_sub(1));
+                            }
+                        }
+                    }
+                }
+                out
+            }
+        };
+        v.retain(|i| *i < total);
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
+}
+
+/// Lo que ha salido al exportar a HTML.
+#[derive(Serialize, Debug)]
+pub struct InformeHtml {
+    pub paginas: u16,
+    pub bloques: u32,
+    pub imagenes: u32,
+    pub enlaces: u32,
+}
+
+/// Escapa lo que no puede ir tal cual dentro de un HTML.
+fn escapa(t: &str) -> String {
+    t.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// **Exportar a HTML**: un `.html` con una `<div class="pagina">` por
+/// página y cada bloque de texto en su sitio, con su fuente, su tamaño, su
+/// estilo y su color; las imágenes en una carpeta `<destino>_files/` al
+/// lado, y los enlaces como `<a>`.
+///
+/// **Sin JavaScript y sin dependencias**: lo que sale es un fichero que se
+/// abre en cualquier navegador y se puede mandar por correo, no una
+/// aplicación. Y lo mismo que se dice del `.docx` hay que decirlo aquí
+/// antes de elegir destino: el texto y las imágenes salen en su sitio; las
+/// columnas y las tablas, no. Un PDF no guarda párrafos, guarda trozos de
+/// texto colocados en un papel.
+#[tauri::command(async)]
+pub fn export_html(
+    work_path: String,
+    dest_path: String,
+    rango: Option<Rango>,
+) -> Result<InformeHtml, String> {
+    let carpeta = format!("{}_files", dest_path.trim_end_matches(".html"));
+    on_pdfium_thread(move || {
+        let total = with_doc(&work_path, |doc| Ok(doc.pages().len()))?;
+        let paginas = match &rango {
+            Some(r) => r.indices(total),
+            None => (0..total).collect(),
+        };
+        if paginas.is_empty() {
+            return Err("Ese rango no deja ninguna página que exportar".into());
+        }
+        let tamanos = crate::get_page_sizes(work_path.clone())?;
+        let mut html = String::from(
+            "<!DOCTYPE html>\n<html lang=\"es\">\n<head>\n<meta charset=\"utf-8\">\n\
+             <title>Documento</title>\n<style>\n\
+             body { margin: 0; background: #f2f1ec; font-family: Helvetica, Arial, sans-serif }\n\
+             .pagina { position: relative; margin: 16px auto; background: #fff; \
+             box-shadow: 0 1px 4px rgba(0,0,0,.2); overflow: hidden }\n\
+             .bloque { position: absolute; white-space: pre; transform-origin: left top }\n\
+             .imagen { position: absolute }\n\
+             .enlace { position: absolute; display: block }\n\
+             </style>\n</head>\n<body>\n",
+        );
+        let mut bloques_total = 0u32;
+        let mut imagenes_total = 0u32;
+        let mut enlaces_total = 0u32;
+        let mut hay_carpeta = false;
+        for p in &paginas {
+            let tam = tamanos
+                .get(*p as usize)
+                .ok_or("Esa página ya no está en el documento")?;
+            html.push_str(&format!(
+                "<div class=\"pagina\" style=\"width:{:.2}px;height:{:.2}px\">\n",
+                tam.width, tam.height
+            ));
+            for b in crate::texto::get_text_blocks(work_path.clone(), *p)? {
+                if b.text.trim().is_empty() {
+                    continue;
+                }
+                bloques_total += 1;
+                let [r, g, bl, a] = b.color;
+                let color = if a == 0 {
+                    "transparent".to_string()
+                } else {
+                    format!("rgb({r},{g},{bl})")
+                };
+                html.push_str(&format!(
+                    "<div class=\"bloque\" style=\"left:{:.2}px;top:{:.2}px;\
+                     font-size:{:.2}px;font-family:{},serif;color:{color}{}{}\">{}</div>\n",
+                    b.x,
+                    b.y,
+                    b.font_size,
+                    familia_css(&b.font_family),
+                    if b.negrita { ";font-weight:bold" } else { "" },
+                    if b.cursiva { ";font-style:italic" } else { "" },
+                    escapa(&b.text)
+                ));
+            }
+            for img in crate::imagenes::get_images(work_path.clone(), *p)? {
+                if !hay_carpeta {
+                    std::fs::create_dir_all(&carpeta).map_err(|e| {
+                        crate::mensaje_llano(format!("No se ha podido crear {carpeta}: {e}"))
+                    })?;
+                    hay_carpeta = true;
+                }
+                let nombre = format!("imagen-{}-{}.png", p + 1, img.object_index);
+                let ruta = std::path::Path::new(&carpeta).join(&nombre);
+                // una imagen que no se deja leer no tira la exportación
+                if crate::imagenes::save_image_data(
+                    work_path.clone(),
+                    *p,
+                    img.object_index,
+                    ruta.to_string_lossy().into_owned(),
+                )
+                .is_err()
+                {
+                    continue;
+                }
+                imagenes_total += 1;
+                // la ruta es siempre relativa y siempre dentro de la
+                // carpeta de al lado: un nombre de fichero no puede
+                // escaparse de ella
+                let dir = std::path::Path::new(&carpeta)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "_files".into());
+                html.push_str(&format!(
+                    "<img class=\"imagen\" src=\"{}/{}\" alt=\"\" \
+                     style=\"left:{:.2}px;top:{:.2}px;width:{:.2}px;height:{:.2}px\">\n",
+                    escapa(&dir),
+                    escapa(&nombre),
+                    img.x,
+                    img.y,
+                    img.w,
+                    img.h
+                ));
+            }
+            for enlace in crate::documento::get_links(work_path.clone(), *p)? {
+                let Some(uri) = enlace.uri.filter(|u| {
+                    let u = u.to_lowercase();
+                    u.starts_with("http://") || u.starts_with("https://") || u.starts_with("mailto:")
+                }) else {
+                    continue;
+                };
+                enlaces_total += 1;
+                html.push_str(&format!(
+                    "<a class=\"enlace\" href=\"{}\" rel=\"noopener noreferrer\" \
+                     style=\"left:{:.2}px;top:{:.2}px;width:{:.2}px;height:{:.2}px\"></a>\n",
+                    escapa(&uri),
+                    enlace.x,
+                    enlace.y,
+                    enlace.w,
+                    enlace.h
+                ));
+            }
+            html.push_str("</div>\n");
+        }
+        html.push_str("</body>\n</html>\n");
+        std::fs::write(&dest_path, html).map_err(|e| {
+            crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}"))
+        })?;
+        Ok(InformeHtml {
+            paginas: paginas.len() as u16,
+            bloques: bloques_total,
+            imagenes: imagenes_total,
+            enlaces: enlaces_total,
+        })
+    })
+}
+
+/// La familia normalizada, en la que entiende un navegador.
+fn familia_css(familia: &str) -> &'static str {
+    let f = familia.to_lowercase();
+    if f.contains("times") {
+        "Times New Roman"
+    } else if f.contains("courier") {
+        "Courier New"
+    } else if f.contains("symbol") || f.contains("zapf") {
+        "serif"
+    } else {
+        "Helvetica, Arial"
+    }
+}
+
 /// Una categoría de la auditoría de espacio: cuánto ocupa y qué parte del
 /// fichero es.
 #[derive(Serialize, Debug)]
@@ -675,6 +901,76 @@ mod tests {
         assert!(de("anotaciones") > 0, "la nota tiene que contarse");
 
         std::fs::remove_file(&ruta_foto).ok();
+        std::fs::remove_file(&pdf).ok();
+    }
+
+    /// **Exportar a HTML** (orden 5.1 del ciclo 9): un fichero que se abre
+    /// en cualquier navegador y se manda por correo, sin JavaScript y sin
+    /// dependencias. Cada página una `<div>`, cada bloque en su sitio.
+    #[test]
+    fn el_html_lleva_una_division_por_pagina_y_el_texto_en_su_sitio() {
+        let pdf = std::env::temp_dir().join("exportar-html.pdf");
+        crea_pdf(&["Informe anual", "Anexo con acentós y «comillas»"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        let dest = std::env::temp_dir().join("exportar-html-salida.html");
+
+        let informe = export_html(work.clone(), dest.to_string_lossy().into_owned(), None)
+            .expect("exportar");
+        assert_eq!(informe.paginas, 2);
+        assert!(informe.bloques >= 2, "un bloque por página al menos");
+
+        let html = std::fs::read_to_string(&dest).expect("leer");
+        assert_eq!(
+            html.matches("class=\"pagina\"").count(),
+            2,
+            "una división por página"
+        );
+        assert!(html.contains("Informe anual"));
+        // los no-ASCII salen bien: el fichero va en UTF-8 y lo declara
+        assert!(html.contains("charset=\"utf-8\""));
+        assert!(html.contains("acentós"), "los acentos tienen que salir");
+        // y lo que en HTML significa otra cosa va escapado
+        assert!(!html.contains("<script"), "sin JavaScript, nunca");
+
+        // un rango, en las dos sintaxis que manda la interfaz
+        let informe = export_html(
+            work.clone(),
+            dest.to_string_lossy().into_owned(),
+            Some(Rango::Indices(vec![1])),
+        )
+        .expect("exportar la segunda");
+        assert_eq!(informe.paginas, 1);
+        let html = std::fs::read_to_string(&dest).expect("leer");
+        assert!(html.contains("Anexo") && !html.contains("Informe anual"));
+
+        let informe = export_html(
+            work.clone(),
+            dest.to_string_lossy().into_owned(),
+            Some(Rango::Texto("1".into())),
+        )
+        .expect("exportar con el rango escrito");
+        assert_eq!(informe.paginas, 1);
+        let html = std::fs::read_to_string(&dest).expect("leer");
+        assert!(html.contains("Informe anual") && !html.contains("Anexo"));
+
+        // un rango que no deja ninguna página se dice, no escribe un
+        // fichero vacío
+        assert!(export_html(
+            work.clone(),
+            dest.to_string_lossy().into_owned(),
+            Some(Rango::Texto("40-50".into())),
+        )
+        .unwrap_err()
+        .contains("ninguna página"));
+
+        // el texto peligroso se escapa: lo que hay en el PDF es contenido
+        // ajeno y no puede convertirse en etiquetas
+        assert_eq!(escapa("<b>&\"x\""), "&lt;b&gt;&amp;&quot;x&quot;");
+
+        std::fs::remove_file(&dest).ok();
+        let _ = std::fs::remove_dir_all(
+            std::env::temp_dir().join("exportar-html-salida_files"),
+        );
         std::fs::remove_file(&pdf).ok();
     }
 
