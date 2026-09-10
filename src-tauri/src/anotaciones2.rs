@@ -487,15 +487,71 @@ pub(crate) fn apariencia_freetext(
     color: [f32; 3],
     border: bool,
 ) -> lopdf::ObjectId {
+    apariencia_freetext_con_llamada(doc, w, h, texto, size, color, border, [0.0; 4], &[])
+}
+
+/// La apariencia de un `/FreeText`, con o sin llamada. `rd` son los cuatro
+/// márgenes del `/RD` (izquierda, abajo, derecha, arriba): lo que separa la
+/// **caja de texto** del `/Rect` de la anotación, que en una llamada tiene
+/// que abarcar también la línea y su punta. `linea` son los puntos del
+/// `/CL` ya en coordenadas locales del `/BBox`, empezando por la punta.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apariencia_freetext_con_llamada(
+    doc: &mut lopdf::Document,
+    w: f32,
+    h: f32,
+    texto: &str,
+    size: f32,
+    color: [f32; 3],
+    border: bool,
+    rd: [f32; 4],
+    linea: &[(f32, f32)],
+) -> lopdf::ObjectId {
     use lopdf::{Dictionary, Object, Stream};
     let [r, g, b] = color;
+    // la caja de texto dentro del /Rect
+    let (cx, cy) = (rd[0], rd[1]);
+    let (cw, ch) = ((w - rd[0] - rd[2]).max(1.0), (h - rd[1] - rd[3]).max(1.0));
     let mut ops = Vec::new();
+    // la línea de la llamada va DEBAJO de la caja, para que el borde la
+    // tape en el punto de anclaje y no se vea el remate
+    if linea.len() >= 2 {
+        ops.extend_from_slice(
+            format!("q {r:.4} {g:.4} {b:.4} RG 1 w {:.2} {:.2} m ", linea[0].0, linea[0].1)
+                .as_bytes(),
+        );
+        for p in &linea[1..] {
+            ops.extend_from_slice(format!("{:.2} {:.2} l ", p.0, p.1).as_bytes());
+        }
+        ops.extend_from_slice(b"S Q\n");
+        // la punta de flecha, en el primer punto y mirando hacia el segundo
+        // (`/LE /OpenArrow` es lo que declara la anotación; el dibujo lo
+        // ponemos nosotros porque PDFium no escribe apariencias)
+        let (px, py) = linea[0];
+        let (qx, qy) = linea[1];
+        let (dx, dy) = (qx - px, qy - py);
+        let largo = (dx * dx + dy * dy).sqrt().max(0.001);
+        let (ux, uy) = (dx / largo, dy / largo);
+        let punta = 8.0f32.min(largo * 0.6);
+        let ala = 0.42f32; // ±24°, la de Acrobat
+        let (c, s2) = (ala.cos(), ala.sin());
+        let a1 = (px + punta * (ux * c - uy * s2), py + punta * (ux * s2 + uy * c));
+        let a2 = (px + punta * (ux * c + uy * s2), py + punta * (-ux * s2 + uy * c));
+        ops.extend_from_slice(
+            format!(
+                "q {r:.4} {g:.4} {b:.4} RG 1 w {:.2} {:.2} m {px:.2} {py:.2} l {:.2} {:.2} l S Q\n",
+                a1.0, a1.1, a2.0, a2.1
+            )
+            .as_bytes(),
+        );
+    }
     if border {
         ops.extend_from_slice(
             format!(
-                "q {r:.4} {g:.4} {b:.4} RG 1 w 0.5 0.5 {:.2} {:.2} re S Q\n",
-                w - 1.0,
-                h - 1.0
+                "q 1 1 1 rg {:.2} {:.2} {:.2} {:.2} re f Q\n\
+                 q {r:.4} {g:.4} {b:.4} RG 1 w {:.2} {:.2} {:.2} {:.2} re S Q\n",
+                cx, cy, cw, ch,
+                cx + 0.5, cy + 0.5, cw - 1.0, ch - 1.0
             )
             .as_bytes(),
         );
@@ -504,12 +560,13 @@ pub(crate) fn apariencia_freetext(
     let interlineado = size * 1.2;
     ops.extend_from_slice(
         format!(
-            "BT /Helv {size:.2} Tf {interlineado:.2} TL {r:.4} {g:.4} {b:.4} rg {pad:.2} {:.2} Td\n",
-            h - pad - size * 0.85
+            "BT /Helv {size:.2} Tf {interlineado:.2} TL {r:.4} {g:.4} {b:.4} rg {:.2} {:.2} Td\n",
+            cx + pad,
+            cy + ch - pad - size * 0.85
         )
         .as_bytes(),
     );
-    for (n, linea) in parte_lineas(texto, size, w - pad * 2.0).iter().enumerate() {
+    for (n, linea) in parte_lineas(texto, size, cw - pad * 2.0).iter().enumerate() {
         if n > 0 {
             ops.extend_from_slice(b"T* ");
         }
@@ -659,6 +716,429 @@ pub fn add_free_text(
     })
 }
 
+/// La **llamada** de Acrobat: un `/FreeText` con `/IT /FreeTextCallout`,
+/// una línea `/CL` que sale de la caja de texto y acaba en punta de flecha
+/// (`/LE /OpenArrow`) sobre lo que se quiere señalar. El gesto es el de
+/// Acrobat: clic donde señala, arrastrar hasta donde va el texto.
+///
+/// `rect` es la **caja del texto** y `punta` el punto al que apunta, los
+/// dos en el espacio propio de la página (la UI convierte antes de
+/// mandar). El `/Rect` de la anotación abarca las dos cosas —es lo que
+/// exige el spec, y lo que hace que arrastrarla se lleve la punta— y el
+/// `/RD` dice dónde queda la caja dentro de él.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command(async)]
+pub fn add_callout(
+    work_path: String,
+    page_index: u16,
+    rect: Rect,
+    punta: [f32; 2],
+    text: String,
+    color: [u8; 4],
+    author: Option<String>,
+) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Err("La llamada está vacía".into());
+    }
+    if rect.w < 8.0 || rect.h < 8.0 {
+        return Err("El cuadro de la llamada es demasiado pequeño".into());
+    }
+    let size = 11.0f32;
+    let autor = crate::anotaciones::autor_o_sistema(author);
+    let fecha = crate::anotaciones::fecha_pdf_ahora();
+    crate::cirugia(&work_path, move |doc| {
+        use lopdf::{Dictionary, Object};
+        let page_id = *doc
+            .get_pages()
+            .get(&(page_index as u32 + 1))
+            .ok_or("Página fuera de rango")?;
+        let geo = crate::formularios2::geo_pagina(doc, page_id)?;
+        let caja = geo.ui_rect_a_pdf(&rect);
+        let (bx0, by0, bx1, by1) = (
+            caja.left().value,
+            caja.bottom().value,
+            caja.right().value,
+            caja.top().value,
+        );
+        let (px, py) = geo.ui_a_pdf(punta[0], punta[1]);
+        // el ancla: el centro del lado de la caja que mira a la punta, que
+        // es de donde sale la línea en Acrobat
+        let ancla = ancla_de_la_caja((bx0, by0, bx1, by1), (px, py));
+        // el /Rect abarca la caja Y la punta, con hueco para la flecha
+        const AIRE: f32 = 10.0;
+        let x0 = bx0.min(px - AIRE);
+        let y0 = by0.min(py - AIRE);
+        let x1 = bx1.max(px + AIRE);
+        let y1 = by1.max(py + AIRE);
+        let rd = [bx0 - x0, by0 - y0, x1 - bx1, y1 - by1];
+        let (w, h) = (x1 - x0, y1 - y0);
+        let (r, g, b) = (
+            color[0] as f32 / 255.0,
+            color[1] as f32 / 255.0,
+            color[2] as f32 / 255.0,
+        );
+        let linea = [(px - x0, py - y0), (ancla.0 - x0, ancla.1 - y0)];
+        let ap_id = apariencia_freetext_con_llamada(
+            doc, w, h, &text, size, [r, g, b], true, rd, &linea,
+        );
+
+        let mut annot = Dictionary::new();
+        annot.set("Type", Object::Name(b"Annot".to_vec()));
+        annot.set("Subtype", Object::Name(b"FreeText".to_vec()));
+        annot.set("IT", Object::Name(b"FreeTextCallout".to_vec()));
+        annot.set(
+            "Rect",
+            Object::Array(vec![x0.into(), y0.into(), x1.into(), y1.into()]),
+        );
+        annot.set(
+            "RD",
+            Object::Array(vec![rd[0].into(), rd[1].into(), rd[2].into(), rd[3].into()]),
+        );
+        // el /CL empieza en la punta: es ahí donde va el remate que declara
+        // /LE
+        annot.set(
+            "CL",
+            Object::Array(vec![px.into(), py.into(), ancla.0.into(), ancla.1.into()]),
+        );
+        annot.set("LE", Object::Name(b"OpenArrow".to_vec()));
+        annot.set(
+            "DA",
+            Object::string_literal(format!("/Helv {size:.2} Tf {r:.4} {g:.4} {b:.4} rg")),
+        );
+        annot.set("Contents", crate::documento::cadena_pdf(&text));
+        annot.set("C", Object::Array(vec![r.into(), g.into(), b.into()]));
+        annot.set("F", 4i64); // Print
+        annot.set("T", crate::documento::cadena_pdf(&autor));
+        annot.set("CreationDate", Object::string_literal(fecha.clone()));
+        annot.set("M", Object::string_literal(fecha));
+        let mut bs = Dictionary::new();
+        bs.set("W", Object::Integer(1));
+        bs.set("S", Object::Name(b"S".to_vec()));
+        annot.set("BS", Object::Dictionary(bs));
+        let mut ap = Dictionary::new();
+        ap.set("N", Object::Reference(ap_id));
+        annot.set("AP", Object::Dictionary(ap));
+        let annot_id = doc.add_object(annot);
+        crate::formularios2::anade_a_annots(doc, page_id, annot_id)
+    })
+}
+
+/// Le aplica a la línea de una llamada (`/CL`) y a los márgenes de su caja
+/// (`/RD`) la misma transformación que se le ha aplicado al `/Rect`: sin
+/// esto, arrastrar el cuadro dejaba la punta donde estaba.
+fn mueve_la_llamada(
+    doc: &mut lopdf::Document,
+    id: lopdf::ObjectId,
+    (sx, sy, e, f): (f32, f32, f32, f32),
+) -> Result<(), String> {
+    use lopdf::Object;
+    let annot = doc
+        .get_object(id)
+        .and_then(|o| o.as_dict())
+        .map_err(|err| err.to_string())?
+        .clone();
+    let numero = |o: &Object| match o {
+        Object::Integer(i) => Some(*i as f32),
+        Object::Real(r) => Some(*r),
+        _ => None,
+    };
+    let cl: Vec<f32> = match annot.get(b"CL").and_then(|o| o.as_array()) {
+        Ok(a) => a.iter().filter_map(numero).collect(),
+        Err(_) => return Ok(()),
+    };
+    let movida: Vec<Object> = cl
+        .chunks(2)
+        .filter(|c| c.len() == 2)
+        .flat_map(|c| [(c[0] * sx + e).into(), (c[1] * sy + f).into()])
+        .collect();
+    let rd: Vec<f32> = annot
+        .get(b"RD")
+        .and_then(|o| o.as_array())
+        .map(|a| a.iter().filter_map(numero).collect())
+        .unwrap_or_default();
+    let d = doc
+        .get_object_mut(id)
+        .and_then(|o| o.as_dict_mut())
+        .map_err(|err| err.to_string())?;
+    d.set("CL", Object::Array(movida));
+    if rd.len() == 4 {
+        d.set(
+            "RD",
+            Object::Array(vec![
+                (rd[0] * sx).into(),
+                (rd[1] * sy).into(),
+                (rd[2] * sx).into(),
+                (rd[3] * sy).into(),
+            ]),
+        );
+    }
+    Ok(())
+}
+
+/// La goma de borrar del modo Dibujar: quita del trazo los tramos que caen
+/// dentro del rectángulo y deja el resto, en vez de llevarse la anotación
+/// entera. `rect` va en el espacio propio de la página.
+///
+/// Se trabaja sobre el `/AP` de la anotación, que es **donde vive de verdad
+/// el trazo**: PDFium guarda el dibujo del Ink como un objeto de camino
+/// dentro de su apariencia (y no escribe `/InkList`), así que reescribir el
+/// Form XObject es reescribir el trazo. Devuelve `false` si no ha quedado
+/// nada y la anotación se ha borrado, que es lo que hace Acrobat cuando la
+/// goma se lleva el trazo entero.
+#[tauri::command(async)]
+pub fn erase_ink(
+    work_path: String,
+    page_index: u16,
+    annot_index: u16,
+    rect: Rect,
+) -> Result<bool, String> {
+    if rect.w <= 0.0 || rect.h <= 0.0 {
+        return Err("El área de borrado no tiene tamaño".into());
+    }
+    crate::historial::mutacion(work_path, move |work_path| {
+        on_pdfium_thread(move || {
+            let mut queda = true;
+            crate::cirugia_en_hilo(&work_path, |doc| {
+                let id = crate::anotaciones::annot_id(doc, page_index, annot_index as usize)?;
+                let page_id = *doc
+                    .get_pages()
+                    .get(&(page_index as u32 + 1))
+                    .ok_or("Página fuera de rango")?;
+                let geo = crate::formularios2::geo_pagina(doc, page_id)?;
+                let goma = geo.ui_rect_a_pdf(&rect);
+                let goma = (
+                    goma.left().value,
+                    goma.bottom().value,
+                    goma.right().value,
+                    goma.top().value,
+                );
+                queda = borra_del_trazo(doc, id, goma)?;
+                if !queda {
+                    // sin trazo no hay comentario: se va del /Annots, que es
+                    // lo que hace Acrobat cuando la goma se lo lleva entero
+                    crate::anotaciones::quita_annot(doc, page_index, annot_index as usize)?;
+                }
+                Ok(())
+            })?;
+            Ok(queda)
+        })
+    })
+}
+
+/// Quita del `/AP` de un Ink los tramos que tocan el rectángulo y rehace su
+/// `/Rect` y su `/BBox`. Devuelve si ha quedado algo.
+fn borra_del_trazo(
+    doc: &mut lopdf::Document,
+    id: lopdf::ObjectId,
+    goma: (f32, f32, f32, f32),
+) -> Result<bool, String> {
+    use lopdf::Object;
+    let annot = doc
+        .get_object(id)
+        .and_then(|o| o.as_dict())
+        .map_err(|e| e.to_string())?
+        .clone();
+    if annot.get(b"Subtype").and_then(|o| o.as_name()).unwrap_or_default() != b"Ink" {
+        return Err("Ese comentario no es un trazo".into());
+    }
+    let ap_id = annot
+        .get(b"AP")
+        .and_then(|o| o.as_dict())
+        .map_err(|_| "El trazo no tiene dibujo que borrar".to_string())?
+        .get(b"N")
+        .and_then(|o| o.as_reference())
+        .map_err(|e| e.to_string())?;
+    let stream = doc
+        .get_object(ap_id)
+        .and_then(|o| o.as_stream())
+        .map_err(|e| e.to_string())?;
+    let datos = stream
+        .decompressed_content()
+        .unwrap_or_else(|_| stream.content.clone());
+    let (cabecera, trazos) = parte_el_camino(&datos);
+    // cada tramo que toca la goma se va; los de los lados sobreviven, que
+    // es lo que distingue una goma de borrar el comentario
+    let quedan: Vec<Vec<(f32, f32)>> = trazos
+        .iter()
+        .flat_map(|t| trocea_fuera(t, goma))
+        .filter(|t| t.len() >= 2)
+        .collect();
+    if quedan.is_empty() {
+        return Ok(false);
+    }
+    let mut ops = cabecera;
+    for trazo in &quedan {
+        ops.extend_from_slice(format!("{:.2} {:.2} m ", trazo[0].0, trazo[0].1).as_bytes());
+        for p in &trazo[1..] {
+            ops.extend_from_slice(format!("{:.2} {:.2} l ", p.0, p.1).as_bytes());
+        }
+    }
+    ops.extend_from_slice(b"S Q\n");
+
+    const MARGEN: f32 = 3.0;
+    let xs: Vec<f32> = quedan.iter().flatten().map(|p| p.0).collect();
+    let ys: Vec<f32> = quedan.iter().flatten().map(|p| p.1).collect();
+    let caja = [
+        xs.iter().copied().fold(f32::MAX, f32::min) - MARGEN,
+        ys.iter().copied().fold(f32::MAX, f32::min) - MARGEN,
+        xs.iter().copied().fold(f32::MIN, f32::max) + MARGEN,
+        ys.iter().copied().fold(f32::MIN, f32::max) + MARGEN,
+    ];
+    let caja_obj = || {
+        Object::Array(vec![
+            caja[0].into(),
+            caja[1].into(),
+            caja[2].into(),
+            caja[3].into(),
+        ])
+    };
+    {
+        let st = doc
+            .get_object_mut(ap_id)
+            .and_then(|o| o.as_stream_mut())
+            .map_err(|e| e.to_string())?;
+        st.dict.set("BBox", caja_obj());
+        st.set_plain_content(ops);
+        let _ = st.compress();
+    }
+    doc.get_object_mut(id)
+        .and_then(|o| o.as_dict_mut())
+        .map_err(|e| e.to_string())?
+        .set("Rect", caja_obj());
+    Ok(true)
+}
+
+/// Parte el content stream de un trazo en (todo lo de antes del camino, los
+/// caminos). Solo entiende `m` y `l`, que es lo único que escribe el dibujo
+/// de Vitela; lo demás se conserva tal cual delante.
+fn parte_el_camino(datos: &[u8]) -> (Vec<u8>, Vec<Vec<(f32, f32)>>) {
+    let texto = String::from_utf8_lossy(datos);
+    let piezas: Vec<&str> = texto.split_whitespace().collect();
+    let mut cabecera = String::new();
+    let mut trazos: Vec<Vec<(f32, f32)>> = Vec::new();
+    let mut i = 0;
+    let mut en_camino = false;
+    while i < piezas.len() {
+        let p = piezas[i];
+        let punto = |i: usize| -> Option<(f32, f32)> {
+            Some((piezas.get(i - 2)?.parse().ok()?, piezas.get(i - 1)?.parse().ok()?))
+        };
+        match p {
+            "m" if i >= 2 => {
+                if let Some(pt) = punto(i) {
+                    trazos.push(vec![pt]);
+                    en_camino = true;
+                }
+            }
+            "l" if i >= 2 => {
+                if let (Some(pt), Some(t)) = (punto(i), trazos.last_mut()) {
+                    t.push(pt);
+                }
+            }
+            // lo que va después del camino (S, Q) se rehace al escribir
+            "S" | "s" | "f" | "F" | "B" | "n" | "Q" if en_camino => {}
+            // los números se copian con su operador, no sueltos
+            _ if !en_camino && p.parse::<f32>().is_err() => {
+                let mut j = i;
+                let mut nums = Vec::new();
+                while j > 0 && piezas[j - 1].parse::<f32>().is_ok() {
+                    j -= 1;
+                    nums.push(piezas[j]);
+                }
+                nums.reverse();
+                for n in nums {
+                    cabecera.push_str(n);
+                    cabecera.push(' ');
+                }
+                cabecera.push_str(p);
+                cabecera.push(' ');
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    (cabecera.into_bytes(), trazos)
+}
+
+/// Trocea una polilínea dejando fuera los tramos que tocan el rectángulo.
+fn trocea_fuera(
+    trazo: &[(f32, f32)],
+    goma: (f32, f32, f32, f32),
+) -> Vec<Vec<(f32, f32)>> {
+    let mut fuera: Vec<Vec<(f32, f32)>> = Vec::new();
+    let mut actual: Vec<(f32, f32)> = Vec::new();
+    for par in trazo.windows(2) {
+        let (a, b) = (par[0], par[1]);
+        if toca(a, b, goma) {
+            if actual.len() >= 2 {
+                fuera.push(std::mem::take(&mut actual));
+            } else {
+                actual.clear();
+            }
+            continue;
+        }
+        if actual.is_empty() {
+            actual.push(a);
+        }
+        actual.push(b);
+    }
+    if actual.len() >= 2 {
+        fuera.push(actual);
+    }
+    fuera
+}
+
+/// ¿El tramo `a`→`b` toca el rectángulo? Recorte de Liang-Barsky: es la
+/// prueba exacta, y con ella la goma borra lo que el usuario ha tachado
+/// aunque el trazo cruce la zona de lado a lado sin ningún punto dentro.
+fn toca(a: (f32, f32), b: (f32, f32), (x0, y0, x1, y1): (f32, f32, f32, f32)) -> bool {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let mut t0 = 0.0f32;
+    let mut t1 = 1.0f32;
+    for (p, q) in [
+        (-dx, a.0 - x0),
+        (dx, x1 - a.0),
+        (-dy, a.1 - y0),
+        (dy, y1 - a.1),
+    ] {
+        if p.abs() < f32::EPSILON {
+            if q < 0.0 {
+                return false;
+            }
+            continue;
+        }
+        let r = q / p;
+        if p < 0.0 {
+            if r > t1 {
+                return false;
+            }
+            t0 = t0.max(r);
+        } else {
+            if r < t0 {
+                return false;
+            }
+            t1 = t1.min(r);
+        }
+    }
+    t0 <= t1
+}
+
+/// De qué punto de la caja sale la línea de la llamada: el centro del lado
+/// que mira a la punta. Con la punta a un lado sale del lado; con la punta
+/// arriba o abajo, del borde de arriba o de abajo.
+pub(crate) fn ancla_de_la_caja(caja: (f32, f32, f32, f32), punta: (f32, f32)) -> (f32, f32) {
+    let (x0, y0, x1, y1) = caja;
+    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    let (dx, dy) = (punta.0 - cx, punta.1 - cy);
+    // ¿manda la horizontal o la vertical? se compara con la forma de la
+    // caja, que si no una caja muy ancha siempre saldría por el lado
+    if dx.abs() * (y1 - y0).max(1.0) >= dy.abs() * (x1 - x0).max(1.0) {
+        (if dx >= 0.0 { x1 } else { x0 }, cy)
+    } else {
+        (cx, if dy >= 0.0 { y1 } else { y0 })
+    }
+}
+
 /// Mueve y/o reescala una anotación, que es lo que hace Acrobat al
 /// arrastrarla o tirar de sus manijas. Cuatro tipos, con tres caminos:
 ///
@@ -698,6 +1178,9 @@ pub fn transform_annotation(
         let pedido = geo.ui_rect_a_pdf(&Rect { x, y, w, h });
         let es_freetext;
         let es_square;
+        // la transformación que se le aplica al rect, para aplicársela
+        // también a la línea de una llamada
+        let movimiento;
         {
             let mut annot = page
                 .annotations_mut()
@@ -754,14 +1237,19 @@ pub fn transform_annotation(
                 }
             }
             annot.set_bounds(nuevo).map_err(|e| e.to_string())?;
+            movimiento = (sx, sy, e, f);
         }
         drop(page);
         save_and_close(doc, &work_path)?;
         if es_freetext {
             // la apariencia del cuadro se dibuja en local (/BBox 0 0 w h):
-            // con el tamaño nuevo hay que rehacerla entera
+            // con el tamaño nuevo hay que rehacerla entera. Y si es una
+            // llamada, la línea y su punta se mueven con la caja: al `/CL`
+            // y al `/RD` se les aplica la misma transformación que al rect,
+            // que es lo que hace que arrastrar el cuadro arrastre la punta
             crate::cirugia_en_hilo(&work_path, |doc| {
                 let id = crate::anotaciones::annot_id(doc, page_index, annot_index as usize)?;
+                mueve_la_llamada(doc, id, movimiento)?;
                 crate::anotaciones::regenera_freetext(doc, id)
             })?;
         }
@@ -806,6 +1294,190 @@ mod tests {
             .filter(|t| t.contains('('))
             .map(|t| t.rsplit('(').next().unwrap_or("").to_string())
             .collect()
+    }
+
+    /// El contenido crudo del `/AP` de una anotación.
+    fn ap_crudo(work: &str, i: usize) -> String {
+        let mut doc = lopdf::Document::load(work).expect("cargar");
+        let id = crate::anotaciones::annot_id(&mut doc, 0, i).expect("annot");
+        let annot = doc.get_object(id).and_then(|o| o.as_dict()).expect("dict");
+        let ap_id = annot
+            .get(b"AP")
+            .and_then(|o| o.as_dict())
+            .expect("sin /AP")
+            .get(b"N")
+            .and_then(|o| o.as_reference())
+            .expect("/AP /N");
+        let st = doc.get_object(ap_id).and_then(|o| o.as_stream()).expect("stream");
+        String::from_utf8_lossy(&st.decompressed_content().unwrap_or_else(|_| st.content.clone()))
+            .into_owned()
+    }
+
+    /// El valor de una clave de la anotación `i`, como lista de números.
+    fn numeros_de(work: &str, i: usize, clave: &[u8]) -> Vec<f32> {
+        let mut doc = lopdf::Document::load(work).expect("cargar");
+        let id = crate::anotaciones::annot_id(&mut doc, 0, i).expect("annot");
+        doc.get_object(id)
+            .and_then(|o| o.as_dict())
+            .expect("dict")
+            .get(clave)
+            .and_then(|o| o.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|o| match o {
+                        lopdf::Object::Integer(n) => Some(*n as f32),
+                        lopdf::Object::Real(r) => Some(*r),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// **H3.** La llamada: un `/FreeText` con `/IT /FreeTextCallout`, su
+    /// línea `/CL` y la punta de flecha. Al arrastrarla, la línea y la
+    /// punta se van con la caja: si el `/Rect` se mueve y el `/CL` se
+    /// queda, la flecha apunta a otro sitio.
+    #[test]
+    fn una_llamada_apunta_a_su_sitio_y_la_punta_se_mueve_con_la_caja() {
+        let tmp = std::env::temp_dir().join("anot2-llamada.pdf");
+        crea_pdf(&["Plano"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        // la punta abajo a la izquierda de la caja de texto
+        add_callout(
+            work.clone(),
+            0,
+            Rect { x: 250.0, y: 120.0, w: 160.0, h: 50.0 },
+            [90.0, 300.0],
+            "Esta cota está mal".into(),
+            [226, 61, 61, 255],
+            Some("Ana".into()),
+        )
+        .expect("crear la llamada");
+
+        let anots = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar");
+        assert_eq!(anots.len(), 1);
+        assert_eq!(anots[0].kind, "FreeText");
+        assert_eq!(anots[0].contents, "Esta cota está mal");
+        assert_eq!(anots[0].author, "Ana");
+
+        let cl = numeros_de(&work, 0, b"CL");
+        assert_eq!(cl.len(), 4, "la línea va de la punta a la caja: {cl:?}");
+        let rect = numeros_de(&work, 0, b"Rect");
+        let rd = numeros_de(&work, 0, b"RD");
+        assert_eq!(rd.len(), 4, "el /RD dice dónde queda la caja dentro del /Rect");
+        // el /Rect abarca la punta
+        assert!(
+            cl[0] >= rect[0] && cl[0] <= rect[2] && cl[1] >= rect[1] && cl[1] <= rect[3],
+            "la punta {:?} tiene que caber en el /Rect {rect:?}",
+            (cl[0], cl[1])
+        );
+        // y el dibujo lleva la flecha
+        let ap = ap_crudo(&work, 0);
+        assert!(ap.contains(" m ") && ap.contains(" l "), "la línea: {ap}");
+        assert!(ap.contains("Esta cota"), "y el texto: {ap}");
+
+        // arrastrarla: la línea y la punta se mueven con la caja
+        let antes_rect = rect.clone();
+        let antes_cl = cl.clone();
+        let vista = &crate::get_page_sizes(work.clone()).expect("tamaños")[0];
+        let _ = vista;
+        let ui = &crate::anotaciones::get_annotations(work.clone(), 0).expect("listar")[0];
+        let (x, y, w, h) = (ui.x, ui.y, ui.w, ui.h);
+        transform_annotation(work.clone(), 0, 0, x + 40.0, y + 25.0, w, h).expect("mover");
+        let rect2 = numeros_de(&work, 0, b"Rect");
+        let cl2 = numeros_de(&work, 0, b"CL");
+        let dx = rect2[0] - antes_rect[0];
+        let dy = rect2[1] - antes_rect[1];
+        assert!(dx.abs() > 1.0 || dy.abs() > 1.0, "algo se ha movido");
+        assert!(
+            (cl2[0] - antes_cl[0] - dx).abs() < 0.6 && (cl2[1] - antes_cl[1] - dy).abs() < 0.6,
+            "el /CL tiene que moverse lo mismo que el /Rect: {antes_cl:?} → {cl2:?} con ({dx},{dy})"
+        );
+        // y la apariencia se rehace con la línea, no se queda la de antes
+        let ap = ap_crudo(&work, 0);
+        assert!(ap.contains(" m ") && ap.contains("Esta cota"), "{ap}");
+
+        // el texto vacío se dice
+        assert!(add_callout(
+            work.clone(),
+            0,
+            Rect { x: 250.0, y: 120.0, w: 160.0, h: 50.0 },
+            [90.0, 300.0],
+            "  ".into(),
+            [0, 0, 0, 255],
+            None,
+        )
+        .is_err());
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// El ancla sale por el lado que mira a la punta.
+    #[test]
+    fn la_linea_de_la_llamada_sale_por_el_lado_que_mira_a_la_punta() {
+        let caja = (100.0, 100.0, 200.0, 140.0);
+        assert_eq!(ancla_de_la_caja(caja, (300.0, 120.0)), (200.0, 120.0), "a la derecha");
+        assert_eq!(ancla_de_la_caja(caja, (20.0, 120.0)), (100.0, 120.0), "a la izquierda");
+        assert_eq!(ancla_de_la_caja(caja, (150.0, 400.0)), (150.0, 140.0), "arriba");
+        assert_eq!(ancla_de_la_caja(caja, (150.0, 10.0)), (150.0, 100.0), "abajo");
+    }
+
+    /// **H3.** La goma de borrar quita del trazo lo que se tacha y deja el
+    /// resto: hasta ahora la única forma de arreglar un garabato era
+    /// borrarlo entero.
+    #[test]
+    fn la_goma_borra_medio_trazo_y_deja_la_otra_mitad() {
+        let tmp = std::env::temp_dir().join("anot2-goma.pdf");
+        crea_pdf(&["Dibujo"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        // una línea horizontal de doce tramos, de x=100 a x=340
+        let puntos: Vec<[f32; 2]> = (0..13).map(|i| [100.0 + i as f32 * 20.0, 300.0]).collect();
+        crate::anotaciones::add_stroke(work.clone(), 0, puntos, None, None, None)
+            .expect("dibujar");
+        let ancho_antes = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar")[0].w;
+
+        // la goma en el trozo del medio
+        let queda = erase_ink(
+            work.clone(),
+            0,
+            0,
+            Rect { x: 180.0, y: 280.0, w: 80.0, h: 40.0 },
+        )
+        .expect("borrar el medio");
+        assert!(queda, "queda trazo a los dos lados");
+
+        let ap = ap_crudo(&work, 0);
+        let subcaminos = ap.matches(" m ").count();
+        assert_eq!(subcaminos, 2, "dos trozos, uno a cada lado:\n{ap}");
+        assert!(ap.contains("2 w"), "el grosor y el color se conservan:\n{ap}");
+        assert!(
+            !ap.contains("220.00 300.00"),
+            "el punto de en medio ya no está:\n{ap}"
+        );
+        // la caja se encoge un poco, pero el comentario sigue ahí
+        let anots = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar");
+        assert_eq!(anots.len(), 1);
+        assert!(anots[0].w <= ancho_antes + 0.1);
+        crate::render_page_png(work.clone(), 0, 200, true).expect("render con el trazo a medias");
+
+        // ⌘Z devuelve el trazo entero
+        crate::historial::undo(work.clone()).expect("deshacer");
+        let ap = ap_crudo(&work, 0);
+        assert_eq!(ap.matches(" m ").count(), 2, "PDFium escribe un `m` de más al crear");
+
+        // y borrarlo todo se lleva el comentario, como en Acrobat
+        let queda = erase_ink(
+            work.clone(),
+            0,
+            0,
+            Rect { x: 50.0, y: 250.0, w: 400.0, h: 100.0 },
+        )
+        .expect("borrar entero");
+        assert!(!queda);
+        assert!(crate::anotaciones::get_annotations(work.clone(), 0)
+            .expect("listar")
+            .is_empty());
+        std::fs::remove_file(&tmp).ok();
     }
 
     /// El cuadro de texto se ajusta al ancho SIEMPRE, no solo al crearlo:

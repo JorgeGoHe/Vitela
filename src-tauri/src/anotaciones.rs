@@ -1252,8 +1252,28 @@ pub(crate) fn regenera_freetext(doc: &mut lopdf::Document, id: lopdf::ObjectId) 
         .get(b"Contents")
         .map(texto_de_cadena_pdf)
         .unwrap_or_default();
-    let ap_id =
-        crate::anotaciones2::apariencia_freetext(doc, w, h, &texto, size, color, border);
+    // una llamada lleva además su línea (`/CL`) y su caja metida en el
+    // `/Rect` por el `/RD`: la apariencia hay que rehacerla entera, o al
+    // moverla se quedaría la línea de antes
+    let rd: Vec<f32> = annot
+        .get(b"RD")
+        .and_then(|o| o.as_array())
+        .map(|a| a.iter().filter_map(numero).collect())
+        .unwrap_or_default();
+    let cl: Vec<f32> = annot
+        .get(b"CL")
+        .and_then(|o| o.as_array())
+        .map(|a| a.iter().filter_map(numero).collect())
+        .unwrap_or_default();
+    let (x0, y0) = (rect[0].min(rect[2]), rect[1].min(rect[3]));
+    let linea: Vec<(f32, f32)> = cl.chunks(2)
+        .filter(|c| c.len() == 2)
+        .map(|c| (c[0] - x0, c[1] - y0))
+        .collect();
+    let rd = if rd.len() == 4 { [rd[0], rd[1], rd[2], rd[3]] } else { [0.0; 4] };
+    let ap_id = crate::anotaciones2::apariencia_freetext_con_llamada(
+        doc, w, h, &texto, size, color, border, rd, &linea,
+    );
     let mut ap = lopdf::Dictionary::new();
     ap.set("N", Object::Reference(ap_id));
     doc.get_object_mut(id)
@@ -2172,3 +2192,4 @@ mod tests_apariencia {
         std::fs::remove_file(&tmp).ok();
     }
 }
+
