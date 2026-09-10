@@ -3132,6 +3132,22 @@ textarea {
   flex-shrink: 0;
 }
 
+/* el desplegable del andamio, en la píldora: se abre hacia arriba porque
+   la píldora vive en el borde de abajo */
+.menu-andamio {
+  bottom: calc(100% + 6px);
+  top: auto;
+  right: 0;
+  left: auto;
+  min-width: 210px;
+  padding: 8px;
+  gap: 6px;
+}
+
+.menu-andamio .opt-check {
+  padding: 3px 4px;
+}
+
 /* el fondo a sangre en la vista previa: cubre la hoja entera, que es lo que
    lo distingue de una marca de agua colocada */
 .previa-fondo {

@@ -756,6 +756,9 @@ function App() {
   const [reglas, setReglas] = useState(false);
   const [cuadricula, setCuadricula] = useState(false);
   const [guiasVisibles, setGuiasVisibles] = useState(true);
+  // el andamio tenía tres atajos y ninguna puerta: quien no leía la pantalla
+  // de atajos no sabía que existía
+  const [menuAndamio, setMenuAndamio] = useState(false);
   const [guias, setGuias] = useState<Guias>(SIN_GUIAS);
   const fijarEscala = useCallback(
     (mm: number) => {
@@ -4189,6 +4192,16 @@ function App() {
     "panel-lateral": () => setSidebarVisible((v) => !v),
     "pantalla-completa": () => cambiaPantallaCompleta(!pantallaCompleta),
     "modo-nocturno": () => aplicaPrefs({ ...prefs, nocturno: !prefs.nocturno }),
+    // «Ver ▸ Mostrar u ocultar»: el andamio, donde lo pone Acrobat
+    "mostrar-reglas": () => {
+      if (pageCount > 0) setReglas((v) => !v);
+    },
+    "mostrar-guias": () => {
+      if (pageCount > 0) setGuiasVisibles((v) => !v);
+    },
+    "mostrar-cuadricula": () => {
+      if (pageCount > 0) setCuadricula((v) => !v);
+    },
     /* Documento */
     "organizar-paginas": () => abrirPestana("paginas"),
     "recortar-pagina": () => {
@@ -5803,6 +5816,62 @@ function App() {
                   Portada
                 </button>
               )}
+              {/* el andamio, con su estado a la vista: reglas, guías y
+                  cuadrícula tenían tres atajos y ninguna puerta */}
+              <div className="menu-wrap">
+                <button
+                  className={`btn btn-icon${
+                    reglas || cuadricula ? " on" : ""
+                  }`}
+                  title="Reglas, guías y cuadrícula"
+                  aria-label="Reglas, guías y cuadrícula"
+                  aria-haspopup="menu"
+                  aria-expanded={menuAndamio}
+                  onClick={() => setMenuAndamio((v) => !v)}
+                >
+                  <Icon name="ruler" size={14} />
+                </button>
+                {menuAndamio && (
+                  <>
+                    <div
+                      className="menu-backdrop"
+                      onClick={() => setMenuAndamio(false)}
+                    />
+                    <div className="menu menu-andamio" role="menu">
+                      <label className="opt-check">
+                        <input
+                          type="checkbox"
+                          checked={reglas}
+                          onChange={() => setReglas((v) => !v)}
+                        />
+                        <span className="menu-texto">Reglas</span>
+                        <span className="menu-atajo dato">{MOD}R</span>
+                      </label>
+                      <label className="opt-check">
+                        <input
+                          type="checkbox"
+                          checked={guiasVisibles}
+                          onChange={() => setGuiasVisibles((v) => !v)}
+                        />
+                        <span className="menu-texto">Guías</span>
+                        <span className="menu-atajo dato">{MOD};</span>
+                      </label>
+                      <label className="opt-check">
+                        <input
+                          type="checkbox"
+                          checked={cuadricula}
+                          onChange={() => setCuadricula((v) => !v)}
+                        />
+                        <span className="menu-texto">Cuadrícula</span>
+                        <span className="menu-atajo dato">{MOD}&apos;</span>
+                      </label>
+                      <span className="opt-hint bm-hint">
+                        Andamio para colocar: no toca el fichero ni se imprime.
+                      </span>
+                    </div>
+                  </>
+                )}
+              </div>
               <button
                 className={`btn btn-icon${modoLectura ? " on" : ""}`}
                 title={`Modo lectura: solo el documento (⇧${MOD}H; Esc sale)`}
