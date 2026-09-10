@@ -177,7 +177,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "get_document_annotations" => cmd!(anotaciones::get_document_annotations, { path: String }),
         "reply_annotation" => cmd!(crate::comentarios::reply_annotation, { work_path: String, page_index: u16, annot_index: u16, text: String, author: Option<String> }),
         "set_annotation_state" => cmd!(crate::comentarios::set_annotation_state, { work_path: String, page_index: u16, annot_index: u16, state: String, author: Option<String> }),
-        "export_comments" => cmd!(crate::comentarios::export_comments, { path: String, dest_path: String, formato: Option<String>, document_name: Option<String> }),
+        "export_comments" => cmd!(crate::comentarios::export_comments, { work_path: String, dest_path: String, document_name: Option<String> }),
         "get_form_fields" => cmd!(formularios::get_form_fields, { path: String, page_index: u16 }),
         "set_form_text" => cmd!(formularios::set_form_text, { work_path: String, page_index: u16, annot_index: u16, value: String }),
         "set_form_checked" => cmd!(formularios::set_form_checked, { work_path: String, page_index: u16, annot_index: u16, checked: bool }),
@@ -453,7 +453,14 @@ mod tests {
     /// es una función rota que el usuario no puede usar, así que la lista
     /// tiene que quedar vacía: está aquí solo mientras el arreglo vive en
     /// la otra mitad.
-    const ARGUMENTOS_PENDIENTES: &[(&str, &str)] = &[(
+    const ARGUMENTOS_PENDIENTES: &[(&str, &str)] = &[
+        (
+            "export_comments",
+            "pendiente_ui: la UI del ciclo 6 lo llama \
+             `export_comments(workPath, destPath, documentName?)` —el contrato de \
+             R31b— y la de este árbol todavía manda `path` y `formato`",
+        ),
+        (
         "reorder_image",
         "pendiente_ui: `api.ts` manda `imageIndex` y el comando espera \
          `objectIndex`, como sus cinco hermanos de imagen; hasta que la UI lo \

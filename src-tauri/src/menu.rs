@@ -92,6 +92,23 @@ fn e(
     })
 }
 
+/// Como [`e`] pero con la marca de que la mitad de la UI llega en otra
+/// rama. Se le quita al integrar.
+fn pendiente(
+    id: &'static str,
+    etiqueta: &'static str,
+    atajo: Option<&'static str>,
+    necesita_documento: bool,
+) -> Elemento {
+    Elemento::Accion(Entrada {
+        id,
+        etiqueta,
+        atajo,
+        necesita_documento,
+        pendiente_ui: true,
+    })
+}
+
 fn sep() -> Elemento {
     Elemento::Separador
 }
@@ -106,6 +123,7 @@ pub(crate) fn estructura() -> Vec<Grupo> {
             entradas: vec![
                 e("abrir", "Abrir…", Some("CmdOrCtrl+O"), false),
                 e("abrir-reciente", "Abrir reciente…", None, false),
+                pendiente("crear-desde-imagenes", "Crear PDF desde imágenes…", None, false),
                 sep(),
                 e("guardar", "Guardar", Some("CmdOrCtrl+S"), true),
                 e("guardar-como", "Guardar como…", Some("Shift+CmdOrCtrl+S"), true),

@@ -39,6 +39,12 @@ pub fn add_blank_page(work_path: String, index: u16) -> Result<u16, String> {
 /// como Acrobat) y se centra, sin deformarla nunca; con `"imagen"` la
 /// página mide lo que mide la imagen a 72 dpi y no hay margen.
 ///
+/// Devuelve **cuántas páginas** ha hecho, que no siempre son cuántas
+/// imágenes le dieron: una que no se deje leer se salta en vez de tirar el
+/// lote entero —quien acaba de elegir veinte escaneos no quiere empezar de
+/// cero por uno—, y la UI cuenta la diferencia. Si no se puede leer
+/// ninguna, se dice cuáles.
+///
 /// Escribe un fichero nuevo: no toca ningún documento abierto y no deja
 /// paso de deshacer.
 #[tauri::command(async)]
@@ -54,13 +60,19 @@ pub fn pdf_from_images(
         let pdfium = pdfium()?;
         let mut doc = pdfium.create_new_pdf().map_err(crate::mensaje_llano)?;
         const MARGEN: f32 = 36.0;
+        let mut fallidas: Vec<String> = Vec::new();
         for ruta in &image_paths {
-            let img = image::open(ruta).map_err(|e| {
-                crate::mensaje_llano(format!("No se ha podido leer la imagen {ruta}: {e}"))
-            })?;
+            // una foto que no se deja leer no se lleva por delante el lote:
+            // se salta y el recuento lo dice («3 de 4»), que es lo que pide
+            // quien acaba de elegir veinte escaneos
+            let Ok(img) = image::open(ruta) else {
+                fallidas.push(ruta.clone());
+                continue;
+            };
             let (iw, ih) = (img.width() as f32, img.height() as f32);
             if iw < 1.0 || ih < 1.0 {
-                return Err(format!("La imagen {ruta} está vacía"));
+                fallidas.push(ruta.clone());
+                continue;
             }
             let papel = match tamano.as_str() {
                 "carta" => PdfPagePaperSize::from_points(PdfPoints::new(612.0), PdfPoints::new(792.0)),
@@ -96,6 +108,10 @@ pub fn pdf_from_images(
             page.regenerate_content().map_err(crate::mensaje_llano)?;
         }
         let total = doc.pages().len();
+        if total == 0 {
+            let cuales = fallidas.join(", ");
+            return Err(format!("No se ha podido leer ninguna de las imágenes: {cuales}"));
+        }
         doc.save_to_file(&dest_path).map_err(|e| {
             crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}"))
         })?;
@@ -590,6 +606,34 @@ mod tests {
 
         // sin imágenes no hay PDF, y se dice
         assert!(pdf_from_images(vec![], d.clone(), "a4".into()).is_err());
+
+        // **R26.** Una imagen que no se deja leer se salta y el lote sigue:
+        // el recuento que vuelve es el que la UI enseña («2 de 3»)
+        let rota = std::env::temp_dir().join("pdf-imagenes-rota.png");
+        std::fs::write(&rota, b"esto no es un png").expect("escribir la rota");
+        let dest3 = std::env::temp_dir().join("pdf-imagenes-con-rota.pdf");
+        let mezcla = vec![
+            rutas[0].clone(),
+            rota.to_string_lossy().into_owned(),
+            rutas[1].clone(),
+        ];
+        let hechas = pdf_from_images(
+            mezcla,
+            dest3.to_string_lossy().into_owned(),
+            "a4".into(),
+        )
+        .expect("el lote sigue con las que sí se leen");
+        assert_eq!(hechas, 2, "dos páginas de tres imágenes");
+        // y si no se lee ninguna, se dice cuál
+        let err = pdf_from_images(
+            vec![rota.to_string_lossy().into_owned()],
+            dest3.to_string_lossy().into_owned(),
+            "a4".into(),
+        )
+        .unwrap_err();
+        assert!(err.contains("pdf-imagenes-rota.png"), "el aviso: {err}");
+        std::fs::remove_file(&rota).ok();
+        std::fs::remove_file(&dest3).ok();
 
         std::fs::remove_file(&dest).ok();
         for r in rutas {

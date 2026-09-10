@@ -153,11 +153,11 @@ pub fn set_annotation_state(
 /// «Resumen de comentarios»: la lista entera del documento en un fichero de
 /// texto, para leerla fuera o mandarla por correo. Por ahora solo en llano;
 /// el FDF/XFDF que Acrobat también exporta **se deja para otro ciclo** y se
-/// dice aquí para que no se busque. `formato` es opcional y solo admite
-/// `"txt"`.
+/// dice aquí para que no se busque.
 ///
-/// `document_name` es **el nombre que se enseña en la cabecera**: `path` es
-/// siempre la copia de trabajo, y encabezar el fichero que se le manda a
+/// `document_name` es **el nombre que se enseña en la cabecera**:
+/// `work_path` es siempre la copia de trabajo, y encabezar el fichero que
+/// se le manda a
 /// alguien con «Comentarios de vitela-doc-1789032860175765000.pdf» no le
 /// dice nada a nadie (AC-060). Sin él se deduce del nombre de la copia,
 /// que lleva dentro el del original; el nombre del temporal no sale nunca.
@@ -166,19 +166,15 @@ pub fn set_annotation_state(
 /// deshacer.
 #[tauri::command(async)]
 pub fn export_comments(
-    path: String,
+    work_path: String,
     dest_path: String,
-    formato: Option<String>,
     document_name: Option<String>,
 ) -> Result<u32, String> {
-    if formato.as_deref().is_some_and(|f| f != "txt") {
-        return Err("De momento el resumen de comentarios solo sale en texto".into());
-    }
-    let comentarios = crate::anotaciones::get_document_annotations(path.clone())?;
+    let comentarios = crate::anotaciones::get_document_annotations(work_path.clone())?;
     if comentarios.is_empty() {
         return Err("El documento no tiene comentarios que resumir".into());
     }
-    let nombre = nombre_de_documento(document_name.as_deref(), &path);
+    let nombre = nombre_de_documento(document_name.as_deref(), &work_path);
     let mut out = format!("Comentarios de {nombre}\n\n");
     let mut n = 0u32;
     for c in &comentarios {
@@ -498,7 +494,6 @@ mod tests {
         let n = export_comments(
             work.clone(),
             txt.to_string_lossy().into_owned(),
-            Some("txt".into()),
             Some("/Users/ana/contratos/contrato.pdf".into()),
         )
         .expect("exportar");

@@ -10,6 +10,11 @@
       "identifier": "opener:allow-open-url",
       "allow": [{ "url": "http://*" }, { "url": "https://*" }, { "url": "mailto:*" }]
     },
+    {
+      "comment": "abrir un adjunto con el visor del sistema: open_attachment lo deja en una carpeta vitela-adjunto-… del temporal y devuelve esa ruta, así que el permiso se acota al temporal y no al disco entero",
+      "identifier": "opener:allow-open-path",
+      "allow": [{ "path": "$TEMP/**" }]
+    },
     "dialog:default"
   ]
 }
