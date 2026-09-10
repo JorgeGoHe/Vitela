@@ -211,6 +211,7 @@ import DialogoAtajos from "./components/DialogoAtajos";
 import DialogoWord from "./components/DialogoWord";
 import DialogoEtiquetas from "./components/DialogoEtiquetas";
 import DialogoBates, { type BatesOpts } from "./components/DialogoBates";
+import DialogoInsertar from "./components/DialogoInsertar";
 import "./App.css";
 
 const BASE_WIDTH = 900;
@@ -533,6 +534,11 @@ function App() {
   const [etiquetas, setEtiquetas] = useState<RangoEtiquetas[]>([]);
   const [etiquetasOpen, setEtiquetasOpen] = useState(false);
   const [batesOpen, setBatesOpen] = useState(false);
+  // «Insertar PDF…»: el fichero elegido, a la espera de decir dónde entra
+  const [insertarAsk, setInsertarAsk] = useState<{
+    path: string;
+    paginas: number | null;
+  } | null>(null);
   const [wmOpen, setWmOpen] = useState(false);
   const [marginalAsk, setMarginalAsk] = useState<{
     zona: "watermark" | "header" | "footer";
@@ -2989,17 +2995,34 @@ function App() {
     }
   }
 
+  /** «Insertar PDF…»: se elige el fichero y **después** dónde entra, que en
+   *  Acrobat es antes o después de una página concreta. Antes iba siempre
+   *  detrás de la que se estaba leyendo, y la portada de un informe va
+   *  delante. */
   async function insertPdfHere() {
     if (!workPath) return;
     const selected = await open({
       filters: [{ name: "PDF", extensions: ["pdf"] }],
       multiple: false,
-      title: "Insertar PDF después de la página actual",
+      title: "Insertar PDF",
     });
     if (typeof selected !== "string") return;
+    // cuántas páginas trae: es un vistazo al fichero, sin abrirlo ni pedir
+    // contraseña, y si no se puede leer se pregunta igual
+    const info = await pdfInfo(selected).catch(() => null);
+    setInsertarAsk({ path: selected, paginas: info?.page_count ?? null });
+  }
+
+  async function aplicarInsertar(index: number) {
+    const pendiente = insertarAsk;
+    setInsertarAsk(null);
+    if (!workPath || !pendiente) return;
     try {
-      const count = await insertPdfAt(workPath, selected, pageIndex + 1);
-      afterMutation(count);
+      const count = await insertPdfAt(workPath, pendiente.path, index);
+      afterMutation(count, index);
+      setNotice(
+        `PDF insertado en la página ${index + 1} · ${MOD}Z para deshacer`,
+      );
     } catch (e) {
       setError(String(e));
     }
@@ -4714,6 +4737,16 @@ function App() {
           onConfirm={aplicarEtiquetas}
           onQuitar={() => aplicarEtiquetas([])}
           onClose={() => setEtiquetasOpen(false)}
+        />
+      )}
+      {insertarAsk && (
+        <DialogoInsertar
+          nombre={insertarAsk.path.split(/[\\/]/).pop() ?? insertarAsk.path}
+          paginasQueEntran={insertarAsk.paginas}
+          pageCount={pageCount}
+          paginaActual={pageIndex}
+          onConfirm={aplicarInsertar}
+          onClose={() => setInsertarAsk(null)}
         />
       )}
       {batesOpen && (
