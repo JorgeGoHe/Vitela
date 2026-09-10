@@ -1229,15 +1229,20 @@ compila los instaladores a mano o al etiquetar `v*`.
     `zoom-ancho`, `pagina-una`, `pagina-continua`, `pagina-dos`,
     `pagina-dos-continua`, `girar-vista-derecha`, `girar-vista-izquierda`,
     `vista-atras`, `vista-adelante`, `panel-lateral`, `pantalla-completa`,
-    `modo-nocturno`, `leer-en-voz-alta` (⇧⌘Y, donde lo pone Acrobat).
+    `modo-nocturno`, `mostrar-reglas`, `mostrar-guias`,
+    `mostrar-cuadricula`, `ajustar-cuadricula`,
+    `leer-en-voz-alta` (⇧⌘Y, donde lo pone Acrobat).
   - Documento: `organizar-paginas`, `recortar-pagina`, `marca-de-agua`,
     `encabezado-pie`, `quitar-marca-de-agua`, `quitar-encabezados`,
     `quitar-fondo`,
     `anadir-campo`, `reconocer-campos`, `anadir-enlace`,
     `adjuntar-fichero`, `firmar`, `certificar`, `proteger`,
+    `cifrar-certificado`,
     `quitar-proteccion`, `aplanar`, `redactar`, `sanitizar`,
     `propiedades`, `exportar-imagenes`, `exportar-texto`, `exportar-word`,
-    `exportar-comentarios`, `importar-comentarios`, `comprimir`.
+    `exportar-html`,
+    `exportar-comentarios`, `importar-comentarios`, `comprimir`,
+    `comparar`.
   - Ayuda: `atajos` (⌘/ y F1) (y Acerca de, nativa).
 - **Protección** (`seguridad.rs`): `encrypt_pdf` compone la máscara `/P`
   del spec a partir de `permisos { imprimir, copiar, editar }` (los tres a

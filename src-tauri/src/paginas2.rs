@@ -838,9 +838,9 @@ mod tests {
         );
 
         // el ensayo previo cuenta sin tocar
-        assert_eq!(remove_background(work.clone(), true).expect("ensayo"), 2);
-        assert_eq!(remove_background(work.clone(), false).expect("quitar"), 2);
-        assert_eq!(remove_background(work.clone(), true).expect("ensayo"), 0);
+        assert_eq!(remove_background(work.clone(), true).expect("ensayo").objetos, 2);
+        assert_eq!(remove_background(work.clone(), false).expect("quitar").objetos, 2);
+        assert_eq!(remove_background(work.clone(), true).expect("ensayo").objetos, 0);
         let sin_fondo = render_rgba(&work);
         let esquina = sin_fondo.get_pixel(4, 4).0;
         assert!(
@@ -877,7 +877,7 @@ mod tests {
             centro[2] > 150 && centro[0] < 120,
             "el fondo de imagen no se ve: {centro:?}"
         );
-        assert_eq!(remove_background(work.clone(), false).expect("quitar"), 1);
+        assert_eq!(remove_background(work.clone(), false).expect("quitar").objetos, 1);
         let centro = render_rgba(&work)
             .get_pixel(con_imagen.width() / 2, con_imagen.height() / 2)
             .0;
@@ -2175,9 +2175,14 @@ pub fn add_background(
 /// que venía dentro del PDF de fuera no se toca, porque no hay forma
 /// honesta de distinguirlo del contenido del documento.
 #[tauri::command(async)]
-pub fn remove_background(work_path: String, dry_run: bool) -> Result<u16, String> {
+pub fn remove_background(work_path: String, dry_run: bool) -> Result<InformeFondo, String> {
+    // el fondo de un documento puede ser de dos clases: el que Vitela
+    // marca (`objetos`) y el que se puso como marca de agua detrás del
+    // contenido, que es un objeto de texto y se reconoce por dónde y cómo
+    // está (`textos`, el mismo criterio que `remove_marginal_text`)
+    let textos = remove_marginal_text(work_path.clone(), "watermark".into(), dry_run)?.textos;
     if dry_run {
-        return on_pdfium_thread(move || {
+        let objetos = on_pdfium_thread(move || {
             crate::with_lopdf(&work_path, |doc| {
                 Ok(doc
                     .get_pages()
@@ -2186,7 +2191,8 @@ pub fn remove_background(work_path: String, dry_run: bool) -> Result<u16, String
                     .count() as u16)
             })
         })
-        .map_err(crate::mensaje_llano);
+        .map_err(crate::mensaje_llano)?;
+        return Ok(InformeFondo { objetos, textos });
     }
     let quitados = std::sync::Arc::new(std::sync::atomic::AtomicU16::new(0));
     let contador = quitados.clone();
@@ -2202,5 +2208,16 @@ pub fn remove_background(work_path: String, dry_run: bool) -> Result<u16, String
         doc.prune_objects();
         Ok(())
     })?;
-    Ok(quitados.load(std::sync::atomic::Ordering::Relaxed))
+    Ok(InformeFondo {
+        objetos: quitados.load(std::sync::atomic::Ordering::Relaxed),
+        textos,
+    })
+}
+
+/// Lo que se ha quitado al quitar el fondo, por clases: los objetos que
+/// Vitela había marcado y el texto puesto detrás del contenido.
+#[derive(serde::Serialize, Debug)]
+pub struct InformeFondo {
+    pub objetos: u16,
+    pub textos: u32,
 }

@@ -456,13 +456,24 @@ pub fn add_stamp(
     dinamico: Option<String>,
 ) -> Result<(), String> {
     let autor = crate::anotaciones::autor_o_sistema(author.clone());
-    let text = match dinamico.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
-        Some(plantilla) => compone_dinamico(plantilla, &autor),
-        None => text.trim().to_string(),
-    };
-    if text.is_empty() {
+    let text = text.trim().to_string();
+    // la segunda línea de un sello dinámico. Puede llegar ya compuesta
+    // desde la interfaz («Jorge · 10/09/2026 19:40») o ser el nombre de
+    // una plantilla —o una libre con `{autor}`, `{fecha}` y `{hora}`—,
+    // que se resuelve aquí, que es donde están el reloj y el autor
+    let segunda = dinamico
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .map(|d| compone_dinamico(d, &autor));
+    if text.is_empty() && segunda.is_none() {
         return Err("El sello está vacío".into());
     }
+    // sin palabra grande, la línea compuesta **es** el sello
+    let (text, segunda) = match (text.is_empty(), segunda) {
+        (true, Some(s)) => (s, None),
+        (_, s) => (text, s),
+    };
     mutacion(work_path, |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
@@ -475,11 +486,18 @@ pub fn add_stamp(
         // el punto llega en el espacio propio de la página (sin rotar)
         let geo = vista.propia();
         let size = font_size.clamp(8.0, 96.0);
+        // la segunda línea del sello dinámico va más pequeña, como el de
+        // Acrobat: la palabra manda y la fecha acompaña
+        let size2 = size * 0.45;
         // Helvetica Bold en mayúsculas ronda 0.66 em de media por carácter
         let text_w = text.chars().count() as f32 * size * 0.66;
+        let seg_w = segunda
+            .as_ref()
+            .map(|s| s.chars().count() as f32 * size2 * 0.55)
+            .unwrap_or(0.0);
         let pad = size * 0.45;
-        let w = text_w + pad * 2.0;
-        let h = size + pad * 2.0;
+        let w = text_w.max(seg_w) + pad * 2.0;
+        let h = size + segunda.as_ref().map(|_| size2 * 1.5).unwrap_or(0.0) + pad * 2.0;
         // si la página se ve girada, el sello va cruzado en la página para
         // leerse derecho en pantalla, que es lo que hace Acrobat
         let (cw, ch) = if rot == 90 || rot == 270 { (h, w) } else { (w, h) };
@@ -525,11 +543,13 @@ pub fn add_stamp(
             caja.top().value,
         );
         let base = size * 0.14;
+        // el hueco de la segunda línea, que va **debajo** en pantalla
+        let bajo = segunda.as_ref().map(|_| size2 * 1.5).unwrap_or(0.0);
         let (tx, ty) = match rot {
-            90 => (der - pad - base, aba + pad),
-            180 => (der - pad, arr - pad - base),
-            270 => (izq + pad + base, arr - pad),
-            _ => (izq + pad, aba + pad + base),
+            90 => (der - pad - base, aba + pad + bajo),
+            180 => (der - pad, arr - pad - base - bajo),
+            270 => (izq + pad + base, arr - pad - bajo),
+            _ => (izq + pad, aba + pad + base + bajo),
         };
         let rad = (rot as f32).to_radians();
         let (sen, cos) = (rad.sin(), rad.cos());
@@ -544,6 +564,25 @@ pub fn add_stamp(
             .objects_mut()
             .add_text_object(texto)
             .map_err(|e| e.to_string())?;
+        if let Some(linea) = &segunda {
+            let font2 = doc.fonts_mut().helvetica();
+            let mut obj = PdfPageTextObject::new(&doc, linea, font2, PdfPoints::new(size2))
+                .map_err(|e| e.to_string())?;
+            obj.set_fill_color(c).map_err(|e| e.to_string())?;
+            let base2 = size2 * 0.14;
+            let (sx, sy) = match rot {
+                90 => (der - pad - base2 - bajo, aba + pad),
+                180 => (der - pad, arr - pad - base2),
+                270 => (izq + pad + base2 + bajo, arr - pad),
+                _ => (izq + pad, aba + pad + base2),
+            };
+            obj.transform(cos, sen, -sen, cos, sx, sy)
+                .map_err(|e| e.to_string())?;
+            annot
+                .objects_mut()
+                .add_text_object(obj)
+                .map_err(|e| e.to_string())?;
+        }
         drop(page);
         save_and_close(doc, &work_path)?;
         remata_annot(&work_path, page_index, None, author)
@@ -3045,11 +3084,12 @@ mod tests {
         let pdf = std::env::temp_dir().join("anotaciones2-stamp-dinamico-test.pdf");
         crea_pdf(&["Página"], &pdf);
         let work = pdf.to_string_lossy().to_string();
-        // el `text` no se usa cuando hay plantilla: lo compone el backend
+        // con palabra grande y segunda línea, que es lo que manda la
+        // interfaz: «APROBADO» arriba y «Revisado por Jorge · …» debajo
         add_stamp(
             work.clone(),
             0,
-            String::new(),
+            "APROBADO".into(),
             [30, 90, 180, 255],
             300.0,
             400.0,
@@ -3096,10 +3136,16 @@ mod tests {
             texto.contains(&en_hex),
             "la apariencia no lleva el texto compuesto: {texto}"
         );
+        let grande: String = "APROBADO".bytes().map(|b| format!("{b:02X}")).collect();
+        assert!(
+            texto.contains(&grande),
+            "y la palabra grande sigue estando: {texto}"
+        );
 
-        // y el /Rect lo abarca: el sello dinámico es más largo que
-        // «APROBADO» y no puede salirse de su propia caja
-        let ancho_minimo = compuesto.chars().count() as f32 * 12.0 * 0.5;
+        // y el /Rect lo abarca: la segunda línea es más larga que
+        // «APROBADO» y no puede salirse de su propia caja (va al 45 % del
+        // cuerpo, que es lo que la hace acompañar y no competir)
+        let ancho_minimo = compuesto.chars().count() as f32 * 12.0 * 0.45 * 0.5;
         assert!(
             annots[0].w > ancho_minimo,
             "el rect ({}) no abarca el texto compuesto",

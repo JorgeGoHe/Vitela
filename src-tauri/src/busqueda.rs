@@ -442,10 +442,9 @@ pub(crate) fn busca_en_carpeta(
 /// Busca en todos los PDF de una carpeta y devuelve una fila por fichero
 /// con coincidencias (o con el motivo de no haberlo podido abrir).
 ///
-/// Va emitiendo el progreso por evento —`busqueda-progreso` y
-/// `buscando-carpeta`, el mismo objeto `{ hechos, total, fichero }` en los
-/// dos— y se corta con [`cancel_search`], que deja lo encontrado hasta
-/// ahí. Sin progreso, buscar en una carpeta grande es una ventana quieta
+/// Va emitiendo el progreso por evento (`buscando-carpeta`, con
+/// `{ hechos, total, fichero }`) y se corta con [`cancel_search`], que
+/// deja lo encontrado hasta ahí. Sin progreso, buscar en una carpeta grande es una ventana quieta
 /// sin nada que decir.
 #[tauri::command(async)]
 pub fn search_folder(
@@ -459,13 +458,14 @@ pub fn search_folder(
 ) -> Result<Vec<ResultadoFichero>, String> {
     use tauri::Emitter;
     let emite = |hechos: u32, total: u32, fichero: &str| {
-        let carga = serde_json::json!({
-            "hechos": hechos,
-            "total": total,
-            "fichero": fichero,
-        });
-        let _ = app.emit(EVENTO_PROGRESO, carga.clone());
-        let _ = app.emit(EVENTO_PROGRESO_ALIAS, carga);
+        let _ = app.emit(
+            EVENTO_PROGRESO,
+            serde_json::json!({
+                "hechos": hechos,
+                "total": total,
+                "fichero": fichero,
+            }),
+        );
     };
     busca_en_carpeta(
         &dir,
@@ -478,14 +478,9 @@ pub fn search_folder(
     )
 }
 
-/// El evento de progreso de la búsqueda en carpeta. Se emite con **dos
-/// nombres** a propósito: el contrato del analista lo llamó
-/// `buscando-carpeta` y la orden del coordinador `busqueda-progreso`, las
-/// dos mitades se escriben en paralelo y un evento que nadie escucha es
-/// una barra de progreso que no se mueve. Al integrar se quita el que
-/// sobre.
-pub(crate) const EVENTO_PROGRESO: &str = "busqueda-progreso";
-pub(crate) const EVENTO_PROGRESO_ALIAS: &str = "buscando-carpeta";
+/// El evento de progreso de la búsqueda en carpeta, con
+/// `{ hechos, total, fichero }`. Es el nombre que escucha la interfaz.
+pub(crate) const EVENTO_PROGRESO: &str = "buscando-carpeta";
 
 #[cfg(test)]
 mod tests_carpeta {

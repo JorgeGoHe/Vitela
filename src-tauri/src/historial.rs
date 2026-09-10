@@ -443,7 +443,7 @@ mod tests {
         cuenta(&work);
         seguridad::flatten_pdf(work.clone()).unwrap();
         cuenta(&work);
-        crate::exportar::compress_pdf(work.clone(), 60, 72).unwrap();
+        crate::exportar::compress_pdf(work.clone(), 60, 72, None, None, None).unwrap();
         cuenta(&work);
         limpia(&work);
     }

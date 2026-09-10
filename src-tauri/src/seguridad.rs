@@ -821,7 +821,7 @@ fn estado_casilla(doc: &LoDoc, widget: &Dictionary) -> Option<String> {
 /// antiguas), se genera /AP a los campos de texto que no lo tengan y se
 /// normaliza /AS de las casillas (PDFium escribe "/Yes" como cadena al
 /// marcarlas y el aplanado no encuentra ese estado).
-fn prepara_para_aplanar(work_path: &str) -> Result<(), String> {
+pub(crate) fn prepara_para_aplanar(work_path: &str) -> Result<(), String> {
     let mut doc =
         LoDoc::load(work_path).map_err(|e| format!("No se ha podido leer el PDF: {e}"))?;
     let da_form = acroform(&doc)

@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 pub struct OpcionesComposicion {
     /// N-up: 2, 4, 6, 9 o 16, las cinco de Acrobat.
     #[serde(default)]
-    pub paginas_por_hoja: Option<u8>,
+    pub por_hoja: Option<u8>,
     /// `"horizontal"` (por filas, el defecto) o `"vertical"` (por
     /// columnas).
     #[serde(default)]
@@ -43,7 +43,7 @@ pub struct OpcionesComposicion {
     pub solape_mm: Option<f32>,
     /// Póster: marcas de corte en las esquinas.
     #[serde(default)]
-    pub marcas_de_corte: Option<bool>,
+    pub marcas: Option<bool>,
     /// Qué páginas entran (todas si no se dice).
     #[serde(default)]
     pub page_indices: Option<Vec<u16>>,
@@ -352,7 +352,7 @@ fn compone_nup(
     entradas: &[Entrada],
     op: &OpcionesComposicion,
 ) -> Result<Vec<Hoja>, String> {
-    let n = op.paginas_por_hoja.unwrap_or(2);
+    let n = op.por_hoja.unwrap_or(2);
     let (cols, filas) = rejilla(n)?;
     let vertical = op.orden.as_deref() == Some("vertical");
     let borde = op.borde.unwrap_or(false);
@@ -470,7 +470,7 @@ fn compone_poster(
         return Err("El póster amplía la página: la escala tiene que ser mayor que 1".into());
     }
     let solape = (op.solape_mm.unwrap_or(0.0).max(0.0)) * MM;
-    let marcas = op.marcas_de_corte.unwrap_or(false);
+    let marcas = op.marcas.unwrap_or(false);
     let mut hojas = Vec::new();
     for e in entradas {
         let (hw, hh) = (e.ancho, e.alto);
@@ -576,7 +576,7 @@ mod tests {
             work.clone(),
             "nup".into(),
             OpcionesComposicion {
-                paginas_por_hoja: Some(4),
+                por_hoja: Some(4),
                 borde: Some(true),
                 ..Default::default()
             },
@@ -631,7 +631,7 @@ mod tests {
             OpcionesComposicion {
                 page_indices: Some(vec![0]),
                 escala: Some(2.0),
-                marcas_de_corte: Some(true),
+                marcas: Some(true),
                 ..Default::default()
             },
         )
@@ -680,7 +680,7 @@ mod tests {
             work.clone(),
             "nup".into(),
             OpcionesComposicion {
-                paginas_por_hoja: Some(2),
+                por_hoja: Some(2),
                 ..Default::default()
             },
         )

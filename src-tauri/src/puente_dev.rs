@@ -301,7 +301,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "export_pages_png" => cmd!(exportar::export_pages_png, { path: String, dest_dir: String, dpi: u16, format: String }),
         "export_text" => cmd!(exportar::export_text, { path: String, dest_path: String }),
         "export_docx" => cmd!(exportar::export_docx, { work_path: String, dest_path: String, page_indices: Option<Vec<u16>> }),
-        "compress_pdf" => cmd!(exportar::compress_pdf, { work_path: String, quality: u8, max_dpi: u16 }),
+        "compress_pdf" => cmd!(exportar::compress_pdf, { work_path: String, quality: u8, max_dpi: u16, quitar_adjuntos: Option<bool>, quitar_metadatos: Option<bool>, aplanar_formularios: Option<bool> }),
         "audit_pdf" => cmd!(exportar::audit_pdf, { path: String }),
         "create_form_field" => cmd!(crate::formularios2::create_form_field, { work_path: String, page_index: u16, kind: String, rect: crate::Rect, name: String, group: Option<String>, export_value: Option<String>, options: Option<Vec<String>>, props: Option<crate::formularios2::PropsCampo> }),
         "export_form_data_xfdf" => cmd!(crate::formularios2::export_form_data_xfdf, { work_path: String, dest_path: String }),
@@ -570,6 +570,13 @@ mod tests {
     /// puede llegar a ella. Fue el estado exacto de `char_spacing` durante
     /// un ciclo entero. La lista tiene que quedar vacía al cerrar el ciclo.
     const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[
+        (
+            "compress_pdf",
+            "quitar_adjuntos",
+            "ciclo 9: las casillas del PDF Optimizer llegan con la interfaz",
+        ),
+        ("compress_pdf", "quitar_metadatos", "ciclo 9: ídem"),
+        ("compress_pdf", "aplanar_formularios", "ciclo 9: ídem"),
         (
             "sign_pdf",
             "tsa_url",

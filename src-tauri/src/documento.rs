@@ -1464,6 +1464,36 @@ pub struct DocumentoInfo {
     /// Qué deja hacer: la máscara `/P` del spec, en llano.
     pub permisos: crate::seguridad::Permisos,
     pub fuentes: Vec<FuenteInfo>,
+    /// Cuándo se creó y cuándo se modificó, en ISO 8601, del `/Info` del
+    /// documento (`/CreationDate` y `/ModDate`). Vacías si no lo dice: un
+    /// PDF no tiene por qué llevar fecha, y ponerle la del fichero sería
+    /// contar la del disco como si fuera la del documento.
+    pub creado: String,
+    pub modificado: String,
+    /// Con qué se hizo (el `/Producer`, y si no el `/Creator`), que es la
+    /// línea «Aplicación» de las propiedades de Acrobat.
+    pub aplicacion: String,
+}
+
+/// Un texto del `/Info` del documento, o vacío.
+fn texto_del_info(doc: &LoDoc, clave: &[u8]) -> String {
+    doc.trailer
+        .get(b"Info")
+        .ok()
+        .and_then(|o| match o {
+            Object::Reference(id) => doc.get_object(*id).ok(),
+            otro => Some(otro),
+        })
+        .and_then(|o| o.as_dict().ok())
+        .and_then(|d| d.get(clave).ok())
+        .map(crate::anotaciones::texto_de_cadena_pdf)
+        .unwrap_or_default()
+}
+
+/// Una fecha del `/Info` (`D:YYYYMMDDHHmmSS…`) en ISO 8601, que es como
+/// viajan todas las fechas a la interfaz.
+fn fecha_del_info(doc: &LoDoc, clave: &[u8]) -> String {
+    crate::anotaciones::fecha_pdf_a_iso(&texto_del_info(doc, clave))
 }
 
 /// El nombre de una fuente sin el prefijo de subconjunto (`ABCDEF+Arial`),
@@ -1624,6 +1654,16 @@ pub fn get_document_info(path: String) -> Result<DocumentoInfo, String> {
                 proteccion_pendiente: proteccion.pendiente,
                 permisos: proteccion.permisos,
                 fuentes: fuentes_del_documento(doc),
+                creado: fecha_del_info(doc, b"CreationDate"),
+                modificado: fecha_del_info(doc, b"ModDate"),
+                aplicacion: {
+                    let p = texto_del_info(doc, b"Producer");
+                    if p.is_empty() {
+                        texto_del_info(doc, b"Creator")
+                    } else {
+                        p
+                    }
+                },
             })
         })
     })
@@ -1665,6 +1705,12 @@ pub struct VistaInicial {
     /// `""`.
     #[serde(default)]
     pub panel: String,
+    /// ¿Abre con el panel de marcadores desplegado? Es la casilla del
+    /// diálogo, que es la única forma de `panel` que la gente usa: sin
+    /// ella habría que enseñar los seis `/PageMode` del spec para que
+    /// alguien marcara el que ya quería.
+    #[serde(default)]
+    pub marcadores: Option<bool>,
 }
 
 /// `/PageLayout` del spec ↔ las cuatro disposiciones de la app.
@@ -1733,6 +1779,7 @@ pub fn get_open_action(path: String) -> Result<VistaInicial, String> {
             if let Ok(nombre) = catalog.get(b"PageMode").and_then(|o| o.as_name()) {
                 out.panel = panel_nuestro(nombre);
             }
+            out.marcadores = Some(out.panel == "marcadores");
             if let Ok(accion) = catalog.get(b"OpenAction") {
                 // el `/OpenAction` es un destino o una acción `/GoTo`, las
                 // dos formas de escribir lo mismo: `destino_de` ya las
@@ -1839,7 +1886,16 @@ pub fn set_open_action(work_path: String, vista: VistaInicial) -> Result<(), Str
                 catalog.remove(b"PageLayout");
             }
         }
-        match panel_pdf(&vista.panel) {
+        // la casilla manda sobre el nombre del modo: es lo que la
+        // interfaz enseña y lo que el usuario ha marcado
+        let panel = match vista.marcadores {
+            Some(true) => "marcadores".to_string(),
+            Some(false) if vista.panel == "marcadores" || vista.panel.is_empty() => {
+                "ninguno".to_string()
+            }
+            _ => vista.panel.clone(),
+        };
+        match panel_pdf(&panel) {
             Some(n) => catalog.set("PageMode", Object::Name(n.as_bytes().to_vec())),
             None => {
                 catalog.remove(b"PageMode");
@@ -1865,7 +1921,9 @@ mod tests_vista_inicial {
 
         // un PDF que no dice nada devuelve la ficha vacía, no un error
         let vacia = get_open_action(work.clone()).expect("leer");
-        assert_eq!(vacia, VistaInicial::default());
+        assert_eq!(vacia.page_index, None);
+        assert!(vacia.ajuste.is_empty() && vacia.disposicion.is_empty() && vacia.panel.is_empty());
+        assert_eq!(vacia.marcadores, Some(false));
 
         set_open_action(
             work.clone(),
@@ -1876,6 +1934,7 @@ mod tests_vista_inicial {
                 ajuste: "zoom".into(),
                 disposicion: "dos".into(),
                 panel: "marcadores".into(),
+                marcadores: None,
             },
         )
         .expect("escribir");
@@ -1885,6 +1944,11 @@ mod tests_vista_inicial {
         assert_eq!(leida.ajuste, "zoom");
         assert_eq!(leida.disposicion, "dos");
         assert_eq!(leida.panel, "marcadores");
+        assert_eq!(
+            leida.marcadores,
+            Some(true),
+            "la casilla del diálogo dice lo mismo que el modo"
+        );
         assert!(
             leida.top.map(|t| (t - 120.0).abs() < 0.5).unwrap_or(false),
             "el top vuelve donde estaba: {:?}",
@@ -1905,9 +1969,27 @@ mod tests_vista_inicial {
         assert_eq!(leida.ajuste, "ancho");
         assert_eq!(leida.page_index, Some(0));
 
+        // la casilla manda: sin ella el usuario tendría que elegir entre
+        // los seis `/PageMode` del spec para decir «que abra por los
+        // marcadores»
+        set_open_action(
+            work.clone(),
+            VistaInicial {
+                page_index: Some(0),
+                marcadores: Some(false),
+                ..Default::default()
+            },
+        )
+        .expect("sin marcadores");
+        let leida = get_open_action(work.clone()).expect("releer");
+        assert_eq!(leida.marcadores, Some(false));
+        assert_eq!(leida.panel, "ninguno");
+
         // y la ficha vacía devuelve el documento a «lo que decida el visor»
         set_open_action(work.clone(), VistaInicial::default()).expect("quitar");
-        assert_eq!(get_open_action(work.clone()).expect("releer"), VistaInicial::default());
+        let vacia = get_open_action(work.clone()).expect("releer");
+        assert_eq!(vacia.page_index, None);
+        assert!(vacia.disposicion.is_empty() && vacia.panel.is_empty());
 
         // una página que no está se dice antes de escribir nada
         assert!(set_open_action(

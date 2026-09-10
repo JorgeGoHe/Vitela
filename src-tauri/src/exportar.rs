@@ -78,6 +78,15 @@ pub struct CompressReport {
     pub antes: u64,
     pub despues: u64,
     pub imagenes: u32,
+    /// Cuántos adjuntos se ha llevado la casilla «descartar adjuntos».
+    #[serde(default)]
+    pub adjuntos: u32,
+    /// ¿Se han quitado los metadatos privados?
+    #[serde(default)]
+    pub metadatos: bool,
+    /// ¿Se ha aplanado el formulario?
+    #[serde(default)]
+    pub formularios: bool,
 }
 
 /// Comprime el documento recomprimiendo sus imágenes a JPEG con la calidad
@@ -87,14 +96,49 @@ pub struct CompressReport {
 /// ganarían nada (ni hay que bajarles la resolución ni el JPEG sale menor
 /// que su flujo original). Si aun así el resultado no es más pequeño,
 /// devuelve Err y deja el fichero intacto.
+/// Desde el ciclo 9 acepta además las tres casillas del PDF Optimizer de
+/// Acrobat —`quitar_adjuntos`, `quitar_metadatos` y `aplanar_formularios`—,
+/// que es lo que la auditoría de [`audit_pdf`] señala arriba del diálogo.
+/// Con alguna de ellas puesta, un documento **sin imágenes** deja de ser un
+/// error: hay algo que quitar aunque no haya nada que recomprimir.
 #[tauri::command(async)]
-pub fn compress_pdf(work_path: String, quality: u8, max_dpi: u16) -> Result<CompressReport, String> {
+pub fn compress_pdf(
+    work_path: String,
+    quality: u8,
+    max_dpi: u16,
+    quitar_adjuntos: Option<bool>,
+    quitar_metadatos: Option<bool>,
+    aplanar_formularios: Option<bool>,
+) -> Result<CompressReport, String> {
     let quality = quality.clamp(30, 95);
     let max_dpi = max_dpi.clamp(72, 600) as f32;
+    let quitar_adjuntos = quitar_adjuntos.unwrap_or(false);
+    let quitar_metadatos = quitar_metadatos.unwrap_or(false);
+    let aplanar_formularios = aplanar_formularios.unwrap_or(false);
+    let hay_casillas = quitar_adjuntos || quitar_metadatos || aplanar_formularios;
     let antes = std::fs::metadata(&work_path)
         .map(|m| m.len())
         .unwrap_or(0);
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
+    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
+        // las casillas van primero y con lopdf: quitar un adjunto de 4 MB
+        // es lo que de verdad reduce el fichero de quien no tiene fotos
+        let mut adjuntos = 0u32;
+        if aplanar_formularios {
+            crate::invalidate_doc_cache(&work_path);
+            crate::seguridad::prepara_para_aplanar(&work_path)?;
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
+                .map_err(crate::mensaje_llano)?;
+            for i in 0..doc.pages().len() {
+                let mut page = doc.pages().get(i).map_err(crate::mensaje_llano)?;
+                page.flatten().map_err(crate::mensaje_llano)?;
+            }
+            crate::save_and_close(doc, &work_path)?;
+        }
+        if quitar_adjuntos || quitar_metadatos {
+            adjuntos = poda(&work_path, quitar_adjuntos, quitar_metadatos)?;
+        }
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -218,10 +262,10 @@ pub fn compress_pdf(work_path: String, quality: u8, max_dpi: u16) -> Result<Comp
             "No se ha podido reducir el tamaño: este documento no tiene imágenes que comprimir";
         const SIN_REDUCIR: &str =
             "No se ha podido reducir el tamaño: las imágenes ya están comprimidas";
-        if imagenes_vistas == 0 {
+        if imagenes_vistas == 0 && !hay_casillas {
             return Err(SIN_IMAGENES.into());
         }
-        if recomprimidas == 0 {
+        if recomprimidas == 0 && !hay_casillas {
             return Err(SIN_REDUCIR.into());
         }
         // guardar aparte y quedarse con el resultado solo si es más pequeño;
@@ -233,6 +277,21 @@ pub fn compress_pdf(work_path: String, quality: u8, max_dpi: u16) -> Result<Comp
         let despues = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
         if despues == 0 || despues >= antes {
             let _ = std::fs::remove_file(&tmp);
+            // con las casillas puestas ya se ha quitado lo que se pidió: el
+            // fichero es el que hay, y decir «no se ha podido reducir»
+            // sería mentir sobre un trabajo que sí se ha hecho
+            if hay_casillas && despues > 0 {
+                invalidate_doc_cache(&work_path);
+                let despues = std::fs::metadata(&work_path).map(|m| m.len()).unwrap_or(0);
+                return Ok(CompressReport {
+                    antes,
+                    despues,
+                    imagenes: recomprimidas,
+                    adjuntos,
+                    metadatos: quitar_metadatos,
+                    formularios: aplanar_formularios,
+                });
+            }
             return Err(SIN_REDUCIR.into());
         }
         invalidate_doc_cache(&work_path);
@@ -241,8 +300,87 @@ pub fn compress_pdf(work_path: String, quality: u8, max_dpi: u16) -> Result<Comp
             antes,
             despues,
             imagenes: recomprimidas,
+            adjuntos,
+            metadatos: quitar_metadatos,
+            formularios: aplanar_formularios,
         })
     }))
+}
+
+/// Quita del documento lo que pidan las casillas del Optimizer y poda los
+/// objetos, que es lo único que hace que el fichero pese menos: dejar la
+/// referencia fuera y los bytes dentro no reduce nada.
+fn poda(work_path: &str, adjuntos: bool, metadatos: bool) -> Result<u32, String> {
+    let quitados = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let contador = quitados.clone();
+    crate::cirugia_en_hilo(work_path, move |doc| {
+        use lopdf::Object;
+        let catalog_id = doc
+            .trailer
+            .get(b"Root")
+            .and_then(|o| o.as_reference())
+            .map_err(|e| e.to_string())?;
+        if metadatos {
+            doc.trailer.remove(b"Info");
+            if let Ok(c) = doc.get_object_mut(catalog_id).and_then(|o| o.as_dict_mut()) {
+                c.remove(b"Metadata");
+            }
+        }
+        if adjuntos {
+            // el árbol del documento
+            let names = doc
+                .get_object(catalog_id)
+                .and_then(|o| o.as_dict())
+                .ok()
+                .and_then(|c| c.get(b"Names").ok().cloned());
+            if let Some(n) = names {
+                let id = match n {
+                    Object::Reference(id) => Some(id),
+                    _ => None,
+                };
+                if let Some(id) = id {
+                    if let Ok(d) = doc.get_object_mut(id).and_then(|o| o.as_dict_mut()) {
+                        if d.remove(b"EmbeddedFiles").is_some() {
+                            contador.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                }
+            }
+            // y las chinchetas de las páginas, que son otra cosa
+            let paginas: Vec<lopdf::ObjectId> = doc.get_pages().into_values().collect();
+            for (i, page_id) in paginas.iter().enumerate() {
+                let Some(annots) = crate::anotaciones::lista_annots(doc, i as u16) else {
+                    continue;
+                };
+                let quedan: Vec<Object> = annots
+                    .into_iter()
+                    .filter(|a| {
+                        let es_adjunto = match a {
+                            Object::Reference(id) => doc
+                                .get_object(*id)
+                                .and_then(|o| o.as_dict())
+                                .map(|d| {
+                                    d.get(b"Subtype").and_then(|o| o.as_name()).unwrap_or_default()
+                                        == b"FileAttachment"
+                                })
+                                .unwrap_or(false),
+                            _ => false,
+                        };
+                        if es_adjunto {
+                            contador.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        !es_adjunto
+                    })
+                    .collect();
+                if let Ok(p) = doc.get_object_mut(*page_id).and_then(|o| o.as_dict_mut()) {
+                    p.set("Annots", Object::Array(quedan));
+                }
+            }
+        }
+        doc.prune_objects();
+        Ok(())
+    })?;
+    Ok(quitados.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// Una categoría de la auditoría de espacio: cuánto ocupa y qué parte del
@@ -638,7 +776,7 @@ mod tests {
         let pdf = std::env::temp_dir().join("exportar-comprimir-sin-imagenes-test.pdf");
         crea_pdf(&["Solo texto"], &pdf);
         let work = pdf.to_string_lossy().to_string();
-        let e = compress_pdf(work, 70, 150).unwrap_err();
+        let e = compress_pdf(work, 70, 150, None, None, None).unwrap_err();
         assert!(
             e.starts_with("No se ha podido reducir"),
             "la cabeza del mensaje es el contrato con la UI: {e}"
@@ -706,7 +844,7 @@ mod tests {
             .expect("insertar imagen");
 
         let antes = std::fs::read(&pdf).expect("leer antes");
-        let e = match compress_pdf(work.clone(), 75, 150) {
+        let e = match compress_pdf(work.clone(), 75, 150, None, None, None) {
             Err(e) => e,
             Ok(r) => panic!("no debería reducir: {} → {}", r.antes, r.despues),
         };
@@ -744,7 +882,7 @@ mod tests {
         crate::firmas_visuales::stamp_signature(work.clone(), 0, b64, 50.0, 200.0, 300.0, 225.0)
             .expect("insertar imagen");
 
-        let informe = compress_pdf(work.clone(), 70, 150).expect("comprimir");
+        let informe = compress_pdf(work.clone(), 70, 150, None, None, None).expect("comprimir");
         assert_eq!(informe.imagenes, 1);
         assert!(
             informe.despues < informe.antes / 2,

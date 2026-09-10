@@ -199,6 +199,19 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 e("pantalla-completa", "Pantalla completa", Some("CmdOrCtrl+L"), false),
                 e("modo-nocturno", "Modo nocturno del documento", None, false),
                 sep(),
+                // «Ver ▸ Mostrar/Ocultar» de Acrobat (R54): reglas, guías
+                // y cuadrícula existían solo en el teclado, así que no las
+                // encontraba nadie
+                ep("mostrar-reglas", "Reglas", Some("CmdOrCtrl+R"), true),
+                ep("mostrar-guias", "Guías", Some("CmdOrCtrl+;"), true),
+                ep("mostrar-cuadricula", "Cuadrícula", Some("CmdOrCtrl+U"), true),
+                ep(
+                    "ajustar-cuadricula",
+                    "Ajustar a la cuadrícula",
+                    Some("Shift+CmdOrCtrl+U"),
+                    true,
+                ),
+                sep(),
                 // en Acrobat «Leer en voz alta» vive en Ver, que es donde lo
                 // busca quien ya lo ha usado. La etiqueta conmuta en la app
                 // mientras suena; aquí se queda la de encenderlo
@@ -229,6 +242,7 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 // Acrobat
                 ep("certificar", "Certificar documento…", None, true),
                 e("proteger", "Proteger con contraseña…", None, true),
+                ep("cifrar-certificado", "Cifrar con certificado…", None, true),
                 e("quitar-proteccion", "Quitar la contraseña…", None, true),
                 e("aplanar", "Fijar las anotaciones en la página…", None, true),
                 e("redactar", "Redactar (censurar)…", None, true),
@@ -239,9 +253,12 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 e("exportar-imagenes", "Exportar como imágenes…", None, true),
                 e("exportar-texto", "Exportar texto…", None, true),
                 e("exportar-word", "Exportar a Word (.docx)…", None, true),
+                ep("exportar-html", "Exportar a HTML…", None, true),
                 e("exportar-comentarios", "Exportar comentarios…", None, true),
                 e("importar-comentarios", "Importar comentarios…", None, true),
                 e("comprimir", "Reducir tamaño…", None, true),
+                sep(),
+                ep("comparar", "Comparar con otro PDF…", None, true),
             ],
         },
         Grupo {
