@@ -453,6 +453,9 @@ function App() {
   // preferencias vivas: de aquí sale el modo nocturno del documento
   const [prefs, setPrefs] = useState<Preferencias>(cargaPreferencias);
   const [pantallaCompleta, setPantallaCompleta] = useState(false);
+  // «Modo lectura»: el documento con su píldora y nada más, sin salir de la
+  // ventana (esa es la diferencia con la pantalla completa)
+  const [modoLectura, setModoLectura] = useState(false);
   // en presentación la píldora asoma al acercar el ratón al borde inferior
   const [pildoraVisible, setPildoraVisible] = useState(false);
   // historial de vistas (⌥← / ⌥→): el modelo del navegador, dos pilas
@@ -994,6 +997,9 @@ function App() {
     setProtPendiente(false);
     setMode("select");
     setPageIndex(0);
+    // el modo lectura es del documento que se estaba leyendo: sin documento
+    // dejaría el estado vacío sin barra y sin salida visible
+    setModoLectura(false);
     setOutlineState([]);
     setComentarios([]);
     setAnnotSel(null);
@@ -1592,12 +1598,29 @@ function App() {
           cambiaPantallaCompleta(false);
           return;
         }
+        // y en modo lectura, la de volver a ver las herramientas
+        if (modoLectura) {
+          e.preventDefault();
+          setModoLectura(false);
+          return;
+        }
         // Acrobat quita los resaltados de coincidencia desde cualquier
         // sitio, no solo con el foco dentro del campo
         if (busqueda.matches.length > 0) busqueda.limpiar(true);
       } else if (mod && !e.shiftKey && (e.key === "l" || e.key === "L") && pageCount > 0) {
         e.preventDefault();
         cambiaPantallaCompleta(!pantallaCompleta);
+      } else if (
+        mod &&
+        e.shiftKey &&
+        (e.key === "h" || e.key === "H") &&
+        pageCount > 0
+      ) {
+        // en Acrobat es ⌘H, que en macOS es «Ocultar Vitela» y se la queda
+        // AppKit antes que el webview: aquí lleva ⇧, y está escrito en los
+        // atajos como todo lo demás
+        e.preventDefault();
+        cambiaModoLectura(!modoLectura);
       } else if (mod && e.shiftKey && (e.key === "y" || e.key === "Y") && pageCount > 0) {
         // leer desde la página que se está leyendo hasta el final, y la
         // segunda pulsación calla, como el conmutador de Acrobat
@@ -1987,6 +2010,14 @@ function App() {
 
   /** Presentación a pantalla completa: el chrome desaparece y la hoja se
    *  queda sola. Esc sale, y la primera vez se dice cómo. */
+  /** «Modo lectura»: esconde barra, fila contextual y panel y deja el
+   *  documento con su píldora, **sin** salir de la ventana. Se avisa la
+   *  primera vez de cómo se vuelve, que es lo único que no se ve. */
+  function cambiaModoLectura(valor: boolean) {
+    setModoLectura(valor);
+    if (valor) setNotice(`Modo lectura · Esc o ⇧${MOD}H para volver`);
+  }
+
   function cambiaPantallaCompleta(valor: boolean) {
     aplicaPantallaCompleta(valor);
     ponerPantallaCompleta(valor).catch((e) => setError(String(e)));
@@ -3355,7 +3386,7 @@ function App() {
     <div
       className={`app${pantallaCompleta ? " presentacion" : ""}${
         pantallaCompleta && pildoraVisible ? " pildora" : ""
-      }`}
+      }${modoLectura ? " lectura" : ""}`}
       style={{ "--bandas": bandas } as CSSProperties}
     >
       <header className="toolbar">
@@ -4588,6 +4619,15 @@ function App() {
                   Portada
                 </button>
               )}
+              <button
+                className={`btn btn-icon${modoLectura ? " on" : ""}`}
+                title={`Modo lectura: solo el documento (⇧${MOD}H; Esc sale)`}
+                aria-label="Modo lectura"
+                aria-pressed={modoLectura}
+                onClick={() => cambiaModoLectura(!modoLectura)}
+              >
+                <Icon name="libro" size={14} />
+              </button>
               <button
                 className={`btn btn-icon${pantallaCompleta ? " on" : ""}`}
                 title={`Pantalla completa (${MOD}L; Esc sale)`}

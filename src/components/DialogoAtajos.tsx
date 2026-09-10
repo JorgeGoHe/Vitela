@@ -61,6 +61,7 @@ const GRUPOS: { titulo: string; atajos: Atajo[] }[] = [
       [atajo("2", "alt cmd"), "Marcadores"],
       [atajo("3", "alt cmd"), "Comentarios"],
       [atajo("L"), "Pantalla completa (Esc sale)"],
+      [atajo("H", "shift cmd"), "Modo lectura: solo el documento (Esc sale)"],
       [atajo("L", "shift cmd"), "Modo nocturno del documento"],
       [atajo("Y", "shift cmd"), "Leer en voz alta desde esta página (Esc para)"],
       [`${atajo("←", "alt")} · ${atajo("→", "alt")}`, "Vista anterior y siguiente"],

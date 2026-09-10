@@ -926,6 +926,13 @@ textarea {
   display: none;
 }
 
+/* «Modo lectura»: lo mismo que esconde la presentación, pero la ventana se
+   queda como está y la píldora no se va (es la salida) */
+.app.lectura .toolbar,
+.app.lectura .sidebar,
+.app.lectura .tool-options {
+  display: none;
+}
 .app.presentacion .nav-pill {
   opacity: 0;
   pointer-events: none;

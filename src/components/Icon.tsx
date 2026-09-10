@@ -123,6 +123,11 @@ const ICONS: Record<string, string[]> = {
   moon: ["M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"],
   back: ["M19 12H5", "m12 19-7-7 7-7"],
   forward: ["M5 12h14", "m12 5 7 7-7 7"],
+  // libro abierto: «Modo lectura»
+  libro: [
+    "M2 4.5h6a3 3 0 0 1 3 3V20a2.5 2.5 0 0 0-2.5-2H2Z",
+    "M22 4.5h-6a3 3 0 0 0-3 3V20a2.5 2.5 0 0 1 2.5-2H22Z",
+  ],
   // regla en diagonal con sus marcas: el icono de «Medir», que hasta ahora
   // reusaba el de encabezado y pie
   ruler: [
