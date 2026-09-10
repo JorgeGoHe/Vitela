@@ -362,12 +362,14 @@ export function setAnnotationState(
   pageIndex: number,
   annotIndex: number,
   state: EstadoComentario,
+  author?: string,
 ): Promise<void> {
   return invoke("set_annotation_state", {
     workPath,
     pageIndex,
     annotIndex,
     state,
+    author,
   });
 }
 

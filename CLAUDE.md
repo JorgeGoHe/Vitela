@@ -883,7 +883,7 @@ compila los instaladores a mano o al etiquetar `v*`.
     recuperación se pliega a un botón «Recuperar…» de la barra en cuanto se
     abre otro documento.
 - **La mitad de la UI del ciclo 7** (según el desarrollador de interfaz):
-  - Comandos nuevos que llama la UI, con los nombres de argumento en
+  - Comandos nuevos que llama la UI en el ciclo 7, con los nombres de argumento en
     camelCase que exige el test cruzado:
     - `add_text_block` y `edit_text_block` **vuelven a mandar
       `charSpacing`** (R32): el desplegable «Espaciado entre caracteres»

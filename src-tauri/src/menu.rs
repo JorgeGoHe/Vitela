@@ -92,23 +92,6 @@ fn e(
     })
 }
 
-/// Igual que [`e`] pero con la marca temporal `pendiente_ui`: la mitad de
-/// la UI de este id llega en otra rama. Se le quita al integrar.
-fn ep(
-    id: &'static str,
-    etiqueta: &'static str,
-    atajo: Option<&'static str>,
-    necesita_documento: bool,
-) -> Elemento {
-    Elemento::Accion(Entrada {
-        id,
-        etiqueta,
-        atajo,
-        necesita_documento,
-        pendiente_ui: true,
-    })
-}
-
 fn sep() -> Elemento {
     Elemento::Separador
 }
@@ -196,7 +179,7 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 // en Acrobat «Leer en voz alta» vive en Ver, que es donde lo
                 // busca quien ya lo ha usado. La etiqueta conmuta en la app
                 // mientras suena; aquí se queda la de encenderlo
-                ep("leer-en-voz-alta", "Leer en voz alta", Some("Shift+CmdOrCtrl+Y"), true),
+                e("leer-en-voz-alta", "Leer en voz alta", Some("Shift+CmdOrCtrl+Y"), true),
             ],
         },
         Grupo {
@@ -210,9 +193,9 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 e("quitar-encabezados", "Quitar encabezados y pies…", None, true),
                 sep(),
                 e("anadir-campo", "Añadir campo de formulario…", None, true),
-                ep("reconocer-campos", "Reconocer campos…", None, true),
+                e("reconocer-campos", "Reconocer campos…", None, true),
                 e("anadir-enlace", "Añadir enlace…", None, true),
-                ep("adjuntar-fichero", "Adjuntar fichero…", None, true),
+                e("adjuntar-fichero", "Adjuntar fichero…", None, true),
                 sep(),
                 e("firmar", "Firma digital (certificado)…", None, true),
                 e("proteger", "Proteger con contraseña…", None, true),
@@ -226,8 +209,8 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 e("exportar-imagenes", "Exportar como imágenes…", None, true),
                 e("exportar-texto", "Exportar texto…", None, true),
                 e("exportar-word", "Exportar a Word (.docx)…", None, true),
-                ep("exportar-comentarios", "Exportar comentarios…", None, true),
-                ep("importar-comentarios", "Importar comentarios…", None, true),
+                e("exportar-comentarios", "Exportar comentarios…", None, true),
+                e("importar-comentarios", "Importar comentarios…", None, true),
                 e("comprimir", "Reducir tamaño…", None, true),
             ],
         },

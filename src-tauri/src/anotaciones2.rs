@@ -1122,6 +1122,9 @@ fn mueve_la_llamada(
 /// nada y la anotación se ha borrado, que es lo que hace Acrobat cuando la
 /// goma se lleva el trazo entero.
 #[tauri::command(async)]
+// Camino viejo (un trazo por llamada): ya no se registra como comando; lo
+// conservan los tests de la goma como referencia del comportamiento.
+#[allow(dead_code)]
 pub fn erase_ink(
     work_path: String,
     page_index: u16,

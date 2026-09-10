@@ -216,7 +216,6 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "add_free_text" => cmd!(anotaciones2::add_free_text, { work_path: String, page_index: u16, rect: crate::Rect, text: String, font_size: f32, color: [u8; 4], border: bool, author: Option<String> }),
         "add_callout" => cmd!(anotaciones2::add_callout, { work_path: String, page_index: u16, rect: crate::Rect, punta: [f32; 2], text: String, color: [u8; 4], author: Option<String> }),
         "add_measure" => cmd!(anotaciones2::add_measure, { work_path: String, page_index: u16, points: Vec<[f32; 2]>, text: String, color: [u8; 4], closed: Option<bool>, author: Option<String> }),
-        "erase_ink" => cmd!(anotaciones2::erase_ink, { work_path: String, page_index: u16, annot_index: u16, rect: crate::Rect }),
         "erase_ink_area" => cmd!(anotaciones2::erase_ink_area, { work_path: String, page_index: u16, rect: crate::Rect }),
         "transform_annotation" => cmd!(anotaciones2::transform_annotation, { work_path: String, page_index: u16, annot_index: u16, x: f32, y: f32, w: f32, h: f32 }),
         "add_blank_page" => cmd!(paginas2::add_blank_page, { work_path: String, index: u16 }),
@@ -454,93 +453,23 @@ mod tests {
     /// excepción mientras las dos mitades se escriben en paralelo, y se
     /// quita al integrar.
     const NADIE_LLAMA: &[(&str, &str)] = &[
-        (
-            "save_image_data",
-            "pendiente_ui — «Guardar imagen como…» del popover de la imagen, \
-             apuntada para el ciclo 8. El backend va por delante porque es \
-             el mismo bitmap que `get_image_data` y sin base64 de por medio",
-        ),
-        (
-            "export_comments_pdf",
-            "pendiente_ui — H9: el resumen de comentarios imprimible. La UI \
-             del ciclo 7 lo elige en el propio diálogo de guardar (.txt · \
-             .pdf · .xfdf), con el orden solo cuando es PDF",
-        ),
-        (
-            "export_comments_xfdf",
-            "pendiente_ui — H9: la revisión que se le devuelve a quien la \
-             pidió, en el mismo diálogo",
-        ),
-        (
-            "import_comments_xfdf",
-            "pendiente_ui — H9: «Importar comentarios…», con su id de menú \
-             ya puesto",
-        ),
-        (
-            "add_measure",
-            "pendiente_ui — R43b: «Dejar la medida puesta» pasa a escribir \
-             un comentario `/Line`, `/PolyLine` o `/Polygon` en vez de \
-             contenido de página. La UI del ciclo 7 lo llama desde el modo \
-             Medir, con los vértices de R38",
-        ),
-        (
-            "detect_form_fields",
-            "pendiente_ui — H7: «Reconocer campos…». Solo propone, no \
-             escribe; la UI del ciclo 7 pinta las propuestas sobre la página \
-             para repasarlas antes de crear nada",
-        ),
-        (
-            "create_form_fields",
-            "pendiente_ui — H7: crear el lote aceptado en una sola cirugía, \
-             para que un ⌘Z devuelva el formulario entero",
-        ),
-        (
-        "erase_ink_area",
-        "pendiente_ui — R34b: la goma de una pasada. La UI del ciclo 7 deja \
-         de recorrer los `annots` y llama a este; hasta entonces sigue \
-         llamando a `erase_ink`, trazo a trazo",
-    )];
+        ("save_image_data", "ciclo 8: «Guardar imagen como…» (H10.3) lo llamará; hoy la UI no tiene el botón"),
+        ("add_measure", "ciclo 8: la UI deja la medida con add_stroke + add_text_block; pasará a add_measure"),
+        ("create_form_fields", "ciclo 8: la UI crea las propuestas con N create_form_field + squash_history; pasará al lote"),
+    ];
 
     /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada
     /// es una función rota que el usuario no puede usar, así que la lista
     /// tiene que quedar vacía: está aquí solo mientras el arreglo vive en
     /// la otra mitad.
-    const ARGUMENTOS_PENDIENTES: &[(&str, &str)] = &[(
-        "borra_sesion",
-        "pendiente_ui — `work_path` pasa a ser obligatorio (con varios \
-         documentos abiertos, cerrar uno no puede llevarse el apunte de \
-         otro). La UI del ciclo 7 lo manda; esta rama trae la del 6, que \
-         llama sin argumentos",
-    )];
+    const ARGUMENTOS_PENDIENTES: &[(&str, &str)] = &[];
 
     /// Parámetros opcionales de un comando que **ninguna** llamada de la UI
     /// manda, con su motivo. Un `Option<T>` que nadie manda es una capacidad
     /// del backend sin vía de acceso: existe, está probada y el usuario no
     /// puede llegar a ella. Fue el estado exacto de `char_spacing` durante
     /// un ciclo entero. La lista tiene que quedar vacía al cerrar el ciclo.
-    const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[
-        (
-            "edit_text_block",
-            "char_spacing",
-            "pendiente_ui — R32: el mando de «Espaciado entre caracteres» \
-             vuelve a la fila contextual del modo Editar en la rama de la \
-             interfaz. El backend está entero desde el ciclo 6 y desde R32b \
-             sobrevive a mover y a estirar el bloque",
-        ),
-        (
-            "add_text_block",
-            "char_spacing",
-            "pendiente_ui — R32: el mismo mando, para el texto nuevo",
-        ),
-        (
-            "set_annotation_state",
-            "author",
-            "pendiente_ui — la UI manda `author` (el de Preferencias) en los \
-             seis comandos que crean anotaciones y no en este, así que el \
-             estado de revisión se firma con el usuario del sistema. Es una \
-             línea en el hook del panel de comentarios",
-        ),
-    ];
+    const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[];
 
     /// Llamadas cuyos argumentos no son un objeto literal y el test no
     /// puede leer (`invoke("render_page", args, opts)`, que arma el objeto

@@ -1674,7 +1674,7 @@ function App() {
   async function estadoComentario(c: AnotacionDoc, estado: EstadoComentario) {
     if (!workPath) return;
     try {
-      await setAnnotationState(workPath, c.page_index, c.index, estado);
+      await setAnnotationState(workPath, c.page_index, c.index, estado, autorComentarios() ?? undefined);
       afterAnnotate(c.page_index);
       setNotice(
         estado
