@@ -141,10 +141,13 @@ export default function DibujarFirma({
     return out.toDataURL("image/png").replace(/^data:image\/png;base64,/, "");
   }
 
+  const esIniciales = ranura === "iniciales";
+  const que = esIniciales ? "iniciales" : "firma";
+
   function save() {
     const png = exportPng();
     if (!png) return;
-    onSave(name.trim() || "Mi firma", png);
+    onSave(name.trim() || (esIniciales ? "Mis iniciales" : "Mi firma"), png);
   }
 
   return (
@@ -175,7 +178,8 @@ export default function DibujarFirma({
           <input
             type="text"
             className="firma-name"
-            placeholder="Nombre de la firma"
+            placeholder={esIniciales ? "Nombre de las iniciales" : "Nombre de la firma"}
+            aria-label={esIniciales ? "Nombre de las iniciales" : "Nombre de la firma"}
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
@@ -218,7 +222,7 @@ export default function DibujarFirma({
             Cancelar
           </button>
           <button className="btn btn-primary" disabled={empty} onClick={save}>
-            Guardar firma
+            Guardar {que}
           </button>
         </div>
       </div>

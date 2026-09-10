@@ -197,6 +197,7 @@ import PanelAdjuntos from "./components/PanelAdjuntos";
 import PanelCapas from "./components/PanelCapas";
 import DialogoFirmar from "./components/DialogoFirmar";
 import PanelSellos from "./components/PanelSellos";
+import LimiteError from "./components/LimiteError";
 import DibujarFirma from "./components/DibujarFirma";
 import DialogoMarcaAgua, {
   type MarcaAguaOpts,
@@ -2838,6 +2839,15 @@ function App() {
   const limpiarBusqueda = busqueda.limpiar;
   const busquedaTrasMutacion = busqueda.trasMutacion;
   hayCoincidenciasRef.current = busqueda.matches.length > 0;
+
+  /** «Recargar el documento» de la red de seguridad: todo lo derivado
+   *  —tamaños, miniaturas, comentarios, firmas— cuelga de `docVersion`, así
+   *  que subirlo vuelve a leerlo todo de la copia de trabajo sin abrir nada
+   *  ni perder un solo cambio. */
+  function recargarDocumento() {
+    setDocVersion((v) => v + 1);
+    setNotice("Documento recargado desde la copia de trabajo");
+  }
 
   /** Un resultado de la búsqueda en carpeta: el PDF se abre **en una
    *  pestaña nueva** —el documento que se está mirando no se toca— y el
@@ -5493,6 +5503,9 @@ function App() {
                 </button>
               )}
             </div>
+            {/* cada panel dentro de su red: un fallo leyendo los
+                comentarios no puede llevarse el documento por delante */}
+            <LimiteError que="este panel" onRecargar={recargarDocumento}>
             {sidebarTab === "firmas" && (
               <PanelFirmasDoc firmas={firmasDoc} onGoto={saltarA} />
             )}
@@ -5556,6 +5569,7 @@ function App() {
                 onBates={() => setBatesOpen(true)}
               />
             )}
+            </LimiteError>
           </aside>
         )}
 
@@ -5642,8 +5656,11 @@ function App() {
                 )}
               </div>
             )}
-            {workPath &&
-              filasVisibles.map((fila) => (
+            {/* red de seguridad: un fallo pintando una página no puede
+                dejar la ventana en blanco y sin salida */}
+            {workPath && (
+              <LimiteError que="este documento" onRecargar={recargarDocumento}>
+                {filasVisibles.map((fila) => (
               <div
                 className={`fila-paginas${fila.length > 1 ? " doble" : ""}`}
                 key={fila[0]}
@@ -5716,7 +5733,9 @@ function App() {
                 />
                   ))}
               </div>
-              ))}
+                ))}
+              </LimiteError>
+            )}
           </main>
 
           {pageCount > 0 && (

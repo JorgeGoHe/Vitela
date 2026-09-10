@@ -190,6 +190,13 @@ export const KIND_LABELS: Record<string, string> = {
   FreeText: "Cuadro de texto",
   Square: "Marca de redacción",
   FileAttachment: "Fichero adjunto",
+  Squiggly: "Subrayado ondulado",
+  Circle: "Elipse",
+  Line: "Línea",
+  Polygon: "Área",
+  PolyLine: "Perímetro",
+  Polyline: "Perímetro",
+  Caret: "Marca de inserción",
 };
 
 /** Plurales para el filtro y el resumen del panel de comentarios. */
@@ -205,6 +212,13 @@ export const KIND_PLURALS: Record<string, string> = {
   Link: "Enlaces",
   Square: "Marcas de redacción",
   FileAttachment: "Ficheros adjuntos",
+  Squiggly: "Subrayados ondulados",
+  Circle: "Elipses",
+  Line: "Líneas",
+  Polygon: "Áreas",
+  PolyLine: "Perímetros",
+  Polyline: "Perímetros",
+  Caret: "Marcas de inserción",
 };
 
 /** Icono del set `Icon` que representa cada tipo de comentario. */
@@ -220,7 +234,47 @@ export const KIND_ICONS: Record<string, string> = {
   Link: "link",
   Square: "redact",
   FileAttachment: "clip",
+  Squiggly: "underline",
+  Circle: "shapes",
+  Line: "ruler",
+  Polygon: "ruler",
+  PolyLine: "ruler",
+  Polyline: "ruler",
+  Caret: "textedit",
 };
+
+/** Los subtipos que el backend cuenta como comentario
+ *  (`comentarios2::es_comentario`). Los tres mapas de arriba tienen que
+ *  decir algo de **todos**: lo que falte sale en inglés en el filtro del
+ *  panel y sin icono, que es como se coló `FileAttachment` (AC-076). El
+ *  spec escribe `/StrikeOut` y `/PolyLine` donde PDFium dice `Strikeout` y
+ *  `Polyline`, así que las dos grafías están en los mapas. */
+export const SUBTIPOS_COMENTARIO = [
+  "Text",
+  "Highlight",
+  "Underline",
+  "StrikeOut",
+  "Squiggly",
+  "FreeText",
+  "Ink",
+  "Square",
+  "Circle",
+  "Line",
+  "Polygon",
+  "PolyLine",
+  "Stamp",
+  "Caret",
+  "FileAttachment",
+];
+
+/** Comprobación de la lista de arriba: devuelve los subtipos que se han
+ *  quedado sin nombre en español. En desarrollo se grita por consola al
+ *  arrancar; en producción no cuesta nada porque nadie la llama. */
+export function subtiposSinNombre(): string[] {
+  return SUBTIPOS_COMENTARIO.filter(
+    (s) => !KIND_LABELS[s] || !KIND_PLURALS[s] || !KIND_ICONS[s],
+  );
+}
 
 /** «todos» o el plural de un tipo (`KIND_PLURALS`). */
 export type FiltroComentarios = string;

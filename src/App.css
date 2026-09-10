@@ -3176,6 +3176,42 @@ textarea {
   flex-shrink: 0;
 }
 
+/* la red de seguridad: lo que se ve cuando un trozo de la interfaz falla.
+   Papel, no alarma: el documento sigue entero y hay dos salidas */
+.limite-error {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 24px auto;
+  padding: 16px;
+  max-width: 460px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  color: var(--fg);
+}
+
+.limite-error-pista {
+  color: var(--fg-muted);
+  line-height: 1.4;
+}
+
+.limite-error-detalles {
+  align-self: flex-start;
+}
+
+.limite-error-pila {
+  max-height: 160px;
+  max-width: 100%;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin: 0;
+}
+
 /* el desplegable del andamio, en la píldora: se abre hacia arriba porque
    la píldora vive en el borde de abajo */
 .menu-andamio {
