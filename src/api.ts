@@ -849,12 +849,29 @@ export function saveAttachment(
   return invoke("save_attachment", { path, index, destPath });
 }
 
+/** Saca el adjunto a un temporal y lo abre con el visor del sistema. El
+ *  paso por el backend no es un rodeo: el permiso del opener está acotado a
+ *  http/https/mailto, así que abrir un fichero del disco no se puede hacer
+ *  desde el webview. */
+export function openAttachment(path: string, index: number): Promise<void> {
+  return invoke("open_attachment", { path, index });
+}
+
 export function addAttachment(
   workPath: string,
   filePath: string,
   description: string,
 ): Promise<void> {
   return invoke("add_attachment", { workPath, filePath, description });
+}
+
+/** Quita un adjunto del documento. Pasa por `cirugia`, así que deja su paso
+ *  de deshacer: es trabajo del usuario y ⌘Z lo devuelve. */
+export function deleteAttachment(
+  workPath: string,
+  index: number,
+): Promise<void> {
+  return invoke("delete_attachment", { workPath, index });
 }
 
 /** Una capa del documento (`/OCProperties /OCGs`). */

@@ -83,7 +83,9 @@ import {
   exportComments,
   listAttachments,
   saveAttachment,
+  openAttachment,
   addAttachment,
+  deleteAttachment,
   listLayers,
   setLayerVisible,
   type Adjunto,
@@ -361,6 +363,11 @@ function App() {
   // pestañas salen únicamente cuando hay algo que enseñar (con seis fijas a
   // 200 px no cabe ninguna)
   const [adjuntos, setAdjuntos] = useState<Adjunto[]>([]);
+  // adjunto que se va a quitar, a la espera de la confirmación
+  const [adjuntoAsk, setAdjuntoAsk] = useState<{
+    index: number;
+    adjunto: Adjunto;
+  } | null>(null);
   const [capas, setCapas] = useState<Capa[]>([]);
   // firmas del fichero abierto y la banda que las resume, que se cierra y
   // no vuelve hasta el documento siguiente
@@ -1184,6 +1191,33 @@ function App() {
     try {
       await saveAttachment(workPath, index, dest);
       setNotice(`Adjunto guardado en ${dest}`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  /** «Abrir»: el backend lo saca a un temporal y se lo pasa al visor del
+   *  sistema. Es la acción de la fila —un adjunto de una factura es un XML
+   *  que se quiere ver, no guardar—. */
+  async function abrirAdjunto(index: number, a: Adjunto) {
+    if (!workPath) return;
+    try {
+      await openAttachment(workPath, index);
+      setNotice(`Abriendo ${a.name} con el visor del sistema…`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  /** Quitar un adjunto es borrar trabajo del usuario: se pregunta antes,
+   *  con la frase que usa el resto de la app, y ⌘Z lo devuelve. */
+  async function borrarAdjunto(index: number, a: Adjunto) {
+    if (!workPath) return;
+    setAdjuntoAsk(null);
+    try {
+      await deleteAttachment(workPath, index);
+      afterMutation(pageCount);
+      setNotice(`${a.name} ya no va dentro del documento · ${MOD}Z para deshacer`);
     } catch (e) {
       setError(String(e));
     }
@@ -3498,6 +3532,23 @@ function App() {
           onClose={() => setWordAsk(false)}
         />
       )}
+      {adjuntoAsk && (
+        <DialogoConfirmar
+          titulo="Quitar el adjunto"
+          cuerpo={
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              {adjuntoAsk.adjunto.name} dejará de ir dentro del documento.
+              {MOD}Z lo devuelve mientras el documento siga abierto.
+            </p>
+          }
+          textoConfirmar="Quitar el adjunto"
+          peligro
+          onConfirm={() =>
+            borrarAdjunto(adjuntoAsk.index, adjuntoAsk.adjunto)
+          }
+          onClose={() => setAdjuntoAsk(null)}
+        />
+      )}
       {redactAsk && (
         <DialogoConfirmar
           titulo="Aplicar la redacción"
@@ -3896,7 +3947,9 @@ function App() {
             {sidebarTab === "adjuntos" && (
               <PanelAdjuntos
                 adjuntos={adjuntos}
+                onAbrir={abrirAdjunto}
                 onGuardar={guardarAdjunto}
+                onBorrar={(index, adjunto) => setAdjuntoAsk({ index, adjunto })}
                 onAnadir={anadirAdjunto}
               />
             )}

@@ -1790,6 +1790,35 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+/* la fila se puede recorrer con el teclado, como la de comentarios */
+.adj-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.adj-acciones {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+}
+
+/* «Abrir» es la acción de la fila: un adjunto se quiere ver, no guardar */
+.adj-abrir {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.adj-quitar {
+  margin-left: auto;
+  color: var(--fg-muted);
+}
+
+.adj-quitar:hover:not(:disabled) {
+  color: var(--danger);
+}
+
 /* un hilo: el comentario, sus acciones y sus respuestas indentadas */
 .com-hilo {
   display: flex;
