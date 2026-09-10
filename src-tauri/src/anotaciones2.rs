@@ -1103,67 +1103,6 @@ fn mueve_la_llamada(
     Ok(())
 }
 
-/// La goma de borrar del modo Dibujar, **trazo a trazo**.
-///
-/// Lo sustituye [`erase_ink_area`], que busca él los trazos que toca la
-/// goma y los hace todos en una sola mutación (R34b). Este se queda
-/// mientras la interfaz de esta rama siga llamándolo; **se retira al
-/// integrar**, como se retiró `add_highlight` cuando `add_markup` pasó a
-/// hacer las tres marcas.
-///
-/// Quita del trazo los tramos que caen
-/// dentro del rectángulo y deja el resto, en vez de llevarse la anotación
-/// entera. `rect` va en el espacio propio de la página.
-///
-/// Se trabaja sobre el `/AP` de la anotación, que es **donde vive de verdad
-/// el trazo**: PDFium guarda el dibujo del Ink como un objeto de camino
-/// dentro de su apariencia (y no escribe `/InkList`), así que reescribir el
-/// Form XObject es reescribir el trazo. Devuelve `false` si no ha quedado
-/// nada y la anotación se ha borrado, que es lo que hace Acrobat cuando la
-/// goma se lleva el trazo entero.
-#[tauri::command(async)]
-// Camino viejo (un trazo por llamada): ya no se registra como comando; lo
-// conservan los tests de la goma como referencia del comportamiento.
-#[allow(dead_code)]
-pub fn erase_ink(
-    work_path: String,
-    page_index: u16,
-    annot_index: u16,
-    rect: Rect,
-) -> Result<bool, String> {
-    if rect.w <= 0.0 || rect.h <= 0.0 {
-        return Err("El área de borrado no tiene tamaño".into());
-    }
-    crate::historial::mutacion(work_path, move |work_path| {
-        on_pdfium_thread(move || {
-            let mut queda = true;
-            crate::cirugia_en_hilo(&work_path, |doc| {
-                let id = crate::anotaciones::annot_id(doc, page_index, annot_index as usize)?;
-                let page_id = *doc
-                    .get_pages()
-                    .get(&(page_index as u32 + 1))
-                    .ok_or("Página fuera de rango")?;
-                let geo = crate::formularios2::geo_pagina(doc, page_id)?;
-                let goma = geo.ui_rect_a_pdf(&rect);
-                let goma = (
-                    goma.left().value,
-                    goma.bottom().value,
-                    goma.right().value,
-                    goma.top().value,
-                );
-                queda = borra_del_trazo(doc, id, goma)?.0;
-                if !queda {
-                    // sin trazo no hay comentario: se va del /Annots, que es
-                    // lo que hace Acrobat cuando la goma se lo lleva entero
-                    crate::anotaciones::quita_annot(doc, page_index, annot_index as usize)?;
-                }
-                Ok(())
-            })?;
-            Ok(queda)
-        })
-    })
-}
-
 /// Lo que se ha llevado un pase de goma, para que la UI pueda contarlo sin
 /// tener que mirar el documento otra vez.
 #[derive(serde::Serialize, Debug, Default, PartialEq)]
@@ -1179,8 +1118,8 @@ pub struct BorradoTinta {
 /// mutación. `rect` va en el espacio propio de la página.
 ///
 /// Es lo que hace Acrobat, donde un pase de goma es un paso de deshacer.
-/// Con `erase_ink` (un trazo por llamada) la UI tenía que recorrer las
-/// anotaciones, decidir cuáles tocaba y llamar una vez por cada una:
+/// El camino viejo —una llamada por trazo, con la UI recorriendo las
+/// anotaciones y decidiendo cuáles tocaba— se retiró en el ciclo 8: era
 /// geometría de PDF fuera de su sitio, y un arrastre sobre tres trazos
 /// gastaba tres ⌘Z aunque la banda prometiera uno.
 ///
@@ -1806,14 +1745,17 @@ mod tests {
         let ancho_antes = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar")[0].w;
 
         // la goma en el trozo del medio
-        let queda = erase_ink(
+        let hecho = erase_ink_area(
             work.clone(),
-            0,
             0,
             Rect { x: 180.0, y: 280.0, w: 80.0, h: 40.0 },
         )
         .expect("borrar el medio");
-        assert!(queda, "queda trazo a los dos lados");
+        assert_eq!(
+            hecho,
+            BorradoTinta { tocados: 1, borrados: 0 },
+            "queda trazo a los dos lados"
+        );
 
         let ap = ap_crudo(&work, 0);
         let subcaminos = ap.matches(" m ").count();
@@ -1835,14 +1777,13 @@ mod tests {
         assert_eq!(ap.matches(" m ").count(), 2, "PDFium escribe un `m` de más al crear");
 
         // y borrarlo todo se lleva el comentario, como en Acrobat
-        let queda = erase_ink(
+        let hecho = erase_ink_area(
             work.clone(),
-            0,
             0,
             Rect { x: 50.0, y: 250.0, w: 400.0, h: 100.0 },
         )
         .expect("borrar entero");
-        assert!(!queda);
+        assert_eq!(hecho, BorradoTinta { tocados: 1, borrados: 1 });
         assert!(crate::anotaciones::get_annotations(work.clone(), 0)
             .expect("listar")
             .is_empty());
@@ -1954,7 +1895,7 @@ mod tests {
     }
 
     /// **R34b.** En Acrobat un pase de goma es **un** paso de deshacer.
-    /// Aquí la UI llamaba a `erase_ink` una vez por trazo y cada llamada
+    /// Aquí la UI llamaba una vez por trazo y cada llamada
     /// traía su propia `mutacion`: un arrastre sobre tres trazos gastaba
     /// tres ⌘Z mientras la banda prometía uno. `erase_ink_area` busca él
     /// los trazos que tocan la zona y hace el lote entero de una vez.

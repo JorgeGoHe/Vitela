@@ -453,9 +453,9 @@ mod tests {
     /// excepción mientras las dos mitades se escriben en paralelo, y se
     /// quita al integrar.
     const NADIE_LLAMA: &[(&str, &str)] = &[
-        ("save_image_data", "ciclo 8: «Guardar imagen como…» (H10.3) lo llamará; hoy la UI no tiene el botón"),
-        ("add_measure", "ciclo 8: la UI deja la medida con add_stroke + add_text_block; pasará a add_measure"),
-        ("create_form_fields", "ciclo 8: la UI crea las propuestas con N create_form_field + squash_history; pasará al lote"),
+        ("save_image_data", "pendiente_ui — R46 del ciclo 8: «Guardar imagen como…» en el popover de la imagen"),
+        ("add_measure", "pendiente_ui — R47 del ciclo 8: «Dejar la medida puesta» deja add_stroke + add_text_block"),
+        ("create_form_fields", "pendiente_ui — R48 del ciclo 8: las propuestas se aceptan en una cirugía, no en N llamadas fundidas"),
     ];
 
     /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada

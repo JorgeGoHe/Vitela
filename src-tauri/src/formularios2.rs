@@ -1316,6 +1316,46 @@ mod tests {
         std::fs::remove_file(&pdf).ok();
     }
 
+    /// **R48b.** Aceptar un lote de propuestas es **una cirugía**, no N
+    /// llamadas fundidas después: si el sexto campo no se puede crear, no
+    /// se escribe ninguno. Un formulario a medias —cinco campos escritos y
+    /// un error— es peor que un formulario que no se creó, porque el
+    /// documento se queda en un estado que nadie pidió y no hay un ⌘Z que
+    /// lo deshaga del todo.
+    #[test]
+    fn un_lote_que_falla_a_medias_no_escribe_ninguno() {
+        let pdf = std::env::temp_dir().join("formularios2-lote-roto.pdf");
+        crea_pdf(&["Solicitud"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        let pasos = crate::historial::history_state(work.clone()).expect("historial").undo;
+
+        let campo = |nombre: &str, y: f32| CampoNuevo {
+            page_index: 0,
+            kind: "text".into(),
+            rect: Rect { x: 100.0, y, w: 160.0, h: 20.0 },
+            name: nombre.into(),
+            group: None,
+            export_value: None,
+            options: None,
+            props: None,
+        };
+        // el tercero no tiene nombre: `crea_campo` se niega
+        let lote = vec![campo("nombre", 200.0), campo("apellidos", 240.0), campo("", 280.0)];
+        let error = create_form_fields(work.clone(), lote).expect_err("el lote no vale");
+        assert!(error.contains("nombre"), "el aviso dice qué falta: {error}");
+
+        assert!(
+            get_form_fields_vacio(&work),
+            "ni los dos buenos: la cirugía guarda al final o no guarda"
+        );
+        assert_eq!(
+            crate::historial::history_state(work.clone()).expect("historial").undo,
+            pasos,
+            "una mutación fallida no deja paso de deshacer"
+        );
+        std::fs::remove_file(&pdf).ok();
+    }
+
     fn get_form_fields_vacio(work: &str) -> bool {
         crate::formularios::get_form_fields(work.to_string(), 0)
             .map(|c| c.is_empty())
