@@ -31,6 +31,14 @@ const ESPACIADOS: [number, string][] = [
   [2, "2 pt"],
 ];
 
+/** Las tres herramientas de medida de Acrobat. La distancia va de dos
+ *  puntos; el perímetro y el área se ponen por vértices. */
+const MEDIDAS: ["distancia" | "perimetro" | "area", string, string][] = [
+  ["distancia", "Distancia", "Entre dos puntos: arrastra de uno a otro"],
+  ["perimetro", "Perímetro", "El contorno: un clic por vértice"],
+  ["area", "Área", "La superficie del polígono: un clic por vértice"],
+];
+
 /** Los tres botones de alineación, con la etiqueta que entiende el backend. */
 const ALINEACIONES: [Alineacion, string, string][] = [
   ["izq", "Izq.", "Alinear a la izquierda"],
@@ -125,8 +133,8 @@ export default function OpcionesHerramienta({
   onPausarLectura: () => void;
   onPararLectura: () => void;
   /** Modo «Medir». */
-  medidaTipo: "distancia" | "area";
-  setMedidaTipo: (v: "distancia" | "area") => void;
+  medidaTipo: "distancia" | "perimetro" | "area";
+  setMedidaTipo: (v: "distancia" | "perimetro" | "area") => void;
   medidaDejar: boolean;
   setMedidaDejar: (v: boolean) => void;
   calibrando: boolean;
@@ -471,16 +479,15 @@ export default function OpcionesHerramienta({
       )}
       {mode === "medir" && (
         <div className="tool-options">
+          {/* las tres de Acrobat: la distancia es un arrastre y las otras
+              dos se ponen por vértices, que es como se mide una parcela o
+              una planta */}
           <div className="segmented">
-            {(
-              [
-                ["distancia", "Distancia"],
-                ["area", "Área"],
-              ] as ["distancia" | "area", string][]
-            ).map(([v, etiqueta]) => (
+            {MEDIDAS.map(([v, etiqueta, ayuda]) => (
               <button
                 key={v}
                 className={`btn${medidaTipo === v ? " on" : ""}`}
+                title={ayuda}
                 aria-pressed={medidaTipo === v}
                 onClick={() => setMedidaTipo(v)}
               >
@@ -511,7 +518,9 @@ export default function OpcionesHerramienta({
             Dejar la medida puesta
           </label>
           <span className="opt-hint">
-            Arrastra sobre la página · Esc sale
+            {medidaTipo === "distancia"
+              ? "Arrastra sobre la página · Esc sale"
+              : "Un clic por vértice · doble clic o Enter cierra · Retroceso quita el último · Esc cancela"}
           </span>
         </div>
       )}

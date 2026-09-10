@@ -1711,6 +1711,34 @@ textarea {
   stroke-width: 1.5;
 }
 
+/* la capa que sigue al ratón mientras se ponen vértices: el ratón sin
+   botón pulsado no llega al despachador de la página */
+.medida-captura {
+  position: absolute;
+  inset: 0;
+  z-index: 29;
+  cursor: crosshair;
+}
+
+.medida-linea polyline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+/* el vértice puesto, para saber dónde se ha pinchado */
+.medida-linea circle {
+  fill: var(--card-bg);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+/* el interior del polígono, para ver qué se está midiendo */
+.medida-relleno {
+  fill: color-mix(in srgb, var(--accent) 8%, transparent);
+  stroke: none;
+}
+
 .medida-caja {
   position: absolute;
   border: 1.5px solid var(--accent);

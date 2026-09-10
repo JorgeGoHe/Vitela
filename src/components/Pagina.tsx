@@ -51,7 +51,7 @@ export type ToolProps = {
   /** Diámetro del borrado, en puntos de página. */
   gomaAncho: number;
   /** Modo «Medir»: qué se mide, si se deja puesta y si toca calibrar. */
-  medidaTipo: "distancia" | "area";
+  medidaTipo: "distancia" | "perimetro" | "area";
   medidaDejar: boolean;
   calibrando: boolean;
   /** Milímetros por punto de página del documento abierto. */
@@ -465,6 +465,17 @@ function Pagina({
       return;
     }
     if (mode === "medir") {
+      // perímetro y área se ponen por vértices —clic por punto, doble clic
+      // cierra—, como las tres herramientas de Acrobat; la distancia y la
+      // calibración siguen siendo un arrastre
+      if (
+        !tool.calibrando &&
+        (tool.medidaTipo === "perimetro" || tool.medidaTipo === "area")
+      ) {
+        if (e.detail >= 2) medida.cierra();
+        else medida.anadeVertice({ x, y });
+        return;
+      }
       medida.medidaStartRef.current = { x, y };
       medida.medidaLiveRef.current = null;
       medida.setMedidaDraft(null);
@@ -996,6 +1007,7 @@ function Pagina({
             mode={mode}
             medida={medida}
             scale={scale}
+            viewRotation={viewRotation}
             displayWidth={displayWidth}
             tool={tool}
           />

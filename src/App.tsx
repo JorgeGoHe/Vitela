@@ -3219,15 +3219,15 @@ function App() {
     },
     {
       id: "callout",
-      icon: "forward",
+      icon: "callout",
       label: "Llamada",
       hint: "Señalar algo con una línea y escribir al lado (clic donde señala, arrastra hasta el texto)",
     },
     {
       id: "medir",
-      icon: "hf",
+      icon: "ruler",
       label: "Medir",
-      hint: "Medir distancias y áreas sobre la página (no toca el documento)",
+      hint: "Medir distancias, perímetros y áreas sobre la página (no toca el documento)",
     },
     {
       id: "edit",

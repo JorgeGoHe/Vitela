@@ -1,11 +1,12 @@
 /**
- * Capa propia del modo «Medir»: el trazo, su etiqueta en Fragment Mono y la
- * tarjeta que pregunta cuánto mide de verdad al fijar la escala. No pinta
- * nada en el resto de modos y no toca el documento.
+ * Capa propia del modo «Medir»: el trazo o la figura por vértices, su cifra
+ * en Fragment Mono junto al cursor y la tarjeta que pregunta cuánto mide de
+ * verdad al fijar la escala. No pinta nada en el resto de modos y no toca el
+ * documento.
  */
 import { useState } from "react";
 import type { Mode } from "../../tipos";
-import { clampCardLeft } from "../../hooks/pagina/geometria";
+import { clampCardLeft, puntoEnCapa } from "../../hooks/pagina/geometria";
 import type { MedidaHook } from "../../hooks/pagina/useMedida";
 import type { ToolProps } from "../Pagina";
 
@@ -20,46 +21,91 @@ export default function CapaMedida({
   mode,
   medida,
   scale,
+  viewRotation,
   displayWidth,
   tool,
 }: {
   mode: Mode;
   medida: MedidaHook;
   scale: number;
+  viewRotation: number;
   displayWidth: number;
   tool: ToolProps;
 }) {
-  const { medidaDraft, calibre, etiquetaDe, fijaEscala, setCalibre } = medida;
+  const {
+    medidaDraft,
+    calibre,
+    etiquetaDe,
+    etiquetaPoligono,
+    fijaEscala,
+    setCalibre,
+    enCurso,
+    cerrada,
+    vertices,
+    setCursor,
+  } = medida;
   const [cuanto, setCuanto] = useState("");
   const [unidad, setUnidad] = useState(1);
 
   if (mode !== "medir") return null;
   const d = calibre ?? medidaDraft;
+  // el área se cierra sola para verse como lo que se está midiendo; el
+  // perímetro se queda abierto hasta que el usuario lo cierra
+  const puntos = enCurso.map((p) => `${p.x * scale},${p.y * scale}`).join(" ");
+  const ultimo = enCurso[enCurso.length - 1];
+
+  // el vértice que se está colocando sigue al ratón, y el ratón sin botón
+  // pulsado no llega al despachador de la página: lo escucha esta capa, que
+  // es de quien es el gesto
+  const porVertices =
+    (tool.medidaTipo === "perimetro" || tool.medidaTipo === "area") &&
+    !tool.calibrando;
 
   return (
     <>
+      {porVertices && vertices.length > 0 && !cerrada && (
+        <div
+          className="medida-captura"
+          onMouseMove={(e) => setCursor(puntoEnCapa(e, scale, viewRotation))}
+        />
+      )}
+      {enCurso.length > 0 && (
+        <>
+          <svg className="medida-linea">
+            {tool.medidaTipo === "area" && enCurso.length > 2 ? (
+              <polygon points={puntos} className="medida-relleno" />
+            ) : null}
+            <polyline
+              points={
+                tool.medidaTipo === "area" && cerrada && enCurso.length > 2
+                  ? `${puntos} ${enCurso[0].x * scale},${enCurso[0].y * scale}`
+                  : puntos
+              }
+            />
+            {enCurso.map((p, i) => (
+              <circle key={i} cx={p.x * scale} cy={p.y * scale} r={2.5} />
+            ))}
+          </svg>
+          {ultimo && (
+            <span
+              className="medida-etiqueta dato"
+              style={{ left: ultimo.x * scale + 10, top: ultimo.y * scale + 10 }}
+            >
+              {etiquetaPoligono(enCurso)}
+            </span>
+          )}
+        </>
+      )}
       {d && (
         <>
-          {tool.medidaTipo === "area" ? (
-            <div
-              className="medida-caja"
-              style={{
-                left: Math.min(d.x1, d.x2) * scale,
-                top: Math.min(d.y1, d.y2) * scale,
-                width: Math.abs(d.x2 - d.x1) * scale,
-                height: Math.abs(d.y2 - d.y1) * scale,
-              }}
+          <svg className="medida-linea">
+            <line
+              x1={d.x1 * scale}
+              y1={d.y1 * scale}
+              x2={d.x2 * scale}
+              y2={d.y2 * scale}
             />
-          ) : (
-            <svg className="medida-linea">
-              <line
-                x1={d.x1 * scale}
-                y1={d.y1 * scale}
-                x2={d.x2 * scale}
-                y2={d.y2 * scale}
-              />
-            </svg>
-          )}
+          </svg>
           <span
             className="medida-etiqueta dato"
             style={{

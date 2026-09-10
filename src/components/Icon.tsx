@@ -123,6 +123,21 @@ const ICONS: Record<string, string[]> = {
   moon: ["M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"],
   back: ["M19 12H5", "m12 19-7-7 7-7"],
   forward: ["M5 12h14", "m12 5 7 7-7 7"],
+  // regla en diagonal con sus marcas: el icono de «Medir», que hasta ahora
+  // reusaba el de encabezado y pie
+  ruler: [
+    "M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z",
+    "m14.5 12.5 2-2",
+    "m11.5 9.5 2-2",
+    "m8.5 6.5 2-2",
+    "m17.5 15.5 2-2",
+  ],
+  // bocadillo con su rabo: el icono de «Llamada», que reusaba una flecha
+  callout: [
+    "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z",
+    "M8 9h8",
+    "M8 13h5",
+  ],
   more: [
     "M5 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z",
     "M12 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z",

@@ -63,9 +63,9 @@ export function useHerramienta(
   const [gomaAncho, setGomaAncho] = useState(16);
   // medir: qué se mide, si la medida se deja puesta en el documento y si el
   // arrastre siguiente es el de fijar la escala
-  const [medidaTipo, setMedidaTipo] = useState<"distancia" | "area">(
-    "distancia",
-  );
+  const [medidaTipo, setMedidaTipo] = useState<
+    "distancia" | "perimetro" | "area"
+  >("distancia");
   const [medidaDejar, setMedidaDejar] = useState(false);
   const [calibrando, setCalibrando] = useState(false);
   // marca de «rellenar y firmar» armada, si la hay
