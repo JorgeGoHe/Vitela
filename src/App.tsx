@@ -3482,6 +3482,10 @@ function App() {
       title: "Comparar con este PDF",
     });
     if (typeof sel !== "string") return;
+    // el visor se esconde detrás de la comparación: una herramienta armada
+    // (redactar, dibujar) seguiría viva sobre un visor que no se ve
+    setMode("select");
+    setActiveSig(null);
     setComparandoCon(sel);
   }
 
@@ -6053,13 +6057,17 @@ function App() {
         )}
 
         {comparandoCon && workPath && (
-          <Comparador
-            workPath={workPath}
-            nombreA={fileName ?? "este documento"}
-            otroPath={comparandoCon}
-            onError={(e) => setError(String(e))}
-            onClose={() => setComparandoCon(null)}
-          />
+          // bajo la misma red que el visor y el panel: un fallo pintando una
+          // hoja de la comparación dejaba la ventana en blanco
+          <LimiteError que="la comparación" onRecargar={recargarDocumento}>
+            <Comparador
+              workPath={workPath}
+              nombreA={fileName ?? "este documento"}
+              otroPath={comparandoCon}
+              onError={(e) => setError(String(e))}
+              onClose={() => setComparandoCon(null)}
+            />
+          </LimiteError>
         )}
         <div className="viewer-wrap" hidden={!!comparandoCon}>
           <main

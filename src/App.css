@@ -3280,6 +3280,25 @@ textarea {
   flex-shrink: 0;
 }
 
+/* qué significa cada color, encima de la lista: tres cuadros de colores
+   sin leyenda son un jeroglífico */
+.comparar-leyenda {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 2px 0 6px;
+}
+
+.comparar-leyenda span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.comparar-leyenda .comparar-punto {
+  margin-top: 0;
+}
+
 .comparar-fila-texto {
   display: flex;
   flex-direction: column;

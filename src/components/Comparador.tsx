@@ -97,6 +97,10 @@ export default function Comparador({
   const [hojasB, setHojasB] = useState<Record<number, string>>({});
   const izqRef = useRef<HTMLDivElement | null>(null);
   const derRef = useRef<HTMLDivElement | null>(null);
+  // la lista se recorre con ↑ y ↓ como el panel de comentarios: un roving
+  // tabindex, una sola parada de tabulador y el foco siempre en la fila
+  // señalada
+  const filasRef = useRef<Map<number, HTMLButtonElement>>(new Map());
   const sincronizando = useRef(false);
   // el aviso de error se lee por referencia: si entrara en las dependencias
   // del efecto, cada render de App volvería a abrir el otro documento
@@ -186,7 +190,17 @@ export default function Comparador({
   const total = difs?.length ?? 0;
   const irA = (delta: number) => {
     if (total === 0) return;
-    setActual((i) => (i + delta + total) % total);
+    setActual((i) => {
+      const n = (i + delta + total) % total;
+      // si el foco estaba en la lista, se lleva a la fila nueva; si estaba
+      // en el botón de ⌘G, no se le quita
+      requestAnimationFrame(() => {
+        const fila = filasRef.current.get(n);
+        if (fila && document.activeElement?.closest(".comparar-lista"))
+          fila.focus();
+      });
+      return n;
+    });
   };
 
   // ⌘G y ⇧⌘G recorren las diferencias, como recorren las coincidencias de
@@ -244,8 +258,12 @@ export default function Comparador({
         >
           <Icon name="down" size={13} />
         </button>
-        <button className="btn" onClick={onClose}>
-          Cerrar la comparación
+        <button
+          className="btn"
+          title="Cerrar la comparación (Esc)"
+          onClick={onClose}
+        >
+          Cerrar la comparación <span className="menu-atajo">Esc</span>
         </button>
       </div>
       <div className="comparar-cuerpo">
@@ -257,12 +275,38 @@ export default function Comparador({
               texto.
             </p>
           )}
+          {total > 0 && (
+            // qué significa cada color: tres cuadros de colores sin leyenda
+            // son un jeroglífico
+            <div className="comparar-leyenda">
+              {(["cambiado", "añadido", "quitado"] as const).map((t) => (
+                <span key={t} className="dato">
+                  <span
+                    className="comparar-punto"
+                    style={{ background: COLOR[t] }}
+                  />
+                  {ETIQUETA[t]}
+                </span>
+              ))}
+            </div>
+          )}
           {(difs ?? []).map((d, i) => (
             <button
               key={i}
               role="option"
               aria-selected={i === actual}
+              tabIndex={i === actual ? 0 : -1}
+              ref={(el) => {
+                if (el) filasRef.current.set(i, el);
+                else filasRef.current.delete(i);
+              }}
               className={`comparar-fila${i === actual ? " on" : ""}`}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                  e.preventDefault();
+                  irA(e.key === "ArrowDown" ? 1 : -1);
+                }
+              }}
               onClick={() => setActual(i)}
             >
               <span
@@ -282,8 +326,8 @@ export default function Comparador({
           ))}
           {total > 0 && (
             <p className="opt-hint">
-              {plural(total, "diferencia", "diferencias")} · {MOD}G y ⇧{MOD}G
-              las recorren
+              {plural(total, "diferencia", "diferencias")} · ↑ y ↓ en la lista,
+              o {MOD}G y ⇧{MOD}G desde cualquier sitio
             </p>
           )}
         </div>
