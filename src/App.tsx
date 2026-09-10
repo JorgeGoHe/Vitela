@@ -107,7 +107,14 @@ import {
   detectFormFields,
   createFormField,
   type CampoPropuesto,
+  exportCommentsPdf,
+  exportCommentsXfdf,
+  importCommentsXfdf,
+  type OrdenComentarios,
 } from "./api";
+import DialogoComentarios, {
+  type FormatoComentarios,
+} from "./components/DialogoComentarios";
 import { CONFIANZA_MINIMA } from "./components/pagina/CapaPropuestas";
 import {
   ATAJO_COMENTARIOS,
@@ -529,6 +536,8 @@ function App() {
   // nada en el PDF, y cuál se está revisando
   const [propuestas, setPropuestas] = useState<CampoPropuesto[]>([]);
   const [propuestaActual, setPropuestaActual] = useState<number | null>(null);
+  // «Exportar comentarios…»: el formato se pregunta antes de pedir destino
+  const [comentariosAsk, setComentariosAsk] = useState(false);
   const [redactAsk, setRedactAsk] = useState<RedactReport | null>(null);
   const [sanitizeAsk, setSanitizeAsk] = useState<SanitizeReport | null>(null);
   // enlace externo pendiente de confirmar (los URI del PDF no son de fiar)
@@ -1451,28 +1460,85 @@ function App() {
     }
   }
 
-  /** «Exportar comentarios…»: el resumen de Acrobat, en texto llano. */
-  async function exportarComentarios() {
+  /** «Exportar comentarios…»: el formato se pregunta antes, porque de él
+   *  dependen la extensión, las opciones y qué comando se llama. */
+  function exportarComentarios() {
     if (!workPath) return;
     if (comentarios.length === 0) {
       setNotice("Este documento no tiene comentarios que exportar");
       return;
     }
+    setComentariosAsk(true);
+  }
+
+  /** Los tres formatos del resumen de Acrobat: la lista en llano, el
+   *  resumen imprimible en PDF —que se abre al terminar, como «Crear PDF
+   *  desde imágenes»— y el XFDF con el que se devuelve una revisión. */
+  async function aplicarExportarComentarios(opts: {
+    formato: FormatoComentarios;
+    orden: OrdenComentarios;
+  }) {
+    if (!workPath) return;
+    setComentariosAsk(false);
+    const ext = opts.formato;
+    const nombres: Record<FormatoComentarios, string> = {
+      txt: "Texto",
+      pdf: "PDF",
+      xfdf: "Comentarios XFDF",
+    };
     const dest = await save({
-      filters: [{ name: "Texto", extensions: ["txt"] }],
+      filters: [{ name: nombres[ext], extensions: [ext] }],
       defaultPath: (originalPath ?? "documento.pdf").replace(
         /\.pdf$/i,
-        "-comentarios.txt",
+        `-comentarios.${ext}`,
       ),
       title: "Exportar comentarios",
     });
     if (!dest) return;
+    const nombreDoc = originalPath?.split(/[\\/]/).pop();
     try {
-      await exportComments(workPath, dest, originalPath?.split("/").pop());
+      setNotice("Exportando los comentarios…", { persistente: true });
+      if (ext === "pdf") {
+        await exportCommentsPdf(workPath, dest, opts.orden, nombreDoc);
+      } else if (ext === "xfdf") {
+        await exportCommentsXfdf(workPath, dest);
+      } else {
+        await exportComments(workPath, dest, nombreDoc);
+      }
       setNotice(
         `${plural(comentarios.length, "comentario exportado", "comentarios exportados")} a ${dest}`,
       );
+      // el resumen es un documento para leer: se abre, como el PDF de
+      // imágenes, que es lo que se quiere hacer con él a continuación
+      if (ext === "pdf") await openPath(dest);
     } catch (e) {
+      setNotice(null);
+      setError(String(e));
+    }
+  }
+
+  /** «Importar comentarios…»: la revisión que devuelve otro revisor sobre
+   *  su copia. **Añade**, no sustituye, y en una sola mutación. */
+  async function importarComentarios() {
+    if (!workPath) return;
+    const sel = await open({
+      multiple: false,
+      filters: [{ name: "Comentarios", extensions: ["xfdf"] }],
+      title: "Importar comentarios",
+    });
+    if (typeof sel !== "string") return;
+    try {
+      setNotice("Importando los comentarios…", { persistente: true });
+      const cuantos = await importCommentsXfdf(workPath, sel);
+      afterMutation(pageCount);
+      abrirPestana("comentarios");
+      setNotice(
+        cuantos === 0
+          ? "Ese fichero no traía ningún comentario"
+          : `${plural(cuantos, "comentario añadido", "comentarios añadidos")} · ${MOD}Z los quita`,
+      );
+    } catch (e) {
+      setNotice(null);
       setError(String(e));
     }
   }
@@ -3413,6 +3479,7 @@ function App() {
     "exportar-texto": exportPlainText,
     "exportar-word": () => setWordAsk(true),
     "exportar-comentarios": exportarComentarios,
+    "importar-comentarios": importarComentarios,
     "crear-desde-imagenes": () => setImagenesOpen(true),
     // Copiar y Seleccionar todo: el menú nativo se queda con ⌘C y ⌘A antes
     // que el webview, así que las dos entradas actúan donde esté mirando el
@@ -3759,6 +3826,7 @@ function App() {
                 exportPlainText={exportPlainText}
                 exportarWord={() => setWordAsk(true)}
                 exportarComentarios={exportarComentarios}
+                importarComentarios={importarComentarios}
                 abrirComprimir={() => setCompressOpen(true)}
                 leerEnVozAlta={() => {
                   if (lectura.leyendo) lectura.parar();
@@ -4251,6 +4319,13 @@ function App() {
           paginaActual={pageIndex}
           onConfirm={aplicarCombinar}
           onClose={() => setCombinarOpen(false)}
+        />
+      )}
+      {comentariosAsk && (
+        <DialogoComentarios
+          cuantos={comentarios.length}
+          onConfirm={aplicarExportarComentarios}
+          onClose={() => setComentariosAsk(false)}
         />
       )}
       {imagenesOpen && (

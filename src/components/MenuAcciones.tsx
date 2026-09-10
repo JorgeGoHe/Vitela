@@ -71,6 +71,7 @@ export default function MenuAcciones({
   exportPlainText,
   exportarWord,
   exportarComentarios,
+  importarComentarios,
   abrirComprimir,
   leerEnVozAlta,
   leyendo,
@@ -121,6 +122,9 @@ export default function MenuAcciones({
   exportPlainText: () => void;
   exportarWord: () => void;
   exportarComentarios: () => void;
+  /** «Importar comentarios…»: la revisión que devuelve otro revisor en un
+   *  `.xfdf` sobre su copia del documento. */
+  importarComentarios: () => void;
   abrirComprimir: () => void;
   /** «Leer en voz alta»: empieza por la página que se está leyendo. */
   leerEnVozAlta: () => void;
@@ -376,6 +380,11 @@ export default function MenuAcciones({
               icon="note"
               texto="Exportar comentarios…"
               onSelect={ejecutar(exportarComentarios)}
+            />
+            <Entrada
+              icon="sticky"
+              texto="Importar comentarios…"
+              onSelect={ejecutar(importarComentarios)}
             />
             <Entrada
               icon="note"

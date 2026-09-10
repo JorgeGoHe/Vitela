@@ -381,6 +381,45 @@ export function exportComments(
   return invoke("export_comments", { workPath, destPath, documentName });
 }
 
+/** Por qué se ordena el resumen en PDF; «por página» es el de Acrobat. */
+export type OrdenComentarios = "pagina" | "autor" | "fecha" | "tipo";
+
+/** El «Crear resumen de comentarios» de Acrobat: un PDF nuevo con una fila
+ *  por comentario —número, tipo, autor, fecha, estado y texto, con las
+ *  respuestas sangradas—, imprimible y ordenable. */
+export function exportCommentsPdf(
+  workPath: string,
+  destPath: string,
+  orden: OrdenComentarios,
+  documentName?: string,
+): Promise<void> {
+  return invoke("export_comments_pdf", {
+    workPath,
+    destPath,
+    orden,
+    documentName,
+  });
+}
+
+/** XFDF: el formato con el que un revisor devuelve su revisión sobre **su**
+ *  copia del documento. Es XML plano, y las anotaciones que Vitela escribe
+ *  ya llevan autor, fechas, hilo y estado, que es todo lo que necesita. */
+export function exportCommentsXfdf(
+  workPath: string,
+  destPath: string,
+): Promise<void> {
+  return invoke("export_comments_xfdf", { workPath, destPath });
+}
+
+/** Importar **añade**, no sustituye, y en una sola mutación: un ⌘Z quita
+ *  todos los comentarios que hayan entrado. Devuelve cuántos son. */
+export function importCommentsXfdf(
+  workPath: string,
+  srcPath: string,
+): Promise<number> {
+  return invoke("import_comments_xfdf", { workPath, srcPath });
+}
+
 /** Todos los comentarios del documento en una sola pasada (una llamada por
  *  página serían 300 viajes por el canal del hilo de PDFium). */
 export function getDocumentAnnotations(path: string): Promise<AnotacionDoc[]> {
