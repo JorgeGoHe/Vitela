@@ -187,7 +187,11 @@ pub fn search_pdf(
             let mut results = Vec::new();
             for (page_index, page) in doc.pages().iter().enumerate() {
                 let page_text = extract_chars(&page)?;
-                let bloques = if context { bloques_de_texto(&page) } else { Vec::new() };
+                let bloques = if context {
+                    bloques_de_texto(&page)
+                } else {
+                    Vec::new()
+                };
                 let hay = normaliza_colapsando(
                     page_text
                         .chars
@@ -279,7 +283,9 @@ fn bloques_de_texto(page: &PdfPage) -> Vec<(u32, Rect)> {
     let mut out = Vec::new();
     for i in 0..objects.len() {
         let Ok(obj) = objects.get(i) else { continue };
-        let Some(t) = obj.as_text_object() else { continue };
+        let Some(t) = obj.as_text_object() else {
+            continue;
+        };
         if t.text().trim().is_empty() {
             continue;
         }
@@ -416,7 +422,13 @@ pub(crate) fn busca_en_carpeta(
             .unwrap_or_default();
         progreso(i as u32, total, &nombre);
         let path = ruta.to_string_lossy().into_owned();
-        match search_pdf(path.clone(), query.to_string(), match_case, whole_word, context) {
+        match search_pdf(
+            path.clone(),
+            query.to_string(),
+            match_case,
+            whole_word,
+            context,
+        ) {
             Ok(coincidencias) if !coincidencias.is_empty() => out.push(ResultadoFichero {
                 path: path.clone(),
                 nombre,
@@ -468,13 +480,7 @@ pub fn search_folder(
         );
     };
     busca_en_carpeta(
-        &dir,
-        &query,
-        match_case,
-        whole_word,
-        context,
-        recursivo,
-        &emite,
+        &dir, &query, match_case, whole_word, context, recursivo, &emite,
     )
 }
 
@@ -507,7 +513,10 @@ mod tests_carpeta {
         ));
         let dentro = raiz.join("anexos");
         std::fs::create_dir_all(&dentro).unwrap();
-        crea_pdf(&["Factura de enero", "Total factura"], &raiz.join("uno.pdf"));
+        crea_pdf(
+            &["Factura de enero", "Total factura"],
+            &raiz.join("uno.pdf"),
+        );
         crea_pdf(&["Presupuesto de obra"], &raiz.join("dos.pdf"));
         crea_pdf(&["La factura del anexo"], &dentro.join("tres.pdf"));
         // ni un PDF ni un fichero que se deje abrir como tal
@@ -516,7 +525,10 @@ mod tests_carpeta {
 
         let visto = std::sync::Mutex::new(Vec::new());
         let progreso = |hechos: u32, total: u32, fichero: &str| {
-            visto.lock().unwrap().push((hechos, total, fichero.to_string()));
+            visto
+                .lock()
+                .unwrap()
+                .push((hechos, total, fichero.to_string()));
         };
         let r = busca_en_carpeta(
             &raiz.to_string_lossy(),
@@ -536,8 +548,7 @@ mod tests_carpeta {
         assert_eq!(con_coincidencias.len(), 1, "grupos: {r:?}");
         assert_eq!(con_coincidencias[0].nombre, "uno.pdf");
         assert_eq!(con_coincidencias[0].coincidencias.len(), 2);
-        let ilegibles: Vec<&ResultadoFichero> =
-            r.iter().filter(|g| !g.error.is_empty()).collect();
+        let ilegibles: Vec<&ResultadoFichero> = r.iter().filter(|g| !g.error.is_empty()).collect();
         assert_eq!(ilegibles.len(), 1, "el PDF roto se cuenta aparte: {r:?}");
         assert_eq!(ilegibles[0].nombre, "roto.pdf");
         assert!(
@@ -555,7 +566,11 @@ mod tests_carpeta {
         assert!(visto.len() >= 4, "progreso: {visto:?}");
         assert_eq!(visto[0].1, 3, "tres PDF en la carpeta: {visto:?}");
         let ultimo = visto.last().unwrap();
-        assert_eq!((ultimo.0, ultimo.1), (3, 3), "el último dice que ha acabado");
+        assert_eq!(
+            (ultimo.0, ultimo.1),
+            (3, 3),
+            "el último dice que ha acabado"
+        );
 
         // con `recursivo`, la del anexo también
         let r = busca_en_carpeta(
@@ -629,8 +644,14 @@ mod tests {
     fn busca_sin_distinguir_mayusculas() {
         let tmp = std::env::temp_dir().join("editor_pdf_test_busqueda.pdf");
         crea_pdf(&["Hola Mundo"], &tmp);
-        let matches =
-            search_pdf(tmp.to_string_lossy().into_owned(), "mundo".into(), None, None, None).expect("buscar");
+        let matches = search_pdf(
+            tmp.to_string_lossy().into_owned(),
+            "mundo".into(),
+            None,
+            None,
+            None,
+        )
+        .expect("buscar");
         std::fs::remove_file(&tmp).ok();
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].page_index, 0);
@@ -652,7 +673,8 @@ mod tests {
         assert_eq!(m.len(), 4, "'hola' aparece 4 veces");
 
         // rachas de espacios en el documento cuentan como un espacio
-        let m = search_pdf(path.clone(), "hola mundo".into(), None, None, None).expect("buscar frase");
+        let m =
+            search_pdf(path.clone(), "hola mundo".into(), None, None, None).expect("buscar frase");
         assert_eq!(m.len(), 1, "'Hola  Mundo' con doble espacio");
 
         std::fs::remove_file(&tmp).ok();
@@ -753,7 +775,10 @@ mod tests {
         .expect("insertar imagen");
 
         let referencia = lo_que_se_lee(&work);
-        assert!(!referencia.is_empty(), "la página de prueba no tiene contenido");
+        assert!(
+            !referencia.is_empty(),
+            "la página de prueba no tiene contenido"
+        );
 
         for grados in [90u16, 180, 270] {
             crate::paginas::rotate_page(work.clone(), 0).expect("girar");
@@ -779,7 +804,8 @@ mod tests {
         // vista, y `get_annotations` ya devuelve ese espacio.
         let s = &crate::get_page_sizes(work.clone()).expect("tamaños")[0];
         assert_eq!(s.rotation, 270, "el test gira la página tres veces");
-        let m = &search_pdf(work.clone(), "Mundo".into(), None, None, None).expect("buscar")[0].rects[0];
+        let m = &search_pdf(work.clone(), "Mundo".into(), None, None, None).expect("buscar")[0]
+            .rects[0];
         let (px, py) = (m.x + m.w / 2.0, m.y + m.h / 2.0);
         // página propia -> vista con /Rotate 270, lo que hace `puntoAVista`
         let (vx, vy) = (py, s.height - px);
@@ -823,5 +849,4 @@ mod tests {
         }
         out
     }
-
 }

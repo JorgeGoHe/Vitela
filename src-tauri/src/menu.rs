@@ -20,7 +20,9 @@
 
 use serde::Serialize;
 use std::sync::OnceLock;
-use tauri::menu::{AboutMetadata, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
+use tauri::menu::{
+    AboutMetadata, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
+};
 use tauri::{AppHandle, Emitter, Runtime};
 
 /// Nombre del evento hacia la UI. Carga: `{ "id": "guardar" }`.
@@ -97,16 +99,31 @@ pub(crate) fn estructura() -> Vec<Grupo> {
             entradas: vec![
                 e("abrir", "Abrir…", Some("CmdOrCtrl+O"), false),
                 e("abrir-reciente", "Abrir reciente…", None, false),
-                e("crear-desde-imagenes", "Crear PDF desde imágenes…", None, false),
+                e(
+                    "crear-desde-imagenes",
+                    "Crear PDF desde imágenes…",
+                    None,
+                    false,
+                ),
                 sep(),
                 e("guardar", "Guardar", Some("CmdOrCtrl+S"), true),
-                e("guardar-como", "Guardar como…", Some("Shift+CmdOrCtrl+S"), true),
+                e(
+                    "guardar-como",
+                    "Guardar como…",
+                    Some("Shift+CmdOrCtrl+S"),
+                    true,
+                ),
                 // ⌘W cierra la **pestaña**, como en Acrobat; con la última,
                 // el documento. La ventana solo se cierra con el botón rojo
                 // o ⌘Q: `cerrar-solicitado` no dice quién lo disparó, así
                 // que ⌘W se resuelve del lado de la interfaz, que sí sabe
                 // cuántas pestañas hay abiertas.
-                e("cerrar-documento", "Cerrar documento", Some("CmdOrCtrl+W"), true),
+                e(
+                    "cerrar-documento",
+                    "Cerrar documento",
+                    Some("CmdOrCtrl+W"),
+                    true,
+                ),
                 sep(),
                 e("anadir-pdf", "Añadir PDF…", None, true),
                 e("insertar-pdf", "Insertar PDF aquí…", None, true),
@@ -133,10 +150,20 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 // `menu-accion` como el resto y la UI hace lo mismo que su
                 // atajo.
                 e("copiar", "Copiar", Some("CmdOrCtrl+C"), true),
-                e("seleccionar-todo", "Seleccionar todo", Some("CmdOrCtrl+A"), true),
+                e(
+                    "seleccionar-todo",
+                    "Seleccionar todo",
+                    Some("CmdOrCtrl+A"),
+                    true,
+                ),
                 sep(),
                 e("buscar", "Buscar…", Some("CmdOrCtrl+F"), true),
-                e("buscar-siguiente", "Coincidencia siguiente", Some("CmdOrCtrl+G"), true),
+                e(
+                    "buscar-siguiente",
+                    "Coincidencia siguiente",
+                    Some("CmdOrCtrl+G"),
+                    true,
+                ),
                 e(
                     "buscar-anterior",
                     "Coincidencia anterior",
@@ -170,14 +197,34 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 e("pagina-dos", "Dos páginas", None, true),
                 e("pagina-dos-continua", "Dos páginas continuas", None, true),
                 sep(),
-                e("girar-vista-derecha", "Girar la vista a la derecha", Some("Shift+CmdOrCtrl+Plus"), true),
-                e("girar-vista-izquierda", "Girar la vista a la izquierda", Some("Shift+CmdOrCtrl+-"), true),
+                e(
+                    "girar-vista-derecha",
+                    "Girar la vista a la derecha",
+                    Some("Shift+CmdOrCtrl+Plus"),
+                    true,
+                ),
+                e(
+                    "girar-vista-izquierda",
+                    "Girar la vista a la izquierda",
+                    Some("Shift+CmdOrCtrl+-"),
+                    true,
+                ),
                 sep(),
                 e("vista-atras", "Vista anterior", Some("Alt+Left"), true),
                 e("vista-adelante", "Vista siguiente", Some("Alt+Right"), true),
                 sep(),
-                e("panel-lateral", "Panel lateral", Some("Alt+CmdOrCtrl+1"), false),
-                e("pantalla-completa", "Pantalla completa", Some("CmdOrCtrl+L"), false),
+                e(
+                    "panel-lateral",
+                    "Panel lateral",
+                    Some("Alt+CmdOrCtrl+1"),
+                    false,
+                ),
+                e(
+                    "pantalla-completa",
+                    "Pantalla completa",
+                    Some("CmdOrCtrl+L"),
+                    false,
+                ),
                 e("modo-nocturno", "Modo nocturno del documento", None, false),
                 sep(),
                 // «Ver ▸ Mostrar/Ocultar» de Acrobat (R54): reglas, guías
@@ -185,7 +232,12 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 // encontraba nadie
                 e("mostrar-reglas", "Reglas", Some("CmdOrCtrl+R"), true),
                 e("mostrar-guias", "Guías", Some("CmdOrCtrl+;"), true),
-                e("mostrar-cuadricula", "Cuadrícula", Some("CmdOrCtrl+U"), true),
+                e(
+                    "mostrar-cuadricula",
+                    "Cuadrícula",
+                    Some("CmdOrCtrl+U"),
+                    true,
+                ),
                 e(
                     "ajustar-cuadricula",
                     "Ajustar a la cuadrícula",
@@ -196,7 +248,12 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 // en Acrobat «Leer en voz alta» vive en Ver, que es donde lo
                 // busca quien ya lo ha usado. La etiqueta conmuta en la app
                 // mientras suena; aquí se queda la de encenderlo
-                e("leer-en-voz-alta", "Leer en voz alta", Some("Shift+CmdOrCtrl+Y"), true),
+                e(
+                    "leer-en-voz-alta",
+                    "Leer en voz alta",
+                    Some("Shift+CmdOrCtrl+Y"),
+                    true,
+                ),
             ],
         },
         Grupo {
@@ -207,9 +264,19 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 // el fondo es la otra mitad de este diálogo desde el
                 // ciclo 9, y quien lo busca lo busca por su nombre
                 e("marca-de-agua", "Marca de agua y fondo…", None, true),
-                e("encabezado-pie", "Encabezado, pie y numeración…", None, true),
+                e(
+                    "encabezado-pie",
+                    "Encabezado, pie y numeración…",
+                    None,
+                    true,
+                ),
                 e("quitar-marca-de-agua", "Quitar marca de agua…", None, true),
-                e("quitar-encabezados", "Quitar encabezados y pies…", None, true),
+                e(
+                    "quitar-encabezados",
+                    "Quitar encabezados y pies…",
+                    None,
+                    true,
+                ),
                 e("quitar-fondo", "Quitar fondo…", None, true),
                 sep(),
                 e("anadir-campo", "Añadir campo de formulario…", None, true),
@@ -229,7 +296,12 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 e("redactar", "Redactar (censurar)…", None, true),
                 e("sanitizar", "Quitar información oculta…", None, true),
                 sep(),
-                e("propiedades", "Propiedades del documento…", Some("CmdOrCtrl+D"), true),
+                e(
+                    "propiedades",
+                    "Propiedades del documento…",
+                    Some("CmdOrCtrl+D"),
+                    true,
+                ),
                 sep(),
                 e("exportar-imagenes", "Exportar como imágenes…", None, true),
                 e("exportar-texto", "Exportar texto…", None, true),
@@ -454,7 +526,9 @@ mod tests {
             vistos.push((entrada.id, atajo));
         }
         assert!(
-            vistos.iter().any(|(id, a)| *id == "atajos" && *a == "CmdOrCtrl+/"),
+            vistos
+                .iter()
+                .any(|(id, a)| *id == "atajos" && *a == "CmdOrCtrl+/"),
             "la pantalla que enseña los atajos tiene que tener el suyo"
         );
     }
@@ -521,13 +595,17 @@ mod tests {
     /// `.tsx`.
     fn fuentes_de_la_ui() -> Vec<(String, String)> {
         fn recorre(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
-            let Ok(entradas) = std::fs::read_dir(dir) else { return };
+            let Ok(entradas) = std::fs::read_dir(dir) else {
+                return;
+            };
             for e in entradas.flatten() {
                 let ruta = e.path();
                 if ruta.is_dir() {
                     recorre(&ruta, out);
-                } else if matches!(ruta.extension().and_then(|s| s.to_str()), Some("ts") | Some("tsx"))
-                {
+                } else if matches!(
+                    ruta.extension().and_then(|s| s.to_str()),
+                    Some("ts") | Some("tsx")
+                ) {
                     if let Ok(texto) = std::fs::read_to_string(&ruta) {
                         out.push((ruta.to_string_lossy().into_owned(), texto));
                     }
@@ -537,7 +615,10 @@ mod tests {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src");
         let mut out = Vec::new();
         recorre(&src, &mut out);
-        assert!(!out.is_empty(), "no se ha encontrado el código de la UI en {src:?}");
+        assert!(
+            !out.is_empty(),
+            "no se ha encontrado el código de la UI en {src:?}"
+        );
         out
     }
 
@@ -659,7 +740,7 @@ mod tests {
             "en la app va bajo el título «Salida»; en la barra del sistema, \
              dentro de «Documento», la etiqueta tiene que decir sola qué hace",
         ),
-                (
+        (
             "word (.docx)",
             "exportar a word (.docx)",
             "en la app va bajo el título «Salida»; en la barra del sistema, \
@@ -692,7 +773,9 @@ mod tests {
             // el cuerpo de la etiqueta, hasta el cierre de la entrada
             let fin = trozo.find("/>").unwrap_or(trozo.len());
             let cuerpo = &trozo[..fin];
-            let Some(i) = cuerpo.find("texto=") else { continue };
+            let Some(i) = cuerpo.find("texto=") else {
+                continue;
+            };
             let resto = &cuerpo[i + "texto=".len()..];
             let literales: Vec<String> = if let Some(dentro) = resto.strip_prefix('"') {
                 dentro

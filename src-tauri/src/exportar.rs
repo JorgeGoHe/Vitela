@@ -1,8 +1,8 @@
 //! Salida: exportar páginas como imágenes, extraer el texto plano y
 //! comprimir el documento recomprimiendo sus imágenes.
 
-use crate::{invalidate_doc_cache, on_pdfium_thread, pdfium, with_doc};
 use crate::historial::mutacion;
+use crate::{invalidate_doc_cache, on_pdfium_thread, pdfium, with_doc};
 use pdfium_render::prelude::*;
 use serde::Serialize;
 use std::io::Cursor;
@@ -140,195 +140,192 @@ pub fn compress_pdf(
     let quitar_metadatos = quitar_metadatos.unwrap_or(false);
     let aplanar_formularios = aplanar_formularios.unwrap_or(false);
     let hay_casillas = quitar_adjuntos || quitar_metadatos || aplanar_formularios;
-    let antes = std::fs::metadata(&work_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
-    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
-        // las casillas van primero y con lopdf: quitar un adjunto de 4 MB
-        // es lo que de verdad reduce el fichero de quien no tiene fotos
-        let mut adjuntos = 0u32;
-        if aplanar_formularios {
-            crate::invalidate_doc_cache(&work_path);
-            crate::seguridad::prepara_para_aplanar(&work_path)?;
+    let antes = std::fs::metadata(&work_path).map(|m| m.len()).unwrap_or(0);
+    mutacion(work_path, move |work_path| {
+        on_pdfium_thread(move || {
+            // las casillas van primero y con lopdf: quitar un adjunto de 4 MB
+            // es lo que de verdad reduce el fichero de quien no tiene fotos
+            let mut adjuntos = 0u32;
+            if aplanar_formularios {
+                crate::invalidate_doc_cache(&work_path);
+                crate::seguridad::prepara_para_aplanar(&work_path)?;
+                let pdfium = pdfium()?;
+                let doc = pdfium
+                    .load_pdf_from_file(&work_path, None)
+                    .map_err(crate::mensaje_llano)?;
+                for i in 0..doc.pages().len() {
+                    let mut page = doc.pages().get(i).map_err(crate::mensaje_llano)?;
+                    page.flatten().map_err(crate::mensaje_llano)?;
+                }
+                crate::save_and_close(doc, &work_path)?;
+            }
+            if quitar_adjuntos || quitar_metadatos {
+                adjuntos = poda(&work_path, quitar_adjuntos, quitar_metadatos)?;
+            }
             let pdfium = pdfium()?;
             let doc = pdfium
                 .load_pdf_from_file(&work_path, None)
-                .map_err(crate::mensaje_llano)?;
-            for i in 0..doc.pages().len() {
-                let mut page = doc.pages().get(i).map_err(crate::mensaje_llano)?;
-                page.flatten().map_err(crate::mensaje_llano)?;
-            }
-            crate::save_and_close(doc, &work_path)?;
-        }
-        if quitar_adjuntos || quitar_metadatos {
-            adjuntos = poda(&work_path, quitar_adjuntos, quitar_metadatos)?;
-        }
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let mut recomprimidas = 0u32;
-        // imágenes vistas (aunque se salten): sirve para distinguir «aquí no
-        // había imágenes» de «las que había ya estaban bien»
-        let mut imagenes_vistas = 0u32;
-        for p in 0..doc.pages().len() {
-            let mut page = doc.pages().get(p).map_err(|e| e.to_string())?;
-            // recopilar candidatas primero: índice, bounds y píxeles
-            struct Candidata {
-                index: usize,
-                left: f32,
-                bottom: f32,
-                w: f32,
-                h: f32,
-                jpeg: Vec<u8>,
-            }
-            let mut candidatas = Vec::new();
-            {
-                let objects = page.objects();
-                for i in 0..objects.len() {
-                    let Ok(obj) = objects.get(i) else { continue };
-                    let Some(img_obj) = obj.as_image_object() else {
-                        continue;
-                    };
-                    imagenes_vistas += 1;
-                    let Ok(m) = img_obj.matrix() else { continue };
-                    // saltar imágenes rotadas o sesgadas
-                    if m.b().abs() > 0.01 || m.c().abs() > 0.01 {
-                        continue;
+                .map_err(|e| e.to_string())?;
+            let mut recomprimidas = 0u32;
+            // imágenes vistas (aunque se salten): sirve para distinguir «aquí no
+            // había imágenes» de «las que había ya estaban bien»
+            let mut imagenes_vistas = 0u32;
+            for p in 0..doc.pages().len() {
+                let mut page = doc.pages().get(p).map_err(|e| e.to_string())?;
+                // recopilar candidatas primero: índice, bounds y píxeles
+                struct Candidata {
+                    index: usize,
+                    left: f32,
+                    bottom: f32,
+                    w: f32,
+                    h: f32,
+                    jpeg: Vec<u8>,
+                }
+                let mut candidatas = Vec::new();
+                {
+                    let objects = page.objects();
+                    for i in 0..objects.len() {
+                        let Ok(obj) = objects.get(i) else { continue };
+                        let Some(img_obj) = obj.as_image_object() else {
+                            continue;
+                        };
+                        imagenes_vistas += 1;
+                        let Ok(m) = img_obj.matrix() else { continue };
+                        // saltar imágenes rotadas o sesgadas
+                        if m.b().abs() > 0.01 || m.c().abs() > 0.01 {
+                            continue;
+                        }
+                        let Ok(b) = obj.bounds() else { continue };
+                        let w_pts = b.right().value - b.left().value;
+                        let h_pts = b.top().value - b.bottom().value;
+                        if w_pts < 4.0 || h_pts < 4.0 {
+                            continue;
+                        }
+                        let Ok(raw) = img_obj.get_raw_image() else {
+                            continue;
+                        };
+                        // tamaño del flujo tal cual está guardado, sin aplicar
+                        // filtros: con qué hay que comparar el JPEG nuevo
+                        let original = img_obj.get_raw_image_data().map(|d| d.len()).unwrap_or(0);
+                        let rgba = raw.to_rgba8();
+                        if rgba.pixels().any(|px| px[3] < 250) {
+                            continue; // transparencia: JPEG la perdería
+                        }
+                        let dpi_efectivo = rgba.width() as f32 / (w_pts / 72.0);
+                        let objetivo_px = (w_pts / 72.0 * max_dpi).round().max(16.0) as u32;
+                        let submuestrear = dpi_efectivo > max_dpi && objetivo_px < rgba.width();
+                        let img = if submuestrear {
+                            image::DynamicImage::ImageRgba8(rgba).resize(
+                                objetivo_px,
+                                u32::MAX,
+                                image::imageops::FilterType::Lanczos3,
+                            )
+                        } else {
+                            image::DynamicImage::ImageRgba8(rgba)
+                        };
+                        let mut jpeg = Vec::new();
+                        let mut cursor = Cursor::new(&mut jpeg);
+                        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(
+                            &mut cursor,
+                            quality,
+                        );
+                        if enc
+                            .encode_image(&image::DynamicImage::ImageRgb8(img.to_rgb8()))
+                            .is_err()
+                        {
+                            continue;
+                        }
+                        drop(enc);
+                        // solo merece la pena si hay que bajar la resolución o si
+                        // el JPEG ocupa menos que el flujo original (un PNG de
+                        // color plano, por ejemplo, ya está mejor comprimido)
+                        if !submuestrear && (original == 0 || jpeg.len() >= original) {
+                            continue;
+                        }
+                        candidatas.push(Candidata {
+                            index: i,
+                            left: b.left().value,
+                            bottom: b.bottom().value,
+                            w: w_pts,
+                            h: h_pts,
+                            jpeg,
+                        });
                     }
-                    let Ok(b) = obj.bounds() else { continue };
-                    let w_pts = b.right().value - b.left().value;
-                    let h_pts = b.top().value - b.bottom().value;
-                    if w_pts < 4.0 || h_pts < 4.0 {
-                        continue;
-                    }
-                    let Ok(raw) = img_obj.get_raw_image() else {
-                        continue;
-                    };
-                    // tamaño del flujo tal cual está guardado, sin aplicar
-                    // filtros: con qué hay que comparar el JPEG nuevo
-                    let original = img_obj
-                        .get_raw_image_data()
-                        .map(|d| d.len())
-                        .unwrap_or(0);
-                    let rgba = raw.to_rgba8();
-                    if rgba.pixels().any(|px| px[3] < 250) {
-                        continue; // transparencia: JPEG la perdería
-                    }
-                    let dpi_efectivo = rgba.width() as f32 / (w_pts / 72.0);
-                    let objetivo_px = (w_pts / 72.0 * max_dpi).round().max(16.0) as u32;
-                    let submuestrear = dpi_efectivo > max_dpi && objetivo_px < rgba.width();
-                    let img = if submuestrear {
-                        image::DynamicImage::ImageRgba8(rgba).resize(
-                            objetivo_px,
-                            u32::MAX,
-                            image::imageops::FilterType::Lanczos3,
-                        )
-                    } else {
-                        image::DynamicImage::ImageRgba8(rgba)
-                    };
-                    let mut jpeg = Vec::new();
-                    let mut cursor = Cursor::new(&mut jpeg);
-                    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(
-                        &mut cursor,
-                        quality,
-                    );
-                    if enc
-                        .encode_image(&image::DynamicImage::ImageRgb8(img.to_rgb8()))
-                        .is_err()
-                    {
-                        continue;
-                    }
-                    drop(enc);
-                    // solo merece la pena si hay que bajar la resolución o si
-                    // el JPEG ocupa menos que el flujo original (un PNG de
-                    // color plano, por ejemplo, ya está mejor comprimido)
-                    if !submuestrear && (original == 0 || jpeg.len() >= original) {
-                        continue;
-                    }
-                    candidatas.push(Candidata {
-                        index: i,
-                        left: b.left().value,
-                        bottom: b.bottom().value,
-                        w: w_pts,
-                        h: h_pts,
-                        jpeg,
-                    });
+                }
+                // reemplazar de atrás hacia delante para no desplazar índices
+                for c in candidatas.iter().rev() {
+                    let removed = page
+                        .objects_mut()
+                        .remove_object_at_index(c.index)
+                        .map_err(|e| e.to_string())?;
+                    // regla del proyecto: no soltar el objeto extraído
+                    std::mem::forget(removed);
+                    let mut obj =
+                        PdfPageImageObject::new_from_jpeg_reader(&doc, Cursor::new(c.jpeg.clone()))
+                            .map_err(|e| e.to_string())?;
+                    // el objeto nace de 1x1 pt: escalar a su tamaño y colocar
+                    obj.scale(c.w, c.h).map_err(|e| e.to_string())?;
+                    obj.translate(PdfPoints::new(c.left), PdfPoints::new(c.bottom))
+                        .map_err(|e| e.to_string())?;
+                    page.objects_mut()
+                        .add_image_object(obj)
+                        .map_err(|e| e.to_string())?;
+                    recomprimidas += 1;
+                }
+                if !candidatas.is_empty() {
+                    page.regenerate_content().map_err(|e| e.to_string())?;
                 }
             }
-            // reemplazar de atrás hacia delante para no desplazar índices
-            for c in candidatas.iter().rev() {
-                let removed = page
-                    .objects_mut()
-                    .remove_object_at_index(c.index)
-                    .map_err(|e| e.to_string())?;
-                // regla del proyecto: no soltar el objeto extraído
-                std::mem::forget(removed);
-                let mut obj =
-                    PdfPageImageObject::new_from_jpeg_reader(&doc, Cursor::new(c.jpeg.clone()))
-                        .map_err(|e| e.to_string())?;
-                // el objeto nace de 1x1 pt: escalar a su tamaño y colocar
-                obj.scale(c.w, c.h).map_err(|e| e.to_string())?;
-                obj.translate(PdfPoints::new(c.left), PdfPoints::new(c.bottom))
-                    .map_err(|e| e.to_string())?;
-                page.objects_mut()
-                    .add_image_object(obj)
-                    .map_err(|e| e.to_string())?;
-                recomprimidas += 1;
+            // dos motivos distintos, los dos con la misma cabeza para no
+            // romper el contrato con la UI («No se ha podido reducir…»)
+            const SIN_IMAGENES: &str =
+                "No se ha podido reducir el tamaño: este documento no tiene imágenes que comprimir";
+            const SIN_REDUCIR: &str =
+                "No se ha podido reducir el tamaño: las imágenes ya están comprimidas";
+            if imagenes_vistas == 0 && !hay_casillas {
+                return Err(SIN_IMAGENES.into());
             }
-            if !candidatas.is_empty() {
-                page.regenerate_content().map_err(|e| e.to_string())?;
+            if recomprimidas == 0 && !hay_casillas {
+                return Err(SIN_REDUCIR.into());
             }
-        }
-        // dos motivos distintos, los dos con la misma cabeza para no
-        // romper el contrato con la UI («No se ha podido reducir…»)
-        const SIN_IMAGENES: &str =
-            "No se ha podido reducir el tamaño: este documento no tiene imágenes que comprimir";
-        const SIN_REDUCIR: &str =
-            "No se ha podido reducir el tamaño: las imágenes ya están comprimidas";
-        if imagenes_vistas == 0 && !hay_casillas {
-            return Err(SIN_IMAGENES.into());
-        }
-        if recomprimidas == 0 && !hay_casillas {
-            return Err(SIN_REDUCIR.into());
-        }
-        // guardar aparte y quedarse con el resultado solo si es más pequeño;
-        // si no, la copia de trabajo se queda como estaba (y la mutación
-        // fallida retira su instantánea)
-        let tmp = format!("{work_path}.comprimido.tmp");
-        doc.save_to_file(&tmp).map_err(|e| e.to_string())?;
-        drop(doc);
-        let despues = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
-        if despues == 0 || despues >= antes {
-            let _ = std::fs::remove_file(&tmp);
-            // con las casillas puestas ya se ha quitado lo que se pidió: el
-            // fichero es el que hay, y decir «no se ha podido reducir»
-            // sería mentir sobre un trabajo que sí se ha hecho
-            if hay_casillas && despues > 0 {
-                invalidate_doc_cache(&work_path);
-                let despues = std::fs::metadata(&work_path).map(|m| m.len()).unwrap_or(0);
-                return Ok(CompressReport {
-                    antes,
-                    despues,
-                    imagenes: recomprimidas,
-                    adjuntos,
-                    metadatos: quitar_metadatos,
-                    formularios: aplanar_formularios,
-                });
+            // guardar aparte y quedarse con el resultado solo si es más pequeño;
+            // si no, la copia de trabajo se queda como estaba (y la mutación
+            // fallida retira su instantánea)
+            let tmp = format!("{work_path}.comprimido.tmp");
+            doc.save_to_file(&tmp).map_err(|e| e.to_string())?;
+            drop(doc);
+            let despues = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
+            if despues == 0 || despues >= antes {
+                let _ = std::fs::remove_file(&tmp);
+                // con las casillas puestas ya se ha quitado lo que se pidió: el
+                // fichero es el que hay, y decir «no se ha podido reducir»
+                // sería mentir sobre un trabajo que sí se ha hecho
+                if hay_casillas && despues > 0 {
+                    invalidate_doc_cache(&work_path);
+                    let despues = std::fs::metadata(&work_path).map(|m| m.len()).unwrap_or(0);
+                    return Ok(CompressReport {
+                        antes,
+                        despues,
+                        imagenes: recomprimidas,
+                        adjuntos,
+                        metadatos: quitar_metadatos,
+                        formularios: aplanar_formularios,
+                    });
+                }
+                return Err(SIN_REDUCIR.into());
             }
-            return Err(SIN_REDUCIR.into());
-        }
-        invalidate_doc_cache(&work_path);
-        std::fs::rename(&tmp, &work_path).map_err(|e| e.to_string())?;
-        Ok(CompressReport {
-            antes,
-            despues,
-            imagenes: recomprimidas,
-            adjuntos,
-            metadatos: quitar_metadatos,
-            formularios: aplanar_formularios,
+            invalidate_doc_cache(&work_path);
+            std::fs::rename(&tmp, &work_path).map_err(|e| e.to_string())?;
+            Ok(CompressReport {
+                antes,
+                despues,
+                imagenes: recomprimidas,
+                adjuntos,
+                metadatos: quitar_metadatos,
+                formularios: aplanar_formularios,
+            })
         })
-    }))
+    })
 }
 
 /// Quita del documento lo que pidan las casillas del Optimizer y poda los
@@ -384,7 +381,9 @@ fn poda(work_path: &str, adjuntos: bool, metadatos: bool) -> Result<u32, String>
                                 .get_object(*id)
                                 .and_then(|o| o.as_dict())
                                 .map(|d| {
-                                    d.get(b"Subtype").and_then(|o| o.as_name()).unwrap_or_default()
+                                    d.get(b"Subtype")
+                                        .and_then(|o| o.as_name())
+                                        .unwrap_or_default()
                                         == b"FileAttachment"
                                 })
                                 .unwrap_or(false),
@@ -589,7 +588,9 @@ pub fn export_html(
             for enlace in crate::documento::get_links(work_path.clone(), *p)? {
                 let Some(uri) = enlace.uri.filter(|u| {
                     let u = u.to_lowercase();
-                    u.starts_with("http://") || u.starts_with("https://") || u.starts_with("mailto:")
+                    u.starts_with("http://")
+                        || u.starts_with("https://")
+                        || u.starts_with("mailto:")
                 }) else {
                     continue;
                 };
@@ -702,7 +703,8 @@ pub fn audit_pdf(path: String) -> Result<Vec<CategoriaPeso>, String> {
             let mut de_quien: std::collections::BTreeMap<lopdf::ObjectId, &str> =
                 std::collections::BTreeMap::new();
             clasifica(doc, &mut de_quien);
-            let mut pesos: std::collections::BTreeMap<&str, u64> = std::collections::BTreeMap::new();
+            let mut pesos: std::collections::BTreeMap<&str, u64> =
+                std::collections::BTreeMap::new();
             let mut atribuido = 0u64;
             for (id, obj) in doc.objects.iter() {
                 let n = tamano_de(obj) as u64;
@@ -753,7 +755,10 @@ fn tamano_de(obj: &lopdf::Object) -> usize {
 }
 
 fn tamano_dict(d: &lopdf::Dictionary) -> usize {
-    d.iter().map(|(k, v)| k.len() + 2 + tamano_de(v)).sum::<usize>() + 4
+    d.iter()
+        .map(|(k, v)| k.len() + 2 + tamano_de(v))
+        .sum::<usize>()
+        + 4
 }
 
 /// De quién es cada objeto. El primero que reclama uno se lo queda: un
@@ -847,7 +852,12 @@ fn clasifica(
     reclama(doc, out, catalogo.get(b"Metadata").ok(), "metadatos");
     reclama(doc, out, doc.trailer.get(b"Info").ok(), "metadatos");
     reclama(doc, out, catalogo.get(b"StructTreeRoot").ok(), "estructura");
-    reclama(doc, out, catalogo.get(b"Outlines").ok(), "marcadores_y_enlaces");
+    reclama(
+        doc,
+        out,
+        catalogo.get(b"Outlines").ok(),
+        "marcadores_y_enlaces",
+    );
     if let Some(names) = catalogo.get(b"Names").ok().and_then(|o| dict_res(doc, o)) {
         reclama(doc, out, names.get(b"EmbeddedFiles").ok(), "adjuntos");
     }
@@ -872,7 +882,12 @@ fn clasifica(
             };
             for a in lista {
                 let subtipo = dict_res(doc, &a)
-                    .and_then(|d| d.get(b"Subtype").and_then(|o| o.as_name()).ok().map(|n| n.to_vec()))
+                    .and_then(|d| {
+                        d.get(b"Subtype")
+                            .and_then(|o| o.as_name())
+                            .ok()
+                            .map(|n| n.to_vec())
+                    })
                     .unwrap_or_default();
                 let cat = match subtipo.as_slice() {
                     b"Link" => "marcadores_y_enlaces",
@@ -1014,15 +1029,8 @@ mod tests {
             40.0,
         )
         .expect("meter la foto");
-        crate::anotaciones::add_note(
-            work.clone(),
-            0,
-            100.0,
-            100.0,
-            "Una nota".into(),
-            None,
-        )
-        .expect("nota");
+        crate::anotaciones::add_note(work.clone(), 0, 100.0, 100.0, "Una nota".into(), None)
+            .expect("nota");
 
         let tabla = audit_pdf(work.clone()).expect("auditar");
         assert_eq!(tabla.len(), 9, "las nueve categorías de Acrobat");
@@ -1067,8 +1075,8 @@ mod tests {
         let work = pdf.to_string_lossy().into_owned();
         let dest = std::env::temp_dir().join("exportar-html-salida.html");
 
-        let informe = export_html(work.clone(), dest.to_string_lossy().into_owned(), None)
-            .expect("exportar");
+        let informe =
+            export_html(work.clone(), dest.to_string_lossy().into_owned(), None).expect("exportar");
         assert_eq!(informe.paginas, 2);
         assert!(informe.bloques >= 2, "un bloque por página al menos");
 
@@ -1121,9 +1129,7 @@ mod tests {
         assert_eq!(escapa("<b>&\"x\""), "&lt;b&gt;&amp;&quot;x&quot;");
 
         std::fs::remove_file(&dest).ok();
-        let _ = std::fs::remove_dir_all(
-            std::env::temp_dir().join("exportar-html-salida_files"),
-        );
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join("exportar-html-salida_files"));
         std::fs::remove_file(&pdf).ok();
     }
 
@@ -1166,14 +1172,25 @@ mod tests {
             Some("Times-Bold".into()),
             Some([220, 20, 20, 255]),
             None,
-            None, None)
+            None,
+            None,
+        )
         .expect("titular");
-        crate::imagenes::add_image(work.clone(), 0, png.to_string_lossy().into_owned(), 60.0, 300.0)
-            .expect("imagen");
+        crate::imagenes::add_image(
+            work.clone(),
+            0,
+            png.to_string_lossy().into_owned(),
+            60.0,
+            300.0,
+        )
+        .expect("imagen");
 
         let informe = export_docx(work.clone(), docx.to_string_lossy().into_owned(), None)
             .expect("exportar a docx");
-        assert_eq!(informe.parrafos, 3, "dos textos de la página 1 y uno de la 2");
+        assert_eq!(
+            informe.parrafos, 3,
+            "dos textos de la página 1 y uno de la 2"
+        );
         assert_eq!(informe.imagenes, 1);
         assert!(
             informe.perdido.iter().any(|p| p.contains("columnas")),
@@ -1182,7 +1199,10 @@ mod tests {
         );
 
         let xml = dentro_del_docx(&docx, "word/document.xml");
-        let pos = |aguja: &str| xml.find(aguja).unwrap_or_else(|| panic!("falta {aguja} en el XML"));
+        let pos = |aguja: &str| {
+            xml.find(aguja)
+                .unwrap_or_else(|| panic!("falta {aguja} en el XML"))
+        };
         // orden de lectura: el titular (y=60) antes que el texto de la
         // página (y≈100) y que la segunda página
         assert!(
@@ -1205,13 +1225,20 @@ mod tests {
         );
 
         // un rango de páginas exporta solo eso
-        let informe = export_docx(work.clone(), docx.to_string_lossy().into_owned(), Some(vec![1]))
-            .expect("exportar la segunda");
+        let informe = export_docx(
+            work.clone(),
+            docx.to_string_lossy().into_owned(),
+            Some(vec![1]),
+        )
+        .expect("exportar la segunda");
         assert_eq!(informe.parrafos, 1);
         assert_eq!(informe.imagenes, 0);
         let xml = dentro_del_docx(&docx, "word/document.xml");
         assert!(!xml.contains("Primera pagina"), "solo la página pedida");
-        assert!(!xml.contains("w:type=\"page\""), "una sola página, sin salto");
+        assert!(
+            !xml.contains("w:type=\"page\""),
+            "una sola página, sin salto"
+        );
 
         for f in [&pdf, &png, &docx] {
             std::fs::remove_file(f).ok();
@@ -1425,10 +1452,13 @@ pub fn export_docx(
 
         let mut docx = Docx::new();
         let mut informe = DocxReport::default();
-        let (mut ilegibles, mut vectores, mut comentarios, mut campos) = (0u32, false, false, false);
+        let (mut ilegibles, mut vectores, mut comentarios, mut campos) =
+            (0u32, false, false, false);
 
         for (orden, &pi) in paginas.iter().enumerate() {
-            let Ok(page) = doc.pages().get(pi) else { continue };
+            let Ok(page) = doc.pages().get(pi) else {
+                continue;
+            };
             let geo = crate::Geo::de_pagina(&page).propia();
             // texto e imágenes en una sola lista, ordenada como se lee
             let mut trozos: Vec<(i32, i32, Trozo)> = Vec::new();
@@ -1442,9 +1472,12 @@ pub fn export_docx(
                     vectores = true;
                     continue;
                 }
-                let Some(img) = obj.as_image_object() else { continue };
+                let Some(img) = obj.as_image_object() else {
+                    continue;
+                };
                 let Ok(b) = obj.bounds() else { continue };
-                let caja = geo.pdf_rect_a_ui(&PdfRect::new(b.bottom(), b.left(), b.top(), b.right()));
+                let caja =
+                    geo.pdf_rect_a_ui(&PdfRect::new(b.bottom(), b.left(), b.top(), b.right()));
                 match png_de_imagen(img, &doc) {
                     Some((png, ancho_px, alto_px)) => trozos.push((
                         caja.y.round() as i32,
@@ -1493,8 +1526,8 @@ pub fn export_docx(
                         // EMU: 914400 por pulgada, 12700 por punto PDF
                         let pic = Pic::new_with_dimensions(png, ancho_px, alto_px)
                             .size((ancho_pt * 12700.0) as u32, (alto_pt * 12700.0) as u32);
-                        docx = docx
-                            .add_paragraph(Paragraph::new().add_run(Run::new().add_image(pic)));
+                        docx =
+                            docx.add_paragraph(Paragraph::new().add_run(Run::new().add_image(pic)));
                         informe.imagenes += 1;
                     }
                 }
@@ -1509,22 +1542,23 @@ pub fn export_docx(
             }
 
             if orden + 1 < paginas.len() {
-                docx = docx.add_paragraph(
-                    Paragraph::new().add_run(Run::new().add_break(BreakType::Page)),
-                );
+                docx = docx
+                    .add_paragraph(Paragraph::new().add_run(Run::new().add_break(BreakType::Page)));
             }
         }
 
-        informe.perdido.push(
-            "La maquetación: las columnas y las tablas salen como texto corrido".into(),
-        );
+        informe
+            .perdido
+            .push("La maquetación: las columnas y las tablas salen como texto corrido".into());
         if vectores {
             informe
                 .perdido
                 .push("Los dibujos vectoriales (líneas, recuadros y fondos)".into());
         }
         if comentarios {
-            informe.perdido.push("Los comentarios y las anotaciones".into());
+            informe
+                .perdido
+                .push("Los comentarios y las anotaciones".into());
         }
         if campos {
             informe
@@ -1539,11 +1573,12 @@ pub fn export_docx(
             });
         }
 
-        let fichero = std::fs::File::create(&dest_path)
-            .map_err(|e| crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}")))?;
-        docx.build()
-            .pack(fichero)
-            .map_err(|e| crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}")))?;
+        let fichero = std::fs::File::create(&dest_path).map_err(|e| {
+            crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}"))
+        })?;
+        docx.build().pack(fichero).map_err(|e| {
+            crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}"))
+        })?;
         Ok(informe)
     })
 }

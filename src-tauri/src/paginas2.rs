@@ -2,32 +2,34 @@
 //! PDF en una posición, recorte, marca de agua y encabezados/pies con
 //! numeración.
 
-use crate::{on_pdfium_thread, pdfium, save_and_close, Rect};
 use crate::historial::mutacion;
+use crate::{on_pdfium_thread, pdfium, save_and_close, Rect};
 use pdfium_render::prelude::*;
 
 /// Inserta una página en blanco en `index`, del mismo tamaño que la página
 /// vecina (o A4 si el documento está vacío). Devuelve el nuevo total.
 #[tauri::command(async)]
 pub fn add_blank_page(work_path: String, index: u16) -> Result<u16, String> {
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let mut doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let count = doc.pages().len();
-        let size = doc
-            .pages()
-            .get(index.min(count.saturating_sub(1)))
-            .map(|p| PdfPagePaperSize::Custom(p.width(), p.height()))
-            .unwrap_or_else(|_| PdfPagePaperSize::a4());
-        doc.pages_mut()
-            .create_page_at_index(size, index.min(count))
-            .map_err(|e| e.to_string())?;
-        let nuevo = doc.pages().len();
-        save_and_close(doc, &work_path)?;
-        Ok(nuevo)
-    }))
+    mutacion(work_path, |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let mut doc = pdfium
+                .load_pdf_from_file(&work_path, None)
+                .map_err(|e| e.to_string())?;
+            let count = doc.pages().len();
+            let size = doc
+                .pages()
+                .get(index.min(count.saturating_sub(1)))
+                .map(|p| PdfPagePaperSize::Custom(p.width(), p.height()))
+                .unwrap_or_else(|_| PdfPagePaperSize::a4());
+            doc.pages_mut()
+                .create_page_at_index(size, index.min(count))
+                .map_err(|e| e.to_string())?;
+            let nuevo = doc.pages().len();
+            save_and_close(doc, &work_path)?;
+            Ok(nuevo)
+        })
+    })
 }
 
 /// Crea un PDF nuevo con una imagen por página. Es «Crear PDF desde
@@ -84,7 +86,9 @@ pub fn pdf_from_images(
                 continue;
             }
             let papel = match tamano.as_str() {
-                "carta" => PdfPagePaperSize::from_points(PdfPoints::new(612.0), PdfPoints::new(792.0)),
+                "carta" => {
+                    PdfPagePaperSize::from_points(PdfPoints::new(612.0), PdfPoints::new(792.0))
+                }
                 "imagen" => PdfPagePaperSize::from_points(PdfPoints::new(iw), PdfPoints::new(ih)),
                 _ => PdfPagePaperSize::a4(),
             };
@@ -98,13 +102,9 @@ pub fn pdf_from_images(
             // los dos ejes, la que quepa
             let escala = ((pw - margen * 2.0) / iw).min((ph - margen * 2.0) / ih);
             let (w, h) = (iw * escala, ih * escala);
-            let mut obj = PdfPageImageObject::new_with_size(
-                &doc,
-                &img,
-                PdfPoints::new(w),
-                PdfPoints::new(h),
-            )
-            .map_err(crate::mensaje_llano)?;
+            let mut obj =
+                PdfPageImageObject::new_with_size(&doc, &img, PdfPoints::new(w), PdfPoints::new(h))
+                    .map_err(crate::mensaje_llano)?;
             // centrada en la página, que es donde se espera una foto
             obj.translate(
                 PdfPoints::new((pw - w) / 2.0),
@@ -122,7 +122,9 @@ pub fn pdf_from_images(
                 .map(|i| format!("{} ({})", informe.nombre(i), informe.motivos[i]))
                 .collect::<Vec<_>>()
                 .join(", ");
-            return Err(format!("No se ha podido leer ninguna de las imágenes: {cuales}"));
+            return Err(format!(
+                "No se ha podido leer ninguna de las imágenes: {cuales}"
+            ));
         }
         doc.save_to_file(&dest_path).map_err(|e| {
             crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}"))
@@ -184,31 +186,29 @@ fn motivo_de_imagen(e: &image::ImageError) -> String {
 /// Duplica la página dada (la copia queda justo después). Devuelve el total.
 #[tauri::command(async)]
 pub fn duplicate_page(work_path: String, page_index: u16) -> Result<u16, String> {
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let mut doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        // segundo handle del mismo fichero, solo lectura, en el mismo hilo
-        // AC-046: importar de una copia sin las ventanas de las notas
-        // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
-        let fuente = crate::anotaciones::fuente_importable(&work_path);
-        let origen = pdfium
-            .load_pdf_from_file(fuente.ruta(), None)
-            .map_err(|e| e.to_string())?;
-        doc.pages_mut()
-            .copy_pages_from_document(
-                &origen,
-                &format!("{}", page_index + 1),
-                page_index + 1,
-            )
-            .map_err(|e| e.to_string())?;
-        drop(origen);
-        let nuevo = doc.pages().len();
-        save_and_close(doc, &work_path)?;
-        crate::anotaciones::repon_popups_en(&work_path)?;
-        Ok(nuevo)
-    }))
+    mutacion(work_path, |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let mut doc = pdfium
+                .load_pdf_from_file(&work_path, None)
+                .map_err(|e| e.to_string())?;
+            // segundo handle del mismo fichero, solo lectura, en el mismo hilo
+            // AC-046: importar de una copia sin las ventanas de las notas
+            // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
+            let fuente = crate::anotaciones::fuente_importable(&work_path);
+            let origen = pdfium
+                .load_pdf_from_file(fuente.ruta(), None)
+                .map_err(|e| e.to_string())?;
+            doc.pages_mut()
+                .copy_pages_from_document(&origen, &format!("{}", page_index + 1), page_index + 1)
+                .map_err(|e| e.to_string())?;
+            drop(origen);
+            let nuevo = doc.pages().len();
+            save_and_close(doc, &work_path)?;
+            crate::anotaciones::repon_popups_en(&work_path)?;
+            Ok(nuevo)
+        })
+    })
 }
 
 /// Inserta en la posición dada las páginas de otro PDF: todas, o **solo
@@ -226,45 +226,47 @@ pub fn insert_pdf_at(
     index: u16,
     page_indices: Option<Vec<u16>>,
 ) -> Result<u16, String> {
-    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let mut doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        // AC-046: importar de una copia sin las ventanas de las notas
-        // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
-        let fuente = crate::anotaciones::fuente_importable(&other_path);
-        let other = pdfium
-            .load_pdf_from_file(fuente.ruta(), None)
-            .map_err(|e| e.to_string())?;
-        // el rango que entiende PDFium va en base 1 y por comas; sin lista,
-        // el documento entero
-        let rango = match &page_indices {
-            Some(v) => {
-                let dentro: Vec<String> = v
-                    .iter()
-                    .filter(|i| **i < other.pages().len())
-                    .map(|i| (i + 1).to_string())
-                    .collect();
-                if dentro.is_empty() {
-                    return Err(
-                        "Ninguna de esas páginas está en el documento que se inserta".into(),
-                    );
+    mutacion(work_path, move |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let mut doc = pdfium
+                .load_pdf_from_file(&work_path, None)
+                .map_err(|e| e.to_string())?;
+            // AC-046: importar de una copia sin las ventanas de las notas
+            // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
+            let fuente = crate::anotaciones::fuente_importable(&other_path);
+            let other = pdfium
+                .load_pdf_from_file(fuente.ruta(), None)
+                .map_err(|e| e.to_string())?;
+            // el rango que entiende PDFium va en base 1 y por comas; sin lista,
+            // el documento entero
+            let rango = match &page_indices {
+                Some(v) => {
+                    let dentro: Vec<String> = v
+                        .iter()
+                        .filter(|i| **i < other.pages().len())
+                        .map(|i| (i + 1).to_string())
+                        .collect();
+                    if dentro.is_empty() {
+                        return Err(
+                            "Ninguna de esas páginas está en el documento que se inserta".into(),
+                        );
+                    }
+                    dentro.join(",")
                 }
-                dentro.join(",")
-            }
-            None => format!("1-{}", other.pages().len()),
-        };
-        let index = index.min(doc.pages().len());
-        doc.pages_mut()
-            .copy_pages_from_document(&other, &rango, index)
-            .map_err(|e| e.to_string())?;
-        drop(other);
-        let nuevo = doc.pages().len();
-        save_and_close(doc, &work_path)?;
-        crate::anotaciones::repon_popups_en(&work_path)?;
-        Ok(nuevo)
-    }))
+                None => format!("1-{}", other.pages().len()),
+            };
+            let index = index.min(doc.pages().len());
+            doc.pages_mut()
+                .copy_pages_from_document(&other, &rango, index)
+                .map_err(|e| e.to_string())?;
+            drop(other);
+            let nuevo = doc.pages().len();
+            save_and_close(doc, &work_path)?;
+            crate::anotaciones::repon_popups_en(&work_path)?;
+            Ok(nuevo)
+        })
+    })
 }
 
 /// **Cuánto se quita por cada lado**, en puntos PDF (72 por pulgada). La
@@ -319,112 +321,116 @@ pub fn crop_page(
                 .into());
         }
     }
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let indices: Vec<u16> = if all_pages {
-            (0..doc.pages().len()).collect()
-        } else {
-            vec![page_index]
-        };
-        for i in indices {
-            let mut page = doc.pages().get(i).map_err(|e| e.to_string())?;
-            let page_w = page.width().value;
-            let page_h = page.height().value;
-            // por medida, el área se calcula para ESTA página: con varias
-            // de tamaños distintos, un rect fijo recortaría mal todas menos
-            // una
-            let area = match margenes {
-                Some(m) => Rect {
-                    x: m.izq,
-                    y: m.arriba,
-                    w: page_w - m.izq - m.der,
-                    h: page_h - m.arriba - m.abajo,
-                },
-                None => rect.clone(),
+    mutacion(work_path, |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
+                .map_err(|e| e.to_string())?;
+            let indices: Vec<u16> = if all_pages {
+                (0..doc.pages().len()).collect()
+            } else {
+                vec![page_index]
             };
-            if area.w < 24.0 || area.h < 24.0 {
-                return Err(format!(
-                    "Con esos márgenes la página {} se queda casi sin nada: quita menos \
+            for i in indices {
+                let mut page = doc.pages().get(i).map_err(|e| e.to_string())?;
+                let page_w = page.width().value;
+                let page_h = page.height().value;
+                // por medida, el área se calcula para ESTA página: con varias
+                // de tamaños distintos, un rect fijo recortaría mal todas menos
+                // una
+                let area = match margenes {
+                    Some(m) => Rect {
+                        x: m.izq,
+                        y: m.arriba,
+                        w: page_w - m.izq - m.der,
+                        h: page_h - m.arriba - m.abajo,
+                    },
+                    None => rect.clone(),
+                };
+                if area.w < 24.0 || area.h < 24.0 {
+                    return Err(format!(
+                        "Con esos márgenes la página {} se queda casi sin nada: quita menos \
                      por los lados",
-                    i as u32 + 1
-                ));
-            }
-            // rect en coords PDF de esta página, dentro de sus límites
-            let x0 = area.x.clamp(0.0, page_w - 1.0);
-            let y_top = area.y.clamp(0.0, page_h - 1.0);
-            let w = area.w.min(page_w - x0);
-            let h = area.h.min(page_h - y_top);
-            let y0 = page_h - y_top - h; // borde inferior en coords PDF
-            {
-                let objects = page.objects_mut();
-                for j in 0..objects.len() {
-                    if let Ok(mut obj) = objects.get(j) {
-                        obj.translate(PdfPoints::new(-x0), PdfPoints::new(-y0))
-                            .map_err(|e| e.to_string())?;
+                        i as u32 + 1
+                    ));
+                }
+                // rect en coords PDF de esta página, dentro de sus límites
+                let x0 = area.x.clamp(0.0, page_w - 1.0);
+                let y_top = area.y.clamp(0.0, page_h - 1.0);
+                let w = area.w.min(page_w - x0);
+                let h = area.h.min(page_h - y_top);
+                let y0 = page_h - y_top - h; // borde inferior en coords PDF
+                {
+                    let objects = page.objects_mut();
+                    for j in 0..objects.len() {
+                        if let Ok(mut obj) = objects.get(j) {
+                            obj.translate(PdfPoints::new(-x0), PdfPoints::new(-y0))
+                                .map_err(|e| e.to_string())?;
+                        }
                     }
                 }
-            }
-            {
-                let annotations = page.annotations_mut();
-                for j in 0..annotations.len() {
-                    let Ok(mut a) = annotations.get(j) else { continue };
-                    if let Ok(b) = a.bounds() {
-                        let _ = a.set_bounds(PdfRect::new(
-                            PdfPoints::new(b.bottom().value - y0),
-                            PdfPoints::new(b.left().value - x0),
-                            PdfPoints::new(b.top().value - y0),
-                            PdfPoints::new(b.right().value - x0),
-                        ));
-                    }
-                    macro_rules! desplaza_quads {
-                        ($m:expr) => {
-                            if let Some(m) = $m {
-                                let points = m.attachment_points_mut();
-                                for k in 0..points.len() {
-                                    if let Ok(q) = points.get(k) {
-                                        let _ = points.set_attachment_point_at_index(
-                                            k,
-                                            PdfQuadPoints::new(
-                                                PdfPoints::new(q.left().value - x0),
-                                                PdfPoints::new(q.top().value - y0),
-                                                PdfPoints::new(q.right().value - x0),
-                                                PdfPoints::new(q.top().value - y0),
-                                                PdfPoints::new(q.left().value - x0),
-                                                PdfPoints::new(q.bottom().value - y0),
-                                                PdfPoints::new(q.right().value - x0),
-                                                PdfPoints::new(q.bottom().value - y0),
-                                            ),
-                                        );
+                {
+                    let annotations = page.annotations_mut();
+                    for j in 0..annotations.len() {
+                        let Ok(mut a) = annotations.get(j) else {
+                            continue;
+                        };
+                        if let Ok(b) = a.bounds() {
+                            let _ = a.set_bounds(PdfRect::new(
+                                PdfPoints::new(b.bottom().value - y0),
+                                PdfPoints::new(b.left().value - x0),
+                                PdfPoints::new(b.top().value - y0),
+                                PdfPoints::new(b.right().value - x0),
+                            ));
+                        }
+                        macro_rules! desplaza_quads {
+                            ($m:expr) => {
+                                if let Some(m) = $m {
+                                    let points = m.attachment_points_mut();
+                                    for k in 0..points.len() {
+                                        if let Ok(q) = points.get(k) {
+                                            let _ = points.set_attachment_point_at_index(
+                                                k,
+                                                PdfQuadPoints::new(
+                                                    PdfPoints::new(q.left().value - x0),
+                                                    PdfPoints::new(q.top().value - y0),
+                                                    PdfPoints::new(q.right().value - x0),
+                                                    PdfPoints::new(q.top().value - y0),
+                                                    PdfPoints::new(q.left().value - x0),
+                                                    PdfPoints::new(q.bottom().value - y0),
+                                                    PdfPoints::new(q.right().value - x0),
+                                                    PdfPoints::new(q.bottom().value - y0),
+                                                ),
+                                            );
+                                        }
                                     }
                                 }
-                            }
-                        };
+                            };
+                        }
+                        desplaza_quads!(a.as_highlight_annotation_mut());
+                        desplaza_quads!(a.as_underline_annotation_mut());
+                        desplaza_quads!(a.as_strikeout_annotation_mut());
                     }
-                    desplaza_quads!(a.as_highlight_annotation_mut());
-                    desplaza_quads!(a.as_underline_annotation_mut());
-                    desplaza_quads!(a.as_strikeout_annotation_mut());
                 }
+                let caja = PdfRect::new(
+                    PdfPoints::new(0.0),
+                    PdfPoints::new(0.0),
+                    PdfPoints::new(h),
+                    PdfPoints::new(w),
+                );
+                page.boundaries_mut()
+                    .set_media(caja)
+                    .map_err(|e| e.to_string())?;
+                page.boundaries_mut()
+                    .set_crop(caja)
+                    .map_err(|e| e.to_string())?;
+                page.regenerate_content().map_err(|e| e.to_string())?;
             }
-            let caja = PdfRect::new(
-                PdfPoints::new(0.0),
-                PdfPoints::new(0.0),
-                PdfPoints::new(h),
-                PdfPoints::new(w),
-            );
-            page.boundaries_mut()
-                .set_media(caja)
-                .map_err(|e| e.to_string())?;
-            page.boundaries_mut()
-                .set_crop(caja)
-                .map_err(|e| e.to_string())?;
-            page.regenerate_content().map_err(|e| e.to_string())?;
-        }
-        save_and_close(doc, &work_path)?;
-        Ok(())
-    }))
+            save_and_close(doc, &work_path)?;
+            Ok(())
+        })
+    })
 }
 
 /// Ancho estimado de un texto en Helvetica Bold (media ~0.6 em por carácter).
@@ -518,99 +524,102 @@ pub fn add_watermark(
     let opacidad = opacity.unwrap_or(OPACIDAD_MARCA).clamp(0.05, 1.0);
     let giro = rotation.unwrap_or(if diagonal { 45.0 } else { 0.0 });
     let detras = detras.unwrap_or(false);
-    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let mut doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let font = doc.fonts_mut().helvetica_bold();
-        let size = font_size.clamp(12.0, 200.0);
-        // la opacidad viene en su propio parámetro: el color llega opaco y
-        // el alfa sale de `opacity` (tope 240 para que
-        // `remove_marginal_text` siga reconociendo la marca por translúcida)
-        let alpha = (opacidad * 255.0).round().clamp(1.0, 240.0) as u8;
-        let c = PdfColor::new(color[0], color[1], color[2], alpha);
-        // la imagen lleva la opacidad en su propio alfa: así PDFium le
-        // escribe el /SMask y se ve translúcida en cualquier visor
-        let imagen = imagen.as_ref().map(|img| {
-            let mut rgba = img.to_rgba8();
-            for p in rgba.pixels_mut() {
-                p.0[3] = (p.0[3] as f32 * opacidad).round() as u8;
-            }
-            image::DynamicImage::ImageRgba8(rgba)
-        });
-        let (cos, sin) = {
-            let r = giro.to_radians();
-            (r.cos(), r.sin())
-        };
-        for i in paginas_pedidas(doc.pages().len(), &page_indices) {
-            let mut page = doc.pages().get(i).map_err(|e| e.to_string())?;
-            let page_w = page.width().value;
-            let page_h = page.height().value;
-            let habia = page.objects().len();
-            // ancho y alto del objeto sin girar, y su centro
-            let (w, h, cx, cy) = match &imagen {
-                Some(img) => {
-                    let (iw, ih) = (img.width() as f32, img.height() as f32);
-                    let escala = ((page_w * 0.5) / iw).min((page_h * 0.5) / ih);
-                    let (w, h) = (iw * escala, ih * escala);
-                    (w, h, w / 2.0, h / 2.0)
+    mutacion(work_path, move |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let mut doc = pdfium
+                .load_pdf_from_file(&work_path, None)
+                .map_err(|e| e.to_string())?;
+            let font = doc.fonts_mut().helvetica_bold();
+            let size = font_size.clamp(12.0, 200.0);
+            // la opacidad viene en su propio parámetro: el color llega opaco y
+            // el alfa sale de `opacity` (tope 240 para que
+            // `remove_marginal_text` siga reconociendo la marca por translúcida)
+            let alpha = (opacidad * 255.0).round().clamp(1.0, 240.0) as u8;
+            let c = PdfColor::new(color[0], color[1], color[2], alpha);
+            // la imagen lleva la opacidad en su propio alfa: así PDFium le
+            // escribe el /SMask y se ve translúcida en cualquier visor
+            let imagen = imagen.as_ref().map(|img| {
+                let mut rgba = img.to_rgba8();
+                for p in rgba.pixels_mut() {
+                    p.0[3] = (p.0[3] as f32 * opacidad).round() as u8;
                 }
-                None => {
-                    let w = ancho_estimado(&text, size);
-                    // el texto tiene la línea base en el origen
-                    (w, size, w / 2.0, size * 0.35)
-                }
+                image::DynamicImage::ImageRgba8(rgba)
+            });
+            let (cos, sin) = {
+                let r = giro.to_radians();
+                (r.cos(), r.sin())
             };
-            // el centro, después del giro alrededor del origen
-            let (cx2, cy2) = (cx * cos - cy * sin, cx * sin + cy * cos);
-            let (hw, hh) = (
-                (w * cos.abs() + h * sin.abs()) / 2.0,
-                (w * sin.abs() + h * cos.abs()) / 2.0,
-            );
-            let (tx, ty) = centro_en_celda(&pos, page_w, page_h, hw, hh);
-            match &imagen {
-                Some(img) => {
-                    let mut obj = PdfPageImageObject::new_with_size(
-                        &doc,
-                        img,
-                        PdfPoints::new(w),
-                        PdfPoints::new(h),
-                    )
-                    .map_err(|e| e.to_string())?;
-                    if giro != 0.0 {
-                        obj.rotate_counter_clockwise_degrees(giro)
+            for i in paginas_pedidas(doc.pages().len(), &page_indices) {
+                let mut page = doc.pages().get(i).map_err(|e| e.to_string())?;
+                let page_w = page.width().value;
+                let page_h = page.height().value;
+                let habia = page.objects().len();
+                // ancho y alto del objeto sin girar, y su centro
+                let (w, h, cx, cy) = match &imagen {
+                    Some(img) => {
+                        let (iw, ih) = (img.width() as f32, img.height() as f32);
+                        let escala = ((page_w * 0.5) / iw).min((page_h * 0.5) / ih);
+                        let (w, h) = (iw * escala, ih * escala);
+                        (w, h, w / 2.0, h / 2.0)
+                    }
+                    None => {
+                        let w = ancho_estimado(&text, size);
+                        // el texto tiene la línea base en el origen
+                        (w, size, w / 2.0, size * 0.35)
+                    }
+                };
+                // el centro, después del giro alrededor del origen
+                let (cx2, cy2) = (cx * cos - cy * sin, cx * sin + cy * cos);
+                let (hw, hh) = (
+                    (w * cos.abs() + h * sin.abs()) / 2.0,
+                    (w * sin.abs() + h * cos.abs()) / 2.0,
+                );
+                let (tx, ty) = centro_en_celda(&pos, page_w, page_h, hw, hh);
+                match &imagen {
+                    Some(img) => {
+                        let mut obj = PdfPageImageObject::new_with_size(
+                            &doc,
+                            img,
+                            PdfPoints::new(w),
+                            PdfPoints::new(h),
+                        )
+                        .map_err(|e| e.to_string())?;
+                        if giro != 0.0 {
+                            obj.rotate_counter_clockwise_degrees(giro)
+                                .map_err(|e| e.to_string())?;
+                        }
+                        obj.translate(PdfPoints::new(tx - cx2), PdfPoints::new(ty - cy2))
+                            .map_err(|e| e.to_string())?;
+                        page.objects_mut()
+                            .add_image_object(obj)
                             .map_err(|e| e.to_string())?;
                     }
-                    obj.translate(PdfPoints::new(tx - cx2), PdfPoints::new(ty - cy2))
-                        .map_err(|e| e.to_string())?;
-                    page.objects_mut()
-                        .add_image_object(obj)
-                        .map_err(|e| e.to_string())?;
-                }
-                None => {
-                    let mut obj = PdfPageTextObject::new(&doc, &text, font, PdfPoints::new(size))
-                        .map_err(|e| e.to_string())?;
-                    obj.set_fill_color(c).map_err(|e| e.to_string())?;
-                    if giro != 0.0 {
-                        obj.rotate_counter_clockwise_degrees(giro)
+                    None => {
+                        let mut obj =
+                            PdfPageTextObject::new(&doc, &text, font, PdfPoints::new(size))
+                                .map_err(|e| e.to_string())?;
+                        obj.set_fill_color(c).map_err(|e| e.to_string())?;
+                        if giro != 0.0 {
+                            obj.rotate_counter_clockwise_degrees(giro)
+                                .map_err(|e| e.to_string())?;
+                        }
+                        obj.translate(PdfPoints::new(tx - cx2), PdfPoints::new(ty - cy2))
+                            .map_err(|e| e.to_string())?;
+                        page.objects_mut()
+                            .add_text_object(obj)
                             .map_err(|e| e.to_string())?;
                     }
-                    obj.translate(PdfPoints::new(tx - cx2), PdfPoints::new(ty - cy2))
-                        .map_err(|e| e.to_string())?;
-                    page.objects_mut()
-                        .add_text_object(obj)
-                        .map_err(|e| e.to_string())?;
                 }
+                if detras {
+                    manda_al_fondo(&mut page, habia)?;
+                }
+                page.regenerate_content().map_err(|e| e.to_string())?;
             }
-            if detras {
-                manda_al_fondo(&mut page, habia)?;
-            }
-            page.regenerate_content().map_err(|e| e.to_string())?;
-        }
-        save_and_close(doc, &work_path)?;
-        Ok(())
-    }))
+            save_and_close(doc, &work_path)?;
+            Ok(())
+        })
+    })
 }
 
 /// Deja el **último** objeto de la página el primero, que es el que se
@@ -627,7 +636,9 @@ fn manda_al_fondo(page: &mut PdfPage, habia: usize) -> Result<(), String> {
             .objects_mut()
             .remove_object_at_index(0)
             .map_err(crate::mensaje_llano)?;
-        page.objects_mut().add_object(otro).map_err(crate::mensaje_llano)?;
+        page.objects_mut()
+            .add_object(otro)
+            .map_err(crate::mensaje_llano)?;
     }
     Ok(())
 }
@@ -662,62 +673,64 @@ pub fn add_header_footer(
     }) {
         return Err("No hay ningún texto que añadir".into());
     }
-    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let mut doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let font = doc.fonts_mut().helvetica();
-        let size = font_size.clamp(6.0, 24.0);
-        let total = doc.pages().len();
-        let fecha = chrono::Local::now().format("%d/%m/%Y").to_string();
-        const MARGEN_X: f32 = 36.0;
-        // el número de página y el total siguen siendo los del documento,
-        // aunque solo se escriban unas cuantas
-        for i in paginas_pedidas(total, &page_indices) {
-            let mut page = doc.pages().get(i).map_err(|e| e.to_string())?;
-            let page_w = page.width().value;
-            let page_h = page.height().value;
-            let y_header = page_h - 28.0;
-            let y_footer = 20.0;
-            let piezas: [(&Option<String>, u8, f32); 6] = [
-                (&header_left, 0, y_header),
-                (&header_center, 1, y_header),
-                (&header_right, 2, y_header),
-                (&footer_left, 0, y_footer),
-                (&footer_center, 1, y_footer),
-                (&footer_right, 2, y_footer),
-            ];
-            for (texto, alineacion, y) in piezas {
-                let Some(t) = texto else { continue };
-                let t = t
-                    .replace("{n}", &format!("{}", i + 1))
-                    .replace("{total}", &format!("{total}"))
-                    .replace("{fecha}", &fecha);
-                if t.trim().is_empty() {
-                    continue;
+    mutacion(work_path, move |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let mut doc = pdfium
+                .load_pdf_from_file(&work_path, None)
+                .map_err(|e| e.to_string())?;
+            let font = doc.fonts_mut().helvetica();
+            let size = font_size.clamp(6.0, 24.0);
+            let total = doc.pages().len();
+            let fecha = chrono::Local::now().format("%d/%m/%Y").to_string();
+            const MARGEN_X: f32 = 36.0;
+            // el número de página y el total siguen siendo los del documento,
+            // aunque solo se escriban unas cuantas
+            for i in paginas_pedidas(total, &page_indices) {
+                let mut page = doc.pages().get(i).map_err(|e| e.to_string())?;
+                let page_w = page.width().value;
+                let page_h = page.height().value;
+                let y_header = page_h - 28.0;
+                let y_footer = 20.0;
+                let piezas: [(&Option<String>, u8, f32); 6] = [
+                    (&header_left, 0, y_header),
+                    (&header_center, 1, y_header),
+                    (&header_right, 2, y_header),
+                    (&footer_left, 0, y_footer),
+                    (&footer_center, 1, y_footer),
+                    (&footer_right, 2, y_footer),
+                ];
+                for (texto, alineacion, y) in piezas {
+                    let Some(t) = texto else { continue };
+                    let t = t
+                        .replace("{n}", &format!("{}", i + 1))
+                        .replace("{total}", &format!("{total}"))
+                        .replace("{fecha}", &fecha);
+                    if t.trim().is_empty() {
+                        continue;
+                    }
+                    let mut obj = PdfPageTextObject::new(&doc, &t, font, PdfPoints::new(size))
+                        .map_err(|e| e.to_string())?;
+                    obj.set_fill_color(PdfColor::new(60, 60, 60, 255))
+                        .map_err(|e| e.to_string())?;
+                    let w = ancho_estimado(&t, size);
+                    let x = match alineacion {
+                        0 => MARGEN_X,
+                        1 => (page_w - w) / 2.0,
+                        _ => page_w - MARGEN_X - w,
+                    };
+                    obj.translate(PdfPoints::new(x), PdfPoints::new(y))
+                        .map_err(|e| e.to_string())?;
+                    page.objects_mut()
+                        .add_text_object(obj)
+                        .map_err(|e| e.to_string())?;
                 }
-                let mut obj = PdfPageTextObject::new(&doc, &t, font, PdfPoints::new(size))
-                    .map_err(|e| e.to_string())?;
-                obj.set_fill_color(PdfColor::new(60, 60, 60, 255))
-                    .map_err(|e| e.to_string())?;
-                let w = ancho_estimado(&t, size);
-                let x = match alineacion {
-                    0 => MARGEN_X,
-                    1 => (page_w - w) / 2.0,
-                    _ => page_w - MARGEN_X - w,
-                };
-                obj.translate(PdfPoints::new(x), PdfPoints::new(y))
-                    .map_err(|e| e.to_string())?;
-                page.objects_mut()
-                    .add_text_object(obj)
-                    .map_err(|e| e.to_string())?;
+                page.regenerate_content().map_err(|e| e.to_string())?;
             }
-            page.regenerate_content().map_err(|e| e.to_string())?;
-        }
-        save_and_close(doc, &work_path)?;
-        Ok(())
-    }))
+            save_and_close(doc, &work_path)?;
+            Ok(())
+        })
+    })
 }
 
 /// **Numeración Bates** (Acrobat: «Más ▸ Numeración Bates»): un sello
@@ -752,47 +765,49 @@ pub fn add_bates(
     let empieza_en = empieza_en.max(1);
     let pos = position.unwrap_or_else(|| "se".into());
     let size = font_size.unwrap_or(9.0).clamp(6.0, 24.0);
-    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let mut doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(crate::mensaje_llano)?;
-        let font = doc.fonts_mut().helvetica();
-        const MARGEN_X: f32 = 36.0;
-        const MARGEN_Y: f32 = 20.0;
-        let total = doc.pages().len();
-        let paginas = paginas_pedidas(total, &page_indices);
-        if paginas.is_empty() {
-            crate::historial::retira_paso(&work_path);
-            return Ok(0);
-        }
-        let cuantas = paginas.len() as u16;
-        for (n, i) in paginas.into_iter().enumerate() {
-            let numero = empieza_en as u64 + n as u64;
-            let texto = format!("{prefijo}{numero:0>ancho$}{sufijo}", ancho = digitos);
-            let mut page = doc.pages().get(i).map_err(crate::mensaje_llano)?;
-            let (page_w, page_h) = (page.width().value, page.height().value);
-            let ancho = ancho_estimado(&texto, size);
-            // el sello se coloca por su esquina, con el margen de Acrobat;
-            // `centro_en_celda` da el centro de la celda que toque
-            let (cx, cy) = centro_en_celda(&pos, page_w, page_h, ancho / 2.0, size / 2.0);
-            let x = cx - ancho / 2.0;
-            let x = x.clamp(MARGEN_X, (page_w - MARGEN_X - ancho).max(MARGEN_X));
-            let y = (cy - size / 2.0).clamp(MARGEN_Y, (page_h - MARGEN_Y - size).max(MARGEN_Y));
-            let mut obj = PdfPageTextObject::new(&doc, &texto, font, PdfPoints::new(size))
+    mutacion(work_path, move |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let mut doc = pdfium
+                .load_pdf_from_file(&work_path, None)
                 .map_err(crate::mensaje_llano)?;
-            obj.set_fill_color(PdfColor::new(60, 60, 60, 255))
-                .map_err(crate::mensaje_llano)?;
-            obj.translate(PdfPoints::new(x), PdfPoints::new(y))
-                .map_err(crate::mensaje_llano)?;
-            page.objects_mut()
-                .add_text_object(obj)
-                .map_err(crate::mensaje_llano)?;
-            page.regenerate_content().map_err(crate::mensaje_llano)?;
-        }
-        save_and_close(doc, &work_path)?;
-        Ok(cuantas)
-    }))
+            let font = doc.fonts_mut().helvetica();
+            const MARGEN_X: f32 = 36.0;
+            const MARGEN_Y: f32 = 20.0;
+            let total = doc.pages().len();
+            let paginas = paginas_pedidas(total, &page_indices);
+            if paginas.is_empty() {
+                crate::historial::retira_paso(&work_path);
+                return Ok(0);
+            }
+            let cuantas = paginas.len() as u16;
+            for (n, i) in paginas.into_iter().enumerate() {
+                let numero = empieza_en as u64 + n as u64;
+                let texto = format!("{prefijo}{numero:0>ancho$}{sufijo}", ancho = digitos);
+                let mut page = doc.pages().get(i).map_err(crate::mensaje_llano)?;
+                let (page_w, page_h) = (page.width().value, page.height().value);
+                let ancho = ancho_estimado(&texto, size);
+                // el sello se coloca por su esquina, con el margen de Acrobat;
+                // `centro_en_celda` da el centro de la celda que toque
+                let (cx, cy) = centro_en_celda(&pos, page_w, page_h, ancho / 2.0, size / 2.0);
+                let x = cx - ancho / 2.0;
+                let x = x.clamp(MARGEN_X, (page_w - MARGEN_X - ancho).max(MARGEN_X));
+                let y = (cy - size / 2.0).clamp(MARGEN_Y, (page_h - MARGEN_Y - size).max(MARGEN_Y));
+                let mut obj = PdfPageTextObject::new(&doc, &texto, font, PdfPoints::new(size))
+                    .map_err(crate::mensaje_llano)?;
+                obj.set_fill_color(PdfColor::new(60, 60, 60, 255))
+                    .map_err(crate::mensaje_llano)?;
+                obj.translate(PdfPoints::new(x), PdfPoints::new(y))
+                    .map_err(crate::mensaje_llano)?;
+                page.objects_mut()
+                    .add_text_object(obj)
+                    .map_err(crate::mensaje_llano)?;
+                page.regenerate_content().map_err(crate::mensaje_llano)?;
+            }
+            save_and_close(doc, &work_path)?;
+            Ok(cuantas)
+        })
+    })
 }
 
 #[cfg(test)]
@@ -833,9 +848,19 @@ mod tests {
         crop_page(
             work.clone(),
             0,
-            crate::Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 },
+            crate::Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 0.0,
+                h: 0.0,
+            },
             true,
-            Some(Margenes { arriba: 36.0, abajo: 36.0, izq: 20.0, der: 20.0 }),
+            Some(Margenes {
+                arriba: 36.0,
+                abajo: 36.0,
+                izq: 20.0,
+                der: 20.0,
+            }),
         )
         .expect("recortar por márgenes");
 
@@ -854,9 +879,19 @@ mod tests {
         let e = crop_page(
             work.clone(),
             0,
-            crate::Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 },
+            crate::Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 0.0,
+                h: 0.0,
+            },
             true,
-            Some(Margenes { arriba: 500.0, abajo: 500.0, izq: 0.0, der: 0.0 }),
+            Some(Margenes {
+                arriba: 500.0,
+                abajo: 500.0,
+                izq: 0.0,
+                der: 0.0,
+            }),
         )
         .unwrap_err();
         assert!(e.contains("página 1") && e.contains("márgenes"), "{e}");
@@ -889,7 +924,10 @@ mod tests {
         let destino = std::env::temp_dir().join("paginas2-insertar-rango.pdf");
         let origen = std::env::temp_dir().join("paginas2-insertar-rango-origen.pdf");
         crea_pdf(&["Contrato A", "Contrato B"], &destino);
-        crea_pdf(&["Anexo uno", "Anexo dos", "Anexo tres", "Anexo cuatro"], &origen);
+        crea_pdf(
+            &["Anexo uno", "Anexo dos", "Anexo tres", "Anexo cuatro"],
+            &origen,
+        );
         let work = destino.to_string_lossy().to_string();
         let otro = origen.to_string_lossy().to_string();
 
@@ -899,7 +937,10 @@ mod tests {
         assert_eq!(total, 4);
         let t = textos(&work);
         assert!(t[0].contains("Contrato A"));
-        assert!(t[1].contains("Anexo dos"), "la 2 tendría que ser el anexo dos: {t:?}");
+        assert!(
+            t[1].contains("Anexo dos"),
+            "la 2 tendría que ser el anexo dos: {t:?}"
+        );
         assert!(t[2].contains("Anexo cuatro"), "y la 3 el cuatro: {t:?}");
         assert!(t[3].contains("Contrato B"));
 
@@ -938,14 +979,8 @@ mod tests {
             .contains("color o una imagen"));
 
         // color sólido, a sangre, en las dos páginas
-        let puestas = add_background(
-            work.clone(),
-            Some([250, 240, 200, 255]),
-            None,
-            None,
-            None,
-        )
-        .expect("fondo de color");
+        let puestas = add_background(work.clone(), Some([250, 240, 200, 255]), None, None, None)
+            .expect("fondo de color");
         assert_eq!(puestas, 2);
         let con_fondo = render_rgba(&work);
         let esquina = con_fondo.get_pixel(4, 4).0;
@@ -960,9 +995,24 @@ mod tests {
         );
 
         // el ensayo previo cuenta sin tocar
-        assert_eq!(remove_background(work.clone(), true).expect("ensayo").objetos, 2);
-        assert_eq!(remove_background(work.clone(), false).expect("quitar").objetos, 2);
-        assert_eq!(remove_background(work.clone(), true).expect("ensayo").objetos, 0);
+        assert_eq!(
+            remove_background(work.clone(), true)
+                .expect("ensayo")
+                .objetos,
+            2
+        );
+        assert_eq!(
+            remove_background(work.clone(), false)
+                .expect("quitar")
+                .objetos,
+            2
+        );
+        assert_eq!(
+            remove_background(work.clone(), true)
+                .expect("ensayo")
+                .objetos,
+            0
+        );
         let sin_fondo = render_rgba(&work);
         let esquina = sin_fondo.get_pixel(4, 4).0;
         assert!(
@@ -991,15 +1041,19 @@ mod tests {
             1
         );
         let con_imagen = render_rgba(&work);
-        let centro = con_imagen.get_pixel(
-            con_imagen.width() / 2,
-            con_imagen.height() / 2,
-        ).0;
+        let centro = con_imagen
+            .get_pixel(con_imagen.width() / 2, con_imagen.height() / 2)
+            .0;
         assert!(
             centro[2] > 150 && centro[0] < 120,
             "el fondo de imagen no se ve: {centro:?}"
         );
-        assert_eq!(remove_background(work.clone(), false).expect("quitar").objetos, 1);
+        assert_eq!(
+            remove_background(work.clone(), false)
+                .expect("quitar")
+                .objetos,
+            1
+        );
         let centro = render_rgba(&work)
             .get_pixel(con_imagen.width() / 2, con_imagen.height() / 2)
             .0;
@@ -1020,7 +1074,9 @@ mod tests {
     /// El render de la copia de trabajo, para mirar píxeles.
     fn render_rgba(work: &str) -> image::RgbaImage {
         let png = crate::render_page_png(work.to_string(), 0, 400, true).expect("render");
-        image::load_from_memory(&png).expect("leer render").to_rgba8()
+        image::load_from_memory(&png)
+            .expect("leer render")
+            .to_rgba8()
     }
 
     /// **Numeración Bates.** Un juzgado cita «la 000123» y todo el mundo
@@ -1036,8 +1092,17 @@ mod tests {
         let antes = pasos(&work);
 
         assert_eq!(
-            add_bates(work.clone(), "ABC-".into(), "-2026".into(), 6, 1, None, None, None)
-                .expect("numerar"),
+            add_bates(
+                work.clone(),
+                "ABC-".into(),
+                "-2026".into(),
+                6,
+                1,
+                None,
+                None,
+                None
+            )
+            .expect("numerar"),
             4,
             "dice cuántas páginas ha numerado"
         );
@@ -1064,9 +1129,17 @@ mod tests {
             2
         );
         let t = textos(&work);
-        assert!(!t[0].contains("0100"), "la primera no se numera: {:?}", t[0]);
+        assert!(
+            !t[0].contains("0100"),
+            "la primera no se numera: {:?}",
+            t[0]
+        );
         assert!(t[1].contains("0100"), "{:?}", t[1]);
-        assert!(t[3].contains("0101"), "el siguiente folio, no la página: {:?}", t[3]);
+        assert!(
+            t[3].contains("0101"),
+            "el siguiente folio, no la página: {:?}",
+            t[3]
+        );
 
         // los dígitos no recortan un número que no cabe: perder una cifra
         // sería citar mal el folio
@@ -1143,7 +1216,10 @@ mod tests {
         .expect("marca detrás");
         let ahora = objetos(0);
         assert_eq!(ahora.len(), antes + 1, "un objeto más: {ahora:?}");
-        assert_eq!(ahora[0], "Text", "y va el primero, debajo de todo: {ahora:?}");
+        assert_eq!(
+            ahora[0], "Text",
+            "y va el primero, debajo de todo: {ahora:?}"
+        );
         // el texto del documento se sigue leyendo, que es lo que distingue
         // un fondo de una marca encima
         assert!(textos(&work)[0].contains("Contenido uno"));
@@ -1203,17 +1279,16 @@ mod tests {
         )
         .expect("pie");
         // dry run cuenta sin tocar
-        let previa = remove_marginal_text(work.clone(), "watermark".into(), true)
-            .expect("dry run");
+        let previa = remove_marginal_text(work.clone(), "watermark".into(), true).expect("dry run");
         assert_eq!(previa.textos, 2);
         let t = textos(&work);
         assert!(t[0].contains("BORRADOR"));
         // quitar de verdad
-        let informe = remove_marginal_text(work.clone(), "watermark".into(), false)
-            .expect("quitar marca");
+        let informe =
+            remove_marginal_text(work.clone(), "watermark".into(), false).expect("quitar marca");
         assert_eq!(informe.textos, 2);
-        let informe = remove_marginal_text(work.clone(), "footer".into(), false)
-            .expect("quitar pies");
+        let informe =
+            remove_marginal_text(work.clone(), "footer".into(), false).expect("quitar pies");
         assert_eq!(informe.textos, 2);
         let t = textos(&work);
         assert!(!t[0].contains("BORRADOR"), "{:?}", t[0]);
@@ -1266,7 +1341,9 @@ mod tests {
                 let page = doc.pages().get(0).expect("página");
                 let (pw, ph) = (page.width().value, page.height().value);
                 for i in 0..page.objects().len() {
-                    let Ok(obj) = page.objects().get(i) else { continue };
+                    let Ok(obj) = page.objects().get(i) else {
+                        continue;
+                    };
                     if obj.as_text_object().is_none() {
                         continue;
                     }
@@ -1282,8 +1359,8 @@ mod tests {
         .expect("marca translúcida no encontrada");
         assert!(bounds.0 > 0.3, "muy a la izquierda: {}", bounds.0);
         assert!(bounds.1 < 0.35, "muy arriba: {}", bounds.1);
-        let informe = remove_marginal_text(work.clone(), "watermark".into(), false)
-            .expect("quitar marca");
+        let informe =
+            remove_marginal_text(work.clone(), "watermark".into(), false).expect("quitar marca");
         assert_eq!(informe.textos, 1);
         let t = textos(&work);
         assert!(!t[0].contains("CONFIDENCIAL"), "{:?}", t[0]);
@@ -1332,7 +1409,9 @@ mod tests {
     }
 
     fn pasos(work: &str) -> u16 {
-        crate::historial::history_state(work.to_string()).expect("historial").undo
+        crate::historial::history_state(work.to_string())
+            .expect("historial")
+            .undo
     }
 
     /// «Reemplazar páginas» de Acrobat: se eligen las del destino y las del
@@ -1346,8 +1425,13 @@ mod tests {
         let work = pdf.to_string_lossy().into_owned();
         let antes = pasos(&work);
 
-        let total = replace_pages(work.clone(), vec![1, 2], otro.to_string_lossy().into_owned(), None)
-            .expect("reemplazar");
+        let total = replace_pages(
+            work.clone(),
+            vec![1, 2],
+            otro.to_string_lossy().into_owned(),
+            None,
+        )
+        .expect("reemplazar");
 
         assert_eq!(total, 6, "dos por dos: el total no cambia");
         let t = textos(&work);
@@ -1359,7 +1443,10 @@ mod tests {
         assert_eq!(pasos(&work), antes + 1, "reemplazar es UN paso");
         crate::historial::undo(work.clone()).expect("deshacer");
         let t = textos(&work);
-        assert!(t[1].contains("Dos") && t[2].contains("Tres"), "⌘Z lo devuelve");
+        assert!(
+            t[1].contains("Dos") && t[2].contains("Tres"),
+            "⌘Z lo devuelve"
+        );
 
         // y se puede elegir qué páginas del origen entran
         replace_pages(
@@ -1371,7 +1458,11 @@ mod tests {
         .expect("reemplazar con selección del origen");
         let t = textos(&work);
         assert_eq!(t.len(), 6);
-        assert!(t[0].contains("Beta"), "solo la segunda del origen: {:?}", t[0]);
+        assert!(
+            t[0].contains("Beta"),
+            "solo la segunda del origen: {:?}",
+            t[0]
+        );
 
         std::fs::remove_file(&pdf).ok();
         std::fs::remove_file(&otro).ok();
@@ -1463,14 +1554,20 @@ mod tests {
 
         let total = merge_many(
             work.clone(),
-            vec![a.to_string_lossy().into_owned(), b.to_string_lossy().into_owned()],
+            vec![
+                a.to_string_lossy().into_owned(),
+                b.to_string_lossy().into_owned(),
+            ],
             None,
         )
         .expect("combinar");
         assert_eq!(total, 4);
         let t = textos(&work);
         assert!(t[0].contains("Base"));
-        assert!(t[1].contains("A1") && t[2].contains("A2"), "orden de la lista");
+        assert!(
+            t[1].contains("A1") && t[2].contains("A2"),
+            "orden de la lista"
+        );
         assert!(t[3].contains("B1"));
         assert_eq!(pasos(&work), antes + 1, "combinar es UN paso");
         crate::historial::undo(work.clone()).expect("deshacer");
@@ -1479,13 +1576,19 @@ mod tests {
         // y se puede insertar en un punto concreto, conservando el orden
         merge_many(
             work.clone(),
-            vec![a.to_string_lossy().into_owned(), b.to_string_lossy().into_owned()],
+            vec![
+                a.to_string_lossy().into_owned(),
+                b.to_string_lossy().into_owned(),
+            ],
             Some(0),
         )
         .expect("combinar al principio");
         let t = textos(&work);
         assert!(
-            t[0].contains("A1") && t[1].contains("A2") && t[2].contains("B1") && t[3].contains("Base"),
+            t[0].contains("A1")
+                && t[1].contains("A2")
+                && t[2].contains("B1")
+                && t[3].contains("Base"),
             "el orden de la lista se conserva al insertar: {t:?}"
         );
 
@@ -1617,7 +1720,6 @@ mod tests {
         }
         n
     }
-
 }
 
 /// Reemplaza las páginas de `page_indices` por las de otro documento,
@@ -1636,59 +1738,67 @@ pub fn replace_pages(
     if page_indices.is_empty() {
         return Err("No hay páginas que reemplazar".into());
     }
-    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let mut doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(crate::mensaje_llano)?;
-        // AC-046: importar de una copia sin las ventanas de las notas
-        // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
-        let fuente = crate::anotaciones::fuente_importable(&other_path);
-        let other = pdfium
-            .load_pdf_from_file(fuente.ruta(), None)
-            .map_err(crate::mensaje_llano)?;
-        let total = doc.pages().len();
-        let mut viejas: Vec<u16> = page_indices.clone();
-        viejas.sort_unstable();
-        viejas.dedup();
-        if let Some(fuera) = viejas.iter().find(|i| **i >= total) {
-            return Err(format!("La página {} ya no está en el documento", fuera + 1));
-        }
-        let rango = match &other_indices {
-            Some(indices) if !indices.is_empty() => {
-                if let Some(fuera) = indices.iter().find(|i| **i >= other.pages().len()) {
-                    return Err(format!("El otro documento no tiene la página {}", fuera + 1));
-                }
-                indices
-                    .iter()
-                    .map(|i| (i + 1).to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            }
-            _ => format!("1-{}", other.pages().len()),
-        };
-        let destino = viejas[0];
-        doc.pages_mut()
-            .copy_pages_from_document(&other, &rango, destino)
-            .map_err(crate::mensaje_llano)?;
-        drop(other);
-        // las viejas se han desplazado tantas posiciones como páginas nuevas
-        let metidas = doc.pages().len() - total;
-        for i in viejas.iter().rev() {
-            doc.pages()
-                .get(i + metidas)
-                .map_err(crate::mensaje_llano)?
-                .delete()
+    mutacion(work_path, move |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let mut doc = pdfium
+                .load_pdf_from_file(&work_path, None)
                 .map_err(crate::mensaje_llano)?;
-        }
-        let nuevo = doc.pages().len();
-        if nuevo == 0 {
-            return Err("Un documento no puede quedarse sin páginas".into());
-        }
-        save_and_close(doc, &work_path)?;
-        crate::anotaciones::repon_popups_en(&work_path)?;
-        Ok(nuevo)
-    }))
+            // AC-046: importar de una copia sin las ventanas de las notas
+            // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
+            let fuente = crate::anotaciones::fuente_importable(&other_path);
+            let other = pdfium
+                .load_pdf_from_file(fuente.ruta(), None)
+                .map_err(crate::mensaje_llano)?;
+            let total = doc.pages().len();
+            let mut viejas: Vec<u16> = page_indices.clone();
+            viejas.sort_unstable();
+            viejas.dedup();
+            if let Some(fuera) = viejas.iter().find(|i| **i >= total) {
+                return Err(format!(
+                    "La página {} ya no está en el documento",
+                    fuera + 1
+                ));
+            }
+            let rango = match &other_indices {
+                Some(indices) if !indices.is_empty() => {
+                    if let Some(fuera) = indices.iter().find(|i| **i >= other.pages().len()) {
+                        return Err(format!(
+                            "El otro documento no tiene la página {}",
+                            fuera + 1
+                        ));
+                    }
+                    indices
+                        .iter()
+                        .map(|i| (i + 1).to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                }
+                _ => format!("1-{}", other.pages().len()),
+            };
+            let destino = viejas[0];
+            doc.pages_mut()
+                .copy_pages_from_document(&other, &rango, destino)
+                .map_err(crate::mensaje_llano)?;
+            drop(other);
+            // las viejas se han desplazado tantas posiciones como páginas nuevas
+            let metidas = doc.pages().len() - total;
+            for i in viejas.iter().rev() {
+                doc.pages()
+                    .get(i + metidas)
+                    .map_err(crate::mensaje_llano)?
+                    .delete()
+                    .map_err(crate::mensaje_llano)?;
+            }
+            let nuevo = doc.pages().len();
+            if nuevo == 0 {
+                return Err("Un documento no puede quedarse sin páginas".into());
+            }
+            save_and_close(doc, &work_path)?;
+            crate::anotaciones::repon_popups_en(&work_path)?;
+            Ok(nuevo)
+        })
+    })
 }
 
 /// Divide el documento en varios ficheros dentro de `dest_dir` y devuelve
@@ -1776,35 +1886,38 @@ pub fn merge_many(work_path: String, others: Vec<String>, at: Option<u16>) -> Re
     if others.is_empty() {
         return Err("No hay ningún fichero que unir".into());
     }
-    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let mut doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(crate::mensaje_llano)?;
-        let mut destino = at.unwrap_or(u16::MAX).min(doc.pages().len());
-        for otro in &others {
-            // AC-046: importar de una copia sin las ventanas de las notas
-            // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
-            let fuente = crate::anotaciones::fuente_importable(otro);
-            let other = pdfium
-                .load_pdf_from_file(fuente.ruta(), None)
-                .map_err(|e| crate::mensaje_llano(format!("No se ha podido abrir {otro}: {e}")))?;
-            let paginas = other.pages().len();
-            let rango = format!("1-{paginas}");
-            doc.pages_mut()
-                .copy_pages_from_document(&other, &rango, destino)
+    mutacion(work_path, move |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let mut doc = pdfium
+                .load_pdf_from_file(&work_path, None)
                 .map_err(crate::mensaje_llano)?;
-            drop(other);
-            // el siguiente va detrás, para conservar el orden de la lista
-            destino += paginas;
-        }
-        let nuevo = doc.pages().len();
-        save_and_close(doc, &work_path)?;
-        crate::anotaciones::repon_popups_en(&work_path)?;
-        Ok(nuevo)
-    }))
+            let mut destino = at.unwrap_or(u16::MAX).min(doc.pages().len());
+            for otro in &others {
+                // AC-046: importar de una copia sin las ventanas de las notas
+                // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
+                let fuente = crate::anotaciones::fuente_importable(otro);
+                let other = pdfium
+                    .load_pdf_from_file(fuente.ruta(), None)
+                    .map_err(|e| {
+                        crate::mensaje_llano(format!("No se ha podido abrir {otro}: {e}"))
+                    })?;
+                let paginas = other.pages().len();
+                let rango = format!("1-{paginas}");
+                doc.pages_mut()
+                    .copy_pages_from_document(&other, &rango, destino)
+                    .map_err(crate::mensaje_llano)?;
+                drop(other);
+                // el siguiente va detrás, para conservar el orden de la lista
+                destino += paginas;
+            }
+            let nuevo = doc.pages().len();
+            save_and_close(doc, &work_path)?;
+            crate::anotaciones::repon_popups_en(&work_path)?;
+            Ok(nuevo)
+        })
+    })
 }
-
 
 #[derive(serde::Serialize, Debug)]
 pub struct MarginalReport {
@@ -1821,69 +1934,69 @@ pub fn remove_marginal_text(
     dry_run: bool,
 ) -> Result<MarginalReport, String> {
     // sin instantánea en el ensayo (dry_run): no se escribe nada
-    let cuerpo = move |work_path: String| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(crate::mensaje_llano)?;
-        let mut total = 0u32;
-        for p in 0..doc.pages().len() {
-            let mut page = doc.pages().get(p).map_err(crate::mensaje_llano)?;
-            let page_h = page.height().value;
-            let mut caen: Vec<usize> = Vec::new();
-            {
-                let objects = page.objects();
-                for i in 0..objects.len() {
-                    let Ok(obj) = objects.get(i) else { continue };
-                    if obj.as_text_object().is_none() {
-                        continue;
-                    }
-                    let rotado = obj
-                        .matrix()
-                        .map(|m| m.b().abs() > 0.01 || m.c().abs() > 0.01)
-                        .unwrap_or(false);
-                    // las marcas de agua sin rotar se reconocen por su
-                    // translucidez (add_watermark limita el alpha a 240)
-                    let translucido = obj
-                        .fill_color()
-                        .map(|c| c.alpha() < 250)
-                        .unwrap_or(false);
-                    let Ok(b) = obj.bounds() else { continue };
-                    let en_zona = match zona.as_str() {
-                        "watermark" => rotado || translucido,
-                        // banda superior: el objeto entero por encima de h-40
-                        "header" => !rotado && b.bottom().value > page_h - 40.0,
-                        // banda inferior: el objeto entero por debajo de 40
-                        "footer" => !rotado && b.top().value < 40.0,
-                        _ => return Err(format!("Zona desconocida: {zona}")),
-                    };
-                    if en_zona {
-                        caen.push(i);
+    let cuerpo = move |work_path: String| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
+                .map_err(crate::mensaje_llano)?;
+            let mut total = 0u32;
+            for p in 0..doc.pages().len() {
+                let mut page = doc.pages().get(p).map_err(crate::mensaje_llano)?;
+                let page_h = page.height().value;
+                let mut caen: Vec<usize> = Vec::new();
+                {
+                    let objects = page.objects();
+                    for i in 0..objects.len() {
+                        let Ok(obj) = objects.get(i) else { continue };
+                        if obj.as_text_object().is_none() {
+                            continue;
+                        }
+                        let rotado = obj
+                            .matrix()
+                            .map(|m| m.b().abs() > 0.01 || m.c().abs() > 0.01)
+                            .unwrap_or(false);
+                        // las marcas de agua sin rotar se reconocen por su
+                        // translucidez (add_watermark limita el alpha a 240)
+                        let translucido =
+                            obj.fill_color().map(|c| c.alpha() < 250).unwrap_or(false);
+                        let Ok(b) = obj.bounds() else { continue };
+                        let en_zona = match zona.as_str() {
+                            "watermark" => rotado || translucido,
+                            // banda superior: el objeto entero por encima de h-40
+                            "header" => !rotado && b.bottom().value > page_h - 40.0,
+                            // banda inferior: el objeto entero por debajo de 40
+                            "footer" => !rotado && b.top().value < 40.0,
+                            _ => return Err(format!("Zona desconocida: {zona}")),
+                        };
+                        if en_zona {
+                            caen.push(i);
+                        }
                     }
                 }
-            }
-            total += caen.len() as u32;
-            if !dry_run && !caen.is_empty() {
-                for &i in caen.iter().rev() {
-                    let removed = page
-                        .objects_mut()
-                        .remove_object_at_index(i)
-                        .map_err(crate::mensaje_llano)?;
-                    // regla del proyecto: su Drop llama a FPDFPageObj_Destroy
-                    // y PDFium casca — fuga puntual asumida
-                    std::mem::forget(removed);
+                total += caen.len() as u32;
+                if !dry_run && !caen.is_empty() {
+                    for &i in caen.iter().rev() {
+                        let removed = page
+                            .objects_mut()
+                            .remove_object_at_index(i)
+                            .map_err(crate::mensaje_llano)?;
+                        // regla del proyecto: su Drop llama a FPDFPageObj_Destroy
+                        // y PDFium casca — fuga puntual asumida
+                        std::mem::forget(removed);
+                    }
+                    page.regenerate_content().map_err(crate::mensaje_llano)?;
                 }
-                page.regenerate_content().map_err(crate::mensaje_llano)?;
             }
-        }
-        if dry_run {
-            drop(doc);
-            crate::invalidate_doc_cache(&work_path);
-        } else {
-            save_and_close(doc, &work_path)?;
-        }
-        Ok(MarginalReport { textos: total })
-    });
+            if dry_run {
+                drop(doc);
+                crate::invalidate_doc_cache(&work_path);
+            } else {
+                save_and_close(doc, &work_path)?;
+            }
+            Ok(MarginalReport { textos: total })
+        })
+    };
     if dry_run {
         cuerpo(work_path).map_err(crate::mensaje_llano)
     } else {
@@ -1971,7 +2084,12 @@ mod fondo {
         }
     }
 
-    fn escribe_recursos(doc: &mut LoDoc, page_id: ObjectId, res: Dictionary, res_id: Option<ObjectId>) {
+    fn escribe_recursos(
+        doc: &mut LoDoc,
+        page_id: ObjectId,
+        res: Dictionary,
+        res_id: Option<ObjectId>,
+    ) {
         match res_id {
             Some(id) => {
                 if let Ok(o) = doc.get_object_mut(id) {
@@ -2252,7 +2370,11 @@ pub fn add_background(
     opacity: Option<f32>,
     page_indices: Option<Vec<u16>>,
 ) -> Result<u16, String> {
-    let imagen = match image_png.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let imagen = match image_png
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(b64) => {
             use base64::Engine;
             let bytes = base64::engine::general_purpose::STANDARD

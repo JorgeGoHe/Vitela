@@ -27,80 +27,91 @@ pub fn add_markup(
     if rects.is_empty() {
         return Err("No hay nada que marcar".into());
     }
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let geo = Geo::de_pagina(&page).propia();
-        let left = rects.iter().map(|r| r.x).fold(f32::MAX, f32::min);
-        let top = rects.iter().map(|r| r.y).fold(f32::MAX, f32::min);
-        let right = rects.iter().map(|r| r.x + r.w).fold(f32::MIN, f32::max);
-        let bottom = rects.iter().map(|r| r.y + r.h).fold(f32::MIN, f32::max);
-        let envelope = geo.ui_rect_a_pdf(&Rect {
-            x: left,
-            y: top,
-            w: right - left,
-            h: bottom - top,
-        });
-        // los tres subtipos comparten API pero son tipos distintos sin trait
-        // común para los quadpoints: macro local en vez de duplicar
-        macro_rules! configurar {
-            ($annot:expr, $default:expr) => {{
-                let mut annot = $annot.map_err(|e| e.to_string())?;
-                // flag Print: sin él, aplanar (FLAT_PRINT) la descarta
-                annot.set_is_printed(true).map_err(|e| e.to_string())?;
-                annot
-                    .set_stroke_color(color_de(color.unwrap_or($default)))
-                    .map_err(|e| e.to_string())?;
-                annot.set_bounds(envelope).map_err(|e| e.to_string())?;
-                let points = annot.attachment_points_mut();
-                for r in &rects {
-                    let pr = geo.ui_rect_a_pdf(r);
-                    // orden del spec (UL, UR, LL, LR)
-                    let quad = PdfQuadPoints::new(
-                        pr.left(),
-                        pr.top(),
-                        pr.right(),
-                        pr.top(),
-                        pr.left(),
-                        pr.bottom(),
-                        pr.right(),
-                        pr.bottom(),
-                    );
-                    points
-                        .create_attachment_point_at_end(quad)
+    mutacion(work_path, |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
+                .map_err(|e| e.to_string())?;
+            let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            let geo = Geo::de_pagina(&page).propia();
+            let left = rects.iter().map(|r| r.x).fold(f32::MAX, f32::min);
+            let top = rects.iter().map(|r| r.y).fold(f32::MAX, f32::min);
+            let right = rects.iter().map(|r| r.x + r.w).fold(f32::MIN, f32::max);
+            let bottom = rects.iter().map(|r| r.y + r.h).fold(f32::MIN, f32::max);
+            let envelope = geo.ui_rect_a_pdf(&Rect {
+                x: left,
+                y: top,
+                w: right - left,
+                h: bottom - top,
+            });
+            // los tres subtipos comparten API pero son tipos distintos sin trait
+            // común para los quadpoints: macro local en vez de duplicar
+            macro_rules! configurar {
+                ($annot:expr, $default:expr) => {{
+                    let mut annot = $annot.map_err(|e| e.to_string())?;
+                    // flag Print: sin él, aplanar (FLAT_PRINT) la descarta
+                    annot.set_is_printed(true).map_err(|e| e.to_string())?;
+                    annot
+                        .set_stroke_color(color_de(color.unwrap_or($default)))
                         .map_err(|e| e.to_string())?;
-                }
-            }};
-        }
-        let estilo = match kind.as_str() {
-            "highlight" => EstiloMarca::Resaltado,
-            "underline" => EstiloMarca::Subrayado,
-            "strikeout" => EstiloMarca::Tachado,
-            otro => return Err(format!("Tipo de marca desconocido: {otro}")),
-        };
-        {
-            let annotations = page.annotations_mut();
-            match estilo {
-                EstiloMarca::Resaltado => {
-                    configurar!(annotations.create_highlight_annotation(), [255, 220, 0, 140])
-                }
-                EstiloMarca::Subrayado => {
-                    configurar!(annotations.create_underline_annotation(), [46, 160, 67, 255])
-                }
-                EstiloMarca::Tachado => {
-                    configurar!(annotations.create_strikeout_annotation(), [226, 61, 61, 255])
+                    annot.set_bounds(envelope).map_err(|e| e.to_string())?;
+                    let points = annot.attachment_points_mut();
+                    for r in &rects {
+                        let pr = geo.ui_rect_a_pdf(r);
+                        // orden del spec (UL, UR, LL, LR)
+                        let quad = PdfQuadPoints::new(
+                            pr.left(),
+                            pr.top(),
+                            pr.right(),
+                            pr.top(),
+                            pr.left(),
+                            pr.bottom(),
+                            pr.right(),
+                            pr.bottom(),
+                        );
+                        points
+                            .create_attachment_point_at_end(quad)
+                            .map_err(|e| e.to_string())?;
+                    }
+                }};
+            }
+            let estilo = match kind.as_str() {
+                "highlight" => EstiloMarca::Resaltado,
+                "underline" => EstiloMarca::Subrayado,
+                "strikeout" => EstiloMarca::Tachado,
+                otro => return Err(format!("Tipo de marca desconocido: {otro}")),
+            };
+            {
+                let annotations = page.annotations_mut();
+                match estilo {
+                    EstiloMarca::Resaltado => {
+                        configurar!(
+                            annotations.create_highlight_annotation(),
+                            [255, 220, 0, 140]
+                        )
+                    }
+                    EstiloMarca::Subrayado => {
+                        configurar!(
+                            annotations.create_underline_annotation(),
+                            [46, 160, 67, 255]
+                        )
+                    }
+                    EstiloMarca::Tachado => {
+                        configurar!(
+                            annotations.create_strikeout_annotation(),
+                            [226, 61, 61, 255]
+                        )
+                    }
                 }
             }
-        }
-        drop(page);
-        save_and_close(doc, &work_path)?;
-        // segundo pase: PDFium genera la apariencia en memoria pero no la
-        // escribe, así que la marca no existiría fuera de Vitela
-        remata_annot(&work_path, page_index, Some(estilo), author)
-    }))
+            drop(page);
+            save_and_close(doc, &work_path)?;
+            // segundo pase: PDFium genera la apariencia en memoria pero no la
+            // escribe, así que la marca no existiría fuera de Vitela
+            remata_annot(&work_path, page_index, Some(estilo), author)
+        })
+    })
 }
 
 /// Forma geométrica entre dos puntos (coords de UI): rectángulo, elipse,
@@ -186,7 +197,11 @@ pub fn add_shape(
                 "LE",
                 Object::Array(vec![
                     Object::Name(b"None".to_vec()),
-                    Object::Name(if flecha { b"OpenArrow".to_vec() } else { b"None".to_vec() }),
+                    Object::Name(if flecha {
+                        b"OpenArrow".to_vec()
+                    } else {
+                        b"None".to_vec()
+                    }),
                 ]),
             );
         }
@@ -310,7 +325,10 @@ fn apariencia_forma(
             // grosor del trazo dentro de la caja
             let m = ancho / 2.0 + PUNTA.min(0.0); // el aire ya está en la caja
             let (x0, y0) = (caja[0] + m + 1.0, caja[1] + m + 1.0);
-            let (w, h) = (caja[2] - caja[0] - 2.0 * (m + 1.0), caja[3] - caja[1] - 2.0 * (m + 1.0));
+            let (w, h) = (
+                caja[2] - caja[0] - 2.0 * (m + 1.0),
+                caja[3] - caja[1] - 2.0 * (m + 1.0),
+            );
             ops.push_str(&format!("{x0:.2} {y0:.2} {w:.2} {h:.2} re {pintar} "));
         }
     }
@@ -356,11 +374,17 @@ pub(crate) fn regenera_forma(doc: &mut lopdf::Document, id: lopdf::ObjectId) -> 
                 .and_then(|o| o.as_array())
                 .ok()?
                 .iter()
-                .filter_map(|o| o.as_float().ok().or_else(|| o.as_i64().ok().map(|n| n as f32)))
+                .filter_map(|o| {
+                    o.as_float()
+                        .ok()
+                        .or_else(|| o.as_i64().ok().map(|n| n as f32))
+                })
                 .collect(),
         )
     };
-    let rect = numeros(b"Rect").filter(|v| v.len() == 4).ok_or("La forma no tiene caja")?;
+    let rect = numeros(b"Rect")
+        .filter(|v| v.len() == 4)
+        .ok_or("La forma no tiene caja")?;
     let caja = [
         rect[0].min(rect[2]),
         rect[1].min(rect[3]),
@@ -371,7 +395,9 @@ pub(crate) fn regenera_forma(doc: &mut lopdf::Document, id: lopdf::ObjectId) -> 
         .filter(|v| v.len() == 4)
         .map(|v| [v[0], v[1], v[2], v[3]]);
     let color = |clave: &[u8]| -> Option<[f32; 3]> {
-        numeros(clave).filter(|v| v.len() >= 3).map(|v| [v[0], v[1], v[2]])
+        numeros(clave)
+            .filter(|v| v.len() >= 3)
+            .map(|v| [v[0], v[1], v[2]])
     };
     let trazo = color(b"C").unwrap_or([0.0, 0.0, 0.0]);
     let relleno = color(b"IC");
@@ -380,7 +406,11 @@ pub(crate) fn regenera_forma(doc: &mut lopdf::Document, id: lopdf::ObjectId) -> 
         .and_then(|o| o.as_dict())
         .ok()
         .and_then(|bs| bs.get(b"W").ok())
-        .and_then(|o| o.as_float().ok().or_else(|| o.as_i64().ok().map(|n| n as f32)))
+        .and_then(|o| {
+            o.as_float()
+                .ok()
+                .or_else(|| o.as_i64().ok().map(|n| n as f32))
+        })
         .unwrap_or(1.0)
         .max(0.5);
     let flecha = annot
@@ -476,119 +506,125 @@ pub fn add_stamp(
         (true, Some(s)) => (s, None),
         (_, s) => (text, s),
     };
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let mut doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let font = doc.fonts_mut().helvetica_bold();
-        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let vista = Geo::de_pagina(&page);
-        let rot = vista.rot;
-        // el punto llega en el espacio propio de la página (sin rotar)
-        let geo = vista.propia();
-        let size = font_size.clamp(8.0, 96.0);
-        // la segunda línea del sello dinámico va más pequeña, como el de
-        // Acrobat: la palabra manda y la fecha acompaña
-        let size2 = size * 0.45;
-        // Helvetica Bold en mayúsculas ronda 0.66 em de media por carácter
-        let text_w = text.chars().count() as f32 * size * 0.66;
-        let seg_w = segunda
-            .as_ref()
-            .map(|s| s.chars().count() as f32 * size2 * 0.55)
-            .unwrap_or(0.0);
-        let pad = size * 0.45;
-        let w = text_w.max(seg_w) + pad * 2.0;
-        let h = size + segunda.as_ref().map(|_| size2 * 1.5).unwrap_or(0.0) + pad * 2.0;
-        // si la página se ve girada, el sello va cruzado en la página para
-        // leerse derecho en pantalla, que es lo que hace Acrobat
-        let (cw, ch) = if rot == 90 || rot == 270 { (h, w) } else { (w, h) };
-        let caja = geo.ui_rect_a_pdf(&Rect {
-            x: x - cw / 2.0,
-            y: y - ch / 2.0,
-            w: cw,
-            h: ch,
-        });
-        let c = color_de(color);
-
-        let mut annot = page
-            .annotations_mut()
-            .create_stamp_annotation()
-            .map_err(|e| e.to_string())?;
-        annot.set_is_printed(true).map_err(|e| e.to_string())?;
-        annot.set_stroke_color(c).map_err(|e| e.to_string())?;
-        annot
-            .set_bounds(PdfRect::new(
-                PdfPoints::new(caja.bottom().value - 2.0),
-                PdfPoints::new(caja.left().value - 2.0),
-                PdfPoints::new(caja.top().value + 2.0),
-                PdfPoints::new(caja.right().value + 2.0),
-            ))
-            .map_err(|e| e.to_string())?;
-        let border = PdfPagePathObject::new_rect(
-            &doc,
-            caja,
-            Some(c),
-            Some(PdfPoints::new((size * 0.09).max(1.2))),
-            None,
-        )
-        .map_err(|e| e.to_string())?;
-        let mut texto = PdfPageTextObject::new(&doc, &text, font, PdfPoints::new(size))
-            .map_err(|e| e.to_string())?;
-        texto.set_fill_color(c).map_err(|e| e.to_string())?;
-        // el texto se gira al revés que la página y arranca en la esquina
-        // que, en pantalla, es la de abajo a la izquierda de la línea base
-        let (izq, aba, der, arr) = (
-            caja.left().value,
-            caja.bottom().value,
-            caja.right().value,
-            caja.top().value,
-        );
-        let base = size * 0.14;
-        // el hueco de la segunda línea, que va **debajo** en pantalla
-        let bajo = segunda.as_ref().map(|_| size2 * 1.5).unwrap_or(0.0);
-        let (tx, ty) = match rot {
-            90 => (der - pad - base, aba + pad + bajo),
-            180 => (der - pad, arr - pad - base - bajo),
-            270 => (izq + pad + base, arr - pad - bajo),
-            _ => (izq + pad, aba + pad + base + bajo),
-        };
-        let rad = (rot as f32).to_radians();
-        let (sen, cos) = (rad.sin(), rad.cos());
-        texto
-            .transform(cos, sen, -sen, cos, tx, ty)
-            .map_err(|e| e.to_string())?;
-        annot
-            .objects_mut()
-            .add_path_object(border)
-            .map_err(|e| e.to_string())?;
-        annot
-            .objects_mut()
-            .add_text_object(texto)
-            .map_err(|e| e.to_string())?;
-        if let Some(linea) = &segunda {
-            let font2 = doc.fonts_mut().helvetica();
-            let mut obj = PdfPageTextObject::new(&doc, linea, font2, PdfPoints::new(size2))
+    mutacion(work_path, |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let mut doc = pdfium
+                .load_pdf_from_file(&work_path, None)
                 .map_err(|e| e.to_string())?;
-            obj.set_fill_color(c).map_err(|e| e.to_string())?;
-            let base2 = size2 * 0.14;
-            let (sx, sy) = match rot {
-                90 => (der - pad - base2 - bajo, aba + pad),
-                180 => (der - pad, arr - pad - base2),
-                270 => (izq + pad + base2 + bajo, arr - pad),
-                _ => (izq + pad, aba + pad + base2),
+            let font = doc.fonts_mut().helvetica_bold();
+            let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            let vista = Geo::de_pagina(&page);
+            let rot = vista.rot;
+            // el punto llega en el espacio propio de la página (sin rotar)
+            let geo = vista.propia();
+            let size = font_size.clamp(8.0, 96.0);
+            // la segunda línea del sello dinámico va más pequeña, como el de
+            // Acrobat: la palabra manda y la fecha acompaña
+            let size2 = size * 0.45;
+            // Helvetica Bold en mayúsculas ronda 0.66 em de media por carácter
+            let text_w = text.chars().count() as f32 * size * 0.66;
+            let seg_w = segunda
+                .as_ref()
+                .map(|s| s.chars().count() as f32 * size2 * 0.55)
+                .unwrap_or(0.0);
+            let pad = size * 0.45;
+            let w = text_w.max(seg_w) + pad * 2.0;
+            let h = size + segunda.as_ref().map(|_| size2 * 1.5).unwrap_or(0.0) + pad * 2.0;
+            // si la página se ve girada, el sello va cruzado en la página para
+            // leerse derecho en pantalla, que es lo que hace Acrobat
+            let (cw, ch) = if rot == 90 || rot == 270 {
+                (h, w)
+            } else {
+                (w, h)
             };
-            obj.transform(cos, sen, -sen, cos, sx, sy)
+            let caja = geo.ui_rect_a_pdf(&Rect {
+                x: x - cw / 2.0,
+                y: y - ch / 2.0,
+                w: cw,
+                h: ch,
+            });
+            let c = color_de(color);
+
+            let mut annot = page
+                .annotations_mut()
+                .create_stamp_annotation()
+                .map_err(|e| e.to_string())?;
+            annot.set_is_printed(true).map_err(|e| e.to_string())?;
+            annot.set_stroke_color(c).map_err(|e| e.to_string())?;
+            annot
+                .set_bounds(PdfRect::new(
+                    PdfPoints::new(caja.bottom().value - 2.0),
+                    PdfPoints::new(caja.left().value - 2.0),
+                    PdfPoints::new(caja.top().value + 2.0),
+                    PdfPoints::new(caja.right().value + 2.0),
+                ))
+                .map_err(|e| e.to_string())?;
+            let border = PdfPagePathObject::new_rect(
+                &doc,
+                caja,
+                Some(c),
+                Some(PdfPoints::new((size * 0.09).max(1.2))),
+                None,
+            )
+            .map_err(|e| e.to_string())?;
+            let mut texto = PdfPageTextObject::new(&doc, &text, font, PdfPoints::new(size))
+                .map_err(|e| e.to_string())?;
+            texto.set_fill_color(c).map_err(|e| e.to_string())?;
+            // el texto se gira al revés que la página y arranca en la esquina
+            // que, en pantalla, es la de abajo a la izquierda de la línea base
+            let (izq, aba, der, arr) = (
+                caja.left().value,
+                caja.bottom().value,
+                caja.right().value,
+                caja.top().value,
+            );
+            let base = size * 0.14;
+            // el hueco de la segunda línea, que va **debajo** en pantalla
+            let bajo = segunda.as_ref().map(|_| size2 * 1.5).unwrap_or(0.0);
+            let (tx, ty) = match rot {
+                90 => (der - pad - base, aba + pad + bajo),
+                180 => (der - pad, arr - pad - base - bajo),
+                270 => (izq + pad + base, arr - pad - bajo),
+                _ => (izq + pad, aba + pad + base + bajo),
+            };
+            let rad = (rot as f32).to_radians();
+            let (sen, cos) = (rad.sin(), rad.cos());
+            texto
+                .transform(cos, sen, -sen, cos, tx, ty)
                 .map_err(|e| e.to_string())?;
             annot
                 .objects_mut()
-                .add_text_object(obj)
+                .add_path_object(border)
                 .map_err(|e| e.to_string())?;
-        }
-        drop(page);
-        save_and_close(doc, &work_path)?;
-        remata_annot(&work_path, page_index, None, author)
-    }))
+            annot
+                .objects_mut()
+                .add_text_object(texto)
+                .map_err(|e| e.to_string())?;
+            if let Some(linea) = &segunda {
+                let font2 = doc.fonts_mut().helvetica();
+                let mut obj = PdfPageTextObject::new(&doc, linea, font2, PdfPoints::new(size2))
+                    .map_err(|e| e.to_string())?;
+                obj.set_fill_color(c).map_err(|e| e.to_string())?;
+                let base2 = size2 * 0.14;
+                let (sx, sy) = match rot {
+                    90 => (der - pad - base2 - bajo, aba + pad),
+                    180 => (der - pad, arr - pad - base2),
+                    270 => (izq + pad + base2 + bajo, arr - pad),
+                    _ => (izq + pad, aba + pad + base2),
+                };
+                obj.transform(cos, sen, -sen, cos, sx, sy)
+                    .map_err(|e| e.to_string())?;
+                annot
+                    .objects_mut()
+                    .add_text_object(obj)
+                    .map_err(|e| e.to_string())?;
+            }
+            drop(page);
+            save_and_close(doc, &work_path)?;
+            remata_annot(&work_path, page_index, None, author)
+        })
+    })
 }
 
 /// Texto para un stream de contenido en WinAnsiEncoding, escapando `\`,
@@ -652,11 +688,16 @@ fn winansi_alto(c: char) -> Option<u8> {
 /// imprimible de ASCII. Fuera de él: 667 para las mayúsculas acentuadas y
 /// 556 para el resto, que es lo que miden casi todas en esta fuente.
 const ANCHOS_HELVETICA: [u16; 95] = [
-    278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, // ' ' … '/'
-    556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, // '0' … '?'
-    1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778, // '@' … 'O'
-    667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, // 'P' … '_'
-    191, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, // '`' … 'o'
+    278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278,
+    278, // ' ' … '/'
+    556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584,
+    556, // '0' … '?'
+    1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722,
+    778, // '@' … 'O'
+    667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469,
+    556, // 'P' … '_'
+    191, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556,
+    556, // '`' … 'o'
     556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584, // 'p' … '~'
 ];
 
@@ -773,8 +814,11 @@ pub(crate) fn apariencia_freetext_con_llamada(
     // tape en el punto de anclaje y no se vea el remate
     if linea.len() >= 2 {
         ops.extend_from_slice(
-            format!("q {r:.4} {g:.4} {b:.4} RG 1 w {:.2} {:.2} m ", linea[0].0, linea[0].1)
-                .as_bytes(),
+            format!(
+                "q {r:.4} {g:.4} {b:.4} RG 1 w {:.2} {:.2} m ",
+                linea[0].0, linea[0].1
+            )
+            .as_bytes(),
         );
         for p in &linea[1..] {
             ops.extend_from_slice(format!("{:.2} {:.2} l ", p.0, p.1).as_bytes());
@@ -791,8 +835,14 @@ pub(crate) fn apariencia_freetext_con_llamada(
         let punta = 8.0f32.min(largo * 0.6);
         let ala = 0.42f32; // ±24°, la de Acrobat
         let (c, s2) = (ala.cos(), ala.sin());
-        let a1 = (px + punta * (ux * c - uy * s2), py + punta * (ux * s2 + uy * c));
-        let a2 = (px + punta * (ux * c + uy * s2), py + punta * (-ux * s2 + uy * c));
+        let a1 = (
+            px + punta * (ux * c - uy * s2),
+            py + punta * (ux * s2 + uy * c),
+        );
+        let a2 = (
+            px + punta * (ux * c + uy * s2),
+            py + punta * (-ux * s2 + uy * c),
+        );
         ops.extend_from_slice(
             format!(
                 "q {r:.4} {g:.4} {b:.4} RG 1 w {:.2} {:.2} m {px:.2} {py:.2} l {:.2} {:.2} l S Q\n",
@@ -806,8 +856,14 @@ pub(crate) fn apariencia_freetext_con_llamada(
             format!(
                 "q 1 1 1 rg {:.2} {:.2} {:.2} {:.2} re f Q\n\
                  q {r:.4} {g:.4} {b:.4} RG 1 w {:.2} {:.2} {:.2} {:.2} re S Q\n",
-                cx, cy, cw, ch,
-                cx + 0.5, cy + 0.5, cw - 1.0, ch - 1.0
+                cx,
+                cy,
+                cw,
+                ch,
+                cx + 0.5,
+                cy + 0.5,
+                cw - 1.0,
+                ch - 1.0
             )
             .as_bytes(),
         );
@@ -952,10 +1008,7 @@ pub fn add_free_text(
             Object::string_literal(format!("/Helv {size:.2} Tf {r:.4} {g:.4} {b:.4} rg")),
         );
         annot.set("Contents", crate::documento::cadena_pdf(&text));
-        annot.set(
-            "C",
-            Object::Array(vec![r.into(), g.into(), b.into()]),
-        );
+        annot.set("C", Object::Array(vec![r.into(), g.into(), b.into()]));
         annot.set("F", 4i64); // Print
         annot.set("T", crate::documento::cadena_pdf(&autor));
         annot.set("CreationDate", Object::string_literal(fecha.clone()));
@@ -1049,9 +1102,8 @@ pub fn add_callout(
             linea.push((cx - x0, cy - y0));
         }
         linea.push((ancla.0 - x0, ancla.1 - y0));
-        let ap_id = apariencia_freetext_con_llamada(
-            doc, w, h, &text, size, [r, g, b], true, rd, &linea,
-        );
+        let ap_id =
+            apariencia_freetext_con_llamada(doc, w, h, &text, size, [r, g, b], true, rd, &linea);
 
         let mut annot = Dictionary::new();
         annot.set("Type", Object::Name(b"Annot".to_vec()));
@@ -1400,8 +1452,14 @@ fn flecha(desde: (f32, f32), hacia: (f32, f32), color: [f32; 3]) -> Vec<u8> {
     let punta = 8.0f32.min(largo * 0.4);
     let ala = 0.42f32; // ±24°, la de Acrobat
     let (c, s) = (ala.cos(), ala.sin());
-    let a1 = (px + punta * (ux * c - uy * s), py + punta * (ux * s + uy * c));
-    let a2 = (px + punta * (ux * c + uy * s), py + punta * (-ux * s + uy * c));
+    let a1 = (
+        px + punta * (ux * c - uy * s),
+        py + punta * (ux * s + uy * c),
+    );
+    let a2 = (
+        px + punta * (ux * c + uy * s),
+        py + punta * (-ux * s + uy * c),
+    );
     format!(
         "q {r:.4} {g:.4} {b:.4} RG 1.5 w {:.2} {:.2} m {px:.2} {py:.2} l {:.2} {:.2} l S Q\n",
         a1.0, a1.1, a2.0, a2.1
@@ -1429,7 +1487,11 @@ fn mueve_la_linea(
     let l: Vec<f32> = match annot.get(b"L").and_then(|o| o.as_array()) {
         Ok(a) => a
             .iter()
-            .filter_map(|o| o.as_float().ok().or_else(|| o.as_i64().ok().map(|n| n as f32)))
+            .filter_map(|o| {
+                o.as_float()
+                    .ok()
+                    .or_else(|| o.as_i64().ok().map(|n| n as f32))
+            })
             .collect(),
         Err(_) => return Ok(()),
     };
@@ -1591,7 +1653,9 @@ fn trazos_en(
         .iter()
         .enumerate()
         .filter_map(|(i, o)| {
-            let Object::Reference(id) = o else { return None };
+            let Object::Reference(id) = o else {
+                return None;
+            };
             let d = doc.get_object(*id).ok()?.as_dict().ok()?;
             if d.get(b"Subtype").ok()?.as_name().ok()? != b"Ink" {
                 return None;
@@ -1634,7 +1698,12 @@ fn borra_del_trazo(
         .and_then(|o| o.as_dict())
         .map_err(|e| e.to_string())?
         .clone();
-    if annot.get(b"Subtype").and_then(|o| o.as_name()).unwrap_or_default() != b"Ink" {
+    if annot
+        .get(b"Subtype")
+        .and_then(|o| o.as_name())
+        .unwrap_or_default()
+        != b"Ink"
+    {
         return Err("Ese comentario no es un trazo".into());
     }
     let ap_id = annot
@@ -1722,7 +1791,10 @@ pub(crate) fn parte_el_camino(datos: &[u8]) -> (Vec<u8>, Vec<Vec<(f32, f32)>>) {
     while i < piezas.len() {
         let p = piezas[i];
         let punto = |i: usize| -> Option<(f32, f32)> {
-            Some((piezas.get(i - 2)?.parse().ok()?, piezas.get(i - 1)?.parse().ok()?))
+            Some((
+                piezas.get(i - 2)?.parse().ok()?,
+                piezas.get(i - 1)?.parse().ok()?,
+            ))
         };
         match p {
             "m" if i >= 2 => {
@@ -1762,10 +1834,7 @@ pub(crate) fn parte_el_camino(datos: &[u8]) -> (Vec<u8>, Vec<Vec<(f32, f32)>>) {
 }
 
 /// Trocea una polilínea dejando fuera los tramos que tocan el rectángulo.
-fn trocea_fuera(
-    trazo: &[(f32, f32)],
-    goma: (f32, f32, f32, f32),
-) -> Vec<Vec<(f32, f32)>> {
+fn trocea_fuera(trazo: &[(f32, f32)], goma: (f32, f32, f32, f32)) -> Vec<Vec<(f32, f32)>> {
     let mut fuera: Vec<Vec<(f32, f32)>> = Vec::new();
     let mut actual: Vec<(f32, f32)> = Vec::new();
     for par in trazo.windows(2) {
@@ -1869,117 +1938,125 @@ pub fn transform_annotation(
     if w <= 1.0 || h <= 1.0 {
         return Err("Tamaño demasiado pequeño".into());
     }
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let geo = Geo::de_pagina(&page).propia();
-        let pedido = geo.ui_rect_a_pdf(&Rect { x, y, w, h });
-        let es_freetext;
-        // las formas y las marcas de redacción son los subtipos que
-        // dibujamos nosotros: su apariencia va en coordenadas de página y
-        // hay que rehacerla con el tamaño nuevo
-        let es_forma;
-        // la transformación que se le aplica al rect, para aplicársela
-        // también a la línea de una llamada
-        let movimiento;
-        {
-            let mut annot = page
-                .annotations_mut()
-                .get(annot_index as usize)
+    mutacion(work_path, |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
                 .map_err(|e| e.to_string())?;
-            let tipo = annot.annotation_type();
-            es_freetext = tipo == PdfPageAnnotationType::FreeText;
-            es_forma = matches!(
-                tipo,
-                PdfPageAnnotationType::Square
-                    | PdfPageAnnotationType::Circle
-                    | PdfPageAnnotationType::Line
-            );
-            // el icono de la nota no se estira: se lleva su caja entera a la
-            // esquina nueva, como el post-it de Acrobat
-            let solo_mover = tipo == PdfPageAnnotationType::Text;
-            let viejo = annot.bounds().map_err(|e| e.to_string())?;
-            let (vw, vh) = (
-                viejo.right().value - viejo.left().value,
-                viejo.top().value - viejo.bottom().value,
-            );
-            if vw <= 0.0 || vh <= 0.0 {
-                return Err("La anotación no tiene tamaño".into());
-            }
-            let nuevo = if solo_mover {
-                PdfRect::new(
-                    PdfPoints::new(pedido.top().value - vh),
-                    pedido.left(),
-                    pedido.top(),
-                    PdfPoints::new(pedido.left().value + vw),
-                )
-            } else {
-                pedido
-            };
-            // las escalas se calculan en el espacio del PDF: con la página
-            // rotada, el ancho de la UI puede ser el alto del PDF
-            let sx = (nuevo.right().value - nuevo.left().value) / vw;
-            let sy = (nuevo.top().value - nuevo.bottom().value) / vh;
-            // matriz compuesta: llevar el rect viejo al origen, escalar y
-            // colocarlo en el rect nuevo
-            let e = nuevo.left().value - viejo.left().value * sx;
-            let f = nuevo.bottom().value - viejo.bottom().value * sy;
-            // Text y FreeText no tienen objetos dentro que transformar: su
-            // apariencia se dibuja (o se redibuja) desde el /Rect
-            let interno = annot.as_stamp_annotation_mut().is_some()
-                || annot.as_ink_annotation_mut().is_some();
-            if !interno && !solo_mover && !es_freetext && !es_forma {
-                return Err("Esta anotación no se puede transformar".into());
-            }
-            if interno {
-                let objects = match annot.as_stamp_annotation_mut().is_some() {
-                    true => annot.as_stamp_annotation_mut().unwrap().objects_mut(),
-                    false => annot.as_ink_annotation_mut().unwrap().objects_mut(),
+            let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            let geo = Geo::de_pagina(&page).propia();
+            let pedido = geo.ui_rect_a_pdf(&Rect { x, y, w, h });
+            let es_freetext;
+            // las formas y las marcas de redacción son los subtipos que
+            // dibujamos nosotros: su apariencia va en coordenadas de página y
+            // hay que rehacerla con el tamaño nuevo
+            let es_forma;
+            // la transformación que se le aplica al rect, para aplicársela
+            // también a la línea de una llamada
+            let movimiento;
+            {
+                let mut annot = page
+                    .annotations_mut()
+                    .get(annot_index as usize)
+                    .map_err(|e| e.to_string())?;
+                let tipo = annot.annotation_type();
+                es_freetext = tipo == PdfPageAnnotationType::FreeText;
+                es_forma = matches!(
+                    tipo,
+                    PdfPageAnnotationType::Square
+                        | PdfPageAnnotationType::Circle
+                        | PdfPageAnnotationType::Line
+                );
+                // el icono de la nota no se estira: se lleva su caja entera a la
+                // esquina nueva, como el post-it de Acrobat
+                let solo_mover = tipo == PdfPageAnnotationType::Text;
+                let viejo = annot.bounds().map_err(|e| e.to_string())?;
+                let (vw, vh) = (
+                    viejo.right().value - viejo.left().value,
+                    viejo.top().value - viejo.bottom().value,
+                );
+                if vw <= 0.0 || vh <= 0.0 {
+                    return Err("La anotación no tiene tamaño".into());
+                }
+                let nuevo = if solo_mover {
+                    PdfRect::new(
+                        PdfPoints::new(pedido.top().value - vh),
+                        pedido.left(),
+                        pedido.top(),
+                        PdfPoints::new(pedido.left().value + vw),
+                    )
+                } else {
+                    pedido
                 };
-                for i in 0..objects.len() {
-                    let mut obj = objects.get(i).map_err(|e| e.to_string())?;
-                    obj.transform(sx, 0.0, 0.0, sy, e, f)
-                        .map_err(|e| e.to_string())?;
+                // las escalas se calculan en el espacio del PDF: con la página
+                // rotada, el ancho de la UI puede ser el alto del PDF
+                let sx = (nuevo.right().value - nuevo.left().value) / vw;
+                let sy = (nuevo.top().value - nuevo.bottom().value) / vh;
+                // matriz compuesta: llevar el rect viejo al origen, escalar y
+                // colocarlo en el rect nuevo
+                let e = nuevo.left().value - viejo.left().value * sx;
+                let f = nuevo.bottom().value - viejo.bottom().value * sy;
+                // Text y FreeText no tienen objetos dentro que transformar: su
+                // apariencia se dibuja (o se redibuja) desde el /Rect
+                let interno = annot.as_stamp_annotation_mut().is_some()
+                    || annot.as_ink_annotation_mut().is_some();
+                if !interno && !solo_mover && !es_freetext && !es_forma {
+                    return Err("Esta anotación no se puede transformar".into());
                 }
+                if interno {
+                    let objects = match annot.as_stamp_annotation_mut().is_some() {
+                        true => annot.as_stamp_annotation_mut().unwrap().objects_mut(),
+                        false => annot.as_ink_annotation_mut().unwrap().objects_mut(),
+                    };
+                    for i in 0..objects.len() {
+                        let mut obj = objects.get(i).map_err(|e| e.to_string())?;
+                        obj.transform(sx, 0.0, 0.0, sy, e, f)
+                            .map_err(|e| e.to_string())?;
+                    }
+                }
+                annot.set_bounds(nuevo).map_err(|e| e.to_string())?;
+                movimiento = (sx, sy, e, f);
             }
-            annot.set_bounds(nuevo).map_err(|e| e.to_string())?;
-            movimiento = (sx, sy, e, f);
-        }
-        drop(page);
-        save_and_close(doc, &work_path)?;
-        if es_freetext {
-            // la apariencia del cuadro se dibuja en local (/BBox 0 0 w h):
-            // con el tamaño nuevo hay que rehacerla entera. Y si es una
-            // llamada, la línea y su punta se mueven con la caja: al `/CL`
-            // y al `/RD` se les aplica la misma transformación que al rect,
-            // que es lo que hace que arrastrar el cuadro arrastre la punta
-            crate::cirugia_en_hilo(&work_path, |doc| {
-                let id = crate::anotaciones::annot_id(doc, page_index, annot_index as usize)?;
-                mueve_la_llamada(doc, id, movimiento)?;
-                crate::anotaciones::regenera_freetext(doc, id)
-            })?;
-        }
-        if es_forma {
-            // lo mismo con el borde rojo de una marca de redacción y con el
-            // dibujo de una forma. La línea de una forma `/Line` lleva sus
-            // dos puntos en el `/L`, que se mueven con el rect: sin eso, la
-            // caja iría a un sitio y la raya se quedaría en otro
-            crate::cirugia_en_hilo(&work_path, |doc| {
-                let id = crate::anotaciones::annot_id(doc, page_index, annot_index as usize)?;
-                if crate::seguridad2::es_marca_por_id(doc, id) {
-                    return crate::seguridad2::regenera_marca(doc, id);
-                }
-                mueve_la_linea(doc, id, movimiento)?;
-                regenera_forma(doc, id)
-            })?;
-        }
-        // mover un comentario actualiza su fecha de modificación (Acrobat);
-        // PDFium escribe una suya en UTC al guardar, así que la reescribimos
-        remata_annot_en(&work_path, page_index, Some(annot_index as usize), None, None)
-    }))
+            drop(page);
+            save_and_close(doc, &work_path)?;
+            if es_freetext {
+                // la apariencia del cuadro se dibuja en local (/BBox 0 0 w h):
+                // con el tamaño nuevo hay que rehacerla entera. Y si es una
+                // llamada, la línea y su punta se mueven con la caja: al `/CL`
+                // y al `/RD` se les aplica la misma transformación que al rect,
+                // que es lo que hace que arrastrar el cuadro arrastre la punta
+                crate::cirugia_en_hilo(&work_path, |doc| {
+                    let id = crate::anotaciones::annot_id(doc, page_index, annot_index as usize)?;
+                    mueve_la_llamada(doc, id, movimiento)?;
+                    crate::anotaciones::regenera_freetext(doc, id)
+                })?;
+            }
+            if es_forma {
+                // lo mismo con el borde rojo de una marca de redacción y con el
+                // dibujo de una forma. La línea de una forma `/Line` lleva sus
+                // dos puntos en el `/L`, que se mueven con el rect: sin eso, la
+                // caja iría a un sitio y la raya se quedaría en otro
+                crate::cirugia_en_hilo(&work_path, |doc| {
+                    let id = crate::anotaciones::annot_id(doc, page_index, annot_index as usize)?;
+                    if crate::seguridad2::es_marca_por_id(doc, id) {
+                        return crate::seguridad2::regenera_marca(doc, id);
+                    }
+                    mueve_la_linea(doc, id, movimiento)?;
+                    regenera_forma(doc, id)
+                })?;
+            }
+            // mover un comentario actualiza su fecha de modificación (Acrobat);
+            // PDFium escribe una suya en UTC al guardar, así que la reescribimos
+            remata_annot_en(
+                &work_path,
+                page_index,
+                Some(annot_index as usize),
+                None,
+                None,
+            )
+        })
+    })
 }
 
 #[cfg(test)]
@@ -2003,7 +2080,9 @@ mod tests {
             .get_object(ap_id)
             .and_then(|o| o.as_stream())
             .expect("stream");
-        let bytes = stream.decompressed_content().unwrap_or_else(|_| stream.content.clone());
+        let bytes = stream
+            .decompressed_content()
+            .unwrap_or_else(|_| stream.content.clone());
         let contenido = String::from_utf8_lossy(&bytes).into_owned();
         contenido
             .split(") Tj")
@@ -2024,9 +2103,15 @@ mod tests {
             .get(b"N")
             .and_then(|o| o.as_reference())
             .expect("/AP /N");
-        let st = doc.get_object(ap_id).and_then(|o| o.as_stream()).expect("stream");
-        String::from_utf8_lossy(&st.decompressed_content().unwrap_or_else(|_| st.content.clone()))
-            .into_owned()
+        let st = doc
+            .get_object(ap_id)
+            .and_then(|o| o.as_stream())
+            .expect("stream");
+        String::from_utf8_lossy(
+            &st.decompressed_content()
+                .unwrap_or_else(|_| st.content.clone()),
+        )
+        .into_owned()
     }
 
     /// El valor de una clave de la anotación `i`, como lista de números.
@@ -2063,7 +2148,12 @@ mod tests {
         add_callout(
             work.clone(),
             0,
-            Rect { x: 250.0, y: 120.0, w: 160.0, h: 50.0 },
+            Rect {
+                x: 250.0,
+                y: 120.0,
+                w: 160.0,
+                h: 50.0,
+            },
             [90.0, 300.0],
             "Esta cota está mal".into(),
             [226, 61, 61, 255],
@@ -2082,7 +2172,11 @@ mod tests {
         assert_eq!(cl.len(), 4, "la línea va de la punta a la caja: {cl:?}");
         let rect = numeros_de(&work, 0, b"Rect");
         let rd = numeros_de(&work, 0, b"RD");
-        assert_eq!(rd.len(), 4, "el /RD dice dónde queda la caja dentro del /Rect");
+        assert_eq!(
+            rd.len(),
+            4,
+            "el /RD dice dónde queda la caja dentro del /Rect"
+        );
         // el /Rect abarca la punta
         assert!(
             cl[0] >= rect[0] && cl[0] <= rect[2] && cl[1] >= rect[1] && cl[1] <= rect[3],
@@ -2119,7 +2213,12 @@ mod tests {
         assert!(add_callout(
             work.clone(),
             0,
-            Rect { x: 250.0, y: 120.0, w: 160.0, h: 50.0 },
+            Rect {
+                x: 250.0,
+                y: 120.0,
+                w: 160.0,
+                h: 50.0
+            },
             [90.0, 300.0],
             "  ".into(),
             [0, 0, 0, 255],
@@ -2142,7 +2241,12 @@ mod tests {
         add_callout(
             work.clone(),
             0,
-            Rect { x: 250.0, y: 120.0, w: 160.0, h: 50.0 },
+            Rect {
+                x: 250.0,
+                y: 120.0,
+                w: 160.0,
+                h: 50.0,
+            },
             [90.0, 300.0],
             "Esta cota está mal".into(),
             [226, 61, 61, 255],
@@ -2188,10 +2292,26 @@ mod tests {
     #[test]
     fn la_linea_de_la_llamada_sale_por_el_lado_que_mira_a_la_punta() {
         let caja = (100.0, 100.0, 200.0, 140.0);
-        assert_eq!(ancla_de_la_caja(caja, (300.0, 120.0)), (200.0, 120.0), "a la derecha");
-        assert_eq!(ancla_de_la_caja(caja, (20.0, 120.0)), (100.0, 120.0), "a la izquierda");
-        assert_eq!(ancla_de_la_caja(caja, (150.0, 400.0)), (150.0, 140.0), "arriba");
-        assert_eq!(ancla_de_la_caja(caja, (150.0, 10.0)), (150.0, 100.0), "abajo");
+        assert_eq!(
+            ancla_de_la_caja(caja, (300.0, 120.0)),
+            (200.0, 120.0),
+            "a la derecha"
+        );
+        assert_eq!(
+            ancla_de_la_caja(caja, (20.0, 120.0)),
+            (100.0, 120.0),
+            "a la izquierda"
+        );
+        assert_eq!(
+            ancla_de_la_caja(caja, (150.0, 400.0)),
+            (150.0, 140.0),
+            "arriba"
+        );
+        assert_eq!(
+            ancla_de_la_caja(caja, (150.0, 10.0)),
+            (150.0, 100.0),
+            "abajo"
+        );
     }
 
     /// **H3.** La goma de borrar quita del trazo lo que se tacha y deja el
@@ -2204,27 +2324,38 @@ mod tests {
         let work = tmp.to_string_lossy().into_owned();
         // una línea horizontal de doce tramos, de x=100 a x=340
         let puntos: Vec<[f32; 2]> = (0..13).map(|i| [100.0 + i as f32 * 20.0, 300.0]).collect();
-        crate::anotaciones::add_stroke(work.clone(), 0, puntos, None, None, None)
-            .expect("dibujar");
-        let ancho_antes = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar")[0].w;
+        crate::anotaciones::add_stroke(work.clone(), 0, puntos, None, None, None).expect("dibujar");
+        let ancho_antes =
+            crate::anotaciones::get_annotations(work.clone(), 0).expect("listar")[0].w;
 
         // la goma en el trozo del medio
         let hecho = erase_ink_area(
             work.clone(),
             0,
-            Rect { x: 180.0, y: 280.0, w: 80.0, h: 40.0 },
+            Rect {
+                x: 180.0,
+                y: 280.0,
+                w: 80.0,
+                h: 40.0,
+            },
         )
         .expect("borrar el medio");
         assert_eq!(
             hecho,
-            BorradoTinta { tocados: 1, borrados: 0 },
+            BorradoTinta {
+                tocados: 1,
+                borrados: 0
+            },
             "queda trazo a los dos lados"
         );
 
         let ap = ap_crudo(&work, 0);
         let subcaminos = ap.matches(" m ").count();
         assert_eq!(subcaminos, 2, "dos trozos, uno a cada lado:\n{ap}");
-        assert!(ap.contains("2 w"), "el grosor y el color se conservan:\n{ap}");
+        assert!(
+            ap.contains("2 w"),
+            "el grosor y el color se conservan:\n{ap}"
+        );
         assert!(
             !ap.contains("220.00 300.00"),
             "el punto de en medio ya no está:\n{ap}"
@@ -2238,16 +2369,31 @@ mod tests {
         // ⌘Z devuelve el trazo entero
         crate::historial::undo(work.clone()).expect("deshacer");
         let ap = ap_crudo(&work, 0);
-        assert_eq!(ap.matches(" m ").count(), 2, "PDFium escribe un `m` de más al crear");
+        assert_eq!(
+            ap.matches(" m ").count(),
+            2,
+            "PDFium escribe un `m` de más al crear"
+        );
 
         // y borrarlo todo se lleva el comentario, como en Acrobat
         let hecho = erase_ink_area(
             work.clone(),
             0,
-            Rect { x: 50.0, y: 250.0, w: 400.0, h: 100.0 },
+            Rect {
+                x: 50.0,
+                y: 250.0,
+                w: 400.0,
+                h: 100.0,
+            },
         )
         .expect("borrar entero");
-        assert_eq!(hecho, BorradoTinta { tocados: 1, borrados: 1 });
+        assert_eq!(
+            hecho,
+            BorradoTinta {
+                tocados: 1,
+                borrados: 1
+            }
+        );
         assert!(crate::anotaciones::get_annotations(work.clone(), 0)
             .expect("listar")
             .is_empty());
@@ -2265,8 +2411,12 @@ mod tests {
         let tmp = std::env::temp_dir().join("anot2-medida.pdf");
         crea_pdf(&["Plano"], &tmp);
         let work = tmp.to_string_lossy().into_owned();
-        let textos_antes = crate::texto::get_text_blocks(work.clone(), 0).expect("bloques").len();
-        let pasos = crate::historial::history_state(work.clone()).expect("historial").undo;
+        let textos_antes = crate::texto::get_text_blocks(work.clone(), 0)
+            .expect("bloques")
+            .len();
+        let pasos = crate::historial::history_state(work.clone())
+            .expect("historial")
+            .undo;
 
         add_measure(
             work.clone(),
@@ -2281,7 +2431,9 @@ mod tests {
         .expect("dejar la medida puesta");
 
         assert_eq!(
-            crate::historial::history_state(work.clone()).expect("historial").undo,
+            crate::historial::history_state(work.clone())
+                .expect("historial")
+                .undo,
             pasos + 1,
             "un gesto, un paso de deshacer"
         );
@@ -2295,7 +2447,11 @@ mod tests {
 
         // y NO es texto del documento
         let textos = crate::texto::get_text_blocks(work.clone(), 0).expect("bloques");
-        assert_eq!(textos.len(), textos_antes, "la cifra no entra en el texto: {textos:?}");
+        assert_eq!(
+            textos.len(),
+            textos_antes,
+            "la cifra no entra en el texto: {textos:?}"
+        );
         assert!(
             !textos.iter().any(|b| b.text.contains("150,44")),
             "la medida no ensucia el content stream"
@@ -2314,7 +2470,12 @@ mod tests {
         add_measure(
             work.clone(),
             0,
-            vec![[100.0, 300.0], [300.0, 300.0], [300.0, 420.0], [100.0, 420.0]],
+            vec![
+                [100.0, 300.0],
+                [300.0, 300.0],
+                [300.0, 420.0],
+                [100.0, 420.0],
+            ],
             "2,4 m²".into(),
             [40, 120, 200, 255],
             Some(true),
@@ -2382,7 +2543,10 @@ mod tests {
             .and_then(|o| o.as_dict())
             .expect("la medida con escala lleva su /Measure");
         assert_eq!(
-            measure.get(b"Subtype").and_then(|o| o.as_name()).unwrap_or(b""),
+            measure
+                .get(b"Subtype")
+                .and_then(|o| o.as_name())
+                .unwrap_or(b""),
             b"RL"
         );
         assert_eq!(
@@ -2436,8 +2600,17 @@ mod tests {
         .contains("escala"));
 
         // dos puntos como mínimo, y algo que decir
-        assert!(add_measure(work.clone(), 0, vec![[1.0, 1.0]], "x".into(), [0, 0, 0, 255], None, None, None)
-            .is_err());
+        assert!(add_measure(
+            work.clone(),
+            0,
+            vec![[1.0, 1.0]],
+            "x".into(),
+            [0, 0, 0, 255],
+            None,
+            None,
+            None
+        )
+        .is_err());
         assert!(add_measure(
             work.clone(),
             0,
@@ -2471,20 +2644,32 @@ mod tests {
         }
         let lejos: Vec<[f32; 2]> = (0..5).map(|i| [100.0 + i as f32 * 20.0, 600.0]).collect();
         crate::anotaciones::add_stroke(work.clone(), 0, lejos, None, None, None).expect("dibujar");
-        let pasos = crate::historial::history_state(work.clone()).expect("historial").undo;
+        let pasos = crate::historial::history_state(work.clone())
+            .expect("historial")
+            .undo;
 
         let hecho = erase_ink_area(
             work.clone(),
             0,
-            Rect { x: 180.0, y: 260.0, w: 80.0, h: 100.0 },
+            Rect {
+                x: 180.0,
+                y: 260.0,
+                w: 80.0,
+                h: 100.0,
+            },
         )
         .expect("una sola pasada de goma");
         assert_eq!(
             hecho,
-            BorradoTinta { tocados: 2, borrados: 0 },
+            BorradoTinta {
+                tocados: 2,
+                borrados: 0
+            },
             "las dos rayas que cruzan la zona, y solo esas"
         );
-        let ahora = crate::historial::history_state(work.clone()).expect("historial").undo;
+        let ahora = crate::historial::history_state(work.clone())
+            .expect("historial")
+            .undo;
         assert_eq!(ahora, pasos + 1, "un pase de goma, un paso de deshacer");
 
         // los tres comentarios siguen ahí y los dos borrados están partidos
@@ -2507,24 +2692,44 @@ mod tests {
         let hecho = erase_ink_area(
             work.clone(),
             0,
-            Rect { x: 50.0, y: 250.0, w: 400.0, h: 120.0 },
+            Rect {
+                x: 50.0,
+                y: 250.0,
+                w: 400.0,
+                h: 120.0,
+            },
         )
         .expect("borrarlas del todo");
-        assert_eq!(hecho, BorradoTinta { tocados: 2, borrados: 2 });
+        assert_eq!(
+            hecho,
+            BorradoTinta {
+                tocados: 2,
+                borrados: 2
+            }
+        );
         let anots = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar");
         assert_eq!(anots.len(), 1, "queda la raya de arriba");
 
         // pasar la goma por donde no hay nada no es un error ni deja paso
-        let pasos = crate::historial::history_state(work.clone()).expect("historial").undo;
+        let pasos = crate::historial::history_state(work.clone())
+            .expect("historial")
+            .undo;
         let hecho = erase_ink_area(
             work.clone(),
             0,
-            Rect { x: 20.0, y: 20.0, w: 30.0, h: 30.0 },
+            Rect {
+                x: 20.0,
+                y: 20.0,
+                w: 30.0,
+                h: 30.0,
+            },
         )
         .expect("la goma en el vacío no es un error");
         assert_eq!(hecho, BorradoTinta::default());
         assert_eq!(
-            crate::historial::history_state(work.clone()).expect("historial").undo,
+            crate::historial::history_state(work.clone())
+                .expect("historial")
+                .undo,
             pasos,
             "sin cambios no se ofrece un ⌘Z que no hace nada"
         );
@@ -2540,11 +2745,17 @@ mod tests {
         let tmp = std::env::temp_dir().join("anotaciones2-reflujo-test.pdf");
         crea_pdf(&["Hola"], &tmp);
         let work = tmp.to_string_lossy().into_owned();
-        let frase = "Esta es una frase larga de una sola linea que no cabe de ninguna manera en la caja";
+        let frase =
+            "Esta es una frase larga de una sola linea que no cabe de ninguna manera en la caja";
         add_free_text(
             work.clone(),
             0,
-            Rect { x: 40.0, y: 100.0, w: 220.0, h: 80.0 },
+            Rect {
+                x: 40.0,
+                y: 100.0,
+                w: 220.0,
+                h: 80.0,
+            },
             frase.into(),
             12.0,
             [0, 0, 0, 255],
@@ -2686,8 +2897,18 @@ mod tests {
             gira(&work, veces);
 
             let (sx, sy) = vista_a_pagina(&work, 100.0, 200.0);
-            add_stamp(work.clone(), 0, "X".into(), [192, 57, 43, 255], sx, sy, 22.0, None, None)
-                .expect("sello");
+            add_stamp(
+                work.clone(),
+                0,
+                "X".into(),
+                [192, 57, 43, 255],
+                sx,
+                sy,
+                22.0,
+                None,
+                None,
+            )
+            .expect("sello");
             assert!(
                 hay_tinta(&work, 100.0, 200.0),
                 "con /Rotate {grados} el sello no se pinta donde se pulsó"
@@ -2756,8 +2977,18 @@ mod tests {
         let pdf = std::env::temp_dir().join("anotaciones2-rotada-render-test.pdf");
         crea_pdf(&["Página"], &pdf);
         let work = pdf.to_string_lossy().to_string();
-        add_stamp(work.clone(), 0, "X".into(), [192, 57, 43, 255], 100.0, 200.0, 22.0, None, None)
-            .expect("sello");
+        add_stamp(
+            work.clone(),
+            0,
+            "X".into(),
+            [192, 57, 43, 255],
+            100.0,
+            200.0,
+            22.0,
+            None,
+            None,
+        )
+        .expect("sello");
         gira(&work, 1);
 
         // A4: (100,200) sin rotar → (841,89 − 200, 100) al girar 90° CW
@@ -2784,7 +3015,12 @@ mod tests {
         let pdf = std::env::temp_dir().join("anotaciones2-freetext-test.pdf");
         crea_pdf(&["Página"], &pdf);
         let work = pdf.to_string_lossy().to_string();
-        let caja = Rect { x: 120.0, y: 300.0, w: 220.0, h: 60.0 };
+        let caja = Rect {
+            x: 120.0,
+            y: 300.0,
+            w: 220.0,
+            h: 60.0,
+        };
         add_free_text(
             work.clone(),
             0,
@@ -2816,9 +3052,15 @@ mod tests {
             .expect("Annots")[0]
             .as_reference()
             .expect("referencia");
-        let annot = doc.get_object(rid).and_then(|o| o.as_dict()).expect("annot");
+        let annot = doc
+            .get_object(rid)
+            .and_then(|o| o.as_dict())
+            .expect("annot");
         assert_eq!(
-            annot.get(b"Subtype").and_then(|o| o.as_name()).unwrap_or_default(),
+            annot
+                .get(b"Subtype")
+                .and_then(|o| o.as_name())
+                .unwrap_or_default(),
             b"FreeText"
         );
         assert!(annot.get(b"DA").is_ok(), "el cuadro necesita /DA");
@@ -2829,7 +3071,11 @@ mod tests {
             .and_then(|o| o.as_reference())
             .expect("/AP /N");
         assert!(
-            !doc.get_object(ap).and_then(|o| o.as_stream()).expect("stream").content.is_empty(),
+            !doc.get_object(ap)
+                .and_then(|o| o.as_stream())
+                .expect("stream")
+                .content
+                .is_empty(),
             "la apariencia va vacía"
         );
 
@@ -2866,10 +3112,16 @@ mod tests {
             .and_then(|o| o.as_reference())
             .expect("/AP /N");
         let contenido = String::from_utf8_lossy(
-            &doc.get_object(ap).and_then(|o| o.as_stream()).expect("stream").content,
+            &doc.get_object(ap)
+                .and_then(|o| o.as_stream())
+                .expect("stream")
+                .content,
         )
         .into_owned();
-        assert!(contenido.contains("(Corto)"), "la apariencia no se rehízo: {contenido}");
+        assert!(
+            contenido.contains("(Corto)"),
+            "la apariencia no se rehízo: {contenido}"
+        );
         assert!(
             !contenido.contains("Primera"),
             "la apariencia conserva el texto viejo: {contenido}"
@@ -2893,7 +3145,10 @@ mod tests {
         let annots = crate::anotaciones::get_annotations(work, 0).expect("listar");
         let kinds: Vec<&str> = annots.iter().map(|a| a.kind.as_str()).collect();
         assert!(kinds.contains(&"Underline"), "{kinds:?}");
-        assert!(kinds.contains(&"Strikeout") || kinds.contains(&"StrikeOut"), "{kinds:?}");
+        assert!(
+            kinds.contains(&"Strikeout") || kinds.contains(&"StrikeOut"),
+            "{kinds:?}"
+        );
         for a in &annots {
             assert_eq!(a.rects.len(), 1, "quads de {}", a.kind);
             assert!((a.rects[0].x - 50.0).abs() < 1.0);
@@ -2910,7 +3165,12 @@ mod tests {
         add_markup(
             work.clone(),
             0,
-            vec![Rect { x: 50.0, y: 690.0, w: 120.0, h: 16.0 }],
+            vec![Rect {
+                x: 50.0,
+                y: 690.0,
+                w: 120.0,
+                h: 16.0,
+            }],
             "strikeout".into(),
             Some([192, 57, 43, 255]),
             None,
@@ -2932,7 +3192,12 @@ mod tests {
         let pdf = std::env::temp_dir().join("anotaciones2-shapes-subtipo.pdf");
         crea_pdf(&["Página"], &pdf);
         let work = pdf.to_string_lossy().to_string();
-        for (kind, x) in [("rect", 60.0), ("ellipse", 200.0), ("line", 340.0), ("arrow", 440.0)] {
+        for (kind, x) in [
+            ("rect", 60.0),
+            ("ellipse", 200.0),
+            ("line", 340.0),
+            ("arrow", 440.0),
+        ] {
             add_shape(
                 work.clone(),
                 0,
@@ -3001,9 +3266,14 @@ mod tests {
 
         // **y se siguen viendo**: el /AP lo dibujamos nosotros, así que
         // esto es lo único que dice si el cambio de subtipo ha valido
-        for (i, (x, y)) in [(60.0, 300.0), (240.0, 300.0), (340.0, 300.0), (440.0, 300.0)]
-            .into_iter()
-            .enumerate()
+        for (i, (x, y)) in [
+            (60.0, 300.0),
+            (240.0, 300.0),
+            (340.0, 300.0),
+            (440.0, 300.0),
+        ]
+        .into_iter()
+        .enumerate()
         {
             assert!(
                 hay_tinta(&work, x, y) || hay_tinta(&work, x + 40.0, y + 40.0),
@@ -3061,7 +3331,10 @@ mod tests {
         let img = render_rgba(&work);
         let escala = 600.0 / 595.28;
         let p = img.get_pixel((160.0 * escala) as u32, (340.0 * escala) as u32);
-        assert!(p[0] > 150 && p[1] < 100, "esperaba rojo dentro del rect, hay {p:?}");
+        assert!(
+            p[0] > 150 && p[1] < 100,
+            "esperaba rojo dentro del rect, hay {p:?}"
+        );
         // las formas llevan /AP desde el principio: listar sus colores tras
         // el render es justo el caso que hacía SIGSEGV en Linux
         let annots = crate::anotaciones::get_annotations(work, 0).expect("listar tras render");
@@ -3077,11 +3350,17 @@ mod tests {
     fn sello_dinamico_compone_autor_fecha_y_hora_dentro_de_la_apariencia() {
         // la plantilla se resuelve aquí, sin tocar el PDF
         let compuesto = compone_dinamico("revisado", "Jorge");
-        assert!(compuesto.starts_with("Revisado por Jorge · "), "{compuesto}");
+        assert!(
+            compuesto.starts_with("Revisado por Jorge · "),
+            "{compuesto}"
+        );
         let hoy = chrono::Local::now().format("%d/%m/%Y").to_string();
         assert!(compuesto.contains(&hoy), "sin la fecha de hoy: {compuesto}");
         // y una plantilla libre solo sustituye sus variables
-        assert_eq!(compone_dinamico("Visto por {autor}", "Ana"), "Visto por Ana");
+        assert_eq!(
+            compone_dinamico("Visto por {autor}", "Ana"),
+            "Visto por Ana"
+        );
 
         // **AC-091b.** Sin `author`, el nombre lo pone el usuario del
         // sistema: la interfaz componía la línea con el autor de ⌘,, que
@@ -3090,8 +3369,7 @@ mod tests {
         let sin_autor = compone_dinamico("revisado", &crate::anotaciones::autor_o_sistema(None));
         assert!(
             sin_autor.starts_with("Revisado por ")
-                && sin_autor.split(" · ").next().map(str::len).unwrap_or(0)
-                    > "Revisado por ".len(),
+                && sin_autor.split(" · ").next().map(str::len).unwrap_or(0) > "Revisado por ".len(),
             "sin autor en preferencias el nombre lo pone el sistema: {sin_autor}"
         );
         let fecha = sin_autor.split(" · ").nth(1).unwrap_or_default();
@@ -3135,14 +3413,20 @@ mod tests {
             .expect("Annots")[0]
             .as_reference()
             .expect("referencia");
-        let annot = doc.get_object(rid).and_then(|o| o.as_dict()).expect("annot");
+        let annot = doc
+            .get_object(rid)
+            .and_then(|o| o.as_dict())
+            .expect("annot");
         let ap = annot
             .get(b"AP")
             .and_then(|o| o.as_dict())
             .and_then(|d| d.get(b"N"))
             .and_then(|o| o.as_reference())
             .expect("/AP /N");
-        let stream = doc.get_object(ap).and_then(|o| o.as_stream()).expect("stream");
+        let stream = doc
+            .get_object(ap)
+            .and_then(|o| o.as_stream())
+            .expect("stream");
         let contenido = stream
             .decompressed_content()
             .unwrap_or_else(|_| stream.content.clone());
@@ -3171,7 +3455,10 @@ mod tests {
             "el rect ({}) no abarca el texto compuesto",
             annots[0].w
         );
-        assert!(hay_tinta(&work, 300.0, 400.0), "el sello no se ve en el render");
+        assert!(
+            hay_tinta(&work, 300.0, 400.0),
+            "el sello no se ve en el render"
+        );
         std::fs::remove_file(&pdf).ok();
     }
 
@@ -3208,7 +3495,11 @@ mod tests {
             }
         }
         let tras = crate::anotaciones::get_annotations(work, 0).expect("listar tras render");
-        assert_eq!(tras[0].color, Some([200, 30, 30, 255]), "color del sello tras render");
+        assert_eq!(
+            tras[0].color,
+            Some([200, 30, 30, 255]),
+            "color del sello tras render"
+        );
         assert!(rojos > 200, "el sello apenas pinta ({rojos} píxeles rojos)");
     }
 
@@ -3248,12 +3539,21 @@ mod tests {
         let (nx, ny, nw, nh) = (60.0, 100.0, a.w * 2.0, a.h * 2.0);
         transform_annotation(work.clone(), 0, 0, nx, ny, nw, nh).expect("transformar");
         let b = &crate::anotaciones::get_annotations(work.clone(), 0).expect("listar")[0];
-        assert!((b.x - nx).abs() < 1.0 && (b.y - ny).abs() < 1.0, "bounds {b:?}");
-        assert!((b.w - nw).abs() < 1.0 && (b.h - nh).abs() < 1.0, "bounds {b:?}");
+        assert!(
+            (b.x - nx).abs() < 1.0 && (b.y - ny).abs() < 1.0,
+            "bounds {b:?}"
+        );
+        assert!(
+            (b.w - nw).abs() < 1.0 && (b.h - nh).abs() < 1.0,
+            "bounds {b:?}"
+        );
         let img = render_rgba(&work);
         // pinta en la zona nueva…
         let en_nuevo = rojos_en(&img, 60, 100, (nx + nw) as u32, (ny + nh) as u32);
-        assert!(en_nuevo > 400, "el sello transformado apenas pinta ({en_nuevo})");
+        assert!(
+            en_nuevo > 400,
+            "el sello transformado apenas pinta ({en_nuevo})"
+        );
         // …y ya no en la vieja (el sello original rondaba y=590..615, x=130..270)
         let en_viejo = rojos_en(&img, 130, 570, 270, 630);
         assert_eq!(en_viejo, 0, "quedan restos del sello en la posición vieja");
@@ -3281,7 +3581,12 @@ mod tests {
         add_free_text(
             work.clone(),
             0,
-            Rect { x: 60.0, y: 300.0, w: 200.0, h: 60.0 },
+            Rect {
+                x: 60.0,
+                y: 300.0,
+                w: 200.0,
+                h: 60.0,
+            },
             "Cuadro".into(),
             12.0,
             [0, 0, 0, 255],
@@ -3367,13 +3672,16 @@ mod tests {
                 .and_then(|o| o.as_array())
                 .map_err(|e| e.to_string())?
                 .iter()
-                .filter_map(|o| o.as_float().ok().or_else(|| o.as_i64().ok().map(|n| n as f32)))
+                .filter_map(|o| {
+                    o.as_float()
+                        .ok()
+                        .or_else(|| o.as_i64().ok().map(|n| n as f32))
+                })
                 .collect();
             Ok((caja[2] - caja[0], caja[3] - caja[1]))
         };
         hacer().expect("leer el /AP")
     }
-
 
     /// El `/AP` de un cuadro de texto y el de la firma se escriben en
     /// WinAnsiEncoding, que NO es latin-1: el tramo 0x80–0x9F lleva la raya,
@@ -3392,5 +3700,4 @@ mod tests {
         // y los paréntesis y la barra siguen escapados
         assert_eq!(winansi("(a\\b)"), b"\\(a\\\\b\\)".to_vec());
     }
-
 }

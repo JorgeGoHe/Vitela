@@ -46,7 +46,11 @@ fn media_box(doc: &LoDoc, page_id: ObjectId) -> Result<[f32; 4], String> {
 }
 
 /// Añade una anotación al array Annots de la página (directo o referencia).
-pub(crate) fn anade_a_annots(doc: &mut LoDoc, page_id: ObjectId, annot_id: ObjectId) -> Result<(), String> {
+pub(crate) fn anade_a_annots(
+    doc: &mut LoDoc,
+    page_id: ObjectId,
+    annot_id: ObjectId,
+) -> Result<(), String> {
     anade_a_annots_en(doc, page_id, annot_id, None)
 }
 
@@ -213,11 +217,32 @@ fn circulo(cx: f32, cy: f32, r: f32) -> String {
          {:.2} {:.2} {:.2} {:.2} {:.2} {:.2} c \
          {:.2} {:.2} {:.2} {:.2} {:.2} {:.2} c \
          {:.2} {:.2} {:.2} {:.2} {:.2} {:.2} c ",
-        cx + r, cy,
-        cx + r, cy + k, cx + k, cy + r, cx, cy + r,
-        cx - k, cy + r, cx - r, cy + k, cx - r, cy,
-        cx - r, cy - k, cx - k, cy - r, cx, cy - r,
-        cx + k, cy - r, cx + r, cy - k, cx + r, cy,
+        cx + r,
+        cy,
+        cx + r,
+        cy + k,
+        cx + k,
+        cy + r,
+        cx,
+        cy + r,
+        cx - k,
+        cy + r,
+        cx - r,
+        cy + k,
+        cx - r,
+        cy,
+        cx - r,
+        cy - k,
+        cx - k,
+        cy - r,
+        cx,
+        cy - r,
+        cx + k,
+        cy - r,
+        cx + r,
+        cy - k,
+        cx + r,
+        cy,
     )
 }
 
@@ -476,7 +501,11 @@ fn crea_campo(doc: &mut LoDoc, campo: CampoNuevo) -> Result<(), String> {
                 let elegida = props.valor_defecto.as_deref() == Some(export.as_str());
                 widget.set(
                     "AS",
-                    Object::Name(if elegida { export.as_bytes().to_vec() } else { b"Off".to_vec() }),
+                    Object::Name(if elegida {
+                        export.as_bytes().to_vec()
+                    } else {
+                        b"Off".to_vec()
+                    }),
                 );
                 let r = (ancho.min(alto) / 2.0 - 1.0).max(1.0);
                 let (cx, cy) = (ancho / 2.0, alto / 2.0);
@@ -511,7 +540,11 @@ fn crea_campo(doc: &mut LoDoc, campo: CampoNuevo) -> Result<(), String> {
                         padre.set("FT", Object::Name(b"Btn".to_vec()));
                         padre.set("T", Object::string_literal(grupo.clone()));
                         padre.set("Ff", Object::Integer(RADIO | banderas));
-                        let v = if elegida { export.as_bytes().to_vec() } else { b"Off".to_vec() };
+                        let v = if elegida {
+                            export.as_bytes().to_vec()
+                        } else {
+                            b"Off".to_vec()
+                        };
                         padre.set("V", Object::Name(v.clone()));
                         padre.set("DV", Object::Name(v));
                         if let Some(t) = props.tooltip.as_deref().filter(|t| !t.trim().is_empty()) {
@@ -676,12 +709,22 @@ pub(crate) fn pide_apariencias(doc: &mut LoDoc) -> Result<(), String> {
 /// Solo se escriben enlaces web y de correo; sin esquema se asume https.
 fn normaliza_uri(u: &str) -> Result<String, String> {
     let u = u.trim();
-    let con_esquema = if u.contains(':') { u.to_string() } else { format!("https://{u}") };
-    let esquema = con_esquema.split(':').next().unwrap_or("").to_ascii_lowercase();
+    let con_esquema = if u.contains(':') {
+        u.to_string()
+    } else {
+        format!("https://{u}")
+    };
+    let esquema = con_esquema
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
     if matches!(esquema.as_str(), "http" | "https" | "mailto") {
         Ok(con_esquema)
     } else {
-        Err(format!("Solo se admiten enlaces http, https o mailto (no «{esquema}»)"))
+        Err(format!(
+            "Solo se admiten enlaces http, https o mailto (no «{esquema}»)"
+        ))
     }
 }
 
@@ -694,7 +737,10 @@ pub fn create_link(
     uri: Option<String>,
     dest_page: Option<u16>,
 ) -> Result<(), String> {
-    let uri = uri.filter(|u| !u.trim().is_empty()).map(|u| normaliza_uri(&u)).transpose()?;
+    let uri = uri
+        .filter(|u| !u.trim().is_empty())
+        .map(|u| normaliza_uri(&u))
+        .transpose()?;
     if uri.is_some() == dest_page.is_some() {
         return Err("Indica o una URL o una página de destino (solo una)".into());
     }
@@ -708,10 +754,7 @@ pub fn create_link(
         link.set("Type", Object::Name(b"Annot".to_vec()));
         link.set("Subtype", Object::Name(b"Link".to_vec()));
         link.set("Rect", rect_pdf(&rect, &geo));
-        link.set(
-            "Border",
-            Object::Array(vec![0.into(), 0.into(), 0.into()]),
-        );
+        link.set("Border", Object::Array(vec![0.into(), 0.into(), 0.into()]));
         if let Some(u) = uri {
             let mut a = Dictionary::new();
             a.set("S", Object::Name(b"URI".to_vec()));
@@ -869,7 +912,12 @@ fn propone_en(
         let t = b.text.trim();
         if t.len() >= 4 && t.chars().all(|c| c == '_') {
             marcas.push(Marca {
-                rect: Rect { x: b.x, y: b.y + b.h, w: b.w, h: 1.0 },
+                rect: Rect {
+                    x: b.x,
+                    y: b.y + b.h,
+                    w: b.w,
+                    h: 1.0,
+                },
                 clase: Clase::Raya,
             });
         }
@@ -900,7 +948,10 @@ fn propone_en(
         if ocupado.iter().any(|o| se_pisan(o, &caja)) {
             continue;
         }
-        if out.iter().any(|c| c.page_index == page_index && se_pisan(&c.rect, &caja)) {
+        if out
+            .iter()
+            .any(|c| c.page_index == page_index && se_pisan(&c.rect, &caja))
+        {
             continue;
         }
         let fila = filas.get(&indice).cloned().unwrap_or_default();
@@ -1056,9 +1107,8 @@ fn cuerpo_cerca(bloques: &[crate::texto::TextBlock], r: &Rect) -> Option<f32> {
         .iter()
         .filter(|b| !b.text.trim().is_empty() && (b.y + b.h / 2.0 - r.y).abs() < 40.0)
         .min_by(|a, b| {
-            let d = |t: &crate::texto::TextBlock| {
-                ((t.x - r.x).powi(2) + (t.y - r.y).powi(2)).sqrt()
-            };
+            let d =
+                |t: &crate::texto::TextBlock| ((t.x - r.x).powi(2) + (t.y - r.y).powi(2)).sqrt();
             d(a).total_cmp(&d(b))
         })
         .map(|b| b.font_size)
@@ -1148,9 +1198,10 @@ mod tests {
                 .expect("página");
             let negro = PdfColor::new(0, 0, 0, 255);
             let texto = |page: &mut PdfPage<'static>, t: &str, x: f32, y: f32| {
-                let mut obj = PdfPageTextObject::new(&doc, t, font, PdfPoints::new(11.0))
-                    .expect("texto");
-                obj.translate(PdfPoints::new(x), PdfPoints::new(y)).expect("colocar");
+                let mut obj =
+                    PdfPageTextObject::new(&doc, t, font, PdfPoints::new(11.0)).expect("texto");
+                obj.translate(PdfPoints::new(x), PdfPoints::new(y))
+                    .expect("colocar");
                 page.objects_mut().add_text_object(obj).expect("añadir");
             };
             // tres renglones con su rótulo delante
@@ -1279,9 +1330,14 @@ mod tests {
             .find(|c| c.name == "nombre_y_apellidos")
             .expect("el renglón del nombre");
         assert!(renglon.rect.x > 190.0, "empieza donde empieza la raya");
-        assert!(renglon.rect.h > 10.0 && renglon.rect.h < 30.0, "alto de un renglón");
         assert!(
-            propuestas.iter().all(|c| c.confianza > 0.0 && c.confianza <= 1.0),
+            renglon.rect.h > 10.0 && renglon.rect.h < 30.0,
+            "alto de un renglón"
+        );
+        assert!(
+            propuestas
+                .iter()
+                .all(|c| c.confianza > 0.0 && c.confianza <= 1.0),
             "la confianza va de 0 a 1"
         );
 
@@ -1292,7 +1348,9 @@ mod tests {
         );
 
         // y crear el lote entero es UN paso de deshacer
-        let pasos = crate::historial::history_state(work.clone()).expect("historial").undo;
+        let pasos = crate::historial::history_state(work.clone())
+            .expect("historial")
+            .undo;
         let lote: Vec<CampoNuevo> = propuestas
             .iter()
             .map(|c| CampoNuevo {
@@ -1309,14 +1367,19 @@ mod tests {
         let creados = create_form_fields(work.clone(), lote).expect("crear el lote");
         assert_eq!(creados, 8);
         assert_eq!(
-            crate::historial::history_state(work.clone()).expect("historial").undo,
+            crate::historial::history_state(work.clone())
+                .expect("historial")
+                .undo,
             pasos + 1,
             "ocho campos, un solo ⌘Z"
         );
         let campos = crate::formularios::get_form_fields(work.clone(), 0).expect("campos");
         assert_eq!(campos.len(), 8, "los ocho widgets cuelgan de la página");
         crate::historial::undo(work.clone()).expect("deshacer");
-        assert!(get_form_fields_vacio(&work), "un ⌘Z devuelve el formulario entero");
+        assert!(
+            get_form_fields_vacio(&work),
+            "un ⌘Z devuelve el formulario entero"
+        );
 
         // y un documento sin nada que parezca campo devuelve la lista vacía
         // sin error, que es lo que hay que contestar
@@ -1340,12 +1403,19 @@ mod tests {
         let pdf = std::env::temp_dir().join("formularios2-lote-roto.pdf");
         crea_pdf(&["Solicitud"], &pdf);
         let work = pdf.to_string_lossy().into_owned();
-        let pasos = crate::historial::history_state(work.clone()).expect("historial").undo;
+        let pasos = crate::historial::history_state(work.clone())
+            .expect("historial")
+            .undo;
 
         let campo = |nombre: &str, y: f32| CampoNuevo {
             page_index: 0,
             kind: "text".into(),
-            rect: Rect { x: 100.0, y, w: 160.0, h: 20.0 },
+            rect: Rect {
+                x: 100.0,
+                y,
+                w: 160.0,
+                h: 20.0,
+            },
             name: nombre.into(),
             group: None,
             export_value: None,
@@ -1353,7 +1423,11 @@ mod tests {
             props: None,
         };
         // el tercero no tiene nombre: `crea_campo` se niega
-        let lote = vec![campo("nombre", 200.0), campo("apellidos", 240.0), campo("", 280.0)];
+        let lote = vec![
+            campo("nombre", 200.0),
+            campo("apellidos", 240.0),
+            campo("", 280.0),
+        ];
         let error = create_form_fields(work.clone(), lote).expect_err("el lote no vale");
         assert!(error.contains("nombre"), "el aviso dice qué falta: {error}");
 
@@ -1362,7 +1436,9 @@ mod tests {
             "ni los dos buenos: la cirugía guarda al final o no guarda"
         );
         assert_eq!(
-            crate::historial::history_state(work.clone()).expect("historial").undo,
+            crate::historial::history_state(work.clone())
+                .expect("historial")
+                .undo,
             pasos,
             "una mutación fallida no deja paso de deshacer"
         );
@@ -1380,7 +1456,12 @@ mod tests {
         let campos = |y: f32, nombre: &str, kind: &str| CampoNuevo {
             page_index: 0,
             kind: kind.into(),
-            rect: Rect { x: 80.0, y, w: 160.0, h: 20.0 },
+            rect: Rect {
+                x: 80.0,
+                y,
+                w: 160.0,
+                h: 20.0,
+            },
             name: nombre.into(),
             group: None,
             export_value: None,
@@ -1393,7 +1474,10 @@ mod tests {
             let work = pdf.to_string_lossy().into_owned();
             create_form_fields(
                 work.clone(),
-                vec![campos(200.0, "nombre", "text"), campos(240.0, "acepto", "checkbox")],
+                vec![
+                    campos(200.0, "nombre", "text"),
+                    campos(240.0, "acepto", "checkbox"),
+                ],
             )
             .expect("crear el formulario");
             work
@@ -1418,13 +1502,20 @@ mod tests {
 
         // y vuelven a otro ejemplar del mismo formulario, en blanco
         let destino = prepara("formularios2-xfdf-destino.pdf");
-        let pasos = crate::historial::history_state(destino.clone()).expect("historial").undo;
+        let pasos = crate::historial::history_state(destino.clone())
+            .expect("historial")
+            .undo;
         assert_eq!(
             import_form_data_xfdf(destino.clone(), d.clone()).expect("importar"),
-            ImportacionFormulario { rellenados: 2, sin_campo: 0 }
+            ImportacionFormulario {
+                rellenados: 2,
+                sin_campo: 0
+            }
         );
         assert_eq!(
-            crate::historial::history_state(destino.clone()).expect("historial").undo,
+            crate::historial::history_state(destino.clone())
+                .expect("historial")
+                .undo,
             pasos + 1,
             "el fichero entero es un solo ⌘Z"
         );
@@ -1447,7 +1538,10 @@ mod tests {
         assert_eq!(
             import_form_data_xfdf(destino.clone(), ajeno.to_string_lossy().into_owned())
                 .expect("importar"),
-            ImportacionFormulario { rellenados: 1, sin_campo: 1 }
+            ImportacionFormulario {
+                rellenados: 1,
+                sin_campo: 1
+            }
         );
 
         // un fichero que no trae datos no se traga en silencio
@@ -1461,12 +1555,11 @@ mod tests {
         // y un documento sin campos tampoco escribe un fichero vacío
         let liso = dir.join("formularios2-xfdf-liso.pdf");
         crea_pdf(&["Sin campos"], &liso);
-        assert!(export_form_data_xfdf(
-            liso.to_string_lossy().into_owned(),
-            d.clone()
-        )
-        .unwrap_err()
-        .contains("campos de formulario"));
+        assert!(
+            export_form_data_xfdf(liso.to_string_lossy().into_owned(), d.clone())
+                .unwrap_err()
+                .contains("campos de formulario")
+        );
 
         for f in [&xfdf, &ajeno, &vacio, &liso] {
             std::fs::remove_file(f).ok();
@@ -1494,7 +1587,12 @@ mod tests {
             work.clone(),
             0,
             "text".into(),
-            Rect { x: 60.0, y: 200.0, w: 200.0, h: 20.0 },
+            Rect {
+                x: 60.0,
+                y: 200.0,
+                w: 200.0,
+                h: 20.0,
+            },
             "expediente".into(),
             None,
             None,
@@ -1511,7 +1609,12 @@ mod tests {
             work.clone(),
             0,
             "text".into(),
-            Rect { x: 60.0, y: 240.0, w: 200.0, h: 20.0 },
+            Rect {
+                x: 60.0,
+                y: 240.0,
+                w: 200.0,
+                h: 20.0,
+            },
             "comentario".into(),
             None,
             None,
@@ -1521,8 +1624,14 @@ mod tests {
         .expect("crear el campo normal");
 
         let campos = crate::formularios::get_form_fields(work.clone(), 0).expect("campos");
-        let bloqueado = campos.iter().find(|c| c.name == "expediente").expect("el bloqueado");
-        let libre = campos.iter().find(|c| c.name == "comentario").expect("el libre");
+        let bloqueado = campos
+            .iter()
+            .find(|c| c.name == "expediente")
+            .expect("el bloqueado");
+        let libre = campos
+            .iter()
+            .find(|c| c.name == "comentario")
+            .expect("el libre");
         assert!(bloqueado.read_only, "el bit 1 del /Ff se lee");
         assert!(!libre.read_only);
         assert_eq!(bloqueado.tooltip, "El número que sale en la carta");
@@ -1537,10 +1646,17 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("solo lectura"), "el aviso: {err}");
-        assert!(!err.contains("Ff") && !err.contains("os error"), "jerga: {err}");
+        assert!(
+            !err.contains("Ff") && !err.contains("os error"),
+            "jerga: {err}"
+        );
         let campos = crate::formularios::get_form_fields(work.clone(), 0).expect("campos");
         assert_eq!(
-            campos.iter().find(|c| c.name == "expediente").unwrap().value,
+            campos
+                .iter()
+                .find(|c| c.name == "expediente")
+                .unwrap()
+                .value,
             "2026/0001",
             "el valor no ha cambiado"
         );
@@ -1554,12 +1670,20 @@ mod tests {
             work.clone(),
             0,
             "list".into(),
-            Rect { x: 60.0, y: 300.0, w: 200.0, h: 20.0 },
+            Rect {
+                x: 60.0,
+                y: 300.0,
+                w: 200.0,
+                h: 20.0,
+            },
             "idioma".into(),
             None,
             None,
             Some(vec!["Castellano".into(), "Euskera".into()]),
-            Some(PropsCampo { solo_lectura: true, ..Default::default() }),
+            Some(PropsCampo {
+                solo_lectura: true,
+                ..Default::default()
+            }),
         )
         .expect("crear la lista bloqueada");
         let lista = crate::formularios::get_form_fields(work.clone(), 0)
@@ -1582,12 +1706,20 @@ mod tests {
             work.clone(),
             0,
             "checkbox".into(),
-            Rect { x: 300.0, y: 200.0, w: 16.0, h: 16.0 },
+            Rect {
+                x: 300.0,
+                y: 200.0,
+                w: 16.0,
+                h: 16.0,
+            },
             "leido".into(),
             None,
             None,
             None,
-            Some(PropsCampo { solo_lectura: true, ..Default::default() }),
+            Some(PropsCampo {
+                solo_lectura: true,
+                ..Default::default()
+            }),
         )
         .expect("crear la casilla bloqueada");
         let casilla = crate::formularios::get_form_fields(work.clone(), 0)
@@ -1595,9 +1727,8 @@ mod tests {
             .into_iter()
             .find(|c| c.name == "leido")
             .expect("la casilla");
-        let err =
-            crate::formularios::set_form_checked(work.clone(), 0, casilla.annot_index, true)
-                .unwrap_err();
+        let err = crate::formularios::set_form_checked(work.clone(), 0, casilla.annot_index, true)
+            .unwrap_err();
         assert!(err.contains("solo lectura"), "el aviso: {err}");
         std::fs::remove_file(&pdf).ok();
     }
@@ -1621,7 +1752,12 @@ mod tests {
                 work.clone(),
                 0,
                 "radio".into(),
-                Rect { x: 60.0, y: 250.0 + i as f32 * 40.0, w: 20.0, h: 20.0 },
+                Rect {
+                    x: 60.0,
+                    y: 250.0 + i as f32 * 40.0,
+                    w: 20.0,
+                    h: 20.0,
+                },
                 format!("op{i}"),
                 Some("sexo".into()),
                 Some(format!("op{i}")),
@@ -1665,7 +1801,12 @@ mod tests {
             work.clone(),
             0,
             "checkbox".into(),
-            Rect { x: 200.0, y: 250.0, w: 16.0, h: 16.0 },
+            Rect {
+                x: 200.0,
+                y: 250.0,
+                w: 16.0,
+                h: 16.0,
+            },
             "acepto".into(),
             None,
             None,
@@ -1704,7 +1845,12 @@ mod tests {
                 work.clone(),
                 0,
                 "radio".into(),
-                Rect { x: 60.0, y: 200.0 + i as f32 * 30.0, w: 18.0, h: 18.0 },
+                Rect {
+                    x: 60.0,
+                    y: 200.0 + i as f32 * 30.0,
+                    w: 18.0,
+                    h: 18.0,
+                },
                 format!("sexo-{opcion}"),
                 Some("sexo".into()),
                 Some((*opcion).into()),
@@ -1716,7 +1862,11 @@ mod tests {
 
         // en los bytes: UNA entrada en /Fields, con tres /Kids
         let doc = lopdf::Document::load(&work).expect("releer");
-        let root = doc.trailer.get(b"Root").and_then(|o| o.as_reference()).unwrap();
+        let root = doc
+            .trailer
+            .get(b"Root")
+            .and_then(|o| o.as_reference())
+            .unwrap();
         let form = match doc
             .get_object(root)
             .and_then(|o| o.as_dict())
@@ -1764,7 +1914,14 @@ mod tests {
             .collect();
         let estado = |id: lopdf::ObjectId| {
             String::from_utf8_lossy(
-                doc.get_object(id).unwrap().as_dict().unwrap().get(b"AS").unwrap().as_name().unwrap(),
+                doc.get_object(id)
+                    .unwrap()
+                    .as_dict()
+                    .unwrap()
+                    .get(b"AS")
+                    .unwrap()
+                    .as_name()
+                    .unwrap(),
             )
             .into_owned()
         };
@@ -1796,12 +1953,21 @@ mod tests {
         let pdf = std::env::temp_dir().join("formularios2-desplegable.pdf");
         crea_pdf(&["Pedido"], &pdf);
         let work = pdf.to_string_lossy().to_string();
-        let opciones = vec!["España".to_string(), "Portugal".to_string(), "Francia".to_string()];
+        let opciones = vec![
+            "España".to_string(),
+            "Portugal".to_string(),
+            "Francia".to_string(),
+        ];
         create_form_field(
             work.clone(),
             0,
             "combo".into(),
-            Rect { x: 60.0, y: 200.0, w: 160.0, h: 24.0 },
+            Rect {
+                x: 60.0,
+                y: 200.0,
+                w: 160.0,
+                h: 24.0,
+            },
             "pais".into(),
             None,
             None,
@@ -1816,7 +1982,12 @@ mod tests {
             work.clone(),
             0,
             "list".into(),
-            Rect { x: 60.0, y: 260.0, w: 160.0, h: 60.0 },
+            Rect {
+                x: 60.0,
+                y: 260.0,
+                w: 160.0,
+                h: 60.0,
+            },
             "provincias".into(),
             None,
             None,
@@ -1826,11 +1997,17 @@ mod tests {
         .expect("crear lista");
 
         let campos = crate::formularios::get_form_fields(work.clone(), 0).expect("listar");
-        let combo = campos.iter().find(|c| c.name == "pais").expect("el desplegable");
+        let combo = campos
+            .iter()
+            .find(|c| c.name == "pais")
+            .expect("el desplegable");
         assert_eq!(combo.kind, "ComboBox", "{}", combo.kind);
         assert_eq!(combo.options, opciones, "las opciones se leen enteras");
         assert_eq!(combo.value, "Portugal", "el valor por defecto sale puesto");
-        let lista = campos.iter().find(|c| c.name == "provincias").expect("la lista");
+        let lista = campos
+            .iter()
+            .find(|c| c.name == "provincias")
+            .expect("la lista");
         assert_eq!(lista.kind, "ListBox", "{}", lista.kind);
         assert_eq!(lista.options.len(), 2);
 
@@ -1838,14 +2015,22 @@ mod tests {
         crate::formularios::set_form_choice(work.clone(), 0, combo.annot_index, "Francia".into())
             .expect("elegir");
         let campos = crate::formularios::get_form_fields(work.clone(), 0).expect("listar");
-        assert_eq!(campos.iter().find(|c| c.name == "pais").unwrap().value, "Francia");
+        assert_eq!(
+            campos.iter().find(|c| c.name == "pais").unwrap().value,
+            "Francia"
+        );
 
         // un desplegable sin opciones se dice, no se crea vacío
         assert!(create_form_field(
             work.clone(),
             0,
             "combo".into(),
-            Rect { x: 60.0, y: 400.0, w: 100.0, h: 24.0 },
+            Rect {
+                x: 60.0,
+                y: 400.0,
+                w: 100.0,
+                h: 24.0
+            },
             "vacio".into(),
             None,
             None,
@@ -1867,7 +2052,12 @@ mod tests {
             work.clone(),
             0,
             "text".into(),
-            Rect { x: 60.0, y: 200.0, w: 200.0, h: 24.0 },
+            Rect {
+                x: 60.0,
+                y: 200.0,
+                w: 200.0,
+                h: 24.0,
+            },
             "nombre".into(),
             None,
             None,
@@ -1886,12 +2076,20 @@ mod tests {
             work.clone(),
             0,
             "text".into(),
-            Rect { x: 60.0, y: 260.0, w: 200.0, h: 24.0 },
+            Rect {
+                x: 60.0,
+                y: 260.0,
+                w: 200.0,
+                h: 24.0,
+            },
             "tratamiento".into(),
             None,
             None,
             None,
-            Some(PropsCampo { orden_tab: Some(0), ..Default::default() }),
+            Some(PropsCampo {
+                orden_tab: Some(0),
+                ..Default::default()
+            }),
         )
         .expect("crear el segundo");
 
@@ -1900,7 +2098,10 @@ mod tests {
             campos[0].name, "tratamiento",
             "el orden de tabulación es el de /Annots: {campos:?}"
         );
-        let obligatorio = campos.iter().find(|c| c.name == "nombre").expect("el campo");
+        let obligatorio = campos
+            .iter()
+            .find(|c| c.name == "nombre")
+            .expect("el campo");
         assert!(obligatorio.required, "el bit 2 de /Ff llega hasta la UI");
         assert!(!campos[0].required, "y el otro no es obligatorio");
         assert_eq!(obligatorio.value, "Ada", "el valor por defecto sale puesto");
@@ -1917,7 +2118,10 @@ mod tests {
                     == "nombre"
             })
             .expect("el campo en los bytes");
-        assert_eq!(campo.get(b"Ff").unwrap().as_i64().unwrap() & OBLIGATORIO, OBLIGATORIO);
+        assert_eq!(
+            campo.get(b"Ff").unwrap().as_i64().unwrap() & OBLIGATORIO,
+            OBLIGATORIO
+        );
         assert_eq!(
             crate::anotaciones::texto_de_cadena_pdf(campo.get(b"TU").unwrap()),
             "Nombre y dos apellidos"
@@ -1929,7 +2133,14 @@ mod tests {
         // la página pide tabular por el orden de /Annots
         let page_id = *doc.get_pages().get(&1).unwrap();
         assert_eq!(
-            doc.get_object(page_id).unwrap().as_dict().unwrap().get(b"Tabs").unwrap().as_name().unwrap(),
+            doc.get_object(page_id)
+                .unwrap()
+                .as_dict()
+                .unwrap()
+                .get(b"Tabs")
+                .unwrap()
+                .as_name()
+                .unwrap(),
             b"S"
         );
         std::fs::remove_file(&pdf).ok();
@@ -1946,9 +2157,24 @@ mod tests {
         crate::paginas::rotate_page(work.clone(), 0).expect("girar 90°");
 
         // rect en el espacio propio de la página (A4 sin rotar, 595×842)
-        let area = Rect { x: 100.0, y: 400.0, w: 150.0, h: 30.0 };
-        create_form_field(work.clone(), 0, "text".into(), area.clone(), "nombre".into(), None, None, None, None)
-            .expect("crear campo");
+        let area = Rect {
+            x: 100.0,
+            y: 400.0,
+            w: 150.0,
+            h: 30.0,
+        };
+        create_form_field(
+            work.clone(),
+            0,
+            "text".into(),
+            area.clone(),
+            "nombre".into(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("crear campo");
         create_link(
             work.clone(),
             0,
@@ -2051,8 +2277,18 @@ mod tests {
             w: 16.0,
             h: 16.0,
         };
-        create_form_field(work.clone(), 0, "checkbox".into(), r.clone(), "acepto".into(), None, None, None, None)
-            .expect("crear casilla");
+        create_form_field(
+            work.clone(),
+            0,
+            "checkbox".into(),
+            r.clone(),
+            "acepto".into(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("crear casilla");
         // mismo nombre otra vez: debe renombrarse a acepto-2
         create_form_field(
             work.clone(),
@@ -2069,8 +2305,15 @@ mod tests {
         let campos = crate::formularios::get_form_fields(work.clone(), 0).expect("listar");
         assert_eq!(campos.len(), 2);
         let nombres: Vec<&str> = campos.iter().map(|c| c.name.as_str()).collect();
-        assert!(nombres.contains(&"acepto") && nombres.contains(&"acepto-2"), "{nombres:?}");
-        let idx = campos.iter().find(|c| c.name == "acepto").unwrap().annot_index;
+        assert!(
+            nombres.contains(&"acepto") && nombres.contains(&"acepto-2"),
+            "{nombres:?}"
+        );
+        let idx = campos
+            .iter()
+            .find(|c| c.name == "acepto")
+            .unwrap()
+            .annot_index;
         crate::formularios::set_form_checked(work.clone(), 0, idx, true).expect("marcar");
         let campos = crate::formularios::get_form_fields(work, 0).expect("relistar");
         assert!(campos.iter().find(|c| c.name == "acepto").unwrap().checked);
@@ -2085,7 +2328,12 @@ mod tests {
             work.clone(),
             0,
             "text".into(),
-            Rect { x: 60.0, y: 200.0, w: 140.0, h: 22.0 },
+            Rect {
+                x: 60.0,
+                y: 200.0,
+                w: 140.0,
+                h: 22.0,
+            },
             "efimero".into(),
             None,
             None,
@@ -2093,9 +2341,19 @@ mod tests {
             None,
         )
         .expect("crear");
-        assert_eq!(crate::formularios::get_form_fields(work.clone(), 0).unwrap().len(), 1);
+        assert_eq!(
+            crate::formularios::get_form_fields(work.clone(), 0)
+                .unwrap()
+                .len(),
+            1
+        );
         delete_form_field(work.clone(), "efimero".into()).expect("borrar");
-        assert_eq!(crate::formularios::get_form_fields(work.clone(), 0).unwrap().len(), 0);
+        assert_eq!(
+            crate::formularios::get_form_fields(work.clone(), 0)
+                .unwrap()
+                .len(),
+            0
+        );
         assert!(delete_form_field(work, "no-existe".into()).is_err());
     }
 
@@ -2118,23 +2376,44 @@ mod tests {
             None,
         )
         .expect("enlace uri");
-        create_link(work.clone(), 0, Rect { y: 130.0, ..r }, None, Some(1))
-            .expect("enlace página");
+        create_link(work.clone(), 0, Rect { y: 130.0, ..r }, None, Some(1)).expect("enlace página");
         let links = crate::documento::get_links(work.clone(), 0).expect("listar");
         assert_eq!(links.len(), 2);
-        assert!(links.iter().any(|l| l.uri.as_deref() == Some("https://ejemplo.es")));
+        assert!(links
+            .iter()
+            .any(|l| l.uri.as_deref() == Some("https://ejemplo.es")));
         assert!(links.iter().any(|l| l.dest_page == Some(1)));
         // exactamente uno de los dos parámetros
         assert!(create_link(work.clone(), 0, r.clone(), None, None).is_err());
         // esquemas peligrosos fuera; sin esquema se asume https
-        assert!(create_link(work.clone(), 0, r.clone(), Some("file:///etc/passwd".into()), None)
-            .is_err());
-        assert!(create_link(work.clone(), 0, r.clone(), Some("javascript:alert(1)".into()), None)
-            .is_err());
-        create_link(work.clone(), 0, r.clone(), Some("ejemplo.org/x".into()), None)
-            .expect("sin esquema");
+        assert!(create_link(
+            work.clone(),
+            0,
+            r.clone(),
+            Some("file:///etc/passwd".into()),
+            None
+        )
+        .is_err());
+        assert!(create_link(
+            work.clone(),
+            0,
+            r.clone(),
+            Some("javascript:alert(1)".into()),
+            None
+        )
+        .is_err());
+        create_link(
+            work.clone(),
+            0,
+            r.clone(),
+            Some("ejemplo.org/x".into()),
+            None,
+        )
+        .expect("sin esquema");
         let links = crate::documento::get_links(work.clone(), 0).expect("listar");
-        assert!(links.iter().any(|l| l.uri.as_deref() == Some("https://ejemplo.org/x")));
+        assert!(links
+            .iter()
+            .any(|l| l.uri.as_deref() == Some("https://ejemplo.org/x")));
         // el annot_index de get_links es el mismo que da get_annotations
         let annots = crate::anotaciones::get_annotations(work.clone(), 0).expect("annots");
         let de_annots: Vec<u16> = annots
@@ -2308,7 +2587,9 @@ fn campos_por_nombre(doc: &LoDoc) -> Vec<(String, lopdf::ObjectId)> {
     }
 
     let mut out = Vec::new();
-    let Ok(catalog) = doc.catalog() else { return out };
+    let Ok(catalog) = doc.catalog() else {
+        return out;
+    };
     let form = match catalog.get(b"AcroForm") {
         Ok(Object::Reference(rid)) => doc.get_object(*rid).and_then(|o| o.as_dict()).ok(),
         Ok(Object::Dictionary(d)) => Some(d),
@@ -2347,7 +2628,11 @@ fn valores_de(doc: &LoDoc, id: lopdf::ObjectId) -> Vec<String> {
             Object::Name(n) => String::from_utf8_lossy(n).into_owned(),
             _ => return None,
         };
-        Some(if es_boton { s.trim_start_matches('/').to_string() } else { s })
+        Some(if es_boton {
+            s.trim_start_matches('/').to_string()
+        } else {
+            s
+        })
     };
     // el /V puede estar heredado del padre
     let mut actual = Some(id);
@@ -2604,7 +2889,11 @@ fn rellena_campo(doc: &mut LoDoc, id: lopdf::ObjectId, valores: &[String]) -> Re
             if let Ok(d) = doc.get_object_mut(k).and_then(|o| o.as_dict_mut()) {
                 d.set(
                     "AS",
-                    Object::Name(if suyo { objetivo.clone() } else { b"Off".to_vec() }),
+                    Object::Name(if suyo {
+                        objetivo.clone()
+                    } else {
+                        b"Off".to_vec()
+                    }),
                 );
             }
         }

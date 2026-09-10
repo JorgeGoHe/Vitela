@@ -1,7 +1,7 @@
 //! Formularios AcroForm: leer campos y rellenar texto y casillas.
 
-use crate::{on_pdfium_thread, pdfium, save_and_close, with_doc};
 use crate::historial::mutacion;
+use crate::{on_pdfium_thread, pdfium, save_and_close, with_doc};
 use pdfium_render::prelude::*;
 use serde::Serialize;
 
@@ -153,29 +153,31 @@ pub fn set_form_text(
     annot_index: u16,
     value: String,
 ) -> Result<(), String> {
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        niega_si_es_solo_lectura(&work_path, page_index, annot_index)?;
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let mut annot = page
-            .annotations()
-            .get(annot_index as usize)
-            .map_err(|e| e.to_string())?;
-        annot
-            .as_widget_annotation_mut()
-            .and_then(|w| w.form_field_mut())
-            .and_then(|f| f.as_text_field_mut())
-            .ok_or("No es un campo de texto")?
-            .set_value(&value)
-            .map_err(|e| e.to_string())?;
-        drop(annot);
-        drop(page);
-        save_and_close(doc, &work_path)?;
-        Ok(())
-    }))
+    mutacion(work_path, |work_path| {
+        on_pdfium_thread(move || {
+            niega_si_es_solo_lectura(&work_path, page_index, annot_index)?;
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
+                .map_err(|e| e.to_string())?;
+            let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            let mut annot = page
+                .annotations()
+                .get(annot_index as usize)
+                .map_err(|e| e.to_string())?;
+            annot
+                .as_widget_annotation_mut()
+                .and_then(|w| w.form_field_mut())
+                .and_then(|f| f.as_text_field_mut())
+                .ok_or("No es un campo de texto")?
+                .set_value(&value)
+                .map_err(|e| e.to_string())?;
+            drop(annot);
+            drop(page);
+            save_and_close(doc, &work_path)?;
+            Ok(())
+        })
+    })
 }
 
 /// El `/Ff` de cada anotación de la página, en el orden de `/Annots` (el
@@ -200,7 +202,16 @@ fn banderas_de_annots(doc: &lopdf::Document, page_index: u16) -> Vec<i64> {
             d.get(b"Parent")
                 .and_then(|o| o.as_reference())
                 .ok()
-                .and_then(|p| doc.get_object(p).ok()?.as_dict().ok()?.get(b"Ff").ok()?.as_i64().ok())
+                .and_then(|p| {
+                    doc.get_object(p)
+                        .ok()?
+                        .as_dict()
+                        .ok()?
+                        .get(b"Ff")
+                        .ok()?
+                        .as_i64()
+                        .ok()
+                })
                 .unwrap_or(0)
         })
         .collect()
@@ -222,7 +233,9 @@ fn marcados_de_annots(doc: &lopdf::Document, page_index: u16) -> Vec<bool> {
     lista
         .iter()
         .map(|o| {
-            let Object::Reference(id) = o else { return false };
+            let Object::Reference(id) = o else {
+                return false;
+            };
             let Ok(d) = doc.get_object(*id).and_then(|o| o.as_dict()) else {
                 return false;
             };
@@ -250,7 +263,9 @@ fn tooltips_de_annots(doc: &lopdf::Document, page_index: u16) -> Vec<String> {
     lista
         .iter()
         .map(|o| {
-            let Object::Reference(id) = o else { return String::new() };
+            let Object::Reference(id) = o else {
+                return String::new();
+            };
             let Ok(d) = doc.get_object(*id).and_then(|o| o.as_dict()) else {
                 return String::new();
             };
@@ -368,34 +383,36 @@ pub fn set_form_checked(
     if let Some((widget_id, padre_id)) = radio {
         return elige_radio(work_path, widget_id, padre_id, checked);
     }
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let mut annot = page
-            .annotations()
-            .get(annot_index as usize)
-            .map_err(|e| e.to_string())?;
-        let field = annot
-            .as_widget_annotation_mut()
-            .and_then(|w| w.form_field_mut())
-            .ok_or("No es un campo de formulario")?;
-        if let Some(cb) = field.as_checkbox_field_mut() {
-            cb.set_checked(checked).map_err(|e| e.to_string())?;
-        } else if let Some(rb) = field.as_radio_button_field_mut() {
-            if checked {
-                rb.set_checked().map_err(|e| e.to_string())?;
+    mutacion(work_path, |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
+                .map_err(|e| e.to_string())?;
+            let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            let mut annot = page
+                .annotations()
+                .get(annot_index as usize)
+                .map_err(|e| e.to_string())?;
+            let field = annot
+                .as_widget_annotation_mut()
+                .and_then(|w| w.form_field_mut())
+                .ok_or("No es un campo de formulario")?;
+            if let Some(cb) = field.as_checkbox_field_mut() {
+                cb.set_checked(checked).map_err(|e| e.to_string())?;
+            } else if let Some(rb) = field.as_radio_button_field_mut() {
+                if checked {
+                    rb.set_checked().map_err(|e| e.to_string())?;
+                }
+            } else {
+                return Err("No es una casilla".into());
             }
-        } else {
-            return Err("No es una casilla".into());
-        }
-        drop(annot);
-        drop(page);
-        save_and_close(doc, &work_path)?;
-        Ok(())
-    }))
+            drop(annot);
+            drop(page);
+            save_and_close(doc, &work_path)?;
+            Ok(())
+        })
+    })
 }
 
 /// Si el widget de esa posición es una opción de un grupo de radios,
@@ -419,8 +436,7 @@ fn padre_de_radio(
     };
     let campo = doc.get_object(campo_id).ok()?.as_dict().ok()?;
     let es_radio = campo.get(b"FT").and_then(|o| o.as_name()).ok()? == b"Btn"
-        && campo.get(b"Ff").and_then(|o| o.as_i64()).unwrap_or(0)
-            & crate::formularios2::RADIO_FF
+        && campo.get(b"Ff").and_then(|o| o.as_i64()).unwrap_or(0) & crate::formularios2::RADIO_FF
             != 0;
     es_radio.then_some((*widget_id, campo_id))
 }
@@ -482,12 +498,20 @@ fn elige_radio(
         // tres casillas sueltas
         for kid in kids {
             let encendido = checked && kid == widget_id;
-            let estado = if encendido { export.as_bytes().to_vec() } else { b"Off".to_vec() };
+            let estado = if encendido {
+                export.as_bytes().to_vec()
+            } else {
+                b"Off".to_vec()
+            };
             if let Ok(d) = doc.get_object_mut(kid).and_then(|o| o.as_dict_mut()) {
                 d.set("AS", Object::Name(estado));
             }
         }
-        let v = if checked { export.as_bytes().to_vec() } else { b"Off".to_vec() };
+        let v = if checked {
+            export.as_bytes().to_vec()
+        } else {
+            b"Off".to_vec()
+        };
         doc.get_object_mut(padre_id)
             .and_then(|o| o.as_dict_mut())
             .map_err(|e| e.to_string())?
@@ -543,7 +567,12 @@ pub fn set_form_choice(
             .and_then(|o| o.as_dict())
             .map_err(|e| e.to_string())?
             .clone();
-        if campo.get(b"FT").and_then(|o| o.as_name()).unwrap_or_default() != b"Ch" {
+        if campo
+            .get(b"FT")
+            .and_then(|o| o.as_name())
+            .unwrap_or_default()
+            != b"Ch"
+        {
             return Err("Ese campo no es un desplegable ni una lista".into());
         }
         let opciones = campo
@@ -730,7 +759,10 @@ mod tests {
         let work = tmp.to_string_lossy().into_owned();
 
         let campos = get_form_fields(work.clone(), 0).expect("listar");
-        let ciudad = campos.iter().find(|c| c.name == "ciudad").expect("desplegable");
+        let ciudad = campos
+            .iter()
+            .find(|c| c.name == "ciudad")
+            .expect("desplegable");
         assert_eq!(ciudad.kind, "ComboBox");
         assert_eq!(ciudad.options, vec!["Madrid", "Barcelona", "Sevilla"]);
         assert_eq!(ciudad.value, "");
@@ -782,9 +814,7 @@ mod tests {
             .objects
             .values()
             .filter_map(|o| o.as_dict().ok())
-            .find(|d| {
-                matches!(d.get(b"T"), Ok(lopdf::Object::String(t, _)) if t == b"color")
-            })
+            .find(|d| matches!(d.get(b"T"), Ok(lopdf::Object::String(t, _)) if t == b"color"))
             .expect("campo color");
         assert_eq!(
             lista.get(b"I").and_then(|o| o.as_array()).expect("/I"),

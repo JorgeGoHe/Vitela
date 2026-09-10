@@ -25,8 +25,16 @@ const VALOR: &[u8] = b"Redact";
 
 /// ¿Es esta anotación una marca de redacción nuestra?
 fn es_marca(annot: &Dictionary) -> bool {
-    annot.get(b"Subtype").and_then(|o| o.as_name()).unwrap_or_default() == b"Square"
-        && annot.get(CLAVE).and_then(|o| o.as_name()).unwrap_or_default() == VALOR
+    annot
+        .get(b"Subtype")
+        .and_then(|o| o.as_name())
+        .unwrap_or_default()
+        == b"Square"
+        && annot
+            .get(CLAVE)
+            .and_then(|o| o.as_name())
+            .unwrap_or_default()
+            == VALOR
 }
 
 /// ¿La anotación de este objeto es una marca de redacción? Es lo que
@@ -45,7 +53,11 @@ pub(crate) fn es_marca_por_id(doc: &LoDoc, id: lopdf::ObjectId) -> bool {
 /// que sin esto la marca no existiría fuera de Vitela.
 fn apariencia_marca(doc: &mut LoDoc, w: f32, h: f32) -> lopdf::ObjectId {
     use lopdf::Stream;
-    let ops = format!("q 1 0 0 RG 1.5 w 0.75 0.75 {:.2} {:.2} re S Q\n", w - 1.5, h - 1.5);
+    let ops = format!(
+        "q 1 0 0 RG 1.5 w 0.75 0.75 {:.2} {:.2} re S Q\n",
+        w - 1.5,
+        h - 1.5
+    );
     let mut forma = Dictionary::new();
     forma.set("Type", Object::Name(b"XObject".to_vec()));
     forma.set("Subtype", Object::Name(b"Form".to_vec()));
@@ -96,7 +108,10 @@ pub fn mark_redaction(work_path: String, page_index: u16, rect: Rect) -> Result<
         annot.set("C", Object::Array(vec![1.into(), 0.into(), 0.into()]));
         annot.set("IC", Object::Array(vec![0.into(), 0.into(), 0.into()]));
         annot.set("F", 4i64); // Print
-        annot.set("Contents", crate::documento::cadena_pdf("Marca de redacción"));
+        annot.set(
+            "Contents",
+            crate::documento::cadena_pdf("Marca de redacción"),
+        );
         annot.set(CLAVE, Object::Name(VALOR.to_vec()));
         let mut ap = Dictionary::new();
         ap.set("N", Object::Reference(ap_id));
@@ -140,11 +155,15 @@ fn marcas_de(doc: &LoDoc) -> Vec<Marca> {
             continue;
         };
         for (i, a) in annots.iter().enumerate() {
-            let Some(annot) = dict_de(doc, a) else { continue };
+            let Some(annot) = dict_de(doc, a) else {
+                continue;
+            };
             if !es_marca(&annot) {
                 continue;
             }
-            let Some(caja) = caja_de(&annot) else { continue };
+            let Some(caja) = caja_de(&annot) else {
+                continue;
+            };
             out.push(Marca {
                 page_index: n as u16,
                 annot_index: i as u16,
@@ -169,7 +188,9 @@ fn cajas_de_marcas(doc: &LoDoc) -> Vec<(u16, [f32; 4])> {
             continue;
         };
         for a in &annots {
-            let Some(annot) = dict_de(doc, a) else { continue };
+            let Some(annot) = dict_de(doc, a) else {
+                continue;
+            };
             if !es_marca(&annot) {
                 continue;
             }
@@ -196,7 +217,11 @@ fn caja_de(annot: &Dictionary) -> Option<[f32; 4]> {
         .and_then(|o| o.as_array())
         .ok()?
         .iter()
-        .filter_map(|o| o.as_float().ok().or_else(|| o.as_i64().ok().map(|n| n as f32)))
+        .filter_map(|o| {
+            o.as_float()
+                .ok()
+                .or_else(|| o.as_i64().ok().map(|n| n as f32))
+        })
         .collect();
     if v.len() != 4 {
         return None;
@@ -253,7 +278,10 @@ pub fn unmark_all_redactions(work_path: String) -> Result<u16, String> {
         // de mayor a menor: quitar una mueve los índices de las siguientes
         let mut por_pagina: std::collections::BTreeMap<u16, Vec<u16>> = Default::default();
         for m in marcas {
-            por_pagina.entry(m.page_index).or_default().push(m.annot_index);
+            por_pagina
+                .entry(m.page_index)
+                .or_default()
+                .push(m.annot_index);
         }
         for (p, mut indices) in por_pagina {
             indices.sort_unstable();
@@ -430,7 +458,10 @@ fn tapa_zonas(
         // de mayor a menor para que los índices no se muevan bajo los pies
         let mut por_pagina: std::collections::BTreeMap<u16, Vec<u16>> = Default::default();
         for m in marcas {
-            por_pagina.entry(m.page_index).or_default().push(m.annot_index);
+            por_pagina
+                .entry(m.page_index)
+                .or_default()
+                .push(m.annot_index);
         }
         for (p, mut indices) in por_pagina {
             indices.sort_unstable();
@@ -513,7 +544,11 @@ fn cuenta_oculto(doc: &LoDoc) -> (SanitizeReport, Vec<(u16, usize)>) {
     }
 
     // capas y formularios
-    if let Some(oc) = catalogo.get(b"OCProperties").ok().and_then(|o| dict_de(doc, o)) {
+    if let Some(oc) = catalogo
+        .get(b"OCProperties")
+        .ok()
+        .and_then(|o| dict_de(doc, o))
+    {
         r.capas += match oc.get(b"OCGs") {
             Ok(Object::Array(a)) => a.len() as u32,
             _ => 1,
@@ -538,8 +573,13 @@ fn cuenta_oculto(doc: &LoDoc) -> (SanitizeReport, Vec<(u16, usize)>) {
             continue;
         };
         for (i, a) in annots.iter().enumerate() {
-            let Some(annot) = dict_de(doc, a) else { continue };
-            let subtipo = annot.get(b"Subtype").and_then(|o| o.as_name()).unwrap_or_default();
+            let Some(annot) = dict_de(doc, a) else {
+                continue;
+            };
+            let subtipo = annot
+                .get(b"Subtype")
+                .and_then(|o| o.as_name())
+                .unwrap_or_default();
             if subtipo == b"FileAttachment" {
                 r.adjuntos += 1;
             } else if subtipo == b"Widget" {
@@ -602,7 +642,9 @@ fn quita_oculto(doc: &mut LoDoc, fuera: &[(u16, usize)]) {
 /// Cuenta las hojas de un árbol de nombres (`/Names` o `/Kids`).
 fn cuenta_arbol(doc: &LoDoc, nodo: Option<&Object>) -> u32 {
     let Some(nodo) = nodo else { return 0 };
-    let Some(d) = dict_de(doc, nodo) else { return 0 };
+    let Some(d) = dict_de(doc, nodo) else {
+        return 0;
+    };
     let mut n = match d.get(b"Names") {
         Ok(Object::Array(a)) => (a.len() / 2) as u32,
         _ => 0,
@@ -621,7 +663,9 @@ mod tests {
     use crate::tests::crea_pdf;
 
     fn pasos(work: &str) -> u16 {
-        crate::historial::history_state(work.to_string()).expect("historial").undo
+        crate::historial::history_state(work.to_string())
+            .expect("historial")
+            .undo
     }
 
     /// ¿Es negro el píxel del centro de ese rect en el render?
@@ -634,7 +678,9 @@ mod tests {
             ((r.x + r.w / 2.0) * escala) as u32,
             ((r.y + r.h / 2.0) * escala) as u32,
         );
-        let p = img.get_pixel(x.min(img.width() - 1), y.min(img.height() - 1)).0;
+        let p = img
+            .get_pixel(x.min(img.width() - 1), y.min(img.height() - 1))
+            .0;
         p[0] < 40 && p[1] < 40 && p[2] < 40
     }
 
@@ -648,8 +694,18 @@ mod tests {
         let work = pdf.to_string_lossy().into_owned();
         // el texto de crea_pdf va en (50, 700) desde abajo: en coords de UI,
         // arriba del todo de una A4
-        let zona = Rect { x: 40.0, y: 120.0, w: 160.0, h: 40.0 };
-        let otra = Rect { x: 300.0, y: 400.0, w: 100.0, h: 30.0 };
+        let zona = Rect {
+            x: 40.0,
+            y: 120.0,
+            w: 160.0,
+            h: 40.0,
+        };
+        let otra = Rect {
+            x: 300.0,
+            y: 400.0,
+            w: 100.0,
+            h: 30.0,
+        };
 
         let i = mark_redaction(work.clone(), 0, zona.clone()).expect("marcar");
         mark_redaction(work.clone(), 1, otra.clone()).expect("marcar en la otra página");
@@ -670,7 +726,10 @@ mod tests {
             .iter()
             .map(|c| c.ch.as_str())
             .collect();
-        assert!(texto.contains("Confidencial"), "marcar no puede borrar nada");
+        assert!(
+            texto.contains("Confidencial"),
+            "marcar no puede borrar nada"
+        );
 
         // quitar una marca deja la otra
         unmark_redaction(work.clone(), 1, marcas[1].annot_index).expect("quitar marca");
@@ -697,7 +756,10 @@ mod tests {
             !texto.contains("Confidencial"),
             "el texto redactado sigue en el documento: {texto:?}"
         );
-        assert!(negro_en(&work, 0, &zona), "tiene que quedar negro donde estaba");
+        assert!(
+            negro_en(&work, 0, &zona),
+            "tiene que quedar negro donde estaba"
+        );
         assert!(
             list_redactions(work.clone()).expect("listar").is_empty(),
             "la marca aplicada ya no propone nada"
@@ -732,24 +794,40 @@ mod tests {
         crate::anotaciones2::add_markup(
             work.clone(),
             0,
-            vec![Rect { x: 40.0, y: 300.0, w: 120.0, h: 14.0 }],
+            vec![Rect {
+                x: 40.0,
+                y: 300.0,
+                w: 120.0,
+                h: 14.0,
+            }],
             "highlight".into(),
             None,
             None,
         )
         .expect("resaltar");
-        let zona = Rect { x: 40.0, y: 120.0, w: 160.0, h: 40.0 };
+        let zona = Rect {
+            x: 40.0,
+            y: 120.0,
+            w: 160.0,
+            h: 40.0,
+        };
         mark_redaction(work.clone(), 0, zona).expect("marcar");
 
         let marcas = list_redactions(work.clone()).expect("listar");
         assert_eq!(marcas.len(), 1);
-        assert_eq!(marcas[0].annot_index, 1, "la marca es la segunda de /Annots");
+        assert_eq!(
+            marcas[0].annot_index, 1,
+            "la marca es la segunda de /Annots"
+        );
 
         unmark_redaction(work.clone(), 0, marcas[0].annot_index).expect("quitar la marca");
         assert!(list_redactions(work.clone()).expect("listar").is_empty());
         let quedan = crate::anotaciones::get_annotations(work.clone(), 0).expect("anotaciones");
         assert_eq!(quedan.len(), 1, "solo se va la marca: {quedan:?}");
-        assert_eq!(quedan[0].kind, "Highlight", "el resaltado sigue donde estaba");
+        assert_eq!(
+            quedan[0].kind, "Highlight",
+            "el resaltado sigue donde estaba"
+        );
         std::fs::remove_file(&pdf).ok();
     }
 
@@ -762,16 +840,46 @@ mod tests {
         let work = pdf.to_string_lossy().into_owned();
         crate::anotaciones::add_note(work.clone(), 0, 300.0, 300.0, "Ojo".into(), None)
             .expect("nota");
-        mark_redaction(work.clone(), 0, Rect { x: 40.0, y: 120.0, w: 160.0, h: 40.0 })
-            .expect("marcar");
-        mark_redaction(work.clone(), 0, Rect { x: 40.0, y: 400.0, w: 100.0, h: 30.0 })
-            .expect("marcar");
-        mark_redaction(work.clone(), 1, Rect { x: 60.0, y: 200.0, w: 100.0, h: 30.0 })
-            .expect("marcar");
+        mark_redaction(
+            work.clone(),
+            0,
+            Rect {
+                x: 40.0,
+                y: 120.0,
+                w: 160.0,
+                h: 40.0,
+            },
+        )
+        .expect("marcar");
+        mark_redaction(
+            work.clone(),
+            0,
+            Rect {
+                x: 40.0,
+                y: 400.0,
+                w: 100.0,
+                h: 30.0,
+            },
+        )
+        .expect("marcar");
+        mark_redaction(
+            work.clone(),
+            1,
+            Rect {
+                x: 60.0,
+                y: 200.0,
+                w: 100.0,
+                h: 30.0,
+            },
+        )
+        .expect("marcar");
         assert_eq!(list_redactions(work.clone()).expect("listar").len(), 3);
 
         let antes = pasos(&work);
-        assert_eq!(unmark_all_redactions(work.clone()).expect("quitar todas"), 3);
+        assert_eq!(
+            unmark_all_redactions(work.clone()).expect("quitar todas"),
+            3
+        );
         assert!(list_redactions(work.clone()).expect("listar").is_empty());
         assert_eq!(pasos(&work), antes + 1, "quitar todas es UN paso");
         let quedan = crate::anotaciones::get_annotations(work.clone(), 0).expect("anotaciones");
@@ -795,8 +903,18 @@ mod tests {
         crea_pdf(&["Confidencial"], &pdf);
         let work = pdf.to_string_lossy().into_owned();
         // se marca una zona vacía y después se arrastra encima del texto
-        let vacia = Rect { x: 300.0, y: 500.0, w: 120.0, h: 40.0 };
-        let sobre_el_texto = Rect { x: 40.0, y: 120.0, w: 160.0, h: 40.0 };
+        let vacia = Rect {
+            x: 300.0,
+            y: 500.0,
+            w: 120.0,
+            h: 40.0,
+        };
+        let sobre_el_texto = Rect {
+            x: 40.0,
+            y: 120.0,
+            w: 160.0,
+            h: 40.0,
+        };
         let i = mark_redaction(work.clone(), 0, vacia).expect("marcar");
         crate::anotaciones2::transform_annotation(
             work.clone(),
@@ -850,7 +968,10 @@ mod tests {
             let info_id = doc.add_object(info);
             doc.trailer.set("Info", Object::Reference(info_id));
 
-            let js = doc.add_object(Stream::new(Dictionary::new(), b"app.alert('hola')".to_vec()));
+            let js = doc.add_object(Stream::new(
+                Dictionary::new(),
+                b"app.alert('hola')".to_vec(),
+            ));
             let mut accion = Dictionary::new();
             accion.set("S", Object::Name(b"JavaScript".to_vec()));
             accion.set("JS", Object::Reference(js));

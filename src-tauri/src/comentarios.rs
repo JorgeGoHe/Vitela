@@ -55,7 +55,10 @@ pub fn reply_annotation(
                 annot.set("Type", Object::Name(b"Annot".to_vec()));
                 annot.set("Subtype", Object::Name(b"Text".to_vec()));
                 annot.set("Name", Object::Name(b"Comment".to_vec()));
-                annot.set("Rect", Object::Array(rect.iter().map(|v| (*v).into()).collect()));
+                annot.set(
+                    "Rect",
+                    Object::Array(rect.iter().map(|v| (*v).into()).collect()),
+                );
                 annot.set("Contents", crate::documento::cadena_pdf(&text));
                 annot.set("T", crate::documento::cadena_pdf(&autor));
                 annot.set("M", Object::string_literal(fecha.clone()));
@@ -133,7 +136,10 @@ pub fn set_annotation_state(
         let mut annot = Dictionary::new();
         annot.set("Type", Object::Name(b"Annot".to_vec()));
         annot.set("Subtype", Object::Name(b"Text".to_vec()));
-        annot.set("Rect", Object::Array(rect.iter().map(|v| (*v).into()).collect()));
+        annot.set(
+            "Rect",
+            Object::Array(rect.iter().map(|v| (*v).into()).collect()),
+        );
         // Acrobat deja el texto vacío y pone el estado en /State
         annot.set("Contents", crate::documento::cadena_pdf(""));
         annot.set("T", crate::documento::cadena_pdf(&autor));
@@ -212,9 +218,8 @@ pub fn export_comments(
         out.push('\n');
         n += 1;
     }
-    std::fs::write(&dest_path, out).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}"))
-    })?;
+    std::fs::write(&dest_path, out)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}")))?;
     Ok(n)
 }
 
@@ -341,7 +346,9 @@ fn indice_de(doc: &lopdf::Document, page_index: u16, id: lopdf::ObjectId) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::anotaciones::{add_note, get_annotations, get_document_annotations, remove_annotation};
+    use crate::anotaciones::{
+        add_note, get_annotations, get_document_annotations, remove_annotation,
+    };
     use crate::tests::crea_pdf;
 
     /// **G5.** Un comentario tiene conversación: se responde, la respuesta
@@ -352,8 +359,15 @@ mod tests {
         let pdf = std::env::temp_dir().join("comentarios-responder.pdf");
         crea_pdf(&["Documento"], &pdf);
         let work = pdf.to_string_lossy().into_owned();
-        add_note(work.clone(), 0, 100.0, 200.0, "¿Esto está bien?".into(), Some("Ana".into()))
-            .expect("nota");
+        add_note(
+            work.clone(),
+            0,
+            100.0,
+            200.0,
+            "¿Esto está bien?".into(),
+            Some("Ana".into()),
+        )
+        .expect("nota");
         let nota = &get_annotations(work.clone(), 0).expect("anotaciones")[0];
         let padre = nota.index;
 
@@ -376,7 +390,9 @@ mod tests {
             "la respuesta cuelga del comentario, para que el panel la anide"
         );
         assert!(
-            annots.iter().any(|a| a.index == padre && a.in_reply_to.is_none()),
+            annots
+                .iter()
+                .any(|a| a.index == padre && a.in_reply_to.is_none()),
             "y el comentario original no cuelga de nadie"
         );
         // una respuesta vacía no es una respuesta
@@ -392,20 +408,34 @@ mod tests {
         let pdf = std::env::temp_dir().join("comentarios-estado.pdf");
         crea_pdf(&["Documento"], &pdf);
         let work = pdf.to_string_lossy().into_owned();
-        add_note(work.clone(), 0, 100.0, 200.0, "Repasar".into(), Some("Ana".into()))
-            .expect("nota");
+        add_note(
+            work.clone(),
+            0,
+            100.0,
+            200.0,
+            "Repasar".into(),
+            Some("Ana".into()),
+        )
+        .expect("nota");
         let padre = get_annotations(work.clone(), 0).expect("anotaciones")[0].index;
         let cuantas = || get_annotations(work.clone(), 0).expect("anotaciones").len();
         let antes = cuantas();
 
-        set_annotation_state(work.clone(), 0, padre, "Completed".into(), Some("Jorge".into()))
-            .expect("poner estado");
+        set_annotation_state(
+            work.clone(),
+            0,
+            padre,
+            "Completed".into(),
+            Some("Jorge".into()),
+        )
+        .expect("poner estado");
         assert_eq!(
             cuantas(),
             antes,
             "el estado no es un comentario más en el panel"
         );
-        let c = get_annotations(work.clone(), 0).expect("anotaciones")
+        let c = get_annotations(work.clone(), 0)
+            .expect("anotaciones")
             .into_iter()
             .find(|a| a.index == padre)
             .expect("el comentario");
@@ -418,7 +448,8 @@ mod tests {
 
         // cambiarlo reescribe el mismo hijo, no añade otro
         set_annotation_state(work.clone(), 0, padre, "Rejected".into(), None).expect("cambiar");
-        let c = get_annotations(work.clone(), 0).expect("anotaciones")
+        let c = get_annotations(work.clone(), 0)
+            .expect("anotaciones")
             .into_iter()
             .find(|a| a.index == padre)
             .expect("el comentario");
@@ -427,7 +458,8 @@ mod tests {
 
         // y quitarlo lo quita
         set_annotation_state(work.clone(), 0, padre, String::new(), None).expect("quitar");
-        let c = get_annotations(work.clone(), 0).expect("anotaciones")
+        let c = get_annotations(work.clone(), 0)
+            .expect("anotaciones")
             .into_iter()
             .find(|a| a.index == padre)
             .expect("el comentario");
@@ -447,10 +479,24 @@ mod tests {
         let pdf = std::env::temp_dir().join("comentarios-borrar-hilo.pdf");
         crea_pdf(&["Documento"], &pdf);
         let work = pdf.to_string_lossy().into_owned();
-        add_note(work.clone(), 0, 100.0, 200.0, "Padre".into(), Some("Ana".into()))
-            .expect("nota");
-        add_note(work.clone(), 0, 300.0, 200.0, "De otro sitio".into(), Some("Ana".into()))
-            .expect("otra nota");
+        add_note(
+            work.clone(),
+            0,
+            100.0,
+            200.0,
+            "Padre".into(),
+            Some("Ana".into()),
+        )
+        .expect("nota");
+        add_note(
+            work.clone(),
+            0,
+            300.0,
+            200.0,
+            "De otro sitio".into(),
+            Some("Ana".into()),
+        )
+        .expect("otra nota");
         let padre = get_annotations(work.clone(), 0).expect("anotaciones")[0].index;
         reply_annotation(work.clone(), 0, padre, "Una".into(), None).expect("responder");
         reply_annotation(work.clone(), 0, padre, "Dos".into(), None).expect("responder");
@@ -462,7 +508,10 @@ mod tests {
             quedan.len(),
             1,
             "solo tenía que quedar el comentario de otro sitio: {:?}",
-            quedan.iter().map(|a| a.contents.clone()).collect::<Vec<_>>()
+            quedan
+                .iter()
+                .map(|a| a.contents.clone())
+                .collect::<Vec<_>>()
         );
         assert_eq!(quedan[0].contents, "De otro sitio");
         assert!(
@@ -482,14 +531,34 @@ mod tests {
         let txt = dir.join("comentarios-resumen.txt");
         crea_pdf(&["Uno", "Dos"], &pdf);
         let work = pdf.to_string_lossy().into_owned();
-        add_note(work.clone(), 0, 100.0, 200.0, "Falta la fecha".into(), Some("Ana".into()))
-            .expect("nota");
+        add_note(
+            work.clone(),
+            0,
+            100.0,
+            200.0,
+            "Falta la fecha".into(),
+            Some("Ana".into()),
+        )
+        .expect("nota");
         let padre = get_annotations(work.clone(), 0).expect("anotaciones")[0].index;
-        reply_annotation(work.clone(), 0, padre, "Corregido".into(), Some("Jorge".into()))
-            .expect("responder");
+        reply_annotation(
+            work.clone(),
+            0,
+            padre,
+            "Corregido".into(),
+            Some("Jorge".into()),
+        )
+        .expect("responder");
         set_annotation_state(work.clone(), 0, padre, "Completed".into(), None).expect("estado");
-        add_note(work.clone(), 1, 100.0, 200.0, "Y aquí también".into(), Some("Ana".into()))
-            .expect("nota 2");
+        add_note(
+            work.clone(),
+            1,
+            100.0,
+            200.0,
+            "Y aquí también".into(),
+            Some("Ana".into()),
+        )
+        .expect("nota 2");
 
         let n = export_comments(
             work.clone(),
@@ -533,7 +602,10 @@ mod tests {
             "la fecha va como 10/09/2026 00:25:\n{resumen}"
         );
         // el documento no se ha tocado
-        assert_eq!(get_document_annotations(work.clone()).expect("anots").len(), 3);
+        assert_eq!(
+            get_document_annotations(work.clone()).expect("anots").len(),
+            3
+        );
         for f in [&pdf, &txt] {
             std::fs::remove_file(f).ok();
         }
@@ -559,16 +631,25 @@ mod tests {
             nombre_de_documento(Some("/Users/ana/contrato.pdf"), "/tmp/vitela-doc-1.pdf"),
             "contrato.pdf"
         );
-        assert_eq!(nombre_de_documento(Some("  "), "/tmp/factura.pdf"), "factura.pdf");
+        assert_eq!(
+            nombre_de_documento(Some("  "), "/tmp/factura.pdf"),
+            "factura.pdf"
+        );
         // un fichero que no es una copia de trabajo se enseña tal cual
-        assert_eq!(nombre_de_documento(None, "/tmp/vitela-sin-nanos.pdf"), "vitela-sin-nanos.pdf");
+        assert_eq!(
+            nombre_de_documento(None, "/tmp/vitela-sin-nanos.pdf"),
+            "vitela-sin-nanos.pdf"
+        );
         assert_eq!(nombre_de_documento(None, "/tmp/factura.pdf"), "factura.pdf");
     }
 
     /// La fecha del resumen se escribe como se escribe en español.
     #[test]
     fn la_fecha_del_resumen_va_en_espanol() {
-        assert_eq!(fecha_en_espanol("2026-09-10T00:25:56+02:00"), "10/09/2026 00:25");
+        assert_eq!(
+            fecha_en_espanol("2026-09-10T00:25:56+02:00"),
+            "10/09/2026 00:25"
+        );
         // lo que no se sepa leer se deja tal cual antes que inventarlo
         assert_eq!(fecha_en_espanol(""), "");
         assert_eq!(fecha_en_espanol("ayer"), "ayer");

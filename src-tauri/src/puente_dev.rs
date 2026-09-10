@@ -57,7 +57,9 @@ pub fn arrancar(puerto: u16) {
     }
 }
 
-fn con_cors(mut r: tiny_http::Response<std::io::Cursor<Vec<u8>>>) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
+fn con_cors(
+    mut r: tiny_http::Response<std::io::Cursor<Vec<u8>>>,
+) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
     for (k, v) in [
         ("Access-Control-Allow-Origin", "*"),
         ("Access-Control-Allow-Headers", "content-type"),
@@ -85,7 +87,13 @@ fn atender(mut request: tiny_http::Request) {
     } else {
         match serde_json::from_str(&body_raw) {
             Ok(v) => v,
-            Err(e) => return responde(request, 400, json!({"error": format!("JSON inválido: {e}")})),
+            Err(e) => {
+                return responde(
+                    request,
+                    400,
+                    json!({"error": format!("JSON inválido: {e}")}),
+                )
+            }
         }
     };
     let url = request.url().to_string();
@@ -127,7 +135,11 @@ fn atender(mut request: tiny_http::Request) {
                     Err(e) => responde(request, 400, json!({"error": e})),
                 }
             } else {
-                responde(request, 404, json!({"error": format!("Ruta desconocida: {url}")}))
+                responde(
+                    request,
+                    404,
+                    json!({"error": format!("Ruta desconocida: {url}")}),
+                )
             }
         }
     }
@@ -179,147 +191,335 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         }};
     }
     use crate::{
-        anotaciones, anotaciones2, busqueda, documento, exportar, firma, firmas_visuales, formularios, historial,
-        imagenes, paginas, paginas2, seguridad, seguridad2, texto,
+        anotaciones, anotaciones2, busqueda, documento, exportar, firma, firmas_visuales,
+        formularios, historial, imagenes, paginas, paginas2, seguridad, seguridad2, texto,
     };
     match cmd {
-        "open_pdf" => cmd!(crate::open_pdf, { path: String, password: Option<String>, key_path: Option<String>, key_password: Option<String> }),
-        "render_page" => cmd!(crate::render_page_b64, { path: String, page_index: u16, width: i32, with_annotations: Option<bool> }),
+        "open_pdf" => {
+            cmd!(crate::open_pdf, { path: String, password: Option<String>, key_path: Option<String>, key_password: Option<String> })
+        }
+        "render_page" => {
+            cmd!(crate::render_page_b64, { path: String, page_index: u16, width: i32, with_annotations: Option<bool> })
+        }
         "get_page_text" => cmd!(busqueda::get_page_text, { path: String, page_index: u16 }),
         "get_page_sizes" => cmd!(crate::get_page_sizes, { path: String }),
-        "search_pdf" => cmd!(busqueda::search_pdf, { path: String, query: String, match_case: Option<bool>, whole_word: Option<bool>, context: Option<bool> }),
-        "search_folder" => cmd!(busca_en_carpeta_qa, { dir: String, query: String, match_case: Option<bool>, whole_word: Option<bool>, context: Option<bool>, recursivo: Option<bool> }),
+        "search_pdf" => {
+            cmd!(busqueda::search_pdf, { path: String, query: String, match_case: Option<bool>, whole_word: Option<bool>, context: Option<bool> })
+        }
+        "search_folder" => {
+            cmd!(busca_en_carpeta_qa, { dir: String, query: String, match_case: Option<bool>, whole_word: Option<bool>, context: Option<bool>, recursivo: Option<bool> })
+        }
         "cancel_search" => busqueda::cancel_search()
             .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
         "delete_page" => cmd!(paginas::delete_page, { work_path: String, page_index: u16 }),
         "rotate_page" => cmd!(paginas::rotate_page, { work_path: String, page_index: u16 }),
-        "move_page" => cmd!(paginas::move_page, { work_path: String, from_index: u16, to_index: u16 }),
+        "move_page" => {
+            cmd!(paginas::move_page, { work_path: String, from_index: u16, to_index: u16 })
+        }
         "merge_pdf" => cmd!(paginas::merge_pdf, { work_path: String, other_path: String }),
-        "extract_pages" => cmd!(paginas::extract_pages, { work_path: String, page_indices: Vec<u16>, dest_path: String, delete_after: Option<bool> }),
-        "extract_each_page" => cmd!(paginas::extract_each_page, { work_path: String, page_indices: Vec<u16>, dest_dir: String, delete_after: Option<bool> }),
-        "delete_pages" => cmd!(paginas::delete_pages, { work_path: String, page_indices: Vec<u16> }),
-        "rotate_pages" => cmd!(paginas::rotate_pages, { work_path: String, page_indices: Vec<u16>, quarter_turns: i8 }),
+        "extract_pages" => {
+            cmd!(paginas::extract_pages, { work_path: String, page_indices: Vec<u16>, dest_path: String, delete_after: Option<bool> })
+        }
+        "extract_each_page" => {
+            cmd!(paginas::extract_each_page, { work_path: String, page_indices: Vec<u16>, dest_dir: String, delete_after: Option<bool> })
+        }
+        "delete_pages" => {
+            cmd!(paginas::delete_pages, { work_path: String, page_indices: Vec<u16> })
+        }
+        "rotate_pages" => {
+            cmd!(paginas::rotate_pages, { work_path: String, page_indices: Vec<u16>, quarter_turns: i8 })
+        }
         "save_pdf" => cmd!(crate::save_pdf, { work_path: String, dest_path: String }),
-        "add_stroke" => cmd!(anotaciones::add_stroke, { work_path: String, page_index: u16, points: Vec<[f32; 2]>, color: Option<[u8; 4]>, width: Option<f32>, author: Option<String> }),
-        "add_note" => cmd!(anotaciones::add_note, { work_path: String, page_index: u16, x: f32, y: f32, text: String, author: Option<String> }),
+        "add_stroke" => {
+            cmd!(anotaciones::add_stroke, { work_path: String, page_index: u16, points: Vec<[f32; 2]>, color: Option<[u8; 4]>, width: Option<f32>, author: Option<String> })
+        }
+        "add_note" => {
+            cmd!(anotaciones::add_note, { work_path: String, page_index: u16, x: f32, y: f32, text: String, author: Option<String> })
+        }
         "get_annotations" => cmd!(anotaciones::get_annotations, { path: String, page_index: u16 }),
-        "remove_annotation" => cmd!(anotaciones::remove_annotation, { work_path: String, page_index: u16, annot_index: u16 }),
-        "set_annotation_contents" => cmd!(anotaciones::set_annotation_contents, { work_path: String, page_index: u16, annot_index: u16, contents: String, author: Option<String> }),
-        "set_annotation_color" => cmd!(anotaciones::set_annotation_color, { work_path: String, page_index: u16, annot_index: u16, color: [u8; 4] }),
+        "remove_annotation" => {
+            cmd!(anotaciones::remove_annotation, { work_path: String, page_index: u16, annot_index: u16 })
+        }
+        "set_annotation_contents" => {
+            cmd!(anotaciones::set_annotation_contents, { work_path: String, page_index: u16, annot_index: u16, contents: String, author: Option<String> })
+        }
+        "set_annotation_color" => {
+            cmd!(anotaciones::set_annotation_color, { work_path: String, page_index: u16, annot_index: u16, color: [u8; 4] })
+        }
         "get_document_annotations" => cmd!(anotaciones::get_document_annotations, { path: String }),
-        "reply_annotation" => cmd!(crate::comentarios::reply_annotation, { work_path: String, page_index: u16, annot_index: u16, text: String, author: Option<String> }),
-        "set_annotation_state" => cmd!(crate::comentarios::set_annotation_state, { work_path: String, page_index: u16, annot_index: u16, state: String, author: Option<String> }),
-        "export_comments" => cmd!(crate::comentarios::export_comments, { work_path: String, dest_path: String, document_name: Option<String> }),
-        "export_comments_pdf" => cmd!(crate::comentarios2::export_comments_pdf, { work_path: String, dest_path: String, orden: String, document_name: Option<String> }),
-        "export_comments_xfdf" => cmd!(crate::comentarios2::export_comments_xfdf, { work_path: String, dest_path: String }),
-        "import_comments_xfdf" => cmd!(crate::comentarios2::import_comments_xfdf, { work_path: String, src_path: String }),
+        "reply_annotation" => {
+            cmd!(crate::comentarios::reply_annotation, { work_path: String, page_index: u16, annot_index: u16, text: String, author: Option<String> })
+        }
+        "set_annotation_state" => {
+            cmd!(crate::comentarios::set_annotation_state, { work_path: String, page_index: u16, annot_index: u16, state: String, author: Option<String> })
+        }
+        "export_comments" => {
+            cmd!(crate::comentarios::export_comments, { work_path: String, dest_path: String, document_name: Option<String> })
+        }
+        "export_comments_pdf" => {
+            cmd!(crate::comentarios2::export_comments_pdf, { work_path: String, dest_path: String, orden: String, document_name: Option<String> })
+        }
+        "export_comments_xfdf" => {
+            cmd!(crate::comentarios2::export_comments_xfdf, { work_path: String, dest_path: String })
+        }
+        "import_comments_xfdf" => {
+            cmd!(crate::comentarios2::import_comments_xfdf, { work_path: String, src_path: String })
+        }
         "get_form_fields" => cmd!(formularios::get_form_fields, { path: String, page_index: u16 }),
-        "set_form_text" => cmd!(formularios::set_form_text, { work_path: String, page_index: u16, annot_index: u16, value: String }),
-        "set_form_checked" => cmd!(formularios::set_form_checked, { work_path: String, page_index: u16, annot_index: u16, checked: bool }),
-        "set_form_choice" => cmd!(formularios::set_form_choice, { work_path: String, page_index: u16, field_index: u16, value: String }),
+        "set_form_text" => {
+            cmd!(formularios::set_form_text, { work_path: String, page_index: u16, annot_index: u16, value: String })
+        }
+        "set_form_checked" => {
+            cmd!(formularios::set_form_checked, { work_path: String, page_index: u16, annot_index: u16, checked: bool })
+        }
+        "set_form_choice" => {
+            cmd!(formularios::set_form_choice, { work_path: String, page_index: u16, field_index: u16, value: String })
+        }
         "get_text_blocks" => cmd!(texto::get_text_blocks, { path: String, page_index: u16 }),
-        "replace_text" => cmd!(texto::replace_text, { work_path: String, matches: Vec<texto::Reemplazo> }),
-        "edit_text_block" => cmd!(texto::edit_text_block, { work_path: String, page_index: u16, object_index: u32, new_text: String, color: Option<[u8; 4]>, align: Option<String>, line_height: Option<f32>, char_spacing: Option<f32>, reflow: Option<bool> }),
-        "add_text_block" => cmd!(texto::add_text_block, { work_path: String, page_index: u16, x: f32, y: f32, text: String, font_size: f32, font: Option<String>, color: Option<[u8; 4]>, align: Option<String>, line_height: Option<f32>, char_spacing: Option<f32> }),
-        "delete_text_block" => cmd!(texto::delete_text_block, { work_path: String, page_index: u16, object_index: u32 }),
-        "move_text_block" => cmd!(texto::move_text_block, { work_path: String, page_index: u16, object_index: u32, x: f32, y: f32 }),
-        "resize_text_block" => cmd!(texto::resize_text_block, { work_path: String, page_index: u16, object_index: u32, w: f32, h: f32 }),
+        "replace_text" => {
+            cmd!(texto::replace_text, { work_path: String, matches: Vec<texto::Reemplazo> })
+        }
+        "edit_text_block" => {
+            cmd!(texto::edit_text_block, { work_path: String, page_index: u16, object_index: u32, new_text: String, color: Option<[u8; 4]>, align: Option<String>, line_height: Option<f32>, char_spacing: Option<f32>, reflow: Option<bool> })
+        }
+        "add_text_block" => {
+            cmd!(texto::add_text_block, { work_path: String, page_index: u16, x: f32, y: f32, text: String, font_size: f32, font: Option<String>, color: Option<[u8; 4]>, align: Option<String>, line_height: Option<f32>, char_spacing: Option<f32> })
+        }
+        "delete_text_block" => {
+            cmd!(texto::delete_text_block, { work_path: String, page_index: u16, object_index: u32 })
+        }
+        "move_text_block" => {
+            cmd!(texto::move_text_block, { work_path: String, page_index: u16, object_index: u32, x: f32, y: f32 })
+        }
+        "resize_text_block" => {
+            cmd!(texto::resize_text_block, { work_path: String, page_index: u16, object_index: u32, w: f32, h: f32 })
+        }
         "get_images" => cmd!(imagenes::get_images, { path: String, page_index: u16 }),
-        "add_image" => cmd!(imagenes::add_image, { work_path: String, page_index: u16, image_path: String, x: f32, y: f32 }),
-        "transform_image" => cmd!(imagenes::transform_image, { work_path: String, page_index: u16, object_index: u32, x: f32, y: f32, w: f32, h: f32, rotate: Option<i16>, flip_h: Option<bool>, flip_v: Option<bool> }),
-        "reorder_image" => cmd!(imagenes::reorder_image, { work_path: String, page_index: u16, object_index: u32, al_frente: bool }),
-        "replace_image" => cmd!(imagenes::replace_image, { work_path: String, page_index: u16, object_index: u32, image_path: String }),
-        "crop_image" => cmd!(imagenes::crop_image, { work_path: String, page_index: u16, object_index: u32, rect: crate::Rect }),
-        "delete_image" => cmd!(imagenes::delete_image, { work_path: String, page_index: u16, object_index: u32 }),
-        "sign_pdf" => cmd!(crate::sign_pdf, { work_path: String, dest_path: String, cert_pem_path: String, key_pem_path: String, reason: Option<String>, rect: Option<crate::Rect>, page_index: Option<u16>, signer_name: Option<String>, signature_png: Option<String>, tsa_url: Option<String>, ltv: Option<bool> }),
-        "certify_pdf" => cmd!(crate::certify_pdf, { work_path: String, dest_path: String, nivel: u8, cert_pem_path: Option<String>, key_pem_path: Option<String>, p12_path: Option<String>, password: Option<String>, reason: Option<String>, rect: Option<crate::Rect>, page_index: Option<u16>, signer_name: Option<String>, signature_png: Option<String>, tsa_url: Option<String>, ltv: Option<bool> }),
-        "sign_pdf_p12" => cmd!(crate::sign_pdf_p12, { work_path: String, dest_path: String, p12_path: String, password: String, reason: Option<String>, rect: Option<crate::Rect>, page_index: Option<u16>, signer_name: Option<String>, signature_png: Option<String>, tsa_url: Option<String>, ltv: Option<bool> }),
+        "add_image" => {
+            cmd!(imagenes::add_image, { work_path: String, page_index: u16, image_path: String, x: f32, y: f32 })
+        }
+        "transform_image" => {
+            cmd!(imagenes::transform_image, { work_path: String, page_index: u16, object_index: u32, x: f32, y: f32, w: f32, h: f32, rotate: Option<i16>, flip_h: Option<bool>, flip_v: Option<bool> })
+        }
+        "reorder_image" => {
+            cmd!(imagenes::reorder_image, { work_path: String, page_index: u16, object_index: u32, al_frente: bool })
+        }
+        "replace_image" => {
+            cmd!(imagenes::replace_image, { work_path: String, page_index: u16, object_index: u32, image_path: String })
+        }
+        "crop_image" => {
+            cmd!(imagenes::crop_image, { work_path: String, page_index: u16, object_index: u32, rect: crate::Rect })
+        }
+        "delete_image" => {
+            cmd!(imagenes::delete_image, { work_path: String, page_index: u16, object_index: u32 })
+        }
+        "sign_pdf" => {
+            cmd!(crate::sign_pdf, { work_path: String, dest_path: String, cert_pem_path: String, key_pem_path: String, reason: Option<String>, rect: Option<crate::Rect>, page_index: Option<u16>, signer_name: Option<String>, signature_png: Option<String>, tsa_url: Option<String>, ltv: Option<bool> })
+        }
+        "certify_pdf" => {
+            cmd!(crate::certify_pdf, { work_path: String, dest_path: String, nivel: u8, cert_pem_path: Option<String>, key_pem_path: Option<String>, p12_path: Option<String>, password: Option<String>, reason: Option<String>, rect: Option<crate::Rect>, page_index: Option<u16>, signer_name: Option<String>, signature_png: Option<String>, tsa_url: Option<String>, ltv: Option<bool> })
+        }
+        "sign_pdf_p12" => {
+            cmd!(crate::sign_pdf_p12, { work_path: String, dest_path: String, p12_path: String, password: String, reason: Option<String>, rect: Option<crate::Rect>, page_index: Option<u16>, signer_name: Option<String>, signature_png: Option<String>, tsa_url: Option<String>, ltv: Option<bool> })
+        }
         "verify_signatures" => cmd!(firma::verify_signatures, { path: String }),
         "read_certificate" => cmd!(firma::read_certificate, { path: String }),
-        "stamp_signature" => cmd!(firmas_visuales::stamp_signature, { work_path: String, page_index: u16, png_base64: String, x: f32, y: f32, w: f32, h: f32 }),
-        "import_signature_file" => cmd!(firmas_visuales::import_signature_file, { image_path: String, ranura: Option<String> }),
-        "save_stored_signature" => cmd!(firmas_visuales::save_stored_signature, { name: String, png_base64: String, ranura: Option<String> }),
-        "set_signature_slot" => cmd!(firmas_visuales::set_signature_slot, { id: String, ranura: String }),
+        "stamp_signature" => {
+            cmd!(firmas_visuales::stamp_signature, { work_path: String, page_index: u16, png_base64: String, x: f32, y: f32, w: f32, h: f32 })
+        }
+        "import_signature_file" => {
+            cmd!(firmas_visuales::import_signature_file, { image_path: String, ranura: Option<String> })
+        }
+        "save_stored_signature" => {
+            cmd!(firmas_visuales::save_stored_signature, { name: String, png_base64: String, ranura: Option<String> })
+        }
+        "set_signature_slot" => {
+            cmd!(firmas_visuales::set_signature_slot, { id: String, ranura: String })
+        }
         "list_stored_signatures" => firmas_visuales::list_stored_signatures()
             .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
         "delete_stored_signature" => cmd!(firmas_visuales::delete_stored_signature, { id: String }),
-        "get_image_data" => cmd!(imagenes::get_image_data, { path: String, page_index: u16, object_index: u32 }),
-        "save_image_data" => cmd!(imagenes::save_image_data, { work_path: String, page_index: u16, object_index: u32, dest_path: String }),
-        "add_markup" => cmd!(anotaciones2::add_markup, { work_path: String, page_index: u16, rects: Vec<crate::Rect>, kind: String, color: Option<[u8; 4]>, author: Option<String> }),
-        "add_shape" => cmd!(anotaciones2::add_shape, { work_path: String, page_index: u16, kind: String, x1: f32, y1: f32, x2: f32, y2: f32, stroke: [u8; 4], fill: Option<[u8; 4]>, stroke_width: f32, author: Option<String> }),
-        "add_stamp" => cmd!(anotaciones2::add_stamp, { work_path: String, page_index: u16, text: String, color: [u8; 4], x: f32, y: f32, font_size: f32, author: Option<String>, dinamico: Option<String> }),
-        "add_free_text" => cmd!(anotaciones2::add_free_text, { work_path: String, page_index: u16, rect: crate::Rect, text: String, font_size: f32, color: [u8; 4], border: bool, author: Option<String> }),
-        "add_callout" => cmd!(anotaciones2::add_callout, { work_path: String, page_index: u16, rect: crate::Rect, punta: [f32; 2], text: String, color: [u8; 4], author: Option<String>, codo: Option<[f32; 2]> }),
-        "add_measure" => cmd!(anotaciones2::add_measure, { work_path: String, page_index: u16, points: Vec<[f32; 2]>, text: String, color: [u8; 4], closed: Option<bool>, author: Option<String>, escala: Option<anotaciones2::EscalaMedida> }),
-        "erase_ink_area" => cmd!(anotaciones2::erase_ink_area, { work_path: String, page_index: u16, rect: crate::Rect }),
-        "transform_annotation" => cmd!(anotaciones2::transform_annotation, { work_path: String, page_index: u16, annot_index: u16, x: f32, y: f32, w: f32, h: f32 }),
+        "get_image_data" => {
+            cmd!(imagenes::get_image_data, { path: String, page_index: u16, object_index: u32 })
+        }
+        "save_image_data" => {
+            cmd!(imagenes::save_image_data, { work_path: String, page_index: u16, object_index: u32, dest_path: String })
+        }
+        "add_markup" => {
+            cmd!(anotaciones2::add_markup, { work_path: String, page_index: u16, rects: Vec<crate::Rect>, kind: String, color: Option<[u8; 4]>, author: Option<String> })
+        }
+        "add_shape" => {
+            cmd!(anotaciones2::add_shape, { work_path: String, page_index: u16, kind: String, x1: f32, y1: f32, x2: f32, y2: f32, stroke: [u8; 4], fill: Option<[u8; 4]>, stroke_width: f32, author: Option<String> })
+        }
+        "add_stamp" => {
+            cmd!(anotaciones2::add_stamp, { work_path: String, page_index: u16, text: String, color: [u8; 4], x: f32, y: f32, font_size: f32, author: Option<String>, dinamico: Option<String> })
+        }
+        "add_free_text" => {
+            cmd!(anotaciones2::add_free_text, { work_path: String, page_index: u16, rect: crate::Rect, text: String, font_size: f32, color: [u8; 4], border: bool, author: Option<String> })
+        }
+        "add_callout" => {
+            cmd!(anotaciones2::add_callout, { work_path: String, page_index: u16, rect: crate::Rect, punta: [f32; 2], text: String, color: [u8; 4], author: Option<String>, codo: Option<[f32; 2]> })
+        }
+        "add_measure" => {
+            cmd!(anotaciones2::add_measure, { work_path: String, page_index: u16, points: Vec<[f32; 2]>, text: String, color: [u8; 4], closed: Option<bool>, author: Option<String>, escala: Option<anotaciones2::EscalaMedida> })
+        }
+        "erase_ink_area" => {
+            cmd!(anotaciones2::erase_ink_area, { work_path: String, page_index: u16, rect: crate::Rect })
+        }
+        "transform_annotation" => {
+            cmd!(anotaciones2::transform_annotation, { work_path: String, page_index: u16, annot_index: u16, x: f32, y: f32, w: f32, h: f32 })
+        }
         "add_blank_page" => cmd!(paginas2::add_blank_page, { work_path: String, index: u16 }),
-        "pdf_from_images" => cmd!(paginas2::pdf_from_images, { image_paths: Vec<String>, dest_path: String, tamano: String }),
+        "pdf_from_images" => {
+            cmd!(paginas2::pdf_from_images, { image_paths: Vec<String>, dest_path: String, tamano: String })
+        }
         "duplicate_page" => cmd!(paginas2::duplicate_page, { work_path: String, page_index: u16 }),
-        "insert_pdf_at" => cmd!(paginas2::insert_pdf_at, { work_path: String, other_path: String, index: u16, page_indices: Option<Vec<u16>> }),
-        "replace_pages" => cmd!(paginas2::replace_pages, { work_path: String, page_indices: Vec<u16>, other_path: String, other_indices: Option<Vec<u16>> }),
-        "split_pdf" => cmd!(paginas2::split_pdf, { work_path: String, dest_dir: String, modo: String, cada: Option<u16> }),
-        "merge_many" => cmd!(paginas2::merge_many, { work_path: String, others: Vec<String>, at: Option<u16> }),
-        "crop_page" => cmd!(paginas2::crop_page, { work_path: String, page_index: u16, rect: crate::Rect, all_pages: bool, margenes: Option<paginas2::Margenes> }),
-        "add_watermark" => cmd!(paginas2::add_watermark, { work_path: String, text: String, font_size: f32, color: [u8; 4], diagonal: bool, position: Option<String>, page_indices: Option<Vec<u16>>, image_png: Option<String>, opacity: Option<f32>, rotation: Option<f32>, detras: Option<bool> }),
-        "add_bates" => cmd!(paginas2::add_bates, { work_path: String, prefijo: String, sufijo: String, digitos: u8, empieza_en: u32, position: Option<String>, font_size: Option<f32>, page_indices: Option<Vec<u16>> }),
-        "remove_marginal_text" => cmd!(paginas2::remove_marginal_text, { work_path: String, zona: String, dry_run: bool }),
-        "add_background" => cmd!(paginas2::add_background, { work_path: String, color: Option<[u8; 4]>, image_png: Option<String>, opacity: Option<f32>, page_indices: Option<Vec<u16>> }),
-        "compose_print" => cmd!(crate::imprimir::compose_print, { work_path: String, modo: String, opciones: crate::imprimir::OpcionesComposicion }),
-        "remove_background" => cmd!(paginas2::remove_background, { work_path: String, dry_run: bool }),
-        "add_header_footer" => cmd!(paginas2::add_header_footer, { work_path: String, header_left: Option<String>, header_center: Option<String>, header_right: Option<String>, footer_left: Option<String>, footer_center: Option<String>, footer_right: Option<String>, font_size: f32, page_indices: Option<Vec<u16>> }),
+        "insert_pdf_at" => {
+            cmd!(paginas2::insert_pdf_at, { work_path: String, other_path: String, index: u16, page_indices: Option<Vec<u16>> })
+        }
+        "replace_pages" => {
+            cmd!(paginas2::replace_pages, { work_path: String, page_indices: Vec<u16>, other_path: String, other_indices: Option<Vec<u16>> })
+        }
+        "split_pdf" => {
+            cmd!(paginas2::split_pdf, { work_path: String, dest_dir: String, modo: String, cada: Option<u16> })
+        }
+        "merge_many" => {
+            cmd!(paginas2::merge_many, { work_path: String, others: Vec<String>, at: Option<u16> })
+        }
+        "crop_page" => {
+            cmd!(paginas2::crop_page, { work_path: String, page_index: u16, rect: crate::Rect, all_pages: bool, margenes: Option<paginas2::Margenes> })
+        }
+        "add_watermark" => {
+            cmd!(paginas2::add_watermark, { work_path: String, text: String, font_size: f32, color: [u8; 4], diagonal: bool, position: Option<String>, page_indices: Option<Vec<u16>>, image_png: Option<String>, opacity: Option<f32>, rotation: Option<f32>, detras: Option<bool> })
+        }
+        "add_bates" => {
+            cmd!(paginas2::add_bates, { work_path: String, prefijo: String, sufijo: String, digitos: u8, empieza_en: u32, position: Option<String>, font_size: Option<f32>, page_indices: Option<Vec<u16>> })
+        }
+        "remove_marginal_text" => {
+            cmd!(paginas2::remove_marginal_text, { work_path: String, zona: String, dry_run: bool })
+        }
+        "add_background" => {
+            cmd!(paginas2::add_background, { work_path: String, color: Option<[u8; 4]>, image_png: Option<String>, opacity: Option<f32>, page_indices: Option<Vec<u16>> })
+        }
+        "compose_print" => {
+            cmd!(crate::imprimir::compose_print, { work_path: String, modo: String, opciones: crate::imprimir::OpcionesComposicion })
+        }
+        "remove_background" => {
+            cmd!(paginas2::remove_background, { work_path: String, dry_run: bool })
+        }
+        "add_header_footer" => {
+            cmd!(paginas2::add_header_footer, { work_path: String, header_left: Option<String>, header_center: Option<String>, header_right: Option<String>, footer_left: Option<String>, footer_center: Option<String>, footer_right: Option<String>, font_size: f32, page_indices: Option<Vec<u16>> })
+        }
         "get_outline" => cmd!(documento::get_outline, { path: String }),
-        "set_outline" => cmd!(documento::set_outline, { work_path: String, nodes: Vec<documento::OutlineNode> }),
+        "set_outline" => {
+            cmd!(documento::set_outline, { work_path: String, nodes: Vec<documento::OutlineNode> })
+        }
         "pdf_info" => cmd!(documento::pdf_info, { path: String }),
         "get_metadata" => cmd!(documento::get_metadata, { path: String }),
         "get_document_info" => cmd!(documento::get_document_info, { path: String }),
         "get_page_labels" => cmd!(documento::get_page_labels, { path: String }),
-        "set_page_labels" => cmd!(documento::set_page_labels, { work_path: String, rangos: Vec<documento::RangoEtiqueta> }),
+        "set_page_labels" => {
+            cmd!(documento::set_page_labels, { work_path: String, rangos: Vec<documento::RangoEtiqueta> })
+        }
         "get_open_action" => cmd!(documento::get_open_action, { path: String }),
-        "set_open_action" => cmd!(documento::set_open_action, { work_path: String, vista: documento::VistaInicial }),
-        "set_metadata" => cmd!(documento::set_metadata, { work_path: String, meta: documento::Metadata }),
+        "set_open_action" => {
+            cmd!(documento::set_open_action, { work_path: String, vista: documento::VistaInicial })
+        }
+        "set_metadata" => {
+            cmd!(documento::set_metadata, { work_path: String, meta: documento::Metadata })
+        }
         "get_links" => cmd!(documento::get_links, { path: String, page_index: u16 }),
-        "encrypt_pdf" => cmd!(seguridad::encrypt_pdf, { work_path: String, dest_path: Option<String>, user_password: String, owner_password: Option<String>, permisos: Option<seguridad::Permisos> }),
-        "encrypt_pdf_cert" => cmd!(seguridad::encrypt_pdf_cert, { work_path: String, dest_path: String, destinatarios: Vec<seguridad::Destinatario> }),
+        "encrypt_pdf" => {
+            cmd!(seguridad::encrypt_pdf, { work_path: String, dest_path: Option<String>, user_password: String, owner_password: Option<String>, permisos: Option<seguridad::Permisos> })
+        }
+        "encrypt_pdf_cert" => {
+            cmd!(seguridad::encrypt_pdf_cert, { work_path: String, dest_path: String, destinatarios: Vec<seguridad::Destinatario> })
+        }
         "remove_encryption" => cmd!(seguridad::remove_encryption, { work_path: String }),
         "flatten_pdf" => cmd!(seguridad::flatten_pdf, { work_path: String }),
-        "redact_area" => cmd!(seguridad::redact_area, { work_path: String, page_index: u16, rect: crate::Rect, dry_run: bool }),
-        "mark_redaction" => cmd!(seguridad2::mark_redaction, { work_path: String, page_index: u16, rect: crate::Rect }),
+        "redact_area" => {
+            cmd!(seguridad::redact_area, { work_path: String, page_index: u16, rect: crate::Rect, dry_run: bool })
+        }
+        "mark_redaction" => {
+            cmd!(seguridad2::mark_redaction, { work_path: String, page_index: u16, rect: crate::Rect })
+        }
         "list_redactions" => cmd!(seguridad2::list_redactions, { work_path: String }),
-        "unmark_redaction" => cmd!(seguridad2::unmark_redaction, { work_path: String, page_index: u16, annot_index: u16 }),
+        "unmark_redaction" => {
+            cmd!(seguridad2::unmark_redaction, { work_path: String, page_index: u16, annot_index: u16 })
+        }
         "unmark_all_redactions" => cmd!(seguridad2::unmark_all_redactions, { work_path: String }),
-        "apply_redactions" => cmd!(seguridad2::apply_redactions, { work_path: String, dry_run: bool }),
+        "apply_redactions" => {
+            cmd!(seguridad2::apply_redactions, { work_path: String, dry_run: bool })
+        }
         "sanitize_pdf" => cmd!(seguridad2::sanitize_pdf, { work_path: String, dry_run: bool }),
         "list_attachments" => cmd!(crate::adjuntos::list_attachments, { path: String }),
-        "save_attachment" => cmd!(crate::adjuntos::save_attachment, { path: String, index: u16, dest_path: String }),
-        "add_attachment" => cmd!(crate::adjuntos::add_attachment, { work_path: String, file_path: String, description: Option<String> }),
-        "add_file_attachment_annotation" => cmd!(crate::adjuntos::add_file_attachment_annotation, { work_path: String, page_index: u16, punto: [f32; 2], src_path: String, author: Option<String> }),
-        "delete_attachment" => cmd!(crate::adjuntos::delete_attachment, { work_path: String, index: u16 }),
+        "save_attachment" => {
+            cmd!(crate::adjuntos::save_attachment, { path: String, index: u16, dest_path: String })
+        }
+        "add_attachment" => {
+            cmd!(crate::adjuntos::add_attachment, { work_path: String, file_path: String, description: Option<String> })
+        }
+        "add_file_attachment_annotation" => {
+            cmd!(crate::adjuntos::add_file_attachment_annotation, { work_path: String, page_index: u16, punto: [f32; 2], src_path: String, author: Option<String> })
+        }
+        "delete_attachment" => {
+            cmd!(crate::adjuntos::delete_attachment, { work_path: String, index: u16 })
+        }
         "open_attachment" => cmd!(crate::adjuntos::open_attachment, { path: String, index: u16 }),
-        "open_page_attachment" => cmd!(crate::adjuntos::open_page_attachment, { path: String, page_index: u16, annot_index: u16 }),
-        "save_page_attachment" => cmd!(crate::adjuntos::save_page_attachment, { path: String, page_index: u16, annot_index: u16, dest_path: String }),
+        "open_page_attachment" => {
+            cmd!(crate::adjuntos::open_page_attachment, { path: String, page_index: u16, annot_index: u16 })
+        }
+        "save_page_attachment" => {
+            cmd!(crate::adjuntos::save_page_attachment, { path: String, page_index: u16, annot_index: u16, dest_path: String })
+        }
         "list_layers" => cmd!(crate::adjuntos::list_layers, { path: String }),
-        "set_layer_visible" => cmd!(crate::adjuntos::set_layer_visible, { work_path: String, index: u16, visible: bool }),
-        "export_pages_png" => cmd!(exportar::export_pages_png, { path: String, dest_dir: String, dpi: u16, format: String, page_indices: Option<Vec<u16>> }),
+        "set_layer_visible" => {
+            cmd!(crate::adjuntos::set_layer_visible, { work_path: String, index: u16, visible: bool })
+        }
+        "export_pages_png" => {
+            cmd!(exportar::export_pages_png, { path: String, dest_dir: String, dpi: u16, format: String, page_indices: Option<Vec<u16>> })
+        }
         "export_text" => cmd!(exportar::export_text, { path: String, dest_path: String }),
-        "export_docx" => cmd!(exportar::export_docx, { work_path: String, dest_path: String, page_indices: Option<Vec<u16>> }),
-        "compress_pdf" => cmd!(exportar::compress_pdf, { work_path: String, quality: u8, max_dpi: u16, quitar_adjuntos: Option<bool>, quitar_metadatos: Option<bool>, aplanar_formularios: Option<bool> }),
+        "export_docx" => {
+            cmd!(exportar::export_docx, { work_path: String, dest_path: String, page_indices: Option<Vec<u16>> })
+        }
+        "compress_pdf" => {
+            cmd!(exportar::compress_pdf, { work_path: String, quality: u8, max_dpi: u16, quitar_adjuntos: Option<bool>, quitar_metadatos: Option<bool>, aplanar_formularios: Option<bool> })
+        }
         "audit_pdf" => cmd!(exportar::audit_pdf, { path: String }),
-        "export_html" => cmd!(exportar::export_html, { work_path: String, dest_path: String, rango: Option<exportar::Rango> }),
+        "export_html" => {
+            cmd!(exportar::export_html, { work_path: String, dest_path: String, rango: Option<exportar::Rango> })
+        }
         "compare_pdf" => cmd!(crate::comparar::compare_pdf, { a: String, b: String }),
-        "create_form_field" => cmd!(crate::formularios2::create_form_field, { work_path: String, page_index: u16, kind: String, rect: crate::Rect, name: String, group: Option<String>, export_value: Option<String>, options: Option<Vec<String>>, props: Option<crate::formularios2::PropsCampo> }),
-        "export_form_data_xfdf" => cmd!(crate::formularios2::export_form_data_xfdf, { work_path: String, dest_path: String }),
-        "import_form_data_xfdf" => cmd!(crate::formularios2::import_form_data_xfdf, { work_path: String, src_path: String }),
-        "create_form_fields" => cmd!(crate::formularios2::create_form_fields, { work_path: String, fields: Vec<crate::formularios2::CampoNuevo> }),
-        "detect_form_fields" => cmd!(crate::formularios2::detect_form_fields, { work_path: String, page_indices: Option<Vec<u16>> }),
-        "delete_form_field" => cmd!(crate::formularios2::delete_form_field, { work_path: String, name: String }),
-        "create_link" => cmd!(crate::formularios2::create_link, { work_path: String, page_index: u16, rect: crate::Rect, uri: Option<String>, dest_page: Option<u16> }),
+        "create_form_field" => {
+            cmd!(crate::formularios2::create_form_field, { work_path: String, page_index: u16, kind: String, rect: crate::Rect, name: String, group: Option<String>, export_value: Option<String>, options: Option<Vec<String>>, props: Option<crate::formularios2::PropsCampo> })
+        }
+        "export_form_data_xfdf" => {
+            cmd!(crate::formularios2::export_form_data_xfdf, { work_path: String, dest_path: String })
+        }
+        "import_form_data_xfdf" => {
+            cmd!(crate::formularios2::import_form_data_xfdf, { work_path: String, src_path: String })
+        }
+        "create_form_fields" => {
+            cmd!(crate::formularios2::create_form_fields, { work_path: String, fields: Vec<crate::formularios2::CampoNuevo> })
+        }
+        "detect_form_fields" => {
+            cmd!(crate::formularios2::detect_form_fields, { work_path: String, page_indices: Option<Vec<u16>> })
+        }
+        "delete_form_field" => {
+            cmd!(crate::formularios2::delete_form_field, { work_path: String, name: String })
+        }
+        "create_link" => {
+            cmd!(crate::formularios2::create_link, { work_path: String, page_index: u16, rect: crate::Rect, uri: Option<String>, dest_page: Option<u16> })
+        }
         "close_document" => cmd!(crate::close_document, { work_path: String }),
         "undo" => cmd!(historial::undo, { work_path: String }),
         "redo" => cmd!(historial::redo, { work_path: String }),
         "history_state" => cmd!(historial::history_state, { work_path: String }),
         "squash_history" => cmd!(historial::squash_history, { work_path: String, steps: u16 }),
-        "autosave_state" => cmd!(crate::recuperacion::autosave_state, { work_path: String, original_path: Option<String>, modified: bool }),
+        "autosave_state" => {
+            cmd!(crate::recuperacion::autosave_state, { work_path: String, original_path: Option<String>, modified: bool })
+        }
         "borra_sesion" => cmd!(crate::recuperacion::borra_sesion, { work_path: String }),
         "adopt_session" => cmd!(crate::adopt_session, { work_path: String }),
         "recover_session" => crate::recuperacion::recover_session()
@@ -436,13 +636,17 @@ mod tests {
     /// `.tsx` con su ruta.
     fn fuentes_de_la_ui() -> Vec<(String, String)> {
         fn recorre(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
-            let Ok(entradas) = std::fs::read_dir(dir) else { return };
+            let Ok(entradas) = std::fs::read_dir(dir) else {
+                return;
+            };
             for e in entradas.flatten() {
                 let ruta = e.path();
                 if ruta.is_dir() {
                     recorre(&ruta, out);
-                } else if matches!(ruta.extension().and_then(|s| s.to_str()), Some("ts") | Some("tsx"))
-                {
+                } else if matches!(
+                    ruta.extension().and_then(|s| s.to_str()),
+                    Some("ts") | Some("tsx")
+                ) {
                     if let Ok(texto) = std::fs::read_to_string(&ruta) {
                         // sin comentarios: un `invoke` de ejemplo dentro de
                         // un doc-comment no es una llamada, y un `;` o una
@@ -455,7 +659,10 @@ mod tests {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src");
         let mut out = Vec::new();
         recorre(&src, &mut out);
-        assert!(!out.is_empty(), "no se ha encontrado el código de la UI en {src:?}");
+        assert!(
+            !out.is_empty(),
+            "no se ha encontrado el código de la UI en {src:?}"
+        );
         out
     }
 
@@ -470,7 +677,9 @@ mod tests {
     /// eso es exactamente lo que la UI escribe en `invoke`.
     fn comandos_del_handler() -> Vec<String> {
         let lib = fuente("lib.rs");
-        let desde = lib.find("generate_handler![").expect("lib.rs sin generate_handler!");
+        let desde = lib
+            .find("generate_handler![")
+            .expect("lib.rs sin generate_handler!");
         let cuerpo = &lib[desde + "generate_handler![".len()..];
         let hasta = cuerpo.find(']').expect("generate_handler! sin cerrar");
         let mut nombres: Vec<String> = cuerpo[..hasta]
@@ -479,7 +688,10 @@ mod tests {
             .filter(|t| !t.is_empty())
             .collect();
         nombres.sort();
-        assert!(nombres.len() > 50, "el handler se ha leído a medias: {nombres:?}");
+        assert!(
+            nombres.len() > 50,
+            "el handler se ha leído a medias: {nombres:?}"
+        );
         nombres
     }
 
@@ -487,14 +699,19 @@ mod tests {
     fn comandos_del_puente() -> Vec<String> {
         let yo = fuente("puente_dev.rs");
         let desde = yo.find("fn despachar").expect("sin despachar");
-        let hasta = yo[desde..].find("\n#[cfg(test)]").map(|i| desde + i).unwrap_or(yo.len());
+        let hasta = yo[desde..]
+            .find("\n#[cfg(test)]")
+            .map(|i| desde + i)
+            .unwrap_or(yo.len());
         let mut nombres: Vec<String> = yo[desde..hasta]
             .lines()
             .filter_map(|l| {
                 let l = l.trim_start();
                 let resto = l.strip_prefix('"')?;
                 let (nombre, tras) = resto.split_once('"')?;
-                tras.trim_start().starts_with("=>").then(|| nombre.to_string())
+                tras.trim_start()
+                    .starts_with("=>")
+                    .then(|| nombre.to_string())
             })
             .collect();
         nombres.sort();
@@ -668,9 +885,13 @@ mod tests {
             while let Some(j) = texto[i..].find("#[tauri::command") {
                 let j = i + j;
                 i = j + 1;
-                let Some(k) = texto[j..].find("fn ") else { continue };
+                let Some(k) = texto[j..].find("fn ") else {
+                    continue;
+                };
                 let k = j + k + "fn ".len();
-                let Some(p) = texto[k..].find('(') else { continue };
+                let Some(p) = texto[k..].find('(') else {
+                    continue;
+                };
                 let nombre = texto[k..k + p].trim().to_string();
                 let Some(dentro) = hasta_cerrar(&texto, k + p, '(', ')') else {
                     continue;
@@ -771,7 +992,9 @@ mod tests {
     /// fichero, tal cual, para leerle las claves o su opcionalidad.
     fn bloque_declarado(texto: &str, nombre: &str) -> Option<String> {
         for aguja in [format!("type {nombre} ="), format!("const {nombre}")] {
-            let Some(pos) = texto.find(&aguja) else { continue };
+            let Some(pos) = texto.find(&aguja) else {
+                continue;
+            };
             let tras = &texto[pos..];
             let Some(abre) = tras.find('{') else { continue };
             // que la llave sea de esa declaración y no de la siguiente
@@ -795,9 +1018,16 @@ mod tests {
     /// en el propio `invoke` (`workPath ?? null`).
     fn admite_nulo(texto: &str) -> bool {
         let t: String = texto.chars().filter(|c| !c.is_whitespace()).collect();
-        ["|null", "null|", "|undefined", "undefined|", "??null", "??undefined"]
-            .iter()
-            .any(|a| t.contains(a))
+        [
+            "|null",
+            "null|",
+            "|undefined",
+            "undefined|",
+            "??null",
+            "??undefined",
+        ]
+        .iter()
+        .any(|a| t.contains(a))
             || t.ends_with("=null")
             || t.ends_with("=undefined")
     }
@@ -843,7 +1073,9 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join(" ");
             let t = t.trim();
-            let Some((clave, tipo)) = t.split_once(':') else { continue };
+            let Some((clave, tipo)) = t.split_once(':') else {
+                continue;
+            };
             let opcional = clave.trim_end().ends_with('?') || admite_nulo(tipo);
             let clave = clave.trim().trim_end_matches('?').trim();
             if !opcional
@@ -900,7 +1132,9 @@ mod tests {
             if bytes[i] != b'(' || !texto.is_char_boundary(i) {
                 continue;
             }
-            let Some(dentro) = hasta_cerrar(texto, i, '(', ')') else { continue };
+            let Some(dentro) = hasta_cerrar(texto, i, '(', ')') else {
+                continue;
+            };
             let cierra = i + 1 + dentro.len();
             if cierra < antes_de {
                 continue; // ese paréntesis se cierra antes de la llamada
@@ -931,7 +1165,9 @@ mod tests {
                     let opcional = nombre.ends_with('?') || admite_nulo(&tipo);
                     let nombre = nombre.trim_end_matches('?').trim().to_string();
                     (!nombre.is_empty()
-                        && nombre.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+                        && nombre
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '_'))
                     .then_some((nombre, opcional))
                 })
                 .collect();
@@ -1014,10 +1250,16 @@ mod tests {
                     }
                 }
                 let resto = texto[k..].trim_start();
-                let Some(tras) = resto.strip_prefix("(") else { continue };
+                let Some(tras) = resto.strip_prefix("(") else {
+                    continue;
+                };
                 let tras = tras.trim_start();
-                let Some(tras) = tras.strip_prefix('"') else { continue };
-                let Some((comando, _)) = tras.split_once('"') else { continue };
+                let Some(tras) = tras.strip_prefix('"') else {
+                    continue;
+                };
+                let Some((comando, _)) = tras.split_once('"') else {
+                    continue;
+                };
                 // dónde empieza el objeto de argumentos, si lo hay
                 let pos_nombre = texto.len() - tras.len();
                 let tras_nombre = &texto[pos_nombre + comando.len() + 1..];
@@ -1174,7 +1416,11 @@ mod tests {
         let comandos = parametros_de_los_comandos();
         let fuentes = fuentes_de_la_ui();
         let llamadas = llamadas_de_la_ui(&fuentes);
-        assert!(llamadas.len() > 50, "se han leído {} invoke", llamadas.len());
+        assert!(
+            llamadas.len() > 50,
+            "se han leído {} invoke",
+            llamadas.len()
+        );
 
         let ilegibles: Vec<&str> = llamadas
             .iter()
@@ -1188,7 +1434,9 @@ mod tests {
 
         let mut fallos: Vec<String> = Vec::new();
         for l in &llamadas {
-            let Some(params) = comandos.get(&l.comando) else { continue };
+            let Some(params) = comandos.get(&l.comando) else {
+                continue;
+            };
             if ARGUMENTOS_PENDIENTES.iter().any(|(c, _)| *c == l.comando) {
                 continue;
             }
@@ -1285,7 +1533,9 @@ mod tests {
         // apunte de recuperación quedándose puesto después de guardar.
         let mut indebidos: Vec<String> = Vec::new();
         for l in &llamadas {
-            let Some(params) = comandos.get(&l.comando) else { continue };
+            let Some(params) = comandos.get(&l.comando) else {
+                continue;
+            };
             for clave in &l.opcionales {
                 let snake = a_snake(clave);
                 if !params.iter().any(|p| p.nombre == snake && p.obligatorio) {
@@ -1327,7 +1577,11 @@ mod tests {
         );
         let inventados: Vec<&str> = OPCIONALES_INDEBIDOS
             .iter()
-            .filter(|(c, n, _)| !comandos.get(*c).is_some_and(|p| p.iter().any(|x| x.nombre == *n)))
+            .filter(|(c, n, _)| {
+                !comandos
+                    .get(*c)
+                    .is_some_and(|p| p.iter().any(|x| x.nombre == *n))
+            })
             .map(|(_, n, _)| *n)
             .collect();
         assert!(
@@ -1449,7 +1703,9 @@ mod tests {
                 continue;
             }
             let Some(reales) = comandos.get(nombre) else {
-                fallos.push(format!("{nombre}: el puente lo despacha y no es un comando"));
+                fallos.push(format!(
+                    "{nombre}: el puente lo despacha y no es un comando"
+                ));
                 continue;
             };
             let mios: Vec<&str> = args.iter().map(|p| p.nombre.as_str()).collect();
@@ -1465,8 +1721,16 @@ mod tests {
                     fallos.push(format!(
                         "{nombre}: `{}` es {} en el comando y {} en el puente",
                         a.nombre,
-                        if b.obligatorio { "obligatorio" } else { "opcional" },
-                        if a.obligatorio { "obligatorio" } else { "opcional" },
+                        if b.obligatorio {
+                            "obligatorio"
+                        } else {
+                            "opcional"
+                        },
+                        if a.obligatorio {
+                            "obligatorio"
+                        } else {
+                            "opcional"
+                        },
                     ));
                 }
             }
@@ -1540,15 +1804,21 @@ mod tests {
             while let Some(j) = texto[i..].find("#[tauri::command") {
                 let j = i + j;
                 i = j + 1;
-                let Some(k) = texto[j..].find("fn ") else { continue };
+                let Some(k) = texto[j..].find("fn ") else {
+                    continue;
+                };
                 let k = j + k + "fn ".len();
-                let Some(p) = texto[k..].find('(') else { continue };
+                let Some(p) = texto[k..].find('(') else {
+                    continue;
+                };
                 let nombre = texto[k..k + p].trim().to_string();
                 let Some(cierra) = hasta_cerrar(&texto, k + p, '(', ')') else {
                     continue;
                 };
                 let tras = &texto[k + p + cierra.len() + 2..];
-                let Some(flecha) = tras.find("->") else { continue };
+                let Some(flecha) = tras.find("->") else {
+                    continue;
+                };
                 let cuerpo = tras[flecha..].find('{').unwrap_or(tras.len());
                 let devuelve = tras[flecha + 2..flecha + cuerpo].trim();
                 let dentro = devuelve
@@ -1589,8 +1859,12 @@ mod tests {
                 }
                 // el `invoke` de esa función: el primero del cuerpo
                 let cuerpo = &tras[..tras.len().min(1200)];
-                let Some(inv) = cuerpo.find("invoke") else { continue };
-                let Some(comilla) = cuerpo[inv..].find('"') else { continue };
+                let Some(inv) = cuerpo.find("invoke") else {
+                    continue;
+                };
+                let Some(comilla) = cuerpo[inv..].find('"') else {
+                    continue;
+                };
                 let resto = &cuerpo[inv + comilla + 1..];
                 let Some(fin) = resto.find('"') else { continue };
                 out.push((resto[..fin].to_string(), tipo.trim().to_string()));
@@ -1629,14 +1903,12 @@ mod tests {
     /// que no es del usuario, y decirlo por escrito es la única forma de
     /// distinguirla de la que se quedó a medio integrar. Falla también
     /// cuando el campo desaparece de Rust.
-    const CAMPOS_SOLO_DEL_BACKEND: &[(&str, &str)] = &[
-        (
-            "compose_print.opciones.dest_path",
-            "no es del usuario: sin él la composición va a un temporal que barre el \
+    const CAMPOS_SOLO_DEL_BACKEND: &[(&str, &str)] = &[(
+        "compose_print.opciones.dest_path",
+        "no es del usuario: sin él la composición va a un temporal que barre el \
              arranque, que es lo que quiere la interfaz. Lo usan los tests para \
              escribir donde les conviene",
-        ),
-    ];
+    )];
 
     /// Los campos de un bloque `{ … }` de TypeScript, con su tipo: como
     /// `claves_del_bloque`, pero sin tirar la mitad derecha.
@@ -1654,9 +1926,7 @@ mod tests {
                 continue;
             };
             let clave = clave.trim().trim_end_matches('?').trim();
-            if clave.is_empty()
-                || !clave.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-            {
+            if clave.is_empty() || !clave.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                 continue;
             }
             out.push((clave.to_string(), tipo.trim().to_string()));
@@ -1673,9 +1943,14 @@ mod tests {
                 let j = i + j + "export type ".len();
                 i = j + 1;
                 let resto = &texto[j..];
-                let Some(igual) = resto.find('=') else { continue };
+                let Some(igual) = resto.find('=') else {
+                    continue;
+                };
                 let nombre = resto[..igual].trim();
-                if !nombre.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                if !nombre
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                {
                     continue;
                 }
                 let tras = &resto[igual + 1..];
@@ -1687,7 +1962,9 @@ mod tests {
                             None => continue,
                         }
                     }
-                    false => tras[..tras.find(';').unwrap_or(tras.len())].trim().to_string(),
+                    false => tras[..tras.find(';').unwrap_or(tras.len())]
+                        .trim()
+                        .to_string(),
                 };
                 out.insert(nombre.to_string(), valor);
             }
@@ -1736,8 +2013,7 @@ mod tests {
     }
 
     /// Los campos de cada `pub struct` del core, con su tipo en Rust.
-    fn campos_de_los_structs_rust(
-    ) -> std::collections::BTreeMap<String, Vec<(String, String)>> {
+    fn campos_de_los_structs_rust() -> std::collections::BTreeMap<String, Vec<(String, String)>> {
         let mut out = std::collections::BTreeMap::new();
         for texto in fuentes_del_core() {
             let mut i = 0;
@@ -1840,8 +2116,7 @@ mod tests {
         let alias = alias_de_la_ui(&fuentes);
         let tipos_ui = tipos_de_los_argumentos_de_la_ui(&fuentes);
         let campos_rust = campos_de_los_structs_rust();
-        let structs: std::collections::BTreeSet<String> =
-            campos_rust.keys().cloned().collect();
+        let structs: std::collections::BTreeSet<String> = campos_rust.keys().cloned().collect();
         let mut fallos: Vec<String> = Vec::new();
         let mut mirados: Vec<String> = Vec::new();
 
@@ -1900,8 +2175,7 @@ mod tests {
                     continue;
                 }
                 let de_la_ui = campos_del_bloque(cuerpo.trim_matches(['{', '}']));
-                let nombres_ui: Vec<&str> =
-                    de_la_ui.iter().map(|(n, _)| n.as_str()).collect();
+                let nombres_ui: Vec<&str> = de_la_ui.iter().map(|(n, _)| n.as_str()).collect();
                 let faltan: Vec<&str> = campos
                     .iter()
                     .map(|(n, _)| n.as_str())
@@ -1987,7 +2261,9 @@ mod tests {
         let mut fallos: Vec<String> = Vec::new();
         let mut vistos: Vec<String> = Vec::new();
         for (cmd, tipo) in retornos_de_la_ui(&fuentes) {
-            let Some(clase) = retornos.get(&cmd) else { continue };
+            let Some(clase) = retornos.get(&cmd) else {
+                continue;
+            };
             if TIPOS_PENDIENTES.iter().any(|(n, _)| *n == cmd) {
                 vistos.push(cmd.clone());
                 continue;
@@ -2004,9 +2280,7 @@ mod tests {
                 "void" | "unknown" | "any" | "string" | "number" | "boolean"
             );
             if primitivo {
-                if *clase == "objeto"
-                    && !RETORNOS_IGNORADOS.iter().any(|(n, _)| *n == cmd)
-                {
+                if *clase == "objeto" && !RETORNOS_IGNORADOS.iter().any(|(n, _)| *n == cmd) {
                     fallos.push(format!(
                         "{cmd}: el comando devuelve un objeto con campos y la UI \
                          declara `{tipo}`, así que lo que se use de él será `undefined`. \

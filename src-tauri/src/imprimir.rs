@@ -119,9 +119,8 @@ pub fn compose_print(
                 crate::mensaje_llano(format!("No se ha podido preparar la composición: {e}"))
             })?;
             aplana(&copia)?;
-            doc = LoDoc::load(&copia).map_err(|e| {
-                crate::mensaje_llano(format!("No se ha podido leer el PDF: {e}"))
-            })?;
+            doc = LoDoc::load(&copia)
+                .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer el PDF: {e}")))?;
             aplanada = Some(copia);
         }
         let paginas: Vec<ObjectId> = doc.get_pages().into_values().collect();
@@ -164,8 +163,9 @@ pub fn compose_print(
         if let Some(copia) = &aplanada {
             std::fs::remove_file(copia).ok();
         }
-        escrito
-            .map_err(|e| crate::mensaje_llano(format!("No se ha podido escribir {destino}: {e}")))?;
+        escrito.map_err(|e| {
+            crate::mensaje_llano(format!("No se ha podido escribir {destino}: {e}"))
+        })?;
         Ok(Composicion {
             path: destino,
             hojas: papel,
@@ -357,8 +357,9 @@ impl Hoja {
     }
 
     fn borde(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        self.ops
-            .push_str(&format!("q 0.6 G 0.5 w {x:.2} {y:.2} {w:.2} {h:.2} re S Q\n"));
+        self.ops.push_str(&format!(
+            "q 0.6 G 0.5 w {x:.2} {y:.2} {w:.2} {h:.2} re S Q\n"
+        ));
     }
 }
 
@@ -519,11 +520,7 @@ fn compone_folleto(
             let s = (pw / e.ancho).min(ph / e.alto);
             hoja.pon(
                 e,
-                e.colocada(
-                    s,
-                    hueco + (pw - e.ancho * s) / 2.0,
-                    (ph - e.alto * s) / 2.0,
-                ),
+                e.colocada(s, hueco + (pw - e.ancho * s) / 2.0, (ph - e.alto * s) / 2.0),
             );
         }
         hojas.push(hoja);
@@ -540,7 +537,9 @@ fn compone_poster(
 ) -> Result<Vec<Hoja>, String> {
     let por_ciento = op.escala_por_ciento.unwrap_or(200.0);
     if !(por_ciento.is_finite() && por_ciento > 100.0) {
-        return Err("El póster amplía la página: la escala tiene que ser mayor que el 100 %".into());
+        return Err(
+            "El póster amplía la página: la escala tiene que ser mayor que el 100 %".into(),
+        );
     }
     if por_ciento > 1000.0 {
         return Err("El póster amplía como mucho al 1000 %".into());
@@ -562,8 +561,7 @@ fn compone_poster(
                 // se coloca la página entera y se desplaza
                 let ox = -(col as f32) * paso_x;
                 // las filas van de arriba abajo, que es como se cuelga
-                let oy = -(gh - (fila as f32 + 1.0) * paso_y).max(0.0)
-                    + (hh - paso_y).min(0.0);
+                let oy = -(gh - (fila as f32 + 1.0) * paso_y).max(0.0) + (hh - paso_y).min(0.0);
                 hoja.pon(e, e.colocada(escala, ox, oy));
                 if marcas {
                     marcas_de_corte(&mut hoja, solape.max(6.0));
@@ -634,7 +632,12 @@ mod tests {
         let pdf = std::env::temp_dir().join("imprimir-marcas.pdf");
         crea_pdf(&["Uno", "Dos"], &pdf);
         let work = pdf.to_string_lossy().into_owned();
-        let caja = crate::Rect { x: 40.0, y: 90.0, w: 300.0, h: 40.0 };
+        let caja = crate::Rect {
+            x: 40.0,
+            y: 90.0,
+            w: 300.0,
+            h: 40.0,
+        };
         crate::anotaciones2::add_markup(
             work.clone(),
             0,
@@ -648,7 +651,12 @@ mod tests {
             work.clone(),
             0,
             "checkbox".into(),
-            crate::Rect { x: 40.0, y: 200.0, w: 24.0, h: 24.0 },
+            crate::Rect {
+                x: 40.0,
+                y: 200.0,
+                w: 24.0,
+                h: 24.0,
+            },
             "acepto".into(),
             None,
             None,
@@ -755,7 +763,10 @@ mod tests {
         assert_eq!(r.paginas, 10);
         // la hoja tiene el tamaño de la página original
         let (w, h) = tamano(&r.path, 1);
-        assert!((w - 595.28).abs() < 1.0 && (h - 841.89).abs() < 1.0, "{w}×{h}");
+        assert!(
+            (w - 595.28).abs() < 1.0 && (h - 841.89).abs() < 1.0,
+            "{w}×{h}"
+        );
         std::fs::remove_file(&r.path).ok();
 
         // folleto de 8: cuatro caras, dos hojas de papel
@@ -774,7 +785,10 @@ mod tests {
         assert_eq!(paginas_de(&r.path), 4);
         // la cara del folleto es el doble de ancha que la página
         let (w, h) = tamano(&r.path, 1);
-        assert!((w - 595.28 * 2.0).abs() < 1.0 && (h - 841.89).abs() < 1.0, "{w}×{h}");
+        assert!(
+            (w - 595.28 * 2.0).abs() < 1.0 && (h - 841.89).abs() < 1.0,
+            "{w}×{h}"
+        );
         std::fs::remove_file(&r.path).ok();
 
         // solo el anverso: la mitad de las caras, para meter el papel dos
@@ -846,9 +860,13 @@ mod tests {
         .unwrap_err()
         .contains("1000 %"));
         // y una composición que no existe se dice
-        assert!(compose_print(work.clone(), "espiral".into(), OpcionesComposicion::default())
-            .unwrap_err()
-            .contains("desconocida"));
+        assert!(compose_print(
+            work.clone(),
+            "espiral".into(),
+            OpcionesComposicion::default()
+        )
+        .unwrap_err()
+        .contains("desconocida"));
 
         // el documento no se ha tocado: ni una página menos ni un paso de
         // deshacer gastado
@@ -895,7 +913,10 @@ mod tests {
             }
         })
         .expect("texto");
-        assert!(texto.contains("Uno") && texto.contains("Dos"), "texto: {texto}");
+        assert!(
+            texto.contains("Uno") && texto.contains("Dos"),
+            "texto: {texto}"
+        );
         std::fs::remove_file(&r.path).ok();
         std::fs::remove_file(&pdf).ok();
     }

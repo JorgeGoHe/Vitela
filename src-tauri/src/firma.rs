@@ -44,7 +44,11 @@ pub fn credenciales_pem(cert_pem: &str, key_pem: &str) -> Result<Credenciales, S
             rsa::RsaPrivateKey::from_pkcs1_pem(key_pem)
         })
         .map_err(|e| format!("Clave privada PEM inválida (RSA sin cifrar): {e}"))?;
-    Ok(Credenciales { cert, key, cadena: Vec::new() })
+    Ok(Credenciales {
+        cert,
+        key,
+        cadena: Vec::new(),
+    })
 }
 
 /// Credenciales desde un contenedor PKCS#12 (.p12/.pfx) con contraseña.
@@ -96,9 +100,8 @@ pub(crate) fn clave_privada(
     key_path: &str,
     password: Option<&str>,
 ) -> Result<rsa::RsaPrivateKey, String> {
-    let bytes = std::fs::read(key_path).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido leer {key_path}: {e}"))
-    })?;
+    let bytes = std::fs::read(key_path)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer {key_path}: {e}")))?;
     let minus = key_path.to_lowercase();
     if minus.ends_with(".p12") || minus.ends_with(".pfx") {
         return credenciales_p12(&bytes, password.unwrap_or("")).map(|c| c.key);
@@ -184,9 +187,7 @@ fn build_cms(
             .map_err(|e| e.to_string())?;
     }
     let signed = builder
-        .add_signer_info::<rsa::pkcs1v15::SigningKey<Sha256>, rsa::pkcs1v15::Signature>(
-            si_builder,
-        )
+        .add_signer_info::<rsa::pkcs1v15::SigningKey<Sha256>, rsa::pkcs1v15::Signature>(si_builder)
         .map_err(|e| e.to_string())?
         .build()
         .map_err(|e| e.to_string())?;
@@ -224,8 +225,7 @@ fn sella(der: &[u8], url: &str) -> Result<(Vec<u8>, crate::tsa::SelloDeTiempo), 
         let mut reader = der::SliceReader::new(der).map_err(|e| e.to_string())?;
         reader.decode().map_err(|e| e.to_string())?
     };
-    let mut sd: cms::signed_data::SignedData =
-        ci.content.decode_as().map_err(|e| e.to_string())?;
+    let mut sd: cms::signed_data::SignedData = ci.content.decode_as().map_err(|e| e.to_string())?;
     let firma = sd
         .signer_infos
         .0
@@ -358,8 +358,12 @@ fn apariencia_firma(
     let mut ops: Vec<u8> = Vec::new();
     // marco discreto, como el sello de firma de Acrobat
     ops.extend_from_slice(
-        format!("q 0.35 0.35 0.35 RG 0.7 w 0.35 0.35 {:.2} {:.2} re S Q\n", w - 0.7, h - 0.7)
-            .as_bytes(),
+        format!(
+            "q 0.35 0.35 0.35 RG 0.7 w 0.35 0.35 {:.2} {:.2} re S Q\n",
+            w - 0.7,
+            h - 0.7
+        )
+        .as_bytes(),
     );
     let mut alto_texto = (h * 0.42).min(26.0);
     if png.is_none() {
@@ -369,7 +373,9 @@ fn apariencia_firma(
         let (img_id, iw, ih) = imagen_png(doc, png)?;
         let caja_h = h - alto_texto;
         // la firma manuscrita cabe entera y centrada, sin deformarse
-        let escala = ((w - 8.0) / iw as f32).min((caja_h - 6.0) / ih as f32).max(0.0);
+        let escala = ((w - 8.0) / iw as f32)
+            .min((caja_h - 6.0) / ih as f32)
+            .max(0.0);
         let (dw, dh) = (iw as f32 * escala, ih as f32 * escala);
         ops.extend_from_slice(
             format!(
@@ -388,7 +394,12 @@ fn apariencia_firma(
     let mut fuentes = Dictionary::new();
     fuentes.set("Helv", Object::Reference(helv));
     recursos.set("Font", Object::Dictionary(fuentes));
-    let n_lineas = 2.0 + if motivo.map(str::trim).is_some_and(|m| !m.is_empty()) { 1.0 } else { 0.0 };
+    let n_lineas = 2.0
+        + if motivo.map(str::trim).is_some_and(|m| !m.is_empty()) {
+            1.0
+        } else {
+            0.0
+        };
     // el texto arranca arriba de su banda: con el motivo son tres líneas y
     // la última tiene que seguir cayendo dentro de la caja
     let base = if png.is_some() {
@@ -587,7 +598,12 @@ fn escribe_campo_de_firma(
         Some(r) => {
             let geo = crate::formularios2::geo_pagina(destino.lectura(), page_id)?;
             let c = geo.ui_rect_a_pdf(r);
-            [c.left().value, c.bottom().value, c.right().value, c.top().value]
+            [
+                c.left().value,
+                c.bottom().value,
+                c.right().value,
+                c.top().value,
+            ]
         }
         None => [0.0; 4],
     };
@@ -818,7 +834,9 @@ pub fn sign(
     apariencia: &Apariencia,
     avanzado: &Avanzado,
 ) -> Result<InformeFirma, String> {
-    firma_o_certifica(src_path, dest_path, cred, reason, apariencia, None, avanzado)
+    firma_o_certifica(
+        src_path, dest_path, cred, reason, apariencia, None, avanzado,
+    )
 }
 
 /// Lo que la interfaz pide en el bloque «Avanzado» del diálogo de firmar,
@@ -865,7 +883,15 @@ pub fn certify(
                 .into(),
         );
     }
-    firma_o_certifica(src_path, dest_path, cred, reason, apariencia, Some(nivel), avanzado)
+    firma_o_certifica(
+        src_path,
+        dest_path,
+        cred,
+        reason,
+        apariencia,
+        Some(nivel),
+        avanzado,
+    )
 }
 
 /// Pregunta al respondedor OCSP del certificado si sigue vigente, para
@@ -900,10 +926,8 @@ fn firma_o_certifica(
     certifica: Option<u8>,
     avanzado: &Avanzado,
 ) -> Result<InformeFirma, String> {
-    let bytes =
-        std::fs::read(src_path).map_err(|e| format!("No se ha podido leer el PDF: {e}"))?;
-    let doc =
-        LoDoc::load_mem(&bytes).map_err(|e| format!("No se ha podido leer el PDF: {e}"))?;
+    let bytes = std::fs::read(src_path).map_err(|e| format!("No se ha podido leer el PDF: {e}"))?;
+    let doc = LoDoc::load_mem(&bytes).map_err(|e| format!("No se ha podido leer el PDF: {e}"))?;
     let pagina = apariencia.page_index.unwrap_or(0) as u32 + 1;
     let page_id = *doc
         .get_pages()
@@ -968,8 +992,7 @@ fn firma_o_certifica(
             informe.aviso = format!("{} {aviso_ocsp}", informe.aviso);
         }
     }
-    std::fs::write(dest_path, &out)
-        .map_err(|e| format!("No se ha podido escribir: {e}"))?;
+    std::fs::write(dest_path, &out).map_err(|e| format!("No se ha podido escribir: {e}"))?;
     Ok(informe)
 }
 
@@ -1141,9 +1164,8 @@ pub fn read_certificate(path: String) -> Result<FichaCertificado, String> {
 #[tauri::command(async)]
 pub fn verify_signatures(path: String) -> Result<Vec<FirmaInfo>, String> {
     crate::on_pdfium_thread(move || {
-        let bytes = std::fs::read(&path).map_err(|e| {
-            crate::mensaje_llano(format!("No se ha podido leer el documento: {e}"))
-        })?;
+        let bytes = std::fs::read(&path)
+            .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer el documento: {e}")))?;
         if find_subslice(&bytes, b"/ByteRange").is_none() {
             return Ok(Vec::new());
         }
@@ -1215,8 +1237,15 @@ fn firmas_de(doc: &LoDoc, bytes: &[u8]) -> Vec<FirmaInfo> {
             continue;
         };
         for a in annots {
-            let Some(annot) = dict_de(doc, &a) else { continue };
-            if annot.get(b"FT").and_then(|o| o.as_name()).unwrap_or_default() != b"Sig" {
+            let Some(annot) = dict_de(doc, &a) else {
+                continue;
+            };
+            if annot
+                .get(b"FT")
+                .and_then(|o| o.as_name())
+                .unwrap_or_default()
+                != b"Sig"
+            {
                 continue;
             }
             let Ok(Object::Reference(sig_id)) = annot.get(b"V") else {
@@ -1252,7 +1281,11 @@ fn firmas_de(doc: &LoDoc, bytes: &[u8]) -> Vec<FirmaInfo> {
 /// saber que un `/DocMDP` escrito en un diccionario de firma está de
 /// verdad en vigor para el documento.
 fn perms_docmdp(doc: &LoDoc) -> Option<lopdf::ObjectId> {
-    let root = doc.trailer.get(b"Root").and_then(|o| o.as_reference()).ok()?;
+    let root = doc
+        .trailer
+        .get(b"Root")
+        .and_then(|o| o.as_reference())
+        .ok()?;
     let catalogo = dict_de(doc, &Object::Reference(root))?;
     let perms = dict_de(doc, catalogo.get(b"Perms").ok()?)?;
     perms.get(b"DocMDP").and_then(|o| o.as_reference()).ok()
@@ -1267,7 +1300,11 @@ fn nivel_docmdp(sig: &Dictionary, senalada: bool) -> Option<u8> {
     let mut nivel = None;
     for r in referencias.into_iter().flatten() {
         let Object::Dictionary(d) = r else { continue };
-        if d.get(b"TransformMethod").and_then(|o| o.as_name()).unwrap_or_default() != b"DocMDP" {
+        if d.get(b"TransformMethod")
+            .and_then(|o| o.as_name())
+            .unwrap_or_default()
+            != b"DocMDP"
+        {
             continue;
         }
         nivel = d
@@ -1297,13 +1334,21 @@ fn dict_de(doc: &LoDoc, o: &Object) -> Option<Dictionary> {
 
 /// El `/Rect` del widget en el espacio de la página vista, que es lo que la
 /// UI pinta (igual que `get_annotations`).
-fn rect_del_widget(doc: &LoDoc, annot: &Dictionary, page_id: lopdf::ObjectId) -> Option<crate::Rect> {
+fn rect_del_widget(
+    doc: &LoDoc,
+    annot: &Dictionary,
+    page_id: lopdf::ObjectId,
+) -> Option<crate::Rect> {
     let caja: Vec<f32> = annot
         .get(b"Rect")
         .and_then(|o| o.as_array())
         .ok()?
         .iter()
-        .filter_map(|o| o.as_float().ok().or_else(|| o.as_i64().ok().map(|n| n as f32)))
+        .filter_map(|o| {
+            o.as_float()
+                .ok()
+                .or_else(|| o.as_i64().ok().map(|n| n as f32))
+        })
         .collect();
     if caja.len() != 4 || (caja[2] - caja[0]).abs() < 1.0 || (caja[3] - caja[1]).abs() < 1.0 {
         return None;
@@ -1341,8 +1386,15 @@ fn campos_de_firma(doc: &LoDoc) -> Vec<lopdf::ObjectId> {
         _ => return out,
     };
     for c in lista {
-        let Some(campo) = dict_de(doc, &c) else { continue };
-        if campo.get(b"FT").and_then(|o| o.as_name()).unwrap_or_default() != b"Sig" {
+        let Some(campo) = dict_de(doc, &c) else {
+            continue;
+        };
+        if campo
+            .get(b"FT")
+            .and_then(|o| o.as_name())
+            .unwrap_or_default()
+            != b"Sig"
+        {
             continue;
         }
         if let Ok(Object::Reference(id)) = campo.get(b"V") {
@@ -1397,7 +1449,12 @@ fn lee_firma(
     let rangos: Vec<usize> = sig
         .get(b"ByteRange")
         .and_then(|o| o.as_array())
-        .map(|a| a.iter().filter_map(|o| o.as_i64().ok()).map(|n| n as usize).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|o| o.as_i64().ok())
+                .map(|n| n as usize)
+                .collect()
+        })
         .unwrap_or_default();
     let Object::String(contents, _) = sig.get(b"Contents").unwrap_or(&Object::Null) else {
         return info;
@@ -1690,9 +1747,7 @@ pub(crate) fn certificados_del_bolso(
 }
 
 /// La hora que declara el atributo firmado `signingTime`, si lo lleva.
-fn hora_de_la_firma(
-    attrs: &cms::signed_data::SignedAttributes,
-) -> Option<std::time::SystemTime> {
+fn hora_de_la_firma(attrs: &cms::signed_data::SignedAttributes) -> Option<std::time::SystemTime> {
     use der::{Decode, Encode};
     let attr = attrs
         .iter()
@@ -1706,8 +1761,7 @@ fn hora_de_la_firma(
 /// El `SubjectKeyIdentifier` (extensión 2.5.29.14) del certificado.
 fn identificador_de_clave(cert: &x509_cert::Certificate) -> Option<Vec<u8>> {
     use der::Decode;
-    const SKI: const_oid::ObjectIdentifier =
-        const_oid::ObjectIdentifier::new_unwrap("2.5.29.14");
+    const SKI: const_oid::ObjectIdentifier = const_oid::ObjectIdentifier::new_unwrap("2.5.29.14");
     let ext = cert
         .tbs_certificate
         .extensions
@@ -1730,9 +1784,8 @@ pub(crate) fn comprueba_firma(
     hash_del_digest: Option<Hash>,
 ) -> (Option<bool>, String) {
     use const_oid::db::rfc5912::{
-        ECDSA_WITH_SHA_256, ECDSA_WITH_SHA_384, ECDSA_WITH_SHA_512, ID_RSASSA_PSS,
-        RSA_ENCRYPTION, SHA_256_WITH_RSA_ENCRYPTION, SHA_384_WITH_RSA_ENCRYPTION,
-        SHA_512_WITH_RSA_ENCRYPTION,
+        ECDSA_WITH_SHA_256, ECDSA_WITH_SHA_384, ECDSA_WITH_SHA_512, ID_RSASSA_PSS, RSA_ENCRYPTION,
+        SHA_256_WITH_RSA_ENCRYPTION, SHA_384_WITH_RSA_ENCRYPTION, SHA_512_WITH_RSA_ENCRYPTION,
     };
     // el hash lo fija el algoritmo de firma cuando lo lleva dentro; si no
     // (rsaEncryption a secas, RSA-PSS), el del digest de los atributos
@@ -1943,7 +1996,10 @@ mod tests {
         )
         .expect("firmar");
         let f = &verify_signatures(dest.to_string_lossy().into_owned()).expect("verificar")[0];
-        assert!(f.covers_whole_file && f.estado == ESTADO_OK, "recién firmado");
+        assert!(
+            f.covers_whole_file && f.estado == ESTADO_OK,
+            "recién firmado"
+        );
 
         // una revisión detrás: bytes añadidos al final, sin tocar lo firmado
         let con_revision = dir.join("firma-revision-mas.pdf");
@@ -1951,8 +2007,8 @@ mod tests {
         bytes.extend_from_slice(b"\n% revision anadida despues de firmar\n");
         std::fs::write(&con_revision, &bytes).expect("escribir");
 
-        let f = &verify_signatures(con_revision.to_string_lossy().into_owned())
-            .expect("verificar")[0];
+        let f =
+            &verify_signatures(con_revision.to_string_lossy().into_owned()).expect("verificar")[0];
         assert!(
             !f.covers_whole_file,
             "la firma ya no cubre el fichero entero: hay contenido detrás"
@@ -1977,11 +2033,20 @@ mod tests {
         let ahora = SystemTime::now();
         let dia = Duration::from_secs(24 * 3600);
         // en vigor: empezó ayer y acaba mañana
-        assert_eq!(fuera_de_vigor(ahora - dia, ahora + dia, ahora), (false, false));
+        assert_eq!(
+            fuera_de_vigor(ahora - dia, ahora + dia, ahora),
+            (false, false)
+        );
         // caducado: acabó ayer
-        assert_eq!(fuera_de_vigor(ahora - 2 * dia, ahora - dia, ahora), (true, false));
+        assert_eq!(
+            fuera_de_vigor(ahora - 2 * dia, ahora - dia, ahora),
+            (true, false)
+        );
         // todavía no: empieza mañana
-        assert_eq!(fuera_de_vigor(ahora + dia, ahora + 2 * dia, ahora), (true, true));
+        assert_eq!(
+            fuera_de_vigor(ahora + dia, ahora + 2 * dia, ahora),
+            (true, true)
+        );
     }
 
     /// **Orden 13 del informe de QA.** Un PDF firmado con **ECDSA de
@@ -1997,8 +2062,8 @@ mod tests {
     /// manipular bytes a mano.
     #[test]
     fn el_fixture_firmado_con_ecdsa_se_verifica_al_abrirlo() {
-        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/firmado_ecdsa.pdf");
+        let fixture =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/firmado_ecdsa.pdf");
         let firmas = verify_signatures(fixture.to_string_lossy().into_owned())
             .expect("verificar el fixture");
         assert_eq!(firmas.len(), 1, "el fixture lleva una firma");
@@ -2011,7 +2076,11 @@ mod tests {
             "{}",
             f.algoritmo
         );
-        assert!(f.cert_subject.contains("Ada Lovelace"), "{}", f.cert_subject);
+        assert!(
+            f.cert_subject.contains("Ada Lovelace"),
+            "{}",
+            f.cert_subject
+        );
         assert_eq!(
             f.confianza,
             crate::confianza::AUTOFIRMADO,
@@ -2042,7 +2111,12 @@ mod tests {
         let dest = dir.join("firma-campo-out.pdf");
         crea_pdf(&["Contrato"], &src);
         let ap = Apariencia {
-            rect: Some(crate::Rect { x: 60.0, y: 500.0, w: 220.0, h: 90.0 }),
+            rect: Some(crate::Rect {
+                x: 60.0,
+                y: 500.0,
+                w: 220.0,
+                h: 90.0,
+            }),
             page_index: Some(0),
             signer_name: Some("Jorge".into()),
             signature_png: None,
@@ -2059,10 +2133,7 @@ mod tests {
         let ruta = dest.to_string_lossy().into_owned();
 
         // la firma está ahí (el widget existe en el fichero)
-        assert_eq!(
-            verify_signatures(ruta.clone()).expect("verificar").len(),
-            1
-        );
+        assert_eq!(verify_signatures(ruta.clone()).expect("verificar").len(), 1);
         let campos = crate::formularios::get_form_fields(ruta.clone(), 0).expect("campos");
         assert!(
             campos.is_empty(),
@@ -2113,8 +2184,9 @@ mod tests {
             .expect("AC de prueba");
         let hija = x509_cert::Certificate::from_pem(include_str!("../fixtures/test_hija_cert.pem"))
             .expect("certificado hijo");
-        let clave = rsa::RsaPrivateKey::from_pkcs8_pem(include_str!("../fixtures/test_hija_key.pem"))
-            .expect("clave del hijo");
+        let clave =
+            rsa::RsaPrivateKey::from_pkcs8_pem(include_str!("../fixtures/test_hija_key.pem"))
+                .expect("clave del hijo");
         let cms = cms_a_mano(
             &digest_del_byterange(&bytes, Hash::Sha256),
             const_oid::db::rfc5912::ID_SHA_256,
@@ -2152,9 +2224,7 @@ mod tests {
     fn hueco_de_contents(bytes: &[u8]) -> (usize, usize) {
         // el hueco es la cadena hexadecimal de tamaño fijo que reserva `sign`
         let i = (0..bytes.len())
-            .find(|&i| {
-                bytes[i] == b'<' && bytes.get(i + SIG_LEN * 2 + 1) == Some(&b'>')
-            })
+            .find(|&i| bytes[i] == b'<' && bytes.get(i + SIG_LEN * 2 + 1) == Some(&b'>'))
             .expect("el hueco de /Contents");
         (i, i + SIG_LEN * 2 + 2)
     }
@@ -2197,16 +2267,25 @@ mod tests {
         use der::{Decode, Tag, Tagged};
         use x509_cert::attr::Attribute;
 
-        let alg = |oid| AlgorithmIdentifierOwned { oid, parameters: None };
+        let alg = |oid| AlgorithmIdentifierOwned {
+            oid,
+            parameters: None,
+        };
         let atributo = |oid, valor: Any| {
             let mut valores = SetOfVec::new();
             valores.insert(valor).expect("valor");
-            Attribute { oid, values: valores }
+            Attribute {
+                oid,
+                values: valores,
+            }
         };
         let content_type = atributo(
             const_oid::db::rfc5911::ID_CONTENT_TYPE,
-            Any::new(Tag::ObjectIdentifier, const_oid::db::rfc5911::ID_DATA.as_bytes())
-                .expect("oid"),
+            Any::new(
+                Tag::ObjectIdentifier,
+                const_oid::db::rfc5911::ID_DATA.as_bytes(),
+            )
+            .expect("oid"),
         );
         let message_digest = atributo(
             const_oid::db::rfc5911::ID_MESSAGE_DIGEST,
@@ -2269,7 +2348,9 @@ mod tests {
         let url = format!("http://{}/tsr", escucha.local_addr().expect("puerto"));
         let token = token_de_mentira(cuando);
         let hilo = std::thread::spawn(move || {
-            let Ok((mut cliente, _)) = escucha.accept() else { return };
+            let Ok((mut cliente, _)) = escucha.accept() else {
+                return;
+            };
             // se lee la petición **entera** antes de contestar: cerrar el
             // socket con bytes sin leer manda un RST y el cliente se queda
             // sin respuesta. Lo que mande no se mira: lo que se prueba
@@ -2323,11 +2404,12 @@ mod tests {
         let tst = crate::tsa::tst_de_prueba(cuando);
         let content = EncapsulatedContentInfo {
             econtent_type: crate::tsa::OID_TSTINFO,
-            econtent: Some(
-                Any::new(Tag::OctetString, tst.as_slice()).expect("eContent"),
-            ),
+            econtent: Some(Any::new(Tag::OctetString, tst.as_slice()).expect("eContent")),
         };
-        let alg = |oid| AlgorithmIdentifierOwned { oid, parameters: None };
+        let alg = |oid| AlgorithmIdentifierOwned {
+            oid,
+            parameters: None,
+        };
         let signer = cms::signed_data::SignerInfo {
             version: cms::content_info::CmsVersion::V1,
             sid: SignerIdentifier::IssuerAndSerialNumber(IssuerAndSerialNumber {
@@ -2348,7 +2430,8 @@ mod tests {
             version: cms::content_info::CmsVersion::V1,
             digest_algorithms: {
                 let mut v = SetOfVec::new();
-                v.insert(alg(const_oid::db::rfc5912::ID_SHA_256)).expect("alg");
+                v.insert(alg(const_oid::db::rfc5912::ID_SHA_256))
+                    .expect("alg");
                 v
             },
             encap_content_info: content,
@@ -2377,7 +2460,9 @@ mod tests {
             std::net::TcpListener::bind("127.0.0.1:41960").expect("el puerto del respondedor");
         let cuerpo = crate::ocsp::prueba::respuesta_de_prueba(cuando);
         std::thread::spawn(move || {
-            let Ok((mut cliente, _)) = escucha.accept() else { return };
+            let Ok((mut cliente, _)) = escucha.accept() else {
+                return;
+            };
             let mut peticion = Vec::new();
             let mut buf = [0u8; 1024];
             while let Ok(n) = cliente.read(&mut buf) {
@@ -2439,7 +2524,10 @@ mod tests {
             &cred,
             None,
             &Apariencia::default(),
-            &Avanzado { tsa_url: None, ltv: true },
+            &Avanzado {
+                tsa_url: None,
+                ltv: true,
+            },
         )
         .expect("firmar con LTV");
         let _ = hilo.join();
@@ -2453,7 +2541,10 @@ mod tests {
         // la prueba está dentro del documento y se lee sin red
         let firmas = verify_signatures(dest.to_string_lossy().into_owned()).expect("verificar");
         assert_eq!(firmas.len(), 1);
-        assert_eq!(firmas[0].estado, "ok", "archivar la prueba no rompe la firma");
+        assert_eq!(
+            firmas[0].estado, "ok",
+            "archivar la prueba no rompe la firma"
+        );
         assert!(
             firmas[0].ltv_archivado,
             "el /DSS tiene que llevar la respuesta del respondedor"
@@ -2472,10 +2563,16 @@ mod tests {
             &cred,
             None,
             &Apariencia::default(),
-            &Avanzado { tsa_url: None, ltv: true },
+            &Avanzado {
+                tsa_url: None,
+                ltv: true,
+            },
         )
         .expect("firmar sin respondedor no es un fallo");
-        assert!(!informe.aviso.is_empty(), "hay que decir que falta la prueba");
+        assert!(
+            !informe.aviso.is_empty(),
+            "hay que decir que falta la prueba"
+        );
         assert!(
             !informe.aviso.contains("OCSP") && !informe.aviso.contains("respondedor"),
             "el aviso lo lee una persona: {}",
@@ -2495,7 +2592,10 @@ mod tests {
             &credenciales(),
             None,
             &Apariencia::default(),
-            &Avanzado { tsa_url: None, ltv: true },
+            &Avanzado {
+                tsa_url: None,
+                ltv: true,
+            },
         )
         .expect("firmar");
         assert!(informe.aviso.contains("no dice dónde"), "{}", informe.aviso);
@@ -2536,8 +2636,7 @@ mod tests {
         )
         .expect("firmar");
         assert_eq!(
-            verify_signatures(firmado.to_string_lossy().into_owned()).expect("verificar")[0]
-                .estado,
+            verify_signatures(firmado.to_string_lossy().into_owned()).expect("verificar")[0].estado,
             ESTADO_OK
         );
 
@@ -2584,12 +2683,19 @@ mod tests {
             &credenciales(),
             None,
             &Apariencia::default(),
-            &Avanzado { tsa_url: Some(url), ltv: true },
+            &Avanzado {
+                tsa_url: Some(url),
+                ltv: true,
+            },
         )
         .expect("firmar con sello");
         let _ = hilo.join();
 
-        assert!(informe.sellada, "el informe tiene que decir que va sellada: {}", informe.aviso);
+        assert!(
+            informe.sellada,
+            "el informe tiene que decir que va sellada: {}",
+            informe.aviso
+        );
         // el aviso no puede nombrar el servidor de tiempo: es lo que la
         // interfaz reconoce para preguntar «¿firmar sin sello?», y aquí el
         // sello ha llegado. (Lo que sí dice es que este certificado no
@@ -2707,7 +2813,12 @@ mod tests {
         let src = dir.join("firma-visible-src.pdf");
         let dest = dir.join("firma-visible-out.pdf");
         crea_pdf(&["Uno", "Dos"], &src);
-        let rect = crate::Rect { x: 60.0, y: 500.0, w: 220.0, h: 90.0 };
+        let rect = crate::Rect {
+            x: 60.0,
+            y: 500.0,
+            w: 220.0,
+            h: 90.0,
+        };
         let ap = Apariencia {
             rect: Some(rect.clone()),
             page_index: Some(1),
@@ -2735,7 +2846,11 @@ mod tests {
         let f = &firmas[0];
         assert!(f.digest_ok, "el documento no ha cambiado desde la firma");
         assert_eq!(f.estado, ESTADO_OK, "algoritmo: {}", f.algoritmo);
-        assert!(f.algoritmo.contains("RSA-2048 / SHA-256"), "{}", f.algoritmo);
+        assert!(
+            f.algoritmo.contains("RSA-2048 / SHA-256"),
+            "{}",
+            f.algoritmo
+        );
         assert!(f.covers_whole_file, "el ByteRange cubre el fichero entero");
         assert_eq!(f.page_index, Some(1), "la firma está en la página 2");
         let r = f.rect.as_ref().expect("la firma visible trae su rect");
@@ -2785,7 +2900,6 @@ mod tests {
         let f = &verify_signatures(invisible.to_string_lossy().into_owned()).expect("verificar")[0];
         assert!(f.digest_ok && f.covers_whole_file);
         assert!(f.rect.is_none(), "sin rect no hay firma que ver");
-
 
         for p in [&src, &dest, &tocado, &invisible] {
             std::fs::remove_file(p).ok();
@@ -2859,10 +2973,7 @@ mod tests {
             "AC FNMT Usuarios"
         );
         // una coma dentro del CN: un solo componente, con su coma
-        assert_eq!(
-            nombre_llano(r"CN=Pérez\, Ada,O=Vitela,C=ES"),
-            "Pérez, Ada"
-        );
+        assert_eq!(nombre_llano(r"CN=Pérez\, Ada,O=Vitela,C=ES"), "Pérez, Ada");
         // sin CN, el O
         assert_eq!(nombre_llano("OU=Ceres,O=FNMT-RCM,C=ES"), "FNMT-RCM");
         // sin ninguno de los dos, el DN entero antes que una casilla vacía
@@ -2944,7 +3055,11 @@ mod tests {
         assert_eq!(f.estado, ESTADO_OK, "algoritmo: {}", f.algoritmo);
         assert!(f.digest_ok && f.covers_whole_file);
         assert!(f.algoritmo.contains("ECDSA P-256"), "{}", f.algoritmo);
-        assert!(f.cert_subject.contains("Ada Lovelace"), "{}", f.cert_subject);
+        assert!(
+            f.cert_subject.contains("Ada Lovelace"),
+            "{}",
+            f.cert_subject
+        );
         std::fs::remove_file(&dest).ok();
     }
 
@@ -3032,9 +3147,18 @@ mod tests {
 
         let bytes = std::fs::read(&cert).expect("leer");
         let texto = String::from_utf8_lossy(&bytes);
-        assert!(texto.contains("/DocMDP"), "la firma tiene que llevar su /DocMDP");
-        assert!(texto.contains("/TransformMethod"), "y su método de transformación");
-        assert!(texto.contains("/Perms"), "y el catálogo tiene que señalarla");
+        assert!(
+            texto.contains("/DocMDP"),
+            "la firma tiene que llevar su /DocMDP"
+        );
+        assert!(
+            texto.contains("/TransformMethod"),
+            "y su método de transformación"
+        );
+        assert!(
+            texto.contains("/Perms"),
+            "y el catálogo tiene que señalarla"
+        );
         assert!(texto.contains("/P 2"), "con el nivel que se pidió");
 
         // y sigue siendo una firma como las demás: se comprueba igual
@@ -3192,7 +3316,12 @@ mod tests {
             &otras_credenciales(),
             Some("También conforme".into()),
             &Apariencia {
-                rect: Some(crate::Rect { x: 60.0, y: 500.0, w: 180.0, h: 60.0 }),
+                rect: Some(crate::Rect {
+                    x: 60.0,
+                    y: 500.0,
+                    w: 180.0,
+                    h: 60.0,
+                }),
                 page_index: Some(0),
                 signer_name: Some("Ada Lovelace".into()),
                 signature_png: None,
@@ -3293,7 +3422,11 @@ mod tests {
         .expect("la primera firma");
         let firmas = verify_signatures(una.to_string_lossy().into_owned()).expect("verificar");
         assert_eq!(firmas.len(), 1);
-        assert!(firmas[0].documento_intacto, "una firma sola: {:?}", firmas[0]);
+        assert!(
+            firmas[0].documento_intacto,
+            "una firma sola: {:?}",
+            firmas[0]
+        );
 
         sign(
             &una.to_string_lossy(),
@@ -3319,7 +3452,9 @@ mod tests {
         let base = std::fs::read(&dos).expect("leer");
         let doc = LoDoc::load(&dos).expect("cargar");
         let mut inc = lopdf::IncrementalDocument::create_from(base, doc);
-        let id = inc.new_document.add_object(Object::string_literal("después de firmar"));
+        let id = inc
+            .new_document
+            .add_object(Object::string_literal("después de firmar"));
         let root = inc
             .get_prev_documents()
             .trailer
@@ -3376,7 +3511,9 @@ mod tests {
         let primera = std::fs::read(&una).expect("leer");
         let doc = LoDoc::load(&una).expect("cargar");
         let mut inc = lopdf::IncrementalDocument::create_from(primera.clone(), doc);
-        let id = inc.new_document.add_object(Object::string_literal("una revisión"));
+        let id = inc
+            .new_document
+            .add_object(Object::string_literal("una revisión"));
         let root = inc
             .get_prev_documents()
             .trailer
@@ -3424,15 +3561,25 @@ mod tests {
                 continue;
             };
             for a in annots {
-                let Some(annot) = dict_de(&doc, &a) else { continue };
-                if annot.get(b"FT").and_then(|o| o.as_name()).unwrap_or_default() != b"Sig" {
+                let Some(annot) = dict_de(&doc, &a) else {
+                    continue;
+                };
+                if annot
+                    .get(b"FT")
+                    .and_then(|o| o.as_name())
+                    .unwrap_or_default()
+                    != b"Sig"
+                {
                     continue;
                 }
                 let Ok(ap) = annot.get(b"AP").and_then(|o| o.as_dict()) else {
                     continue;
                 };
                 let id = ap.get(b"N").and_then(|o| o.as_reference()).expect("/AP /N");
-                let stream = doc.get_object(id).and_then(|o| o.as_stream()).expect("stream");
+                let stream = doc
+                    .get_object(id)
+                    .and_then(|o| o.as_stream())
+                    .expect("stream");
                 let bytes = stream
                     .decompressed_content()
                     .unwrap_or_else(|_| stream.content.clone());
@@ -3487,7 +3634,10 @@ mod tests {
             x509_cert::Certificate::from_pem(include_str!("../fixtures/test_cert.pem"))
                 .expect("otro más"),
         ];
-        let alg = |oid| AlgorithmIdentifierOwned { oid, parameters: None };
+        let alg = |oid| AlgorithmIdentifierOwned {
+            oid,
+            parameters: None,
+        };
         let signer = cms::signed_data::SignerInfo {
             version: cms::content_info::CmsVersion::V1,
             sid: SignerIdentifier::IssuerAndSerialNumber(IssuerAndSerialNumber {
@@ -3511,7 +3661,8 @@ mod tests {
             version: cms::content_info::CmsVersion::V1,
             digest_algorithms: {
                 let mut v = SetOfVec::new();
-                v.insert(alg(const_oid::db::rfc5912::ID_SHA_256)).expect("alg");
+                v.insert(alg(const_oid::db::rfc5912::ID_SHA_256))
+                    .expect("alg");
                 v
             },
             encap_content_info: EncapsulatedContentInfo {
@@ -3557,7 +3708,12 @@ mod tests {
         let dest = dir.join("firma-certifica-ap-out.pdf");
         crea_pdf(&["Pliego"], &src);
         let ap = Apariencia {
-            rect: Some(crate::Rect { x: 60.0, y: 500.0, w: 240.0, h: 90.0 }),
+            rect: Some(crate::Rect {
+                x: 60.0,
+                y: 500.0,
+                w: 240.0,
+                h: 90.0,
+            }),
             page_index: Some(0),
             signer_name: Some("Jorge Gómez".into()),
             signature_png: None,
@@ -3610,7 +3766,12 @@ mod tests {
         let dest = dir.join("firma-motivo-out.pdf");
         crea_pdf(&["Contrato"], &src);
         let ap = Apariencia {
-            rect: Some(crate::Rect { x: 60.0, y: 500.0, w: 240.0, h: 90.0 }),
+            rect: Some(crate::Rect {
+                x: 60.0,
+                y: 500.0,
+                w: 240.0,
+                h: 90.0,
+            }),
             page_index: Some(0),
             signer_name: Some("Jorge Gómez".into()),
             signature_png: None,

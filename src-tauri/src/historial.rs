@@ -172,9 +172,15 @@ pub(crate) fn mutacion<R>(
 }
 
 fn estado(work_path: &str) -> Result<HistoryState, String> {
-    let (undo, redo) = con(work_path, |h| (h.deshacer.len() as u16, h.rehacer.len() as u16));
+    let (undo, redo) = con(work_path, |h| {
+        (h.deshacer.len() as u16, h.rehacer.len() as u16)
+    });
     let page_count = with_doc(work_path, |d| Ok(d.pages().len()))?;
-    Ok(HistoryState { undo, redo, page_count })
+    Ok(HistoryState {
+        undo,
+        redo,
+        page_count,
+    })
 }
 
 /// Sustituye la copia de trabajo por `origen` guardando la actual en la pila
@@ -183,10 +189,18 @@ fn estado(work_path: &str) -> Result<HistoryState, String> {
 fn intercambia(work_path: &str, hacia_atras: bool) -> Result<HistoryState, String> {
     invalidate_doc_cache(work_path);
     let origen = con(work_path, |h| {
-        let pila = if hacia_atras { &mut h.deshacer } else { &mut h.rehacer };
+        let pila = if hacia_atras {
+            &mut h.deshacer
+        } else {
+            &mut h.rehacer
+        };
         pila.pop()
     })
-    .ok_or(if hacia_atras { "Nada que deshacer" } else { "Nada que rehacer" })?;
+    .ok_or(if hacia_atras {
+        "Nada que deshacer"
+    } else {
+        "Nada que rehacer"
+    })?;
     let actual = con(work_path, |h| {
         let p = ruta_instantanea(work_path, h.seq);
         h.seq += 1;
@@ -197,7 +211,11 @@ fn intercambia(work_path: &str, hacia_atras: bool) -> Result<HistoryState, Strin
         let _ = std::fs::remove_file(&actual);
         // devolver la instantánea a su pila: no se ha perdido nada
         con(work_path, |h| {
-            if hacia_atras { h.deshacer.push(origen) } else { h.rehacer.push(origen) }
+            if hacia_atras {
+                h.deshacer.push(origen)
+            } else {
+                h.rehacer.push(origen)
+            }
         });
         return Err(format!("No se ha podido restaurar el documento: {e}"));
     }
@@ -209,7 +227,11 @@ fn intercambia(work_path: &str, hacia_atras: bool) -> Result<HistoryState, Strin
     };
     crate::seguridad::repon_proteccion(work_path, origen.proteccion);
     con(work_path, |h| {
-        if hacia_atras { h.rehacer.push(vuelve) } else { h.deshacer.push(vuelve) }
+        if hacia_atras {
+            h.rehacer.push(vuelve)
+        } else {
+            h.deshacer.push(vuelve)
+        }
     });
     estado(work_path)
 }
@@ -300,16 +322,37 @@ mod tests {
         assert_eq!(paginas::delete_page(work.clone(), 0).unwrap(), 2);
         assert_eq!(
             history_state(work.clone()).unwrap(),
-            HistoryState { undo: 1, redo: 0, page_count: 2 }
+            HistoryState {
+                undo: 1,
+                redo: 0,
+                page_count: 2
+            }
         );
         let e = undo(work.clone()).unwrap();
-        assert_eq!(e, HistoryState { undo: 0, redo: 1, page_count: 3 });
+        assert_eq!(
+            e,
+            HistoryState {
+                undo: 0,
+                redo: 1,
+                page_count: 3
+            }
+        );
         assert_eq!(textos_de(std::path::Path::new(&work))[0], "Uno");
         let e = redo(work.clone()).unwrap();
-        assert_eq!(e, HistoryState { undo: 1, redo: 0, page_count: 2 });
+        assert_eq!(
+            e,
+            HistoryState {
+                undo: 1,
+                redo: 0,
+                page_count: 2
+            }
+        );
         assert_eq!(textos_de(std::path::Path::new(&work))[0], "Dos");
         // el caché se invalidó: el render y el texto ven el estado nuevo
-        assert!(!busqueda::get_page_text(work.clone(), 0).unwrap().chars.is_empty());
+        assert!(!busqueda::get_page_text(work.clone(), 0)
+            .unwrap()
+            .chars
+            .is_empty());
         assert!(undo(work.clone()).is_ok());
         assert!(undo(work.clone()).is_err(), "sin pasos debe fallar");
         limpia(&work);
@@ -320,15 +363,31 @@ mod tests {
     fn anotacion_deshacer_rehacer_y_rama_nueva() {
         let work = fixture("anotacion", &["Página"]);
         anotaciones::add_note(work.clone(), 0, 100.0, 100.0, "hola".into(), None).unwrap();
-        assert_eq!(anotaciones::get_annotations(work.clone(), 0).unwrap().len(), 1);
+        assert_eq!(
+            anotaciones::get_annotations(work.clone(), 0).unwrap().len(),
+            1
+        );
         undo(work.clone()).unwrap();
-        assert_eq!(anotaciones::get_annotations(work.clone(), 0).unwrap().len(), 0);
+        assert_eq!(
+            anotaciones::get_annotations(work.clone(), 0).unwrap().len(),
+            0
+        );
         redo(work.clone()).unwrap();
-        assert_eq!(anotaciones::get_annotations(work.clone(), 0).unwrap().len(), 1);
+        assert_eq!(
+            anotaciones::get_annotations(work.clone(), 0).unwrap().len(),
+            1
+        );
         undo(work.clone()).unwrap();
         // una mutación nueva descarta la rama de rehacer y sus ficheros
-        anotaciones::add_stroke(work.clone(), 0, vec![[10.0, 10.0], [50.0, 50.0]], None, None, None)
-            .unwrap();
+        anotaciones::add_stroke(
+            work.clone(),
+            0,
+            vec![[10.0, 10.0], [50.0, 50.0]],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         let e = history_state(work.clone()).unwrap();
         assert_eq!((e.undo, e.redo), (1, 0));
         assert_eq!(instantaneas(&work), 1);
@@ -341,11 +400,17 @@ mod tests {
         for _ in 0..(MAX_PASOS + 5) {
             paginas::rotate_page(work.clone(), 0).unwrap();
         }
-        assert_eq!(history_state(work.clone()).unwrap().undo as usize, MAX_PASOS);
+        assert_eq!(
+            history_state(work.clone()).unwrap().undo as usize,
+            MAX_PASOS
+        );
         assert_eq!(instantaneas(&work), MAX_PASOS);
         // una mutación que falla no deja paso ni fichero
         assert!(anotaciones::remove_annotation(work.clone(), 0, 99).is_err());
-        assert_eq!(history_state(work.clone()).unwrap().undo as usize, MAX_PASOS);
+        assert_eq!(
+            history_state(work.clone()).unwrap().undo as usize,
+            MAX_PASOS
+        );
         assert_eq!(instantaneas(&work), MAX_PASOS);
         for _ in 0..MAX_PASOS {
             undo(work.clone()).unwrap();
@@ -358,7 +423,12 @@ mod tests {
     #[test]
     fn dry_run_no_crea_paso() {
         let work = fixture("dryrun", &["Página"]);
-        let r = crate::Rect { x: 40.0, y: 130.0, w: 200.0, h: 30.0 };
+        let r = crate::Rect {
+            x: 40.0,
+            y: 130.0,
+            w: 200.0,
+            h: 30.0,
+        };
         seguridad::redact_area(work.clone(), 0, r, true).unwrap();
         crate::paginas2::remove_marginal_text(work.clone(), "header".into(), true).unwrap();
         assert_eq!(history_state(work.clone()).unwrap().undo, 0);
@@ -368,22 +438,58 @@ mod tests {
     #[test]
     fn cirugia_y_metadatos_pasan_por_historial() {
         let work = fixture("cirugia", &["Página"]);
-        let r = crate::Rect { x: 50.0, y: 50.0, w: 120.0, h: 20.0 };
-        crate::formularios2::create_form_field(work.clone(), 0, "text".into(), r, "campo".into(), None, None, None, None)
-            .unwrap();
-        assert_eq!(crate::formularios::get_form_fields(work.clone(), 0).unwrap().len(), 1);
+        let r = crate::Rect {
+            x: 50.0,
+            y: 50.0,
+            w: 120.0,
+            h: 20.0,
+        };
+        crate::formularios2::create_form_field(
+            work.clone(),
+            0,
+            "text".into(),
+            r,
+            "campo".into(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            crate::formularios::get_form_fields(work.clone(), 0)
+                .unwrap()
+                .len(),
+            1
+        );
         crate::documento::set_metadata(
             work.clone(),
-            crate::documento::Metadata { title: "T".into(), ..Default::default() },
+            crate::documento::Metadata {
+                title: "T".into(),
+                ..Default::default()
+            },
         )
         .unwrap();
         assert_eq!(history_state(work.clone()).unwrap().undo, 2);
         undo(work.clone()).unwrap();
-        assert_eq!(crate::documento::get_metadata(work.clone()).unwrap().title, "");
+        assert_eq!(
+            crate::documento::get_metadata(work.clone()).unwrap().title,
+            ""
+        );
         undo(work.clone()).unwrap();
-        assert_eq!(crate::formularios::get_form_fields(work.clone(), 0).unwrap().len(), 0);
+        assert_eq!(
+            crate::formularios::get_form_fields(work.clone(), 0)
+                .unwrap()
+                .len(),
+            0
+        );
         redo(work.clone()).unwrap();
-        assert_eq!(crate::formularios::get_form_fields(work.clone(), 0).unwrap().len(), 1);
+        assert_eq!(
+            crate::formularios::get_form_fields(work.clone(), 0)
+                .unwrap()
+                .len(),
+            1
+        );
         limpia(&work);
     }
 
@@ -411,11 +517,33 @@ mod tests {
             esperados += 1;
             assert_eq!(history_state(work.to_string()).unwrap().undo, esperados);
         };
-        crate::texto::add_text_block(work.clone(), 0, 60.0, 400.0, "Nuevo".into(), 12.0, None, None, None, None, None)
-            .unwrap();
+        crate::texto::add_text_block(
+            work.clone(),
+            0,
+            60.0,
+            400.0,
+            "Nuevo".into(),
+            12.0,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         cuenta(&work);
-        crate::anotaciones2::add_stamp(work.clone(), 0, "OK".into(), [200, 0, 0, 255], 200.0, 200.0, 20.0, None, None)
-            .unwrap();
+        crate::anotaciones2::add_stamp(
+            work.clone(),
+            0,
+            "OK".into(),
+            [200, 0, 0, 255],
+            200.0,
+            200.0,
+            20.0,
+            None,
+            None,
+        )
+        .unwrap();
         cuenta(&work);
         crate::paginas2::add_blank_page(work.clone(), 1).unwrap();
         cuenta(&work);

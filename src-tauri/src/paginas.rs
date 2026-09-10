@@ -1,45 +1,49 @@
 //! Gestión de páginas: borrar, rotar, mover, unir y extraer (FPDF_ImportPages).
 
-use crate::{on_pdfium_thread, pdfium, save_and_close};
 use crate::historial::mutacion;
+use crate::{on_pdfium_thread, pdfium, save_and_close};
 use pdfium_render::prelude::*;
 
 /// Borra una página y devuelve el nuevo número de páginas.
 #[tauri::command(async)]
 pub fn delete_page(work_path: String, page_index: u16) -> Result<u16, String> {
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        page.delete().map_err(|e| e.to_string())?;
-        let count = doc.pages().len();
-        save_and_close(doc, &work_path)?;
-        Ok(count)
-    }))
+    mutacion(work_path, |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
+                .map_err(|e| e.to_string())?;
+            let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            page.delete().map_err(|e| e.to_string())?;
+            let count = doc.pages().len();
+            save_and_close(doc, &work_path)?;
+            Ok(count)
+        })
+    })
 }
 
 /// Rota una página 90° en sentido horario (acumulativo).
 #[tauri::command(async)]
 pub fn rotate_page(work_path: String, page_index: u16) -> Result<(), String> {
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let next = match page.rotation().unwrap_or(PdfPageRenderRotation::None) {
-            PdfPageRenderRotation::None => PdfPageRenderRotation::Degrees90,
-            PdfPageRenderRotation::Degrees90 => PdfPageRenderRotation::Degrees180,
-            PdfPageRenderRotation::Degrees180 => PdfPageRenderRotation::Degrees270,
-            PdfPageRenderRotation::Degrees270 => PdfPageRenderRotation::None,
-        };
-        page.set_rotation(next);
-        drop(page);
-        save_and_close(doc, &work_path)?;
-        Ok(())
-    }))
+    mutacion(work_path, |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
+                .map_err(|e| e.to_string())?;
+            let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            let next = match page.rotation().unwrap_or(PdfPageRenderRotation::None) {
+                PdfPageRenderRotation::None => PdfPageRenderRotation::Degrees90,
+                PdfPageRenderRotation::Degrees90 => PdfPageRenderRotation::Degrees180,
+                PdfPageRenderRotation::Degrees180 => PdfPageRenderRotation::Degrees270,
+                PdfPageRenderRotation::Degrees270 => PdfPageRenderRotation::None,
+            };
+            page.set_rotation(next);
+            drop(page);
+            save_and_close(doc, &work_path)?;
+            Ok(())
+        })
+    })
 }
 
 /// Borra varias páginas de una vez. De mayor a menor, para que borrar una no
@@ -66,7 +70,10 @@ fn revisa_extraccion(
     indices.sort_unstable();
     indices.dedup();
     if let Some(fuera) = indices.iter().find(|i| **i >= total) {
-        return Err(format!("La página {} ya no está en el documento", fuera + 1));
+        return Err(format!(
+            "La página {} ya no está en el documento",
+            fuera + 1
+        ));
     }
     if borrar && indices.len() as u16 >= total {
         return Err(
@@ -114,13 +121,20 @@ fn borra_paginas(work_path: &str, page_indices: &[u16]) -> Result<u16, String> {
     indices.sort_unstable();
     indices.dedup();
     if let Some(fuera) = indices.iter().find(|i| **i >= total) {
-        return Err(format!("La página {} ya no está en el documento", fuera + 1));
+        return Err(format!(
+            "La página {} ya no está en el documento",
+            fuera + 1
+        ));
     }
     if indices.len() as u16 == total {
         return Err("Un documento no puede quedarse sin páginas".into());
     }
     for i in indices.iter().rev() {
-        doc.pages().get(*i).map_err(|e| e.to_string())?.delete().map_err(|e| e.to_string())?;
+        doc.pages()
+            .get(*i)
+            .map_err(|e| e.to_string())?
+            .delete()
+            .map_err(|e| e.to_string())?;
     }
     let count = doc.pages().len();
     save_and_close(doc, work_path)?;
@@ -155,33 +169,35 @@ pub fn rotate_pages(
     if cuartos == 0 {
         return Ok(()); // vuelta entera: nada que hacer, ni paso de historial
     }
-    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let total = doc.pages().len();
-        for i in &page_indices {
-            if *i >= total {
-                return Err(format!("La página {} ya no está en el documento", i + 1));
+    mutacion(work_path, move |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
+                .map_err(|e| e.to_string())?;
+            let total = doc.pages().len();
+            for i in &page_indices {
+                if *i >= total {
+                    return Err(format!("La página {} ya no está en el documento", i + 1));
+                }
+                let mut page = doc.pages().get(*i).map_err(|e| e.to_string())?;
+                let actual = match page.rotation().unwrap_or(PdfPageRenderRotation::None) {
+                    PdfPageRenderRotation::None => 0u8,
+                    PdfPageRenderRotation::Degrees90 => 1,
+                    PdfPageRenderRotation::Degrees180 => 2,
+                    PdfPageRenderRotation::Degrees270 => 3,
+                };
+                page.set_rotation(match (actual + cuartos) % 4 {
+                    1 => PdfPageRenderRotation::Degrees90,
+                    2 => PdfPageRenderRotation::Degrees180,
+                    3 => PdfPageRenderRotation::Degrees270,
+                    _ => PdfPageRenderRotation::None,
+                });
             }
-            let mut page = doc.pages().get(*i).map_err(|e| e.to_string())?;
-            let actual = match page.rotation().unwrap_or(PdfPageRenderRotation::None) {
-                PdfPageRenderRotation::None => 0u8,
-                PdfPageRenderRotation::Degrees90 => 1,
-                PdfPageRenderRotation::Degrees180 => 2,
-                PdfPageRenderRotation::Degrees270 => 3,
-            };
-            page.set_rotation(match (actual + cuartos) % 4 {
-                1 => PdfPageRenderRotation::Degrees90,
-                2 => PdfPageRenderRotation::Degrees180,
-                3 => PdfPageRenderRotation::Degrees270,
-                _ => PdfPageRenderRotation::None,
-            });
-        }
-        save_and_close(doc, &work_path)?;
-        Ok(())
-    }))
+            save_and_close(doc, &work_path)?;
+            Ok(())
+        })
+    })
 }
 
 /// Mueve una página a otra posición **reordenando el árbol de páginas en
@@ -288,7 +304,11 @@ fn hereda_de_arriba(
             .and_then(|d| d.get(b"Parent"))
             .and_then(|o| o.as_reference())
             .ok()?;
-        if let Ok(v) = doc.get_object(padre).and_then(|o| o.as_dict()).and_then(|d| d.get(clave)) {
+        if let Ok(v) = doc
+            .get_object(padre)
+            .and_then(|o| o.as_dict())
+            .and_then(|d| d.get(clave))
+        {
             return Some(v.clone());
         }
         actual = padre;
@@ -311,7 +331,9 @@ fn nodos_intermedios(doc: &lopdf::Document, raiz: lopdf::ObjectId) -> Vec<lopdf:
             continue;
         };
         for kid in kids {
-            let Ok(hijo) = kid.as_reference() else { continue };
+            let Ok(hijo) = kid.as_reference() else {
+                continue;
+            };
             if vistos.contains(&hijo) {
                 continue;
             }
@@ -333,24 +355,26 @@ fn nodos_intermedios(doc: &lopdf::Document, raiz: lopdf::ObjectId) -> Vec<lopdf:
 /// Añade todas las páginas de otro PDF al final y devuelve el nuevo total.
 #[tauri::command(async)]
 pub fn merge_pdf(work_path: String, other_path: String) -> Result<u16, String> {
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let mut doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        // AC-046: importar de una copia sin las ventanas de las notas
-        // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
-        let fuente = crate::anotaciones::fuente_importable(&other_path);
-        let other = pdfium
-            .load_pdf_from_file(fuente.ruta(), None)
-            .map_err(|e| e.to_string())?;
-        doc.pages_mut().append(&other).map_err(|e| e.to_string())?;
-        let count = doc.pages().len();
-        drop(other);
-        save_and_close(doc, &work_path)?;
-        crate::anotaciones::repon_popups_en(&work_path)?;
-        Ok(count)
-    }))
+    mutacion(work_path, |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let mut doc = pdfium
+                .load_pdf_from_file(&work_path, None)
+                .map_err(|e| e.to_string())?;
+            // AC-046: importar de una copia sin las ventanas de las notas
+            // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
+            let fuente = crate::anotaciones::fuente_importable(&other_path);
+            let other = pdfium
+                .load_pdf_from_file(fuente.ruta(), None)
+                .map_err(|e| e.to_string())?;
+            doc.pages_mut().append(&other).map_err(|e| e.to_string())?;
+            let count = doc.pages().len();
+            drop(other);
+            save_and_close(doc, &work_path)?;
+            crate::anotaciones::repon_popups_en(&work_path)?;
+            Ok(count)
+        })
+    })
 }
 
 /// Extrae las páginas indicadas (índices base 0) a un PDF nuevo.
@@ -373,36 +397,38 @@ pub fn extract_pages(
     let page_indices_revisar = page_indices.clone();
     // extraer y borrar es UNA operación: un solo paso de deshacer, y si el
     // borrado falla el documento se queda como estaba
-    let cuerpo = move |work_path: String| on_pdfium_thread(move || {
-        {
-            // AC-049: todo lo que puede fallar, antes de escribir nada
-            let total = crate::with_doc(&work_path, |doc| Ok(doc.pages().len()))?;
-            let carpeta = std::path::Path::new(&dest_path)
-                .parent()
-                .unwrap_or(std::path::Path::new("."))
-                .to_path_buf();
-            revisa_extraccion(total, &page_indices_revisar, &carpeta, borrar)?;
-            // AC-046: importar de una copia sin las ventanas de las notas
-            // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
-            let fuente = crate::anotaciones::fuente_importable(&work_path);
-            let doc = pdfium()?
-                .load_pdf_from_file(fuente.ruta(), None)
-                .map_err(crate::mensaje_llano)?;
-            let mut new_doc = pdfium()?.create_new_pdf().map_err(|e| e.to_string())?;
-            new_doc
-                .pages_mut()
-                .copy_pages_from_document(&doc, &range, 0)
-                .map_err(|e| e.to_string())?;
-            new_doc.save_to_file(&dest_path).map_err(|e| {
-                crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}"))
-            })?;
-        }
-        crate::anotaciones::repon_popups_en(&dest_path)?;
-        if borrar {
-            borra_paginas(&work_path, &page_indices)?;
-        }
-        Ok(())
-    });
+    let cuerpo = move |work_path: String| {
+        on_pdfium_thread(move || {
+            {
+                // AC-049: todo lo que puede fallar, antes de escribir nada
+                let total = crate::with_doc(&work_path, |doc| Ok(doc.pages().len()))?;
+                let carpeta = std::path::Path::new(&dest_path)
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .to_path_buf();
+                revisa_extraccion(total, &page_indices_revisar, &carpeta, borrar)?;
+                // AC-046: importar de una copia sin las ventanas de las notas
+                // (el par /Popup ↔ /Parent es un ciclo y mata a FPDF_ImportPages)
+                let fuente = crate::anotaciones::fuente_importable(&work_path);
+                let doc = pdfium()?
+                    .load_pdf_from_file(fuente.ruta(), None)
+                    .map_err(crate::mensaje_llano)?;
+                let mut new_doc = pdfium()?.create_new_pdf().map_err(|e| e.to_string())?;
+                new_doc
+                    .pages_mut()
+                    .copy_pages_from_document(&doc, &range, 0)
+                    .map_err(|e| e.to_string())?;
+                new_doc.save_to_file(&dest_path).map_err(|e| {
+                    crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}"))
+                })?;
+            }
+            crate::anotaciones::repon_popups_en(&dest_path)?;
+            if borrar {
+                borra_paginas(&work_path, &page_indices)?;
+            }
+            Ok(())
+        })
+    };
     if borrar {
         mutacion(work_path, cuerpo)
     } else {
@@ -555,12 +581,8 @@ mod tests {
         .expect("numeración");
         let nota = dir.join(format!("{nombre}-nota.txt"));
         std::fs::write(&nota, b"una nota").expect("nota");
-        crate::adjuntos::add_attachment(
-            work.clone(),
-            nota.to_string_lossy().into_owned(),
-            None,
-        )
-        .expect("adjunto");
+        crate::adjuntos::add_attachment(work.clone(), nota.to_string_lossy().into_owned(), None)
+            .expect("adjunto");
         crate::documento::set_open_action(
             work.clone(),
             crate::documento::VistaInicial {
@@ -578,7 +600,12 @@ mod tests {
             work.clone(),
             0,
             "text".into(),
-            crate::Rect { x: 60.0, y: 300.0, w: 180.0, h: 22.0 },
+            crate::Rect {
+                x: 60.0,
+                y: 300.0,
+                w: 180.0,
+                h: 22.0,
+            },
             "nombre".into(),
             None,
             None,
@@ -804,8 +831,15 @@ mod tests {
         let con_nota = dir.join("ac046-con-nota.pdf");
         crea_pdf(&["Con nota", "Segunda"], &con_nota);
         let cn = con_nota.to_string_lossy().into_owned();
-        crate::anotaciones::add_note(cn.clone(), 0, 100.0, 200.0, "Una nota".into(), Some("Ana".into()))
-            .expect("nota");
+        crate::anotaciones::add_note(
+            cn.clone(),
+            0,
+            100.0,
+            200.0,
+            "Una nota".into(),
+            Some("Ana".into()),
+        )
+        .expect("nota");
 
         // un documento aparte al que importarla
         let destino = dir.join("ac046-destino.pdf");
@@ -846,9 +880,17 @@ mod tests {
         move_page(d.clone(), 0, 3).expect("move_page");
         // 7. extract_pages a un fichero nuevo
         let extraido = dir.join("ac046-extraido.pdf");
-        extract_pages(d.clone(), vec![3], extraido.to_string_lossy().into_owned(), None)
-            .expect("extract_pages");
-        assert!(tiene_popup(&extraido.to_string_lossy(), 0), "y en el extraído también");
+        extract_pages(
+            d.clone(),
+            vec![3],
+            extraido.to_string_lossy().into_owned(),
+            None,
+        )
+        .expect("extract_pages");
+        assert!(
+            tiene_popup(&extraido.to_string_lossy(), 0),
+            "y en el extraído también"
+        );
         // 8. extract_each_page y split_pdf, que escriben varios ficheros
         let carpeta = dir.join("ac046-sueltas");
         std::fs::create_dir_all(&carpeta).expect("carpeta");
@@ -880,11 +922,16 @@ mod tests {
             return false;
         };
         annots.iter().any(|a| {
-            let lopdf::Object::Reference(rid) = a else { return false };
+            let lopdf::Object::Reference(rid) = a else {
+                return false;
+            };
             let Ok(d) = doc.get_object(*rid).and_then(|o| o.as_dict()) else {
                 return false;
             };
-            d.get(b"Subtype").and_then(|s| s.as_name()).map(|n| n == b"Text").unwrap_or(false)
+            d.get(b"Subtype")
+                .and_then(|s| s.as_name())
+                .map(|n| n == b"Text")
+                .unwrap_or(false)
                 && d.has(b"Popup")
         })
     }
@@ -902,10 +949,17 @@ mod tests {
         let pdf = std::env::temp_dir().join("editor_pdf_test_lote.pdf");
         crea_pdf(&["Uno", "Dos", "Tres", "Cuatro", "Cinco", "Seis"], &pdf);
         let work = pdf.to_string_lossy().into_owned();
-        let pasos = |w: &str| crate::historial::history_state(w.to_string()).expect("historial").undo;
+        let pasos = |w: &str| {
+            crate::historial::history_state(w.to_string())
+                .expect("historial")
+                .undo
+        };
         let antes = pasos(&work);
 
-        assert_eq!(delete_pages(work.clone(), vec![0, 2, 4]).expect("borrar"), 3);
+        assert_eq!(
+            delete_pages(work.clone(), vec![0, 2, 4]).expect("borrar"),
+            3
+        );
         let t = textos_de(&pdf);
         assert_eq!(t.len(), 3);
         assert!(
@@ -923,7 +977,10 @@ mod tests {
         assert_eq!(sizes[0].rotation, 0, "solo gira lo seleccionado");
         // dos cuartos más: 270 + 180 = 90
         rotate_pages(work.clone(), vec![1], 2).expect("girar media vuelta");
-        assert_eq!(get_page_sizes(work.clone()).expect("tamaños")[1].rotation, 90);
+        assert_eq!(
+            get_page_sizes(work.clone()).expect("tamaños")[1].rotation,
+            90
+        );
         // una vuelta entera no cambia nada ni deja paso de historial
         let pasos_ahora = pasos(&work);
         rotate_pages(work.clone(), vec![1], 4).expect("vuelta entera");
@@ -956,12 +1013,22 @@ mod tests {
 
         let d = textos_de(&destino);
         assert_eq!(d.len(), 2);
-        assert!(d[0].contains("Dos") && d[1].contains("Tres"), "destino: {d:?}");
+        assert!(
+            d[0].contains("Dos") && d[1].contains("Tres"),
+            "destino: {d:?}"
+        );
         let o = textos_de(&pdf);
         assert_eq!(o.len(), 2, "el original conserva las que no se extrajeron");
-        assert!(o[0].contains("Uno") && o[1].contains("Cuatro"), "origen: {o:?}");
+        assert!(
+            o[0].contains("Uno") && o[1].contains("Cuatro"),
+            "origen: {o:?}"
+        );
         crate::historial::undo(work).expect("deshacer");
-        assert_eq!(textos_de(&pdf).len(), 4, "un ⌘Z devuelve el original entero");
+        assert_eq!(
+            textos_de(&pdf).len(),
+            4,
+            "un ⌘Z devuelve el original entero"
+        );
 
         for f in [&pdf, &destino] {
             std::fs::remove_file(f).ok();
@@ -1026,8 +1093,11 @@ mod tests {
         let dir = std::env::temp_dir().join("vitela-por-pagina-test");
         std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(&dir).expect("carpeta");
-        let pasos =
-            |w: &str| crate::historial::history_state(w.to_string()).expect("historial").undo;
+        let pasos = |w: &str| {
+            crate::historial::history_state(w.to_string())
+                .expect("historial")
+                .undo
+        };
         let antes = pasos(&work);
 
         let escritos = extract_each_page(
@@ -1059,10 +1129,13 @@ mod tests {
             Some(true),
         );
         assert!(fallo.is_err(), "una carpeta que no existe tiene que fallar");
-        assert_eq!(textos_de(&pdf).len(), 4, "el documento se queda como estaba");
+        assert_eq!(
+            textos_de(&pdf).len(),
+            4,
+            "el documento se queda como estaba"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
         std::fs::remove_file(&pdf).ok();
     }
-
 }

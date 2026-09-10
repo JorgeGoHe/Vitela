@@ -1,11 +1,11 @@
 //! Imágenes: listar, insertar, mover/redimensionar, reemplazar, borrar y
 //! extraer el contenido de un objeto de imagen.
 
-use crate::{on_pdfium_thread, pdfium, save_and_close, with_doc};
 use crate::historial::mutacion;
-use serde::Serialize;
+use crate::{on_pdfium_thread, pdfium, save_and_close, with_doc};
 use base64::Engine;
 use pdfium_render::prelude::*;
+use serde::Serialize;
 
 /// Contenido de un objeto de imagen como PNG en base64 (con máscaras y
 /// transparencia aplicadas). La UI lo usa como vista previa al arrastrar.
@@ -21,10 +21,7 @@ pub fn get_image_data(path: String, page_index: u16, object_index: u32) -> Resul
         let doc = pdfium()?
             .load_pdf_from_file(&path, None)
             .map_err(crate::mensaje_llano)?;
-        let page = doc
-            .pages()
-            .get(page_index)
-            .map_err(crate::mensaje_llano)?;
+        let page = doc.pages().get(page_index).map_err(crate::mensaje_llano)?;
         let obj = page
             .objects()
             .get(object_index as usize)
@@ -74,9 +71,7 @@ pub fn save_image_data(
             .get_processed_image(&doc)
             .map_err(crate::mensaje_llano)?;
         img.save_with_format(&dest_path, image::ImageFormat::Png)
-            .map_err(|e| {
-                crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}"))
-            })
+            .map_err(|e| crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}")))
     })
 }
 
@@ -109,12 +104,8 @@ pub fn get_images(path: String, page_index: u16) -> Result<Vec<ImageInfo>, Strin
                 // `bounds()` de un objeto de página son quadpoints; los
                 // giros del PDF son múltiplos de 90°, así que su caja
                 // envolvente es el rect
-                let caja = geo.pdf_rect_a_ui(&PdfRect::new(
-                    b.bottom(),
-                    b.left(),
-                    b.top(),
-                    b.right(),
-                ));
+                let caja =
+                    geo.pdf_rect_a_ui(&PdfRect::new(b.bottom(), b.left(), b.top(), b.right()));
                 out.push(ImageInfo {
                     object_index: i as u32,
                     x: caja.x,
@@ -139,72 +130,74 @@ pub fn add_image(
     x: f32,
     y: f32,
 ) -> Result<(), String> {
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let img =
-            image::open(&image_path).map_err(|e| format!("No se ha podido leer la imagen: {e}"))?;
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let vista = crate::Geo::de_pagina(&page);
-        let rot = vista.rot;
-        // el tamaño se limita al de la página TAL COMO SE VE
-        let (page_w, page_h) = (page.width().value, page.height().value);
-        let mut w = img.width() as f32;
-        let mut h = img.height() as f32;
-        let max_w = page_w * 0.6;
-        if w > max_w {
-            let f = max_w / w;
-            w *= f;
-            h *= f;
-        }
-        if h > page_h * 0.8 {
-            let f = page_h * 0.8 / h;
-            w *= f;
-            h *= f;
-        }
-        let mut obj =
-            PdfPageImageObject::new_with_size(&doc, &img, PdfPoints::new(w), PdfPoints::new(h))
+    mutacion(work_path, |work_path| {
+        on_pdfium_thread(move || {
+            let img = image::open(&image_path)
+                .map_err(|e| format!("No se ha podido leer la imagen: {e}"))?;
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
                 .map_err(|e| e.to_string())?;
-        // girar al revés que la página: si no, en una página con /Rotate la
-        // imagen sale tumbada
-        if rot != 0 {
-            obj.rotate_counter_clockwise_degrees(rot as f32)
-                .map_err(|e| e.to_string())?;
-        }
-        // el punto llega en el espacio propio y es la esquina superior
-        // izquierda de lo que se ve: la caja en coordenadas PDF sale de
-        // recorrer los ejes de la vista
-        let ancla = vista.propia().ui_a_pdf(x, y);
-        let (derecha, abajo) = vista.ejes();
-        let esquinas = [
-            ancla,
-            (ancla.0 + derecha.0 * w, ancla.1 + derecha.1 * w),
-            (ancla.0 + abajo.0 * h, ancla.1 + abajo.1 * h),
-            (
-                ancla.0 + derecha.0 * w + abajo.0 * h,
-                ancla.1 + derecha.1 * w + abajo.1 * h,
-            ),
-        ];
-        let (izq, abajo_pdf) = (
-            esquinas.iter().map(|c| c.0).fold(f32::MAX, f32::min),
-            esquinas.iter().map(|c| c.1).fold(f32::MAX, f32::min),
-        );
-        let b = obj.bounds().map_err(|e| e.to_string())?;
-        obj.translate(
-            PdfPoints::new(izq - b.left().value),
-            PdfPoints::new(abajo_pdf - b.bottom().value),
-        )
-        .map_err(|e| e.to_string())?;
-        page.objects_mut()
-            .add_image_object(obj)
+            let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            let vista = crate::Geo::de_pagina(&page);
+            let rot = vista.rot;
+            // el tamaño se limita al de la página TAL COMO SE VE
+            let (page_w, page_h) = (page.width().value, page.height().value);
+            let mut w = img.width() as f32;
+            let mut h = img.height() as f32;
+            let max_w = page_w * 0.6;
+            if w > max_w {
+                let f = max_w / w;
+                w *= f;
+                h *= f;
+            }
+            if h > page_h * 0.8 {
+                let f = page_h * 0.8 / h;
+                w *= f;
+                h *= f;
+            }
+            let mut obj =
+                PdfPageImageObject::new_with_size(&doc, &img, PdfPoints::new(w), PdfPoints::new(h))
+                    .map_err(|e| e.to_string())?;
+            // girar al revés que la página: si no, en una página con /Rotate la
+            // imagen sale tumbada
+            if rot != 0 {
+                obj.rotate_counter_clockwise_degrees(rot as f32)
+                    .map_err(|e| e.to_string())?;
+            }
+            // el punto llega en el espacio propio y es la esquina superior
+            // izquierda de lo que se ve: la caja en coordenadas PDF sale de
+            // recorrer los ejes de la vista
+            let ancla = vista.propia().ui_a_pdf(x, y);
+            let (derecha, abajo) = vista.ejes();
+            let esquinas = [
+                ancla,
+                (ancla.0 + derecha.0 * w, ancla.1 + derecha.1 * w),
+                (ancla.0 + abajo.0 * h, ancla.1 + abajo.1 * h),
+                (
+                    ancla.0 + derecha.0 * w + abajo.0 * h,
+                    ancla.1 + derecha.1 * w + abajo.1 * h,
+                ),
+            ];
+            let (izq, abajo_pdf) = (
+                esquinas.iter().map(|c| c.0).fold(f32::MAX, f32::min),
+                esquinas.iter().map(|c| c.1).fold(f32::MAX, f32::min),
+            );
+            let b = obj.bounds().map_err(|e| e.to_string())?;
+            obj.translate(
+                PdfPoints::new(izq - b.left().value),
+                PdfPoints::new(abajo_pdf - b.bottom().value),
+            )
             .map_err(|e| e.to_string())?;
-        page.regenerate_content().map_err(|e| e.to_string())?;
-        drop(page);
-        save_and_close(doc, &work_path)?;
-        Ok(())
-    }))
+            page.objects_mut()
+                .add_image_object(obj)
+                .map_err(|e| e.to_string())?;
+            page.regenerate_content().map_err(|e| e.to_string())?;
+            drop(page);
+            save_and_close(doc, &work_path)?;
+            Ok(())
+        })
+    })
 }
 
 /// Mueve, redimensiona, **gira y voltea** una imagen. Los bounds llegan en
@@ -236,72 +229,77 @@ pub fn transform_image(
     }
     let flip_h = flip_h.unwrap_or(false);
     let flip_v = flip_v.unwrap_or(false);
-    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        // los bounds que manda la UI vienen en el espacio propio de la
-        // página, así que la altura para voltear la `y` es la propia, no la
-        // que devuelve `page.height()` (esa ya lleva el /Rotate aplicado)
-        let destino = crate::Geo::de_pagina(&page)
-            .propia()
-            .ui_rect_a_pdf(&crate::Rect { x, y, w, h });
-        let mut obj = page
-            .objects_mut()
-            .get(object_index as usize)
-            .map_err(|e| e.to_string())?;
-        if obj.as_image_object().is_none() {
-            return Err("No es una imagen".into());
-        }
-        let b = obj.bounds().map_err(|e| e.to_string())?;
-        let old_w = b.right().value - b.left().value;
-        let old_h = b.top().value - b.bottom().value;
-        let (nueva_w, nueva_h) = (
-            destino.right().value - destino.left().value,
-            destino.top().value - destino.bottom().value,
-        );
-        if old_w > 0.0 && old_h > 0.0 {
-            obj.scale(nueva_w / old_w, nueva_h / old_h)
+    mutacion(work_path, move |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
                 .map_err(|e| e.to_string())?;
-        }
-        // voltear es escalar por −1 en ese eje; girar, un cuarto de vuelta.
-        // Las dos cosas mueven el objeto de sitio (son respecto del origen
-        // del papel), así que después se recoloca por el centro
-        if flip_h || flip_v {
-            obj.scale(if flip_h { -1.0 } else { 1.0 }, if flip_v { -1.0 } else { 1.0 })
+            let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            // los bounds que manda la UI vienen en el espacio propio de la
+            // página, así que la altura para voltear la `y` es la propia, no la
+            // que devuelve `page.height()` (esa ya lleva el /Rotate aplicado)
+            let destino = crate::Geo::de_pagina(&page)
+                .propia()
+                .ui_rect_a_pdf(&crate::Rect { x, y, w, h });
+            let mut obj = page
+                .objects_mut()
+                .get(object_index as usize)
                 .map_err(|e| e.to_string())?;
-        }
-        if giro != 0 {
-            // `rotate` viene en grados horarios, como `rotate_page`
-            obj.rotate_counter_clockwise_degrees(-(giro as f32))
+            if obj.as_image_object().is_none() {
+                return Err("No es una imagen".into());
+            }
+            let b = obj.bounds().map_err(|e| e.to_string())?;
+            let old_w = b.right().value - b.left().value;
+            let old_h = b.top().value - b.bottom().value;
+            let (nueva_w, nueva_h) = (
+                destino.right().value - destino.left().value,
+                destino.top().value - destino.bottom().value,
+            );
+            if old_w > 0.0 && old_h > 0.0 {
+                obj.scale(nueva_w / old_w, nueva_h / old_h)
+                    .map_err(|e| e.to_string())?;
+            }
+            // voltear es escalar por −1 en ese eje; girar, un cuarto de vuelta.
+            // Las dos cosas mueven el objeto de sitio (son respecto del origen
+            // del papel), así que después se recoloca por el centro
+            if flip_h || flip_v {
+                obj.scale(
+                    if flip_h { -1.0 } else { 1.0 },
+                    if flip_v { -1.0 } else { 1.0 },
+                )
                 .map_err(|e| e.to_string())?;
-        }
-        let b2 = obj.bounds().map_err(|e| e.to_string())?;
-        let (dx, dy) = if giro != 0 || flip_h || flip_v {
-            // centrado en la caja pedida: a 90° el ancho y el alto salen
-            // cambiados y encajar por la esquina la desplazaría
-            (
-                (destino.left().value + destino.right().value) / 2.0
-                    - (b2.left().value + b2.right().value) / 2.0,
-                (destino.bottom().value + destino.top().value) / 2.0
-                    - (b2.bottom().value + b2.top().value) / 2.0,
-            )
-        } else {
-            (
-                destino.left().value - b2.left().value,
-                destino.bottom().value - b2.bottom().value,
-            )
-        };
-        obj.translate(PdfPoints::new(dx), PdfPoints::new(dy))
-            .map_err(|e| e.to_string())?;
-        drop(obj);
-        page.regenerate_content().map_err(|e| e.to_string())?;
-        drop(page);
-        save_and_close(doc, &work_path)?;
-        Ok(())
-    }))
+            }
+            if giro != 0 {
+                // `rotate` viene en grados horarios, como `rotate_page`
+                obj.rotate_counter_clockwise_degrees(-(giro as f32))
+                    .map_err(|e| e.to_string())?;
+            }
+            let b2 = obj.bounds().map_err(|e| e.to_string())?;
+            let (dx, dy) = if giro != 0 || flip_h || flip_v {
+                // centrado en la caja pedida: a 90° el ancho y el alto salen
+                // cambiados y encajar por la esquina la desplazaría
+                (
+                    (destino.left().value + destino.right().value) / 2.0
+                        - (b2.left().value + b2.right().value) / 2.0,
+                    (destino.bottom().value + destino.top().value) / 2.0
+                        - (b2.bottom().value + b2.top().value) / 2.0,
+                )
+            } else {
+                (
+                    destino.left().value - b2.left().value,
+                    destino.bottom().value - b2.bottom().value,
+                )
+            };
+            obj.translate(PdfPoints::new(dx), PdfPoints::new(dy))
+                .map_err(|e| e.to_string())?;
+            drop(obj);
+            page.regenerate_content().map_err(|e| e.to_string())?;
+            drop(page);
+            save_and_close(doc, &work_path)?;
+            Ok(())
+        })
+    })
 }
 
 /// Trae la imagen al frente o la manda al fondo, que es lo que hace falta
@@ -317,53 +315,55 @@ pub fn reorder_image(
     object_index: u32,
     al_frente: bool,
 ) -> Result<(), String> {
-    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(crate::mensaje_llano)?;
-        let mut page = doc.pages().get(page_index).map_err(crate::mensaje_llano)?;
-        let total = page.objects().len();
-        {
-            let obj = page
-                .objects()
-                .get(object_index as usize)
+    mutacion(work_path, move |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
                 .map_err(crate::mensaje_llano)?;
-            if obj.as_image_object().is_none() {
-                return Err("No es una imagen".into());
-            }
-        }
-        let ya_esta = (al_frente && object_index as usize + 1 == total)
-            || (!al_frente && object_index == 0);
-        if !ya_esta {
-            // sacar la imagen y volver a añadirla la deja la última, que es
-            // la que se pinta encima
-            let obj = page
-                .objects_mut()
-                .remove_object_at_index(object_index as usize)
-                .map_err(crate::mensaje_llano)?;
-            page.objects_mut()
-                .add_object(obj)
-                .map_err(crate::mensaje_llano)?;
-            if !al_frente {
-                // …y para mandarla al fondo, se pasan por detrás todos los
-                // demás, en su mismo orden
-                for _ in 0..total.saturating_sub(1) {
-                    let otro = page
-                        .objects_mut()
-                        .remove_object_at_index(0)
-                        .map_err(crate::mensaje_llano)?;
-                    page.objects_mut()
-                        .add_object(otro)
-                        .map_err(crate::mensaje_llano)?;
+            let mut page = doc.pages().get(page_index).map_err(crate::mensaje_llano)?;
+            let total = page.objects().len();
+            {
+                let obj = page
+                    .objects()
+                    .get(object_index as usize)
+                    .map_err(crate::mensaje_llano)?;
+                if obj.as_image_object().is_none() {
+                    return Err("No es una imagen".into());
                 }
             }
-            page.regenerate_content().map_err(crate::mensaje_llano)?;
-        }
-        drop(page);
-        save_and_close(doc, &work_path)?;
-        Ok(())
-    }))
+            let ya_esta = (al_frente && object_index as usize + 1 == total)
+                || (!al_frente && object_index == 0);
+            if !ya_esta {
+                // sacar la imagen y volver a añadirla la deja la última, que es
+                // la que se pinta encima
+                let obj = page
+                    .objects_mut()
+                    .remove_object_at_index(object_index as usize)
+                    .map_err(crate::mensaje_llano)?;
+                page.objects_mut()
+                    .add_object(obj)
+                    .map_err(crate::mensaje_llano)?;
+                if !al_frente {
+                    // …y para mandarla al fondo, se pasan por detrás todos los
+                    // demás, en su mismo orden
+                    for _ in 0..total.saturating_sub(1) {
+                        let otro = page
+                            .objects_mut()
+                            .remove_object_at_index(0)
+                            .map_err(crate::mensaje_llano)?;
+                        page.objects_mut()
+                            .add_object(otro)
+                            .map_err(crate::mensaje_llano)?;
+                    }
+                }
+                page.regenerate_content().map_err(crate::mensaje_llano)?;
+            }
+            drop(page);
+            save_and_close(doc, &work_path)?;
+            Ok(())
+        })
+    })
 }
 
 /// Reemplaza el contenido de una imagen manteniendo posición y tamaño.
@@ -374,49 +374,51 @@ pub fn replace_image(
     object_index: u32,
     image_path: String,
 ) -> Result<(), String> {
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let img =
-            image::open(&image_path).map_err(|e| format!("No se ha podido leer la imagen: {e}"))?;
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let (left, bottom, w, h) = {
-            let obj = page
-                .objects()
-                .get(object_index as usize)
+    mutacion(work_path, |work_path| {
+        on_pdfium_thread(move || {
+            let img = image::open(&image_path)
+                .map_err(|e| format!("No se ha podido leer la imagen: {e}"))?;
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
                 .map_err(|e| e.to_string())?;
-            if obj.as_image_object().is_none() {
-                return Err("No es una imagen".into());
-            }
-            let b = obj.bounds().map_err(|e| e.to_string())?;
-            (
-                b.left().value,
-                b.bottom().value,
-                b.right().value - b.left().value,
-                b.top().value - b.bottom().value,
-            )
-        };
-        let removed = page
-            .objects_mut()
-            .remove_object_at_index(object_index as usize)
-            .map_err(|e| e.to_string())?;
-        // ver nota en delete_text_block: soltar el objeto extraído casca
-        std::mem::forget(removed);
-        let mut obj =
-            PdfPageImageObject::new_with_size(&doc, &img, PdfPoints::new(w), PdfPoints::new(h))
+            let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            let (left, bottom, w, h) = {
+                let obj = page
+                    .objects()
+                    .get(object_index as usize)
+                    .map_err(|e| e.to_string())?;
+                if obj.as_image_object().is_none() {
+                    return Err("No es una imagen".into());
+                }
+                let b = obj.bounds().map_err(|e| e.to_string())?;
+                (
+                    b.left().value,
+                    b.bottom().value,
+                    b.right().value - b.left().value,
+                    b.top().value - b.bottom().value,
+                )
+            };
+            let removed = page
+                .objects_mut()
+                .remove_object_at_index(object_index as usize)
                 .map_err(|e| e.to_string())?;
-        obj.translate(PdfPoints::new(left), PdfPoints::new(bottom))
-            .map_err(|e| e.to_string())?;
-        page.objects_mut()
-            .add_image_object(obj)
-            .map_err(|e| e.to_string())?;
-        page.regenerate_content().map_err(|e| e.to_string())?;
-        drop(page);
-        save_and_close(doc, &work_path)?;
-        Ok(())
-    }))
+            // ver nota en delete_text_block: soltar el objeto extraído casca
+            std::mem::forget(removed);
+            let mut obj =
+                PdfPageImageObject::new_with_size(&doc, &img, PdfPoints::new(w), PdfPoints::new(h))
+                    .map_err(|e| e.to_string())?;
+            obj.translate(PdfPoints::new(left), PdfPoints::new(bottom))
+                .map_err(|e| e.to_string())?;
+            page.objects_mut()
+                .add_image_object(obj)
+                .map_err(|e| e.to_string())?;
+            page.regenerate_content().map_err(|e| e.to_string())?;
+            drop(page);
+            save_and_close(doc, &work_path)?;
+            Ok(())
+        })
+    })
 }
 
 /// Recorta una imagen: se queda con el trozo que marca `rect` —en el
@@ -439,111 +441,117 @@ pub fn crop_image(
     if rect.w < 4.0 || rect.h < 4.0 {
         return Err("El área de recorte es demasiado pequeña".into());
     }
-    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(crate::mensaje_llano)?;
-        let mut page = doc.pages().get(page_index).map_err(crate::mensaje_llano)?;
-        let destino = crate::Geo::de_pagina(&page).propia().ui_rect_a_pdf(&rect);
-        // el trozo que se queda, y el rectángulo del papel que va a ocupar
-        let (recortada, corte_x, corte_y, corte_w, corte_h) = {
-            let obj = page
-                .objects()
-                .get(object_index as usize)
+    mutacion(work_path, move |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
                 .map_err(crate::mensaje_llano)?;
-            let img = obj.as_image_object().ok_or("No es una imagen")?;
-            let b = obj.bounds().map_err(|e| e.to_string())?;
-            let (izq, abajo) = (b.left().value, b.bottom().value);
-            let (ancho, alto) = (b.right().value - izq, b.top().value - abajo);
-            if ancho <= 0.0 || alto <= 0.0 {
-                return Err("Esa imagen no tiene tamaño".into());
-            }
-            // la parte del rect que cae dentro de la imagen
-            let x0 = destino.left().value.max(izq);
-            let x1 = destino.right().value.min(izq + ancho);
-            let y0 = destino.bottom().value.max(abajo);
-            let y1 = destino.top().value.min(abajo + alto);
-            if x1 - x0 < 1.0 || y1 - y0 < 1.0 {
-                return Err("El área de recorte se sale de la imagen".into());
-            }
-            let bitmap = img
-                .get_processed_image(&doc)
-                .map_err(crate::mensaje_llano)?;
-            let (pw, ph) = (bitmap.width(), bitmap.height());
-            // del papel a los píxeles del bitmap: la `y` del papel sube y la
-            // de la imagen baja, así que el borde de arriba del recorte es
-            // la fila de más arriba
-            let a_px = |v: f32, largo: f32, total: u32| -> u32 {
-                ((v / largo) * total as f32).round().clamp(0.0, total as f32) as u32
+            let mut page = doc.pages().get(page_index).map_err(crate::mensaje_llano)?;
+            let destino = crate::Geo::de_pagina(&page).propia().ui_rect_a_pdf(&rect);
+            // el trozo que se queda, y el rectángulo del papel que va a ocupar
+            let (recortada, corte_x, corte_y, corte_w, corte_h) = {
+                let obj = page
+                    .objects()
+                    .get(object_index as usize)
+                    .map_err(crate::mensaje_llano)?;
+                let img = obj.as_image_object().ok_or("No es una imagen")?;
+                let b = obj.bounds().map_err(|e| e.to_string())?;
+                let (izq, abajo) = (b.left().value, b.bottom().value);
+                let (ancho, alto) = (b.right().value - izq, b.top().value - abajo);
+                if ancho <= 0.0 || alto <= 0.0 {
+                    return Err("Esa imagen no tiene tamaño".into());
+                }
+                // la parte del rect que cae dentro de la imagen
+                let x0 = destino.left().value.max(izq);
+                let x1 = destino.right().value.min(izq + ancho);
+                let y0 = destino.bottom().value.max(abajo);
+                let y1 = destino.top().value.min(abajo + alto);
+                if x1 - x0 < 1.0 || y1 - y0 < 1.0 {
+                    return Err("El área de recorte se sale de la imagen".into());
+                }
+                let bitmap = img
+                    .get_processed_image(&doc)
+                    .map_err(crate::mensaje_llano)?;
+                let (pw, ph) = (bitmap.width(), bitmap.height());
+                // del papel a los píxeles del bitmap: la `y` del papel sube y la
+                // de la imagen baja, así que el borde de arriba del recorte es
+                // la fila de más arriba
+                let a_px = |v: f32, largo: f32, total: u32| -> u32 {
+                    ((v / largo) * total as f32)
+                        .round()
+                        .clamp(0.0, total as f32) as u32
+                };
+                let px = a_px(x0 - izq, ancho, pw);
+                let py = a_px(abajo + alto - y1, alto, ph);
+                let ancho_px = a_px(x1 - x0, ancho, pw).clamp(1, pw - px);
+                let alto_px = a_px(y1 - y0, alto, ph).clamp(1, ph - py);
+                let recortada =
+                    image::imageops::crop_imm(&bitmap, px, py, ancho_px, alto_px).to_image();
+                (
+                    image::DynamicImage::ImageRgba8(recortada),
+                    x0,
+                    y0,
+                    x1 - x0,
+                    y1 - y0,
+                )
             };
-            let px = a_px(x0 - izq, ancho, pw);
-            let py = a_px(abajo + alto - y1, alto, ph);
-            let ancho_px = a_px(x1 - x0, ancho, pw).clamp(1, pw - px);
-            let alto_px = a_px(y1 - y0, alto, ph).clamp(1, ph - py);
-            let recortada =
-                image::imageops::crop_imm(&bitmap, px, py, ancho_px, alto_px).to_image();
-            (
-                image::DynamicImage::ImageRgba8(recortada),
-                x0,
-                y0,
-                x1 - x0,
-                y1 - y0,
+            let removed = page
+                .objects_mut()
+                .remove_object_at_index(object_index as usize)
+                .map_err(|e| e.to_string())?;
+            // ver nota en delete_text_block: soltar el objeto extraído casca
+            std::mem::forget(removed);
+            let mut obj = PdfPageImageObject::new_with_size(
+                &doc,
+                &recortada,
+                PdfPoints::new(corte_w),
+                PdfPoints::new(corte_h),
             )
-        };
-        let removed = page
-            .objects_mut()
-            .remove_object_at_index(object_index as usize)
-            .map_err(|e| e.to_string())?;
-        // ver nota en delete_text_block: soltar el objeto extraído casca
-        std::mem::forget(removed);
-        let mut obj = PdfPageImageObject::new_with_size(
-            &doc,
-            &recortada,
-            PdfPoints::new(corte_w),
-            PdfPoints::new(corte_h),
-        )
-        .map_err(crate::mensaje_llano)?;
-        obj.translate(PdfPoints::new(corte_x), PdfPoints::new(corte_y))
-            .map_err(|e| e.to_string())?;
-        page.objects_mut()
-            .add_image_object(obj)
-            .map_err(|e| e.to_string())?;
-        page.regenerate_content().map_err(|e| e.to_string())?;
-        drop(page);
-        save_and_close(doc, &work_path)
-    }))
+            .map_err(crate::mensaje_llano)?;
+            obj.translate(PdfPoints::new(corte_x), PdfPoints::new(corte_y))
+                .map_err(|e| e.to_string())?;
+            page.objects_mut()
+                .add_image_object(obj)
+                .map_err(|e| e.to_string())?;
+            page.regenerate_content().map_err(|e| e.to_string())?;
+            drop(page);
+            save_and_close(doc, &work_path)
+        })
+    })
 }
 
 /// Elimina una imagen de la página.
 #[tauri::command(async)]
 pub fn delete_image(work_path: String, page_index: u16, object_index: u32) -> Result<(), String> {
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        {
-            let obj = page
-                .objects()
-                .get(object_index as usize)
+    mutacion(work_path, |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
                 .map_err(|e| e.to_string())?;
-            if obj.as_image_object().is_none() {
-                return Err("No es una imagen".into());
+            let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            {
+                let obj = page
+                    .objects()
+                    .get(object_index as usize)
+                    .map_err(|e| e.to_string())?;
+                if obj.as_image_object().is_none() {
+                    return Err("No es una imagen".into());
+                }
             }
-        }
-        let removed = page
-            .objects_mut()
-            .remove_object_at_index(object_index as usize)
-            .map_err(|e| e.to_string())?;
-        // ver nota en delete_text_block: soltar el objeto extraído casca
-        std::mem::forget(removed);
-        page.regenerate_content().map_err(|e| e.to_string())?;
-        drop(page);
-        save_and_close(doc, &work_path)?;
-        Ok(())
-    }))
+            let removed = page
+                .objects_mut()
+                .remove_object_at_index(object_index as usize)
+                .map_err(|e| e.to_string())?;
+            // ver nota en delete_text_block: soltar el objeto extraído casca
+            std::mem::forget(removed);
+            page.regenerate_content().map_err(|e| e.to_string())?;
+            drop(page);
+            save_and_close(doc, &work_path)?;
+            Ok(())
+        })
+    })
 }
 
 #[cfg(test)]
@@ -582,18 +590,20 @@ mod tests {
         )
         .expect("guardar la imagen");
         let salida = image::open(&dest).expect("el PNG se abre").to_rgba8();
-        assert_eq!((salida.width(), salida.height()), (40, 20), "el tamaño del bitmap");
+        assert_eq!(
+            (salida.width(), salida.height()),
+            (40, 20),
+            "el tamaño del bitmap"
+        );
         assert_eq!(salida.get_pixel(20, 10).0, [10, 200, 30, 255], "y su color");
 
         // un objeto que no es una imagen se dice en llano
-        let err = save_image_data(
-            work.clone(),
-            0,
-            999,
-            dest.to_string_lossy().into_owned(),
-        )
-        .unwrap_err();
-        assert!(!err.contains("os error") && !err.contains("Pdfium"), "jerga: {err}");
+        let err =
+            save_image_data(work.clone(), 0, 999, dest.to_string_lossy().into_owned()).unwrap_err();
+        assert!(
+            !err.contains("os error") && !err.contains("Pdfium"),
+            "jerga: {err}"
+        );
 
         for p in [&origen, &pdf, &dest] {
             std::fs::remove_file(p).ok();
@@ -628,7 +638,9 @@ mod tests {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(b64)
             .expect("base64");
-        let out = image::load_from_memory(&bytes).expect("PNG válido").to_rgba8();
+        let out = image::load_from_memory(&bytes)
+            .expect("PNG válido")
+            .to_rgba8();
         let p = out.get_pixel(out.width() / 2, out.height() / 2);
         assert!(p[0] > 150 && p[1] < 100, "esperaba rojo, hay {p:?}");
     }
@@ -657,13 +669,24 @@ mod tests {
             }
         }
         img.save(&png).expect("crear png");
-        add_image(work.clone(), 0, png.to_string_lossy().into_owned(), 100.0, 200.0)
-            .expect("insertar");
+        add_image(
+            work.clone(),
+            0,
+            png.to_string_lossy().into_owned(),
+            100.0,
+            200.0,
+        )
+        .expect("insertar");
         let antes = &get_images(work.clone(), 0).expect("imágenes")[0];
         assert!((antes.w - 80.0).abs() < 1.0 && (antes.h - 40.0).abs() < 1.0);
 
         // recortar la mitad derecha (la azul)
-        let corte = crate::Rect { x: antes.x + 40.0, y: antes.y, w: 40.0, h: 40.0 };
+        let corte = crate::Rect {
+            x: antes.x + 40.0,
+            y: antes.y,
+            w: 40.0,
+            h: 40.0,
+        };
         let indice = antes.object_index;
         crop_image(work.clone(), 0, indice, corte.clone()).expect("recortar");
 
@@ -685,14 +708,21 @@ mod tests {
             .decode(b64)
             .expect("base64");
         let recortada = image::load_from_memory(&bytes).expect("png").to_rgba8();
-        let centro = recortada.get_pixel(recortada.width() / 2, recortada.height() / 2).0;
+        let centro = recortada
+            .get_pixel(recortada.width() / 2, recortada.height() / 2)
+            .0;
         assert!(
             centro[2] > 150 && centro[0] < 100,
             "el trozo que queda tenía que ser el azul: {centro:?}"
         );
 
         // un recorte fuera de la imagen se dice, no se hace a medias
-        let fuera = crate::Rect { x: 0.0, y: 0.0, w: 20.0, h: 20.0 };
+        let fuera = crate::Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 20.0,
+            h: 20.0,
+        };
         assert!(crop_image(work.clone(), 0, despues.object_index, fuera).is_err());
 
         std::fs::remove_file(&tmp).ok();
@@ -742,8 +772,19 @@ mod tests {
         );
 
         // mover y redimensionar
-        transform_image(work.clone(), 0, im.object_index, 50.0, 300.0, 160.0, 80.0, None, None, None)
-            .expect("transformar");
+        transform_image(
+            work.clone(),
+            0,
+            im.object_index,
+            50.0,
+            300.0,
+            160.0,
+            80.0,
+            None,
+            None,
+            None,
+        )
+        .expect("transformar");
         let imgs = get_images(work.clone(), 0).expect("relistar");
         let im = &imgs[0];
         assert!(
@@ -815,8 +856,19 @@ mod tests {
             .last()
             .expect("una imagen")
             .object_index;
-        transform_image(work.clone(), 0, idx, 150.0, 350.0, 100.0, 60.0, None, None, None)
-            .expect("redimensionar");
+        transform_image(
+            work.clone(),
+            0,
+            idx,
+            150.0,
+            350.0,
+            100.0,
+            60.0,
+            None,
+            None,
+            None,
+        )
+        .expect("redimensionar");
 
         let bounds = |v: &[ImageInfo]| -> Vec<(u32, i32, i32, i32, i32)> {
             v.iter()
@@ -832,12 +884,14 @@ mod tests {
                 .collect()
         };
         let antes = bounds(&get_images(work.clone(), 0).expect("bounds antes"));
-        let render_antes = crate::render_page_png(work.clone(), 0, 400, true).expect("render antes");
+        let render_antes =
+            crate::render_page_png(work.clone(), 0, 400, true).expect("render antes");
 
         get_image_data(work.clone(), 0, idx).expect("vista previa");
 
         let despues = bounds(&get_images(work.clone(), 0).expect("bounds después"));
-        let render_despues = crate::render_page_png(work.clone(), 0, 400, true).expect("render después");
+        let render_despues =
+            crate::render_page_png(work.clone(), 0, 400, true).expect("render después");
         assert_eq!(antes, despues, "la vista previa movió la imagen");
         assert!(
             render_antes == render_despues,
@@ -874,13 +928,18 @@ mod tests {
             };
         }
         img.save(&png).expect("crear png");
-        add_image(work.clone(), 0, png.to_string_lossy().into_owned(), 100.0, 300.0)
-            .expect("insertar");
+        add_image(
+            work.clone(),
+            0,
+            png.to_string_lossy().into_owned(),
+            100.0,
+            300.0,
+        )
+        .expect("insertar");
         let (idx, x, y, w, h) = caja(&work);
         assert!(w > h, "de partida es más ancha que alta");
 
-        transform_image(work.clone(), 0, idx, x, y, w, h, Some(90), None, None)
-            .expect("girar 90°");
+        transform_image(work.clone(), 0, idx, x, y, w, h, Some(90), None, None).expect("girar 90°");
         let (idx, gx, gy, gw, gh) = caja(&work);
         assert!(
             (gw - h).abs() < 2.0 && (gh - w).abs() < 2.0,
@@ -907,8 +966,19 @@ mod tests {
         assert!(antes != despues, "voltear tiene que verse en el render");
 
         // un giro que no sea múltiplo de 90 se rechaza en llano
-        let err = transform_image(work.clone(), 0, idx, 100.0, 300.0, 60.0, 40.0, Some(37), None, None)
-            .unwrap_err();
+        let err = transform_image(
+            work.clone(),
+            0,
+            idx,
+            100.0,
+            300.0,
+            60.0,
+            40.0,
+            Some(37),
+            None,
+            None,
+        )
+        .unwrap_err();
         assert!(err.contains("múltiplos de 90"), "{err}");
         std::fs::remove_file(&pdf).ok();
         std::fs::remove_file(&png).ok();
@@ -927,19 +997,35 @@ mod tests {
         image::RgbaImage::from_pixel(60, 30, image::Rgba([30, 160, 60, 255]))
             .save(&png)
             .expect("crear png");
-        add_image(work.clone(), 0, png.to_string_lossy().into_owned(), 40.0, 120.0)
-            .expect("insertar");
-        assert_eq!(caja(&work).0, 1, "la imagen entra la última, encima del texto");
+        add_image(
+            work.clone(),
+            0,
+            png.to_string_lossy().into_owned(),
+            40.0,
+            120.0,
+        )
+        .expect("insertar");
+        assert_eq!(
+            caja(&work).0,
+            1,
+            "la imagen entra la última, encima del texto"
+        );
 
         reorder_image(work.clone(), 0, 1, false).expect("al fondo");
         assert_eq!(caja(&work).0, 0, "ahora se pinta la primera");
         let t = textos_de(&pdf).join(" ");
-        assert!(t.contains("Texto de la página"), "el texto sigue ahí: {t:?}");
+        assert!(
+            t.contains("Texto de la página"),
+            "el texto sigue ahí: {t:?}"
+        );
 
         reorder_image(work.clone(), 0, 0, true).expect("al frente");
         assert_eq!(caja(&work).0, 1, "vuelve a estar encima");
         let t = textos_de(&pdf).join(" ");
-        assert!(t.contains("Texto de la página"), "el texto sigue ahí: {t:?}");
+        assert!(
+            t.contains("Texto de la página"),
+            "el texto sigue ahí: {t:?}"
+        );
         std::fs::remove_file(&pdf).ok();
         std::fs::remove_file(&png).ok();
     }
@@ -963,8 +1049,14 @@ mod tests {
             }
             // la UI convierte el gesto al espacio propio de la página antes
             // de mandarlo; aquí se pide directamente en ese espacio
-            add_image(work.clone(), 0, png.to_string_lossy().into_owned(), 80.0, 200.0)
-                .expect("insertar en página girada");
+            add_image(
+                work.clone(),
+                0,
+                png.to_string_lossy().into_owned(),
+                80.0,
+                200.0,
+            )
+            .expect("insertar en página girada");
             let (idx, ..) = caja(&work);
             let (dx, dy, dw, dh) = (120.0f32, 260.0f32, 90.0f32, 45.0f32);
             transform_image(work.clone(), 0, idx, dx, dy, dw, dh, None, None, None)

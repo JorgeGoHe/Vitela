@@ -4,8 +4,8 @@
 //! objeto de imagen normal del content stream: mover, redimensionar y borrar
 //! ya funcionan con los comandos de imágenes existentes.
 
-use crate::{on_pdfium_thread, pdfium, save_and_close};
 use crate::historial::mutacion;
+use crate::{on_pdfium_thread, pdfium, save_and_close};
 use base64::Engine;
 use pdfium_render::prelude::*;
 use serde::Serialize;
@@ -67,31 +67,33 @@ pub fn stamp_signature(
     if w <= 1.0 || h <= 1.0 {
         return Err("Tamaño de firma inválido".into());
     }
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(png_base64.trim())
-            .map_err(|e| format!("Imagen base64 inválida: {e}"))?;
-        let img = image::load_from_memory(&bytes)
-            .map_err(|e| format!("No se ha podido leer la imagen: {e}"))?;
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let page_h = page.height().value;
-        let mut obj =
-            PdfPageImageObject::new_with_size(&doc, &img, PdfPoints::new(w), PdfPoints::new(h))
+    mutacion(work_path, |work_path| {
+        on_pdfium_thread(move || {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(png_base64.trim())
+                .map_err(|e| format!("Imagen base64 inválida: {e}"))?;
+            let img = image::load_from_memory(&bytes)
+                .map_err(|e| format!("No se ha podido leer la imagen: {e}"))?;
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
                 .map_err(|e| e.to_string())?;
-        obj.translate(PdfPoints::new(x), PdfPoints::new(page_h - y - h))
-            .map_err(|e| e.to_string())?;
-        page.objects_mut()
-            .add_image_object(obj)
-            .map_err(|e| e.to_string())?;
-        page.regenerate_content().map_err(|e| e.to_string())?;
-        drop(page);
-        save_and_close(doc, &work_path)?;
-        Ok(())
-    }))
+            let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            let page_h = page.height().value;
+            let mut obj =
+                PdfPageImageObject::new_with_size(&doc, &img, PdfPoints::new(w), PdfPoints::new(h))
+                    .map_err(|e| e.to_string())?;
+            obj.translate(PdfPoints::new(x), PdfPoints::new(page_h - y - h))
+                .map_err(|e| e.to_string())?;
+            page.objects_mut()
+                .add_image_object(obj)
+                .map_err(|e| e.to_string())?;
+            page.regenerate_content().map_err(|e| e.to_string())?;
+            drop(page);
+            save_and_close(doc, &work_path)?;
+            Ok(())
+        })
+    })
 }
 
 /// Directorio de datos de la app. Lo fija el setup de Tauri (app_data_dir)
@@ -150,17 +152,14 @@ pub(crate) fn guardar_firma_en(
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let id = format!("{nanos}");
-    std::fs::write(dir.join(format!("{id}.png")), &bytes).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido guardar la firma: {e}"))
-    })?;
+    std::fs::write(dir.join(format!("{id}.png")), &bytes)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido guardar la firma: {e}")))?;
     let limpio = name.trim();
     let limpio = if limpio.is_empty() { "Firma" } else { limpio };
-    std::fs::write(dir.join(format!("{id}.txt")), limpio).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido guardar el nombre: {e}"))
-    })?;
-    std::fs::write(dir.join(format!("{id}.ranura")), &ranura).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido guardar la ranura: {e}"))
-    })?;
+    std::fs::write(dir.join(format!("{id}.txt")), limpio)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido guardar el nombre: {e}")))?;
+    std::fs::write(dir.join(format!("{id}.ranura")), &ranura)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido guardar la ranura: {e}")))?;
     Ok(FirmaGuardada {
         id,
         name: limpio.to_string(),
@@ -183,7 +182,9 @@ pub(crate) fn listar_firmas_en(dir: &std::path::Path) -> Result<Vec<FirmaGuardad
         let Some(id) = path.file_stem().and_then(|s| s.to_str()).map(String::from) else {
             continue;
         };
-        let Ok(bytes) = std::fs::read(&path) else { continue };
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
         let name = std::fs::read_to_string(dir.join(format!("{id}.txt")))
             .unwrap_or_else(|_| "Firma".into());
         let ranura = ranura_de(dir, &id);
@@ -206,13 +207,13 @@ pub fn import_signature_file(
     image_path: String,
     ranura: Option<String>,
 ) -> Result<FirmaGuardada, String> {
-    let img = image::open(&image_path).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido leer la imagen: {e}"))
-    })?;
+    let img = image::open(&image_path)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer la imagen: {e}")))?;
     let mut buf = std::io::Cursor::new(Vec::new());
-    img.write_to(&mut buf, image::ImageFormat::Png).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido convertir la imagen a PNG: {e}"))
-    })?;
+    img.write_to(&mut buf, image::ImageFormat::Png)
+        .map_err(|e| {
+            crate::mensaje_llano(format!("No se ha podido convertir la imagen a PNG: {e}"))
+        })?;
     let png_base64 = base64::engine::general_purpose::STANDARD.encode(buf.into_inner());
     let name = std::path::Path::new(&image_path)
         .file_stem()
@@ -245,9 +246,8 @@ pub fn set_signature_slot(id: String, ranura: String) -> Result<(), String> {
     if !dir.join(format!("{id}.png")).exists() {
         return Err("Esa imagen ya no está en la biblioteca".into());
     }
-    std::fs::write(dir.join(format!("{id}.ranura")), &ranura).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido guardar la ranura: {e}"))
-    })
+    std::fs::write(dir.join(format!("{id}.ranura")), &ranura)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido guardar la ranura: {e}")))
 }
 
 /// Lista las firmas guardadas (con su PNG en base64 para las miniaturas).
@@ -263,9 +263,8 @@ pub fn delete_stored_signature(id: String) -> Result<(), String> {
         return Err("Id de firma inválido".into());
     }
     let dir = dir_de_firmas()?;
-    std::fs::remove_file(dir.join(format!("{id}.png"))).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido borrar la firma: {e}"))
-    })?;
+    std::fs::remove_file(dir.join(format!("{id}.png")))
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido borrar la firma: {e}")))?;
     let _ = std::fs::remove_file(dir.join(format!("{id}.txt")));
     let _ = std::fs::remove_file(dir.join(format!("{id}.ranura")));
     Ok(())
@@ -300,8 +299,16 @@ mod tests {
         crea_pdf(&["Documento a firmar"], &pdf);
         let work = pdf.to_string_lossy().to_string();
 
-        stamp_signature(work.clone(), 0, png_con_alfa_base64(), 100.0, 500.0, 180.0, 60.0)
-            .expect("estampar firma");
+        stamp_signature(
+            work.clone(),
+            0,
+            png_con_alfa_base64(),
+            100.0,
+            500.0,
+            180.0,
+            60.0,
+        )
+        .expect("estampar firma");
 
         // la firma aparece como imagen con los bounds pedidos
         let imgs = crate::imagenes::get_images(work.clone(), 0).expect("listar imágenes");
@@ -315,7 +322,9 @@ mod tests {
         // el render compone el alfa: la mitad izquierda pinta rojo, la
         // derecha deja el fondo blanco
         let png = crate::render_page_png(work, 0, 600, true).expect("render");
-        let rendered = image::load_from_memory(&png).expect("leer render").to_rgba8();
+        let rendered = image::load_from_memory(&png)
+            .expect("leer render")
+            .to_rgba8();
         let escala = 600.0 / 595.28; // página A4 de crea_pdf: 595.28 pt de ancho
         let alto = rendered.height() as f32;
         let py = |y_ui: f32| ((y_ui * escala).min(alto - 1.0)) as u32;
@@ -380,8 +389,7 @@ mod tests {
         let png = png_con_alfa_base64();
 
         let firma = guardar_firma_en(&dir, "Mi firma", &png, None).expect("firma");
-        let iniciales =
-            guardar_firma_en(&dir, "JG", &png, Some("iniciales")).expect("iniciales");
+        let iniciales = guardar_firma_en(&dir, "JG", &png, Some("iniciales")).expect("iniciales");
         let sello = guardar_firma_en(&dir, "Aprobado", &png, Some("sello")).expect("sello");
         assert_eq!(iniciales.ranura, "iniciales");
         assert_eq!(sello.ranura, "sello");

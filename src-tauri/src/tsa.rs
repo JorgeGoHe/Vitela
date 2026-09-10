@@ -48,7 +48,10 @@ pub(crate) fn tlv(etiqueta: u8, contenido: &[u8]) -> Vec<u8> {
         out.push(n as u8);
     } else {
         let bytes = n.to_be_bytes();
-        let primero = bytes.iter().position(|b| *b != 0).unwrap_or(bytes.len() - 1);
+        let primero = bytes
+            .iter()
+            .position(|b| *b != 0)
+            .unwrap_or(bytes.len() - 1);
         let significativos = &bytes[primero..];
         out.push(0x80 | significativos.len() as u8);
         out.extend_from_slice(significativos);
@@ -61,7 +64,10 @@ pub(crate) fn tlv(etiqueta: u8, contenido: &[u8]) -> Vec<u8> {
 /// puesto, que si no sería negativo).
 pub(crate) fn entero(n: u64) -> Vec<u8> {
     let bytes = n.to_be_bytes();
-    let primero = bytes.iter().position(|b| *b != 0).unwrap_or(bytes.len() - 1);
+    let primero = bytes
+        .iter()
+        .position(|b| *b != 0)
+        .unwrap_or(bytes.len() - 1);
     let mut v = bytes[primero..].to_vec();
     if v[0] & 0x80 != 0 {
         v.insert(0, 0);
@@ -77,7 +83,10 @@ fn peticion(hash: &[u8], nonce: u64) -> Vec<u8> {
     let sha256 = tlv(
         0x30,
         &[
-            tlv(0x06, &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]),
+            tlv(
+                0x06,
+                &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01],
+            ),
             tlv(0x05, &[]),
         ]
         .concat(),
@@ -86,10 +95,10 @@ fn peticion(hash: &[u8], nonce: u64) -> Vec<u8> {
     tlv(
         0x30,
         &[
-            entero(1),             // version
-            imprint,               // messageImprint
-            entero(nonce),         // nonce
-            tlv(0x01, &[0xFF]),    // certReq: TRUE
+            entero(1),          // version
+            imprint,            // messageImprint
+            entero(nonce),      // nonce
+            tlv(0x01, &[0xFF]), // certReq: TRUE
         ]
         .concat(),
     )
@@ -117,11 +126,13 @@ pub(crate) fn cabecera(der: &[u8]) -> Option<(u8, usize, usize)> {
 /// estado y, detrás, el `ContentInfo` con el sello. Un estado que no sea
 /// «concedido» se cuenta en llano.
 fn token_de(respuesta: &[u8]) -> Result<Vec<u8>, String> {
-    let (_, ini, largo) = cabecera(respuesta).ok_or("El servidor de tiempo ha contestado algo que no es un sello")?;
+    let (_, ini, largo) =
+        cabecera(respuesta).ok_or("El servidor de tiempo ha contestado algo que no es un sello")?;
     let dentro = respuesta
         .get(ini..ini + largo)
         .ok_or("La respuesta del servidor de tiempo viene cortada")?;
-    let (_, si, slargo) = cabecera(dentro).ok_or("El servidor de tiempo ha contestado algo que no es un sello")?;
+    let (_, si, slargo) =
+        cabecera(dentro).ok_or("El servidor de tiempo ha contestado algo que no es un sello")?;
     let estado = dentro
         .get(si..si + slargo)
         .and_then(|s| cabecera(s).and_then(|(_, i, l)| s.get(i..i + l)))
@@ -137,7 +148,8 @@ fn token_de(respuesta: &[u8]) -> Result<Vec<u8>, String> {
         .get(si + slargo..)
         .filter(|r| !r.is_empty())
         .ok_or("El servidor de tiempo no ha devuelto ningún sello de tiempo")?;
-    let (_, ti, tlargo) = cabecera(resto).ok_or("El sello de tiempo que ha devuelto el servidor es ilegible")?;
+    let (_, ti, tlargo) =
+        cabecera(resto).ok_or("El sello de tiempo que ha devuelto el servidor es ilegible")?;
     Ok(resto
         .get(..ti + tlargo)
         .ok_or("El sello de tiempo que ha devuelto el servidor viene cortado")?
@@ -216,8 +228,11 @@ pub(crate) fn iso_de_generalized(t: &str) -> Option<String> {
     let fecha = chrono::NaiveDate::from_ymd_opt(n(0, 4)? as i32, n(4, 6)?, n(6, 8)?)?;
     let hora = chrono::NaiveTime::from_hms_opt(n(8, 10)?, n(10, 12)?, n(12, 14).unwrap_or(0))?;
     Some(
-        chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(fecha.and_time(hora), chrono::Utc)
-            .to_rfc3339(),
+        chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+            fecha.and_time(hora),
+            chrono::Utc,
+        )
+        .to_rfc3339(),
     )
 }
 
@@ -284,7 +299,9 @@ pub(crate) fn post(
             Ok(n) => respuesta.extend_from_slice(&trozo[..n]),
             Err(_) if !respuesta.is_empty() => break,
             Err(_) => {
-                return Err(format!("El {servicio} «{autoridad}» no ha contestado a tiempo"))
+                return Err(format!(
+                    "El {servicio} «{autoridad}» no ha contestado a tiempo"
+                ))
             }
         }
     }
@@ -296,7 +313,10 @@ pub(crate) fn post(
         return Err(format!("El {servicio} ha contestado «{}»", primera.trim()));
     }
     let cuerpo = respuesta[corte + 4..].to_vec();
-    if cabecera.to_lowercase().contains("transfer-encoding: chunked") {
+    if cabecera
+        .to_lowercase()
+        .contains("transfer-encoding: chunked")
+    {
         return Ok(destroza_chunks(&cuerpo));
     }
     Ok(cuerpo)
@@ -307,10 +327,12 @@ fn destroza_chunks(cuerpo: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < cuerpo.len() {
-        let Some(fin) = buscar(&cuerpo[i..], b"\r\n") else { break };
+        let Some(fin) = buscar(&cuerpo[i..], b"\r\n") else {
+            break;
+        };
         let cabeza = String::from_utf8_lossy(&cuerpo[i..i + fin]).to_string();
-        let largo = usize::from_str_radix(cabeza.split(';').next().unwrap_or("").trim(), 16)
-            .unwrap_or(0);
+        let largo =
+            usize::from_str_radix(cabeza.split(';').next().unwrap_or("").trim(), 16).unwrap_or(0);
         i += fin + 2;
         if largo == 0 || i + largo > cuerpo.len() {
             break;
@@ -337,7 +359,10 @@ pub(crate) fn tst_de_prueba(cuando: &str) -> Vec<u8> {
     let sha256 = tlv(
         0x30,
         &[
-            tlv(0x06, &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]),
+            tlv(
+                0x06,
+                &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01],
+            ),
             tlv(0x05, &[]),
         ]
         .concat(),
@@ -379,7 +404,11 @@ mod tests {
         assert_eq!(ini + largo, der.len(), "la longitud tiene que cuadrar");
         // el OID de SHA-256 y el hash van dentro
         assert!(
-            buscar(&der, &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]).is_some(),
+            buscar(
+                &der,
+                &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]
+            )
+            .is_some(),
             "falta el OID de SHA-256"
         );
         assert!(buscar(&der, &hash).is_some(), "falta el hash");
@@ -425,7 +454,10 @@ mod tests {
     fn sin_red_se_dice_en_llano_y_no_se_cuelga() {
         // el 9 no tiene nada escuchando en localhost
         let e = pide_token("http://127.0.0.1:9/tsr", b"firma").unwrap_err();
-        assert!(e.contains("127.0.0.1:9"), "tiene que decir con quién no ha podido: {e}");
+        assert!(
+            e.contains("127.0.0.1:9"),
+            "tiene que decir con quién no ha podido: {e}"
+        );
         for jerga in ["ConnectionRefused", "os error", "Os {"] {
             assert!(!e.contains(jerga), "sale jerga ({jerga}): {e}");
         }

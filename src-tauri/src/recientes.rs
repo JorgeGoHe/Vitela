@@ -52,10 +52,14 @@ pub(crate) fn lee(fichero: &std::path::Path) -> Vec<Entrada> {
 
 fn escribe(fichero: &std::path::Path, lista: &[Entrada]) -> Result<(), String> {
     let json = serde_json::to_string_pretty(lista).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido guardar la lista de recientes: {e}"))
+        crate::mensaje_llano(format!(
+            "No se ha podido guardar la lista de recientes: {e}"
+        ))
     })?;
     std::fs::write(fichero, json).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido guardar la lista de recientes: {e}"))
+        crate::mensaje_llano(format!(
+            "No se ha podido guardar la lista de recientes: {e}"
+        ))
     })
 }
 
@@ -157,7 +161,10 @@ mod tests {
         }
         let lista = lee(&f);
         assert_eq!(lista.len(), MAXIMO, "el tope son ocho");
-        assert_eq!(lista[0].path, "/tmp/doc9.pdf", "el último abierto va primero");
+        assert_eq!(
+            lista[0].path, "/tmp/doc9.pdf",
+            "el último abierto va primero"
+        );
         assert!(
             !lista.iter().any(|e| e.path == "/tmp/doc0.pdf"),
             "los más viejos se caen"

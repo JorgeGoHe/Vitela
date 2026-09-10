@@ -48,6 +48,7 @@ bun run tauri build      # binario de producción
 cd src-tauri && cargo check   # compilar solo el core Rust
 cd src-tauri && cargo test    # tests del core (corren en paralelo)
 cd src-tauri && cargo clippy --all-targets -- -D warnings
+cd src-tauri && cargo fmt --check   # formato (desde el ciclo 10 lo exige el CI)
 bun run lint             # ESLint (rules-of-hooks y exhaustive-deps como error)
 ```
 

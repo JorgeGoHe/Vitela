@@ -87,9 +87,7 @@ pub(crate) fn pdfium() -> Result<&'static Pdfium, String> {
             Some(b) => b,
             None => Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./lib/"))
                 .or_else(|_| Pdfium::bind_to_system_library())
-                .map_err(|e| {
-                    mensaje_llano(format!("No se ha podido cargar libpdfium: {e}"))
-                })?,
+                .map_err(|e| mensaje_llano(format!("No se ha podido cargar libpdfium: {e}")))?,
         };
         let leaked: &'static Pdfium = Box::leak(Box::new(Pdfium::new(bindings)));
         *slot = Some(leaked);
@@ -252,7 +250,9 @@ fn barre_carpetas(
     edad_minima: std::time::Duration,
     es_nuestra: impl Fn(&str) -> bool,
 ) -> usize {
-    let Ok(entradas) = std::fs::read_dir(dir) else { return 0 };
+    let Ok(entradas) = std::fs::read_dir(dir) else {
+        return 0;
+    };
     let ahora = std::time::SystemTime::now();
     let mut borradas = 0;
     for e in entradas.flatten() {
@@ -279,7 +279,9 @@ fn barre_ficheros(
     edad_minima: std::time::Duration,
     es_nuestro: impl Fn(&str) -> bool,
 ) -> usize {
-    let Ok(entradas) = std::fs::read_dir(dir) else { return 0 };
+    let Ok(entradas) = std::fs::read_dir(dir) else {
+        return 0;
+    };
     let ahora = std::time::SystemTime::now();
     let mut borrados = 0;
     for e in entradas.flatten() {
@@ -513,9 +515,9 @@ fn open_pdf(
         let pdfium = pdfium()?;
         let doc = match pdfium.load_pdf_from_file(&path, password.as_deref()) {
             Ok(doc) => doc,
-            Err(PdfiumError::PdfiumLibraryInternalError(
-                PdfiumInternalError::PasswordError,
-            )) => return Err("PASSWORD_REQUIRED".into()),
+            Err(PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::PasswordError)) => {
+                return Err("PASSWORD_REQUIRED".into())
+            }
             Err(e) => {
                 // un PDF cifrado **para unos destinatarios** no se abre con
                 // contraseña ninguna: lo que hace falta es la clave privada
@@ -526,12 +528,7 @@ fn open_pdf(
                     let Some(kp) = key_path.as_deref() else {
                         return Err("CERT_KEY_REQUIRED".into());
                     };
-                    seguridad::descifra_pubsec(
-                        &path,
-                        &work_path,
-                        kp,
-                        key_password.as_deref(),
-                    )?;
+                    seguridad::descifra_pubsec(&path, &work_path, kp, key_password.as_deref())?;
                     let doc = pdfium
                         .load_pdf_from_file(&work_path, None)
                         .map_err(|e| mensaje_apertura(&e, &path))?;
@@ -555,11 +552,7 @@ fn open_pdf(
         if had_password {
             // copia descifrada (save_to_file conservaría el cifrado)
             drop(doc);
-            seguridad::guarda_descifrado(
-                &path,
-                password.as_deref().unwrap_or(""),
-                &work_path,
-            )?;
+            seguridad::guarda_descifrado(&path, password.as_deref().unwrap_or(""), &work_path)?;
         } else {
             drop(doc);
             std::fs::copy(&path, &work_path).map_err(|e| {
@@ -745,15 +738,15 @@ impl Geo {
     }
 
     pub(crate) fn de_pagina(page: &PdfPage) -> Self {
-        let rot = page
-            .rotation()
-            .map(|r| r.as_degrees() as u16)
-            .unwrap_or(0)
-            % 360;
+        let rot = page.rotation().map(|r| r.as_degrees() as u16).unwrap_or(0) % 360;
         // el tamaño visible lo da PDFium ya rotado: deshacemos la rotación
         // en vez de leer la caja, para no separarnos nunca del render
         let (vw, vh) = (page.width().value, page.height().value);
-        let (w, h) = if rot == 90 || rot == 270 { (vh, vw) } else { (vw, vh) };
+        let (w, h) = if rot == 90 || rot == 270 {
+            (vh, vw)
+        } else {
+            (vw, vh)
+        };
         // el origen sí sale de la caja de la página (casi siempre 0,0)
         let caja = page
             .boundaries()
@@ -851,30 +844,30 @@ mod adjuntos;
 mod anotaciones;
 mod anotaciones2;
 mod busqueda;
+mod comentarios;
+mod comentarios2;
+mod comparar;
+mod confianza;
 mod documento;
 mod exportar;
-mod comentarios;
-mod comparar;
-mod comentarios2;
-mod confianza;
 mod firma;
 mod firmas_visuales;
 mod formularios;
 mod formularios2;
 mod historial;
-mod menu;
 mod imagenes;
 mod imprimir;
+mod menu;
+mod ocsp;
 mod paginas;
 mod paginas2;
-mod recientes;
-mod recuperacion;
 #[cfg(debug_assertions)]
 pub mod puente_dev;
+mod recientes;
+mod recuperacion;
 mod seguridad;
 mod seguridad2;
 mod texto;
-mod ocsp;
 mod tsa;
 
 /// Firma digitalmente la copia de trabajo y escribe el PDF firmado en
@@ -909,8 +902,16 @@ fn sign_pdf(
         dest_path,
         cred,
         reason,
-        firma::Apariencia { rect, page_index, signer_name, signature_png },
-        firma::Avanzado { tsa_url, ltv: ltv.unwrap_or(false) },
+        firma::Apariencia {
+            rect,
+            page_index,
+            signer_name,
+            signature_png,
+        },
+        firma::Avanzado {
+            tsa_url,
+            ltv: ltv.unwrap_or(false),
+        },
     )
 }
 
@@ -926,8 +927,15 @@ fn firmar_en_hilo(
 ) -> Result<firma::InformeFirma, String> {
     on_pdfium_thread(move || {
         invalidate_doc_cache(&work_path);
-        firma::sign(&work_path, &dest_path, &cred, reason, &apariencia, &avanzado)
-            .map_err(mensaje_llano)
+        firma::sign(
+            &work_path,
+            &dest_path,
+            &cred,
+            reason,
+            &apariencia,
+            &avanzado,
+        )
+        .map_err(mensaje_llano)
     })
 }
 
@@ -981,12 +989,28 @@ fn certify_pdf(
         }
         _ => return Err("Elige un certificado para certificar el documento".into()),
     };
-    let apariencia = firma::Apariencia { rect, page_index, signer_name, signature_png };
-    let avanzado = firma::Avanzado { tsa_url, ltv: ltv.unwrap_or(false) };
+    let apariencia = firma::Apariencia {
+        rect,
+        page_index,
+        signer_name,
+        signature_png,
+    };
+    let avanzado = firma::Avanzado {
+        tsa_url,
+        ltv: ltv.unwrap_or(false),
+    };
     on_pdfium_thread(move || {
         invalidate_doc_cache(&work_path);
-        firma::certify(&work_path, &dest_path, &cred, reason, &apariencia, nivel, &avanzado)
-            .map_err(mensaje_llano)
+        firma::certify(
+            &work_path,
+            &dest_path,
+            &cred,
+            reason,
+            &apariencia,
+            nivel,
+            &avanzado,
+        )
+        .map_err(mensaje_llano)
     })
 }
 
@@ -1014,8 +1038,16 @@ fn sign_pdf_p12(
         dest_path,
         cred,
         reason,
-        firma::Apariencia { rect, page_index, signer_name, signature_png },
-        firma::Avanzado { tsa_url, ltv: ltv.unwrap_or(false) },
+        firma::Apariencia {
+            rect,
+            page_index,
+            signer_name,
+            signature_png,
+        },
+        firma::Avanzado {
+            tsa_url,
+            ltv: ltv.unwrap_or(false),
+        },
     )
 }
 
@@ -1186,8 +1218,7 @@ fn ui_lista() -> Result<Option<String>, String> {
 const EVENTO_CERRAR: &str = "cerrar-solicitado";
 
 /// La UI ya ha dicho que se puede cerrar: el siguiente intento no se frena.
-static CIERRE_CONFIRMADO: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static CIERRE_CONFIRMADO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// ¿Hay que frenar este cierre y preguntar a la UI? Solo la primera vez:
 /// una vez confirmado, cerrar de verdad.
@@ -1238,7 +1269,10 @@ pub fn run() {
                 std::thread::spawn(|| puente_dev::arrancar(puente_dev::puerto()));
             }
             std::thread::spawn(|| {
-                barre_huerfanos(&std::env::temp_dir(), std::time::Duration::from_secs(24 * 3600));
+                barre_huerfanos(
+                    &std::env::temp_dir(),
+                    std::time::Duration::from_secs(24 * 3600),
+                );
             });
             // menú nativo: espejo del menú «Acciones», sin documento abierto
             menu::registra_app(app.handle());
@@ -1457,7 +1491,10 @@ pub(crate) mod tests {
     fn mensaje_llano_traduce_la_jerga_y_respeta_lo_nuestro() {
         // el Display de PdfiumError es el Debug de Rust, multilínea
         let e = mensaje_llano("PdfiumLibraryInternalError(\n    FormatError,\n)");
-        assert_eq!(e, "El PDF parece dañado; prueba con otra copia del documento");
+        assert_eq!(
+            e,
+            "El PDF parece dañado; prueba con otra copia del documento"
+        );
         assert_eq!(
             mensaje_llano("PageIndexOutOfBounds"),
             "Esa página ya no está en el documento; ciérralo y vuelve a abrirlo"
@@ -1488,35 +1525,54 @@ pub(crate) mod tests {
         crea_pdf(&["Uno A", "Uno B", "Uno C"], &uno);
         crea_pdf(&["Otro A", "Otro B"], &otro);
 
-        let a = open_pdf(uno.to_string_lossy().into_owned(), None, None, None).expect("abrir el primero");
-        let b = open_pdf(otro.to_string_lossy().into_owned(), None, None, None).expect("abrir el segundo");
+        let a = open_pdf(uno.to_string_lossy().into_owned(), None, None, None)
+            .expect("abrir el primero");
+        let b = open_pdf(otro.to_string_lossy().into_owned(), None, None, None)
+            .expect("abrir el segundo");
         assert_eq!(a.page_count, 3);
         assert_eq!(b.page_count, 2);
 
         // los dos se leen, alternando, sin echar al otro
         for _ in 0..3 {
-            assert_eq!(get_page_sizes(a.work_path.clone()).expect("tamaños").len(), 3);
-            assert_eq!(get_page_sizes(b.work_path.clone()).expect("tamaños").len(), 2);
+            assert_eq!(
+                get_page_sizes(a.work_path.clone()).expect("tamaños").len(),
+                3
+            );
+            assert_eq!(
+                get_page_sizes(b.work_path.clone()).expect("tamaños").len(),
+                2
+            );
         }
 
         // mutar el primero no toca al segundo
         paginas::delete_page(a.work_path.clone(), 0).expect("borrar una página del primero");
-        assert_eq!(get_page_sizes(a.work_path.clone()).expect("tamaños").len(), 2);
+        assert_eq!(
+            get_page_sizes(a.work_path.clone()).expect("tamaños").len(),
+            2
+        );
         assert_eq!(
             get_page_sizes(b.work_path.clone()).expect("tamaños").len(),
             2,
             "el segundo se queda como estaba"
         );
         assert_eq!(
-            historial::history_state(b.work_path.clone()).expect("historial").undo,
+            historial::history_state(b.work_path.clone())
+                .expect("historial")
+                .undo,
             0,
             "y sin un paso de deshacer que no ha pedido nadie"
         );
 
         // ⌘Z en el primero tampoco
         historial::undo(a.work_path.clone()).expect("deshacer en el primero");
-        assert_eq!(get_page_sizes(a.work_path.clone()).expect("tamaños").len(), 3);
-        assert_eq!(get_page_sizes(b.work_path.clone()).expect("tamaños").len(), 2);
+        assert_eq!(
+            get_page_sizes(a.work_path.clone()).expect("tamaños").len(),
+            3
+        );
+        assert_eq!(
+            get_page_sizes(b.work_path.clone()).expect("tamaños").len(),
+            2
+        );
         assert!(
             crate::tests::textos_de(std::path::Path::new(&b.work_path))[0].contains("Otro A"),
             "el segundo sigue diciendo lo suyo"
@@ -1524,7 +1580,10 @@ pub(crate) mod tests {
 
         // cerrar el primero se lleva su copia y deja la del segundo
         close_document(a.work_path.clone()).expect("cerrar el primero");
-        assert!(!std::path::Path::new(&a.work_path).exists(), "su copia se va");
+        assert!(
+            !std::path::Path::new(&a.work_path).exists(),
+            "su copia se va"
+        );
         assert!(
             std::path::Path::new(&b.work_path).exists(),
             "la del segundo no se toca"
@@ -1566,16 +1625,28 @@ pub(crate) mod tests {
         let i = abre(&mut cache, "doc0");
         assert_eq!(i, cache.len() - 1);
         assert_eq!(cache.len(), DOCUMENTOS_EN_CACHE, "no se ha vuelto a cargar");
-        assert_eq!(cache[i].1, 1, "y es el mismo documento, no otro cargado de nuevo");
+        assert_eq!(
+            cache[i].1, 1,
+            "y es el mismo documento, no otro cargado de nuevo"
+        );
 
         // uno más: se suelta el que llevaba más tiempo sin tocarse, que ya
         // no es el primero
         abre(&mut cache, "otro");
         assert_eq!(cache.len(), DOCUMENTOS_EN_CACHE, "el tope se respeta");
         let nombres: Vec<&str> = cache.iter().map(|(p, _)| p.as_str()).collect();
-        assert!(nombres.contains(&"doc0"), "el que se volvió a usar sigue: {nombres:?}");
-        assert!(!nombres.contains(&"doc1"), "el más viejo se ha soltado: {nombres:?}");
-        assert!(nombres.contains(&"otro"), "y el nuevo ha entrado: {nombres:?}");
+        assert!(
+            nombres.contains(&"doc0"),
+            "el que se volvió a usar sigue: {nombres:?}"
+        );
+        assert!(
+            !nombres.contains(&"doc1"),
+            "el más viejo se ha soltado: {nombres:?}"
+        );
+        assert!(
+            nombres.contains(&"otro"),
+            "y el nuevo ha entrado: {nombres:?}"
+        );
     }
 
     /// **R44b (AC-070) y R50b (AC-073).** CLAUDE.md se escribe a dos manos
@@ -1680,15 +1751,23 @@ pub(crate) mod tests {
                 }
             };
             while let Some((_, tras)) = resto.split_once('`') {
-                let Some((id, mas)) = tras.split_once('`') else { break };
-                if !id.is_empty() && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+                let Some((id, mas)) = tras.split_once('`') else {
+                    break;
+                };
+                if !id.is_empty()
+                    && id
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
                 {
                     escritos.push(id.to_string());
                 }
                 resto = mas;
             }
         }
-        assert!(escritos.len() > 40, "la lista de ids se ha leído a medias: {escritos:?}");
+        assert!(
+            escritos.len() > 40,
+            "la lista de ids se ha leído a medias: {escritos:?}"
+        );
         let mut repes: Vec<&String> = Vec::new();
         for (i, id) in escritos.iter().enumerate() {
             if escritos[..i].contains(id) {
@@ -1710,14 +1789,18 @@ pub(crate) mod tests {
                 _ => None,
             })
             .collect();
-        let inventados: Vec<&String> =
-            escritos.iter().filter(|id| !reales.contains(&id.as_str())).collect();
+        let inventados: Vec<&String> = escritos
+            .iter()
+            .filter(|id| !reales.contains(&id.as_str()))
+            .collect();
         assert!(
             inventados.is_empty(),
             "CLAUDE.md nombra ids del menú que no existen en menu::estructura(): {inventados:?}"
         );
-        let sin_escribir: Vec<&&str> =
-            reales.iter().filter(|id| !escritos.iter().any(|e| e == *id)).collect();
+        let sin_escribir: Vec<&&str> = reales
+            .iter()
+            .filter(|id| !escritos.iter().any(|e| e == *id))
+            .collect();
         assert!(
             sin_escribir.is_empty(),
             "estos ids del menú no están en la lista de CLAUDE.md, que es \
@@ -1792,19 +1875,34 @@ pub(crate) mod tests {
         );
 
         let casos: Vec<(&str, String)> = vec![
-            ("abrir un fichero dañado", open_pdf(d.clone(), None, None, None).unwrap_err()),
+            (
+                "abrir un fichero dañado",
+                open_pdf(d.clone(), None, None, None).unwrap_err(),
+            ),
             (
                 "abrir un PDF cifrado para destinatarios con algo que no es una clave",
                 open_pdf(ps.clone(), None, Some(d.clone()), None).unwrap_err(),
             ),
-            ("renderizar un fichero dañado", render_page_b64(d.clone(), 0, 100, None).unwrap_err()),
+            (
+                "renderizar un fichero dañado",
+                render_page_b64(d.clone(), 0, 100, None).unwrap_err(),
+            ),
             (
                 "listar anotaciones de un fichero dañado",
                 anotaciones::get_annotations(d.clone(), 0).unwrap_err(),
             ),
-            ("borrar una página que no existe", paginas::delete_page(b.clone(), 9).unwrap_err()),
-            ("girar una página que no existe", paginas::rotate_page(b.clone(), 9).unwrap_err()),
-            ("renderizar una página que no existe", render_page_b64(b.clone(), 9, 100, None).unwrap_err()),
+            (
+                "borrar una página que no existe",
+                paginas::delete_page(b.clone(), 9).unwrap_err(),
+            ),
+            (
+                "girar una página que no existe",
+                paginas::rotate_page(b.clone(), 9).unwrap_err(),
+            ),
+            (
+                "renderizar una página que no existe",
+                render_page_b64(b.clone(), 9, 100, None).unwrap_err(),
+            ),
             (
                 "extraer a una carpeta que no existe",
                 paginas::extract_pages(b.clone(), vec![0], "/nope/x.pdf".into(), None).unwrap_err(),
@@ -1833,7 +1931,12 @@ pub(crate) mod tests {
                 seguridad::redact_area(
                     d.clone(),
                     0,
-                    Rect { x: 0.0, y: 0.0, w: 10.0, h: 10.0 },
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 10.0,
+                        h: 10.0,
+                    },
                     true,
                 )
                 .unwrap_err(),
@@ -1853,8 +1956,20 @@ pub(crate) mod tests {
             ),
             (
                 "firmar con un certificado que no está",
-                sign_pdf(b.clone(), "/tmp/f.pdf".into(), "/tmp/nope.pem".into(), "/tmp/nope.pem".into(), None, None, None, None, None, None, None)
-                    .unwrap_err(),
+                sign_pdf(
+                    b.clone(),
+                    "/tmp/f.pdf".into(),
+                    "/tmp/nope.pem".into(),
+                    "/tmp/nope.pem".into(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap_err(),
             ),
         ];
 
@@ -1874,7 +1989,10 @@ pub(crate) mod tests {
             for j in jerga {
                 assert!(!e.contains(j), "al {que} sale jerga ({j}): {e}");
             }
-            assert!(!e.contains('\n'), "al {que} el mensaje va en varias líneas: {e}");
+            assert!(
+                !e.contains('\n'),
+                "al {que} el mensaje va en varias líneas: {e}"
+            );
             assert!(
                 e.starts_with(char::is_uppercase),
                 "al {que} el mensaje no empieza como una frase: {e}"
@@ -1968,11 +2086,18 @@ pub(crate) mod tests {
         let work = info.work_path.clone();
         assert!(copias_abiertas().contains(&work));
         paginas::rotate_page(work.clone(), 0).expect("rotar (deja instantánea)");
-        let nombre = std::path::Path::new(&work).file_name().unwrap().to_string_lossy().to_string();
+        let nombre = std::path::Path::new(&work)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         let snap = historial::directorio().join(format!("{nombre}.snap0"));
         assert!(snap.exists());
         close_document(work.clone()).expect("cerrar");
-        assert!(!std::path::Path::new(&work).exists(), "la copia debe desaparecer");
+        assert!(
+            !std::path::Path::new(&work).exists(),
+            "la copia debe desaparecer"
+        );
         assert!(!snap.exists());
         assert!(!copias_abiertas().contains(&work));
         std::fs::remove_file(&pdf).ok();
@@ -1984,7 +2109,12 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::create_dir_all(dir.join("vitela-historial")).unwrap();
-        for n in ["vitela-a-1.pdf", "vitela-b-2.pdf.tmp", "otro.pdf", "vitela-notas.txt"] {
+        for n in [
+            "vitela-a-1.pdf",
+            "vitela-b-2.pdf.tmp",
+            "otro.pdf",
+            "vitela-notas.txt",
+        ] {
             std::fs::write(dir.join(n), b"x").unwrap();
         }
         std::fs::write(dir.join("vitela-historial").join("x.pdf.snap3"), b"x").unwrap();
@@ -2003,7 +2133,10 @@ pub(crate) mod tests {
         );
         std::fs::write(dir.join("vitela-c-3.pdf"), b"x").unwrap();
         // recién creado: con 24 h de margen no se toca
-        assert_eq!(barre_huerfanos(&dir, std::time::Duration::from_secs(24 * 3600)), 0);
+        assert_eq!(
+            barre_huerfanos(&dir, std::time::Duration::from_secs(24 * 3600)),
+            0
+        );
         assert!(dir.join("vitela-c-3.pdf").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2026,7 +2159,8 @@ pub(crate) mod tests {
         std::fs::write(&salvada, b"x").unwrap();
         std::fs::write(dir.join("vitela-huerfana-2.pdf"), b"x").unwrap();
         std::fs::write(
-            dir.join("vitela-historial").join("vitela-salvada-1.pdf.snap1"),
+            dir.join("vitela-historial")
+                .join("vitela-salvada-1.pdf.snap1"),
             b"x",
         )
         .unwrap();
@@ -2037,16 +2171,27 @@ pub(crate) mod tests {
         let salvada2 = dir.join("vitela-salvada-2.pdf");
         std::fs::write(&salvada2, b"x").unwrap();
         std::fs::write(
-            dir.join("vitela-historial").join("vitela-salvada-2.pdf.snap1"),
+            dir.join("vitela-historial")
+                .join("vitela-salvada-2.pdf.snap1"),
             b"x",
         )
         .unwrap();
         let sesion = datos.join("sesion.json");
         let _ = std::fs::remove_file(&sesion);
-        recuperacion::apunta_en(&sesion, &salvada.to_string_lossy(), "/tmp/factura.pdf", true)
-            .expect("apuntar");
-        recuperacion::apunta_en(&sesion, &salvada2.to_string_lossy(), "/tmp/albaran.pdf", true)
-            .expect("apuntar el segundo");
+        recuperacion::apunta_en(
+            &sesion,
+            &salvada.to_string_lossy(),
+            "/tmp/factura.pdf",
+            true,
+        )
+        .expect("apuntar");
+        recuperacion::apunta_en(
+            &sesion,
+            &salvada2.to_string_lossy(),
+            "/tmp/albaran.pdf",
+            true,
+        )
+        .expect("apuntar el segundo");
 
         assert_eq!(
             barre_huerfanos(&dir, std::time::Duration::ZERO),
@@ -2095,7 +2240,9 @@ pub(crate) mod tests {
         let work = origen.to_string_lossy().into_owned();
         // con qué se hizo el original: lo que traiga el documento, que aquí
         // es lo que escribe PDFium al crearlo
-        let hecho_con = documento::get_metadata(work.clone()).expect("metadatos").creator;
+        let hecho_con = documento::get_metadata(work.clone())
+            .expect("metadatos")
+            .creator;
         assert!(!hecho_con.is_empty() && hecho_con != "Vitela");
         documento::set_metadata(
             work.clone(),
@@ -2154,8 +2301,8 @@ pub(crate) mod tests {
         );
 
         // y el documento sigue abriéndose y con su texto
-        let info = open_pdf(destino.to_string_lossy().into_owned(), None, None, None)
-            .expect("reabrir");
+        let info =
+            open_pdf(destino.to_string_lossy().into_owned(), None, None, None).expect("reabrir");
         assert_eq!(info.page_count, 1);
         close_document(info.work_path).expect("cerrar");
 
@@ -2182,7 +2329,8 @@ pub(crate) mod tests {
     fn renderiza_pagina() {
         let tmp = std::env::temp_dir().join("editor_pdf_test_render.pdf");
         crea_pdf(&["Hola"], &tmp);
-        let png_b64 = render_page_b64(tmp.to_string_lossy().into_owned(), 0, 200, None).expect("render");
+        let png_b64 =
+            render_page_b64(tmp.to_string_lossy().into_owned(), 0, 200, None).expect("render");
         std::fs::remove_file(&tmp).ok();
         let png = base64::engine::general_purpose::STANDARD
             .decode(&png_b64)
@@ -2306,8 +2454,15 @@ pub(crate) mod tests {
 
         let p12 = include_bytes!("../fixtures/test_bundle.p12");
         let cred = firma::credenciales_p12(p12, "test1234").expect("abrir p12");
-        firma::sign(&src.to_string_lossy(), &dest.to_string_lossy(), &cred, None, &firma::Apariencia::default(), &firma::Avanzado::default())
-            .expect("firmar con p12");
+        firma::sign(
+            &src.to_string_lossy(),
+            &dest.to_string_lossy(),
+            &cred,
+            None,
+            &firma::Apariencia::default(),
+            &firma::Avanzado::default(),
+        )
+        .expect("firmar con p12");
         let bytes = std::fs::read(&dest).expect("leer firmado");
         assert!(
             find_in(&bytes, b"/SubFilter/adbe.pkcs7.detached")
@@ -2331,7 +2486,6 @@ pub(crate) mod tests {
         haystack.windows(needle.len()).any(|w| w == needle)
     }
 
-
     /// Cifrar reescribe el documento entero, y eso mueve los
     /// desplazamientos que fija el /ByteRange de la firma: el PDF firmado
     /// quedaba con la firma rota y sin un aviso. `save_pdf` ya tenía el
@@ -2348,8 +2502,15 @@ pub(crate) mod tests {
             include_str!("../fixtures/test_key.pem"),
         )
         .expect("credenciales");
-        firma::sign(&src.to_string_lossy(), &firmado.to_string_lossy(), &cred, None, &firma::Apariencia::default(), &firma::Avanzado::default())
-            .expect("firmar");
+        firma::sign(
+            &src.to_string_lossy(),
+            &firmado.to_string_lossy(),
+            &cred,
+            None,
+            &firma::Apariencia::default(),
+            &firma::Avanzado::default(),
+        )
+        .expect("firmar");
         let work = firmado.to_string_lossy().into_owned();
         let antes = std::fs::read(&firmado).expect("leer firmado");
 
@@ -2394,5 +2555,4 @@ pub(crate) mod tests {
         std::fs::remove_file(&firmado).ok();
         std::fs::remove_file(&dest).ok();
     }
-
 }

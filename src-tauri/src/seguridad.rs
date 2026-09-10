@@ -3,8 +3,8 @@
 //! saben escribir cifrado), aplanar anotaciones/formularios y redacción
 //! real (elimina objetos del content stream, no solo los tapa).
 
-use crate::{invalidate_doc_cache, on_pdfium_thread, pdfium, save_and_close, Rect};
 use crate::historial::mutacion;
+use crate::{invalidate_doc_cache, on_pdfium_thread, pdfium, save_and_close, Rect};
 use aes::cipher::{
     block_padding::{NoPadding, Pkcs7},
     BlockEncrypt, BlockEncryptMut, KeyInit, KeyIvInit,
@@ -186,8 +186,16 @@ pub(crate) fn abre_sobre(sobre: &[u8], clave: &rsa::RsaPrivateKey) -> Option<(Ve
     let cms::enveloped_data::RecipientInfo::Ktri(ktri) = ed.recip_infos.0.iter().next()? else {
         return None;
     };
-    let cek = clave.decrypt(Pkcs1v15Encrypt, ktri.enc_key.as_bytes()).ok()?;
-    let iv_der = ed.encrypted_content.content_enc_alg.parameters.as_ref()?.to_der().ok()?;
+    let cek = clave
+        .decrypt(Pkcs1v15Encrypt, ktri.enc_key.as_bytes())
+        .ok()?;
+    let iv_der = ed
+        .encrypted_content
+        .content_enc_alg
+        .parameters
+        .as_ref()?
+        .to_der()
+        .ok()?;
     let iv = &iv_der[2..];
     let cifrado = ed.encrypted_content.encrypted_content.as_ref()?.as_bytes();
     let claro = Aes256CbcDec::new_from_slices(&cek, iv)
@@ -470,7 +478,13 @@ pub fn encrypt_pdf(
         anota_proteccion(&work_path, user_password, owner_password, permisos);
         return Ok(());
     };
-    cifra_a(&work_path, &dest_path, &user_password, owner_password.as_deref(), permisos)
+    cifra_a(
+        &work_path,
+        &dest_path,
+        &user_password,
+        owner_password.as_deref(),
+        permisos,
+    )
 }
 
 /// Escribe en `dest_path` una copia cifrada de `origen`.
@@ -495,9 +509,8 @@ pub(crate) fn cifra_a(
     // invalidado, para no competir con una mutación concurrente
     on_pdfium_thread(move || {
         invalidate_doc_cache(&work_path);
-        let mut doc = LoDoc::load(&work_path).map_err(|e| {
-            crate::mensaje_llano(format!("No se ha podido leer el documento: {e}"))
-        })?;
+        let mut doc = LoDoc::load(&work_path)
+            .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer el documento: {e}")))?;
 
         // clave de cifrado del fichero y entradas del diccionario Encrypt
         let fek = aleatorio::<32>()?;
@@ -631,11 +644,9 @@ pub(crate) fn guarda_descifrado(
     if !bindings.is_true(ok) {
         return Err("No se ha podido preparar el documento sin contraseña".into());
     }
-    std::fs::write(dest_path, &escritor.buf).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido preparar el documento: {e}"))
-    })
+    std::fs::write(dest_path, &escritor.buf)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido preparar el documento: {e}")))
 }
-
 
 /// Objeto (posiblemente referencia) resuelto a su diccionario.
 fn dict_de<'a>(doc: &'a LoDoc, obj: &'a Object) -> Option<&'a Dictionary> {
@@ -819,8 +830,7 @@ fn apariencia_texto(
         }
     }
     let y = ((h - size) / 2.0 + size * 0.22).max(1.0);
-    let mut contenido =
-        format!("/Tx BMC q BT /Helv {size:.2} Tf 0 g 2 {y:.2} Td (").into_bytes();
+    let mut contenido = format!("/Tx BMC q BT /Helv {size:.2} Tf 0 g 2 {y:.2} Td (").into_bytes();
     contenido.extend_from_slice(&texto);
     contenido.extend_from_slice(b") Tj ET Q EMC");
     let mut fuentes = Dictionary::new();
@@ -1009,7 +1019,11 @@ pub(crate) fn prepara_para_aplanar(work_path: &str) -> Result<(), String> {
                 continue;
             };
             let mut cambios: Vec<(&str, Object)> = Vec::new();
-            let flags = dict.get(b"F").ok().and_then(|f| f.as_i64().ok()).unwrap_or(0);
+            let flags = dict
+                .get(b"F")
+                .ok()
+                .and_then(|f| f.as_i64().ok())
+                .unwrap_or(0);
             if flags & 4 == 0 {
                 cambios.push(("F", Object::Integer(flags | 4)));
             }
@@ -1069,21 +1083,23 @@ pub(crate) fn prepara_para_aplanar(work_path: &str) -> Result<(), String> {
 /// UI avisa antes.
 #[tauri::command(async)]
 pub fn flatten_pdf(work_path: String) -> Result<(), String> {
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        // el caché puede tener el fichero abierto: cerrarlo antes del rename
-        invalidate_doc_cache(&work_path);
-        prepara_para_aplanar(&work_path)?;
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        for i in 0..doc.pages().len() {
-            let mut page = doc.pages().get(i).map_err(|e| e.to_string())?;
-            page.flatten().map_err(|e| e.to_string())?;
-        }
-        save_and_close(doc, &work_path)?;
-        Ok(())
-    }))
+    mutacion(work_path, |work_path| {
+        on_pdfium_thread(move || {
+            // el caché puede tener el fichero abierto: cerrarlo antes del rename
+            invalidate_doc_cache(&work_path);
+            prepara_para_aplanar(&work_path)?;
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
+                .map_err(|e| e.to_string())?;
+            for i in 0..doc.pages().len() {
+                let mut page = doc.pages().get(i).map_err(|e| e.to_string())?;
+                page.flatten().map_err(|e| e.to_string())?;
+            }
+            save_and_close(doc, &work_path)?;
+            Ok(())
+        })
+    })
 }
 
 #[derive(Serialize, Debug)]
@@ -1104,81 +1120,83 @@ pub fn redact_area(
     dry_run: bool,
 ) -> Result<RedactReport, String> {
     // sin instantánea en el ensayo (dry_run): no se escribe nada
-    let cuerpo = move |work_path: String| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(crate::mensaje_llano)?;
-        let mut page = doc.pages().get(page_index).map_err(crate::mensaje_llano)?;
-        let page_h = page.height().value;
-        // rect en coords PDF
-        let rx0 = rect.x;
-        let rx1 = rect.x + rect.w;
-        let ry1 = page_h - rect.y; // borde superior
-        let ry0 = page_h - rect.y - rect.h; // borde inferior
-        let mut caen: Vec<usize> = Vec::new();
-        let mut textos = 0u32;
-        let mut imagenes = 0u32;
-        {
-            let objects = page.objects();
-            for i in 0..objects.len() {
-                let Ok(obj) = objects.get(i) else { continue };
-                let es_texto = obj.as_text_object().is_some();
-                let es_imagen = obj.as_image_object().is_some();
-                if !es_texto && !es_imagen {
-                    continue;
-                }
-                let Ok(b) = obj.bounds() else { continue };
-                let solapa = b.left().value < rx1
-                    && b.right().value > rx0
-                    && b.bottom().value < ry1
-                    && b.top().value > ry0;
-                if solapa {
-                    caen.push(i);
-                    if es_texto {
-                        textos += 1;
-                    } else {
-                        imagenes += 1;
+    let cuerpo = move |work_path: String| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
+                .map_err(crate::mensaje_llano)?;
+            let mut page = doc.pages().get(page_index).map_err(crate::mensaje_llano)?;
+            let page_h = page.height().value;
+            // rect en coords PDF
+            let rx0 = rect.x;
+            let rx1 = rect.x + rect.w;
+            let ry1 = page_h - rect.y; // borde superior
+            let ry0 = page_h - rect.y - rect.h; // borde inferior
+            let mut caen: Vec<usize> = Vec::new();
+            let mut textos = 0u32;
+            let mut imagenes = 0u32;
+            {
+                let objects = page.objects();
+                for i in 0..objects.len() {
+                    let Ok(obj) = objects.get(i) else { continue };
+                    let es_texto = obj.as_text_object().is_some();
+                    let es_imagen = obj.as_image_object().is_some();
+                    if !es_texto && !es_imagen {
+                        continue;
+                    }
+                    let Ok(b) = obj.bounds() else { continue };
+                    let solapa = b.left().value < rx1
+                        && b.right().value > rx0
+                        && b.bottom().value < ry1
+                        && b.top().value > ry0;
+                    if solapa {
+                        caen.push(i);
+                        if es_texto {
+                            textos += 1;
+                        } else {
+                            imagenes += 1;
+                        }
                     }
                 }
             }
-        }
-        if dry_run {
-            drop(page);
-            drop(doc);
-            invalidate_doc_cache(&work_path);
-            return Ok(RedactReport { textos, imagenes });
-        }
-        for &i in caen.iter().rev() {
-            let removed = page
-                .objects_mut()
-                .remove_object_at_index(i)
-                .map_err(crate::mensaje_llano)?;
-            // regla del proyecto: su Drop llama a FPDFPageObj_Destroy y
-            // PDFium casca — fuga puntual asumida
-            std::mem::forget(removed);
-        }
-        let negro = PdfPagePathObject::new_rect(
-            &doc,
-            PdfRect::new(
-                PdfPoints::new(ry0),
-                PdfPoints::new(rx0),
-                PdfPoints::new(ry1),
-                PdfPoints::new(rx1),
-            ),
-            None,
-            None,
-            Some(PdfColor::new(0, 0, 0, 255)),
-        )
-        .map_err(crate::mensaje_llano)?;
-        page.objects_mut()
-            .add_path_object(negro)
+            if dry_run {
+                drop(page);
+                drop(doc);
+                invalidate_doc_cache(&work_path);
+                return Ok(RedactReport { textos, imagenes });
+            }
+            for &i in caen.iter().rev() {
+                let removed = page
+                    .objects_mut()
+                    .remove_object_at_index(i)
+                    .map_err(crate::mensaje_llano)?;
+                // regla del proyecto: su Drop llama a FPDFPageObj_Destroy y
+                // PDFium casca — fuga puntual asumida
+                std::mem::forget(removed);
+            }
+            let negro = PdfPagePathObject::new_rect(
+                &doc,
+                PdfRect::new(
+                    PdfPoints::new(ry0),
+                    PdfPoints::new(rx0),
+                    PdfPoints::new(ry1),
+                    PdfPoints::new(rx1),
+                ),
+                None,
+                None,
+                Some(PdfColor::new(0, 0, 0, 255)),
+            )
             .map_err(crate::mensaje_llano)?;
-        page.regenerate_content().map_err(crate::mensaje_llano)?;
-        drop(page);
-        save_and_close(doc, &work_path)?;
-        Ok(RedactReport { textos, imagenes })
-    });
+            page.objects_mut()
+                .add_path_object(negro)
+                .map_err(crate::mensaje_llano)?;
+            page.regenerate_content().map_err(crate::mensaje_llano)?;
+            drop(page);
+            save_and_close(doc, &work_path)?;
+            Ok(RedactReport { textos, imagenes })
+        })
+    };
     if dry_run {
         cuerpo(work_path).map_err(crate::mensaje_llano)
     } else {
@@ -1339,7 +1357,8 @@ mod tests {
         let pdf = dir.join("seguridad-proteger-abierto.pdf");
         let guardado = dir.join("seguridad-proteger-abierto-guardado.pdf");
         crea_pdf(&["Documento abierto"], &pdf);
-        let info = crate::open_pdf(pdf.to_string_lossy().to_string(), None, None, None).expect("abrir");
+        let info =
+            crate::open_pdf(pdf.to_string_lossy().to_string(), None, None, None).expect("abrir");
         let work = info.work_path.clone();
 
         encrypt_pdf(work.clone(), None, "clave123".into(), None, None).expect("proteger");
@@ -1356,9 +1375,13 @@ mod tests {
             "PASSWORD_REQUIRED",
             "lo guardado tiene que pedir la contraseña"
         );
-        let protegido =
-            crate::open_pdf(guardado.to_string_lossy().to_string(), Some("clave123".into()), None, None)
-                .expect("abrir con contraseña");
+        let protegido = crate::open_pdf(
+            guardado.to_string_lossy().to_string(),
+            Some("clave123".into()),
+            None,
+            None,
+        )
+        .expect("abrir con contraseña");
         crate::close_document(protegido.work_path).expect("cerrar");
 
         // quitar la contraseña: lo guardado ya abre sin ella
@@ -1408,10 +1431,18 @@ mod tests {
             None,
         )
         .expect("trazo");
-        assert_eq!(crate::anotaciones::get_annotations(work.clone(), 0).unwrap().len(), 1);
+        assert_eq!(
+            crate::anotaciones::get_annotations(work.clone(), 0)
+                .unwrap()
+                .len(),
+            1
+        );
         flatten_pdf(work.clone()).expect("aplanar");
         // la anotación desapareció pero su dibujo quedó en la página
-        assert_eq!(crate::anotaciones::get_annotations(work, 0).unwrap().len(), 0);
+        assert_eq!(
+            crate::anotaciones::get_annotations(work, 0).unwrap().len(),
+            0
+        );
     }
 
     /// Cuenta píxeles del render (600 px de ancho) que cumplan `pred`
@@ -1447,21 +1478,47 @@ mod tests {
             work.clone(),
             0,
             "text".into(),
-            Rect { x: 60.0, y: 200.0, w: 250.0, h: 28.0 },
+            Rect {
+                x: 60.0,
+                y: 200.0,
+                w: 250.0,
+                h: 28.0,
+            },
             "nombre".into(),
-        None, None, None, None)
+            None,
+            None,
+            None,
+            None,
+        )
         .expect("campo de texto");
         crate::formularios2::create_form_field(
             work.clone(),
             0,
             "checkbox".into(),
-            Rect { x: 60.0, y: 250.0, w: 20.0, h: 20.0 },
+            Rect {
+                x: 60.0,
+                y: 250.0,
+                w: 20.0,
+                h: 20.0,
+            },
             "acepto".into(),
-        None, None, None, None)
+            None,
+            None,
+            None,
+            None,
+        )
         .expect("casilla");
         let campos = crate::formularios::get_form_fields(work.clone(), 0).expect("campos");
-        let texto = campos.iter().find(|c| c.name == "nombre").unwrap().annot_index;
-        let casilla = campos.iter().find(|c| c.name == "acepto").unwrap().annot_index;
+        let texto = campos
+            .iter()
+            .find(|c| c.name == "nombre")
+            .unwrap()
+            .annot_index;
+        let casilla = campos
+            .iter()
+            .find(|c| c.name == "acepto")
+            .unwrap()
+            .annot_index;
         crate::formularios::set_form_text(
             work.clone(),
             0,
@@ -1506,7 +1563,9 @@ mod tests {
         )
         .expect("forma");
         assert_eq!(
-            crate::anotaciones::get_annotations(work.clone(), 0).unwrap().len(),
+            crate::anotaciones::get_annotations(work.clone(), 0)
+                .unwrap()
+                .len(),
             5
         );
 
@@ -1553,17 +1612,26 @@ mod tests {
     #[test]
     fn aplanar_conserva_el_marco_de_las_casillas() {
         for sin_ap in [false, true] {
-            let pdf = std::env::temp_dir()
-                .join(format!("seguridad-flatten-casilla-{sin_ap}-test.pdf"));
+            let pdf =
+                std::env::temp_dir().join(format!("seguridad-flatten-casilla-{sin_ap}-test.pdf"));
             crea_pdf(&["Consentimiento"], &pdf);
             let work = pdf.to_string_lossy().to_string();
             crate::formularios2::create_form_field(
                 work.clone(),
                 0,
                 "checkbox".into(),
-                Rect { x: 60.0, y: 250.0, w: 20.0, h: 20.0 },
+                Rect {
+                    x: 60.0,
+                    y: 250.0,
+                    w: 20.0,
+                    h: 20.0,
+                },
                 "acepto".into(),
-            None, None, None, None)
+                None,
+                None,
+                None,
+                None,
+            )
             .expect("casilla");
             if sin_ap {
                 // como los PDFs de fuera que dejan el marco en manos del
@@ -1574,7 +1642,9 @@ mod tests {
                         .iter()
                         .filter(|(_, o)| {
                             o.as_dict()
-                                .map(|d| matches!(d.get(b"FT").and_then(|f| f.as_name()), Ok(b"Btn")))
+                                .map(|d| {
+                                    matches!(d.get(b"FT").and_then(|f| f.as_name()), Ok(b"Btn"))
+                                })
                                 .unwrap_or(false)
                         })
                         .map(|(id, _)| *id)
@@ -1618,8 +1688,7 @@ mod tests {
             w: 300.0,
             h: 60.0,
         };
-        let preview =
-            redact_area(work.clone(), 0, area.clone(), true).expect("dry run");
+        let preview = redact_area(work.clone(), 0, area.clone(), true).expect("dry run");
         assert_eq!(preview.textos, 1);
         let texto_antes = crate::busqueda::get_page_text(work.clone(), 0).unwrap();
         assert!(!texto_antes.chars.is_empty());
@@ -1643,12 +1712,18 @@ mod tests {
         let pdf = std::env::temp_dir().join("seguridad-quitar-historial-test.pdf");
         crate::tests::crea_pdf(&["Uno", "Dos"], &pdf);
         let work = pdf.to_string_lossy().into_owned();
-        let pasos =
-            |w: &str| crate::historial::history_state(w.to_string()).expect("historial").undo;
+        let pasos = |w: &str| {
+            crate::historial::history_state(w.to_string())
+                .expect("historial")
+                .undo
+        };
         let antes = pasos(&work);
 
         encrypt_pdf(work.clone(), None, "secreta".into(), None, None).expect("proteger");
-        assert!(proteccion_de(&work).is_some(), "la protección queda anotada");
+        assert!(
+            proteccion_de(&work).is_some(),
+            "la protección queda anotada"
+        );
 
         remove_encryption(work.clone()).expect("quitar la protección");
         assert!(proteccion_de(&work).is_none(), "la protección se olvida");
@@ -1669,7 +1744,6 @@ mod tests {
         std::fs::remove_file(&pdf).ok();
         std::fs::remove_file(&dest).ok();
     }
-
 }
 
 /// Un destinatario del cifrado por certificado: su certificado y lo que
@@ -1705,9 +1779,11 @@ pub fn encrypt_pdf_cert(
     destinatarios: Vec<Destinatario>,
 ) -> Result<u16, String> {
     if destinatarios.is_empty() {
-        return Err("Elige al menos un destinatario: sin certificados el documento no lo \
+        return Err(
+            "Elige al menos un destinatario: sin certificados el documento no lo \
                     podría abrir nadie"
-            .into());
+                .into(),
+        );
     }
     if crate::firma::esta_firmado(&work_path) {
         return Err(crate::firma::AVISO_FIRMADO.into());
@@ -1721,9 +1797,8 @@ pub fn encrypt_pdf_cert(
     let cuantos = certificados.len() as u16;
     on_pdfium_thread(move || {
         invalidate_doc_cache(&work_path);
-        let mut doc = LoDoc::load(&work_path).map_err(|e| {
-            crate::mensaje_llano(format!("No se ha podido leer el documento: {e}"))
-        })?;
+        let mut doc = LoDoc::load(&work_path)
+            .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer el documento: {e}")))?;
         crate::documento::marca_creador(&mut doc);
 
         // la semilla es lo que comparten todos los destinatarios; los
@@ -1846,12 +1921,16 @@ fn sobre_para(
         .subject_public_key_info
         .to_der()
         .map_err(|e| e.to_string())?;
-    let publica = rsa::RsaPublicKey::from_public_key_der(&spki)
-        .map_err(|_| "Ese certificado no lleva una clave RSA, y es la única que Vitela sabe usar aquí".to_string())?;
+    let publica = rsa::RsaPublicKey::from_public_key_der(&spki).map_err(|_| {
+        "Ese certificado no lleva una clave RSA, y es la única que Vitela sabe usar aquí"
+            .to_string()
+    })?;
     let mut rng = rsa::rand_core::OsRng;
     let envuelta = publica
         .encrypt(&mut rng, Pkcs1v15Encrypt, &cek)
-        .map_err(|e| crate::mensaje_llano(format!("No se ha podido cifrar para ese certificado: {e}")))?;
+        .map_err(|e| {
+            crate::mensaje_llano(format!("No se ha podido cifrar para ese certificado: {e}"))
+        })?;
 
     let ktri = KeyTransRecipientInfo {
         version: cms::content_info::CmsVersion::V0,
@@ -1939,9 +2018,11 @@ mod tests_pubsec {
         );
 
         // sin destinatarios no se cifra: nadie podría abrirlo
-        assert!(encrypt_pdf_cert(work.clone(), dest.to_string_lossy().into(), vec![])
-            .unwrap_err()
-            .contains("al menos un destinatario"));
+        assert!(
+            encrypt_pdf_cert(work.clone(), dest.to_string_lossy().into(), vec![])
+                .unwrap_err()
+                .contains("al menos un destinatario")
+        );
         // y un fichero que no es un certificado se dice antes de tocar nada
         assert!(encrypt_pdf_cert(
             work.clone(),
@@ -1978,9 +2059,7 @@ mod tests_pubsec {
         // el fichero está cifrado de verdad: el texto ya no se lee dentro
         let bytes = std::fs::read(&dest).expect("leer");
         assert!(
-            !bytes
-                .windows(20)
-                .any(|v| v == b"Expediente reservado"),
+            !bytes.windows(20).any(|v| v == b"Expediente reservado"),
             "el texto sigue en claro dentro del fichero"
         );
         let doc = LoDoc::load(&dest).expect("cargar");
@@ -2126,8 +2205,7 @@ mod tests_pubsec {
                 info.had_password,
                 "el original va cifrado, aunque la copia de trabajo esté en claro"
             );
-            let texto =
-                crate::busqueda::get_page_text(info.work_path.clone(), 0).expect("texto");
+            let texto = crate::busqueda::get_page_text(info.work_path.clone(), 0).expect("texto");
             assert!(
                 texto
                     .chars
@@ -2167,7 +2245,16 @@ mod tests_pubsec {
             "con la clave que no toca hay que decirlo en llano: {e}"
         );
 
-        for f in [&pdf, &dest, &uno, &dos, &clave_uno, &clave_dos, &clave_tres, &p12] {
+        for f in [
+            &pdf,
+            &dest,
+            &uno,
+            &dos,
+            &clave_uno,
+            &clave_dos,
+            &clave_tres,
+            &p12,
+        ] {
             std::fs::remove_file(f).ok();
         }
     }

@@ -159,7 +159,11 @@ fn destino_de(doc: &LoDoc, nodo: &Dictionary, paginas: &[ObjectId]) -> Destino {
         let geo = crate::formularios2::geo_pagina(doc, page_id).ok()?;
         Some(geo.pdf_a_ui(0.0, y).1)
     });
-    Destino { page_index, top, zoom }
+    Destino {
+        page_index,
+        top,
+        zoom,
+    }
 }
 
 /// Un destino puede ser el array, o el nombre de uno del árbol
@@ -295,10 +299,7 @@ pub fn set_outline(work_path: String, nodes: Vec<OutlineNode>) -> Result<(), Str
                             let geo = crate::formularios2::geo_pagina(doc, *page_id).ok()?;
                             Some(Object::Real(geo.ui_a_pdf(0.0, y).1))
                         });
-                        let zoom = node
-                            .zoom
-                            .filter(|z| *z > 0.0)
-                            .map(Object::Real);
+                        let zoom = node.zoom.filter(|z| *z > 0.0).map(Object::Real);
                         d.set(
                             "Dest",
                             Object::Array(vec![
@@ -468,7 +469,10 @@ pub(crate) fn marca_creador(doc: &mut lopdf::Document) {
         Ok(Object::Dictionary(d)) => d.clone(),
         _ => Dictionary::new(),
     };
-    info.set("Producer", cadena_pdf(&format!("Vitela {}", env!("CARGO_PKG_VERSION"))));
+    info.set(
+        "Producer",
+        cadena_pdf(&format!("Vitela {}", env!("CARGO_PKG_VERSION"))),
+    );
     let sin_creador = match info.get(b"Creator") {
         Ok(Object::String(b, _)) => b.is_empty(),
         Ok(_) => false,
@@ -538,23 +542,20 @@ pub fn get_links(path: String, page_index: u16) -> Result<Vec<LinkInfo>, String>
             // devolver el índice que entiende `remove_annotation`
             let annotations = page.annotations();
             for i in 0..annotations.len() {
-                let Ok(annot) = annotations.get(i) else { continue };
+                let Ok(annot) = annotations.get(i) else {
+                    continue;
+                };
                 let Some(link) = annot.as_link_annotation().and_then(|l| l.link().ok()) else {
                     continue;
                 };
                 let Ok(r) = link.rect() else { continue };
                 let mut uri = None;
-                let mut dest_page = link
-                    .destination()
-                    .and_then(|d| d.page_index().ok());
+                let mut dest_page = link.destination().and_then(|d| d.page_index().ok());
                 if let Some(action) = link.action() {
                     match action {
                         PdfAction::Uri(u) => uri = u.uri().ok(),
                         PdfAction::LocalDestination(l) if dest_page.is_none() => {
-                            dest_page = l
-                                .destination()
-                                .ok()
-                                .and_then(|d| d.page_index().ok());
+                            dest_page = l.destination().ok().and_then(|d| d.page_index().ok());
                         }
                         _ => {}
                     }
@@ -599,7 +600,10 @@ mod tests {
         assert!(!info.encrypted);
         // no ha dejado copia de trabajo ni paso de deshacer
         assert!(
-            crate::historial::history_state(ruta.clone()).expect("historial").undo == 0,
+            crate::historial::history_state(ruta.clone())
+                .expect("historial")
+                .undo
+                == 0,
             "pdf_info no puede tocar el historial"
         );
 
@@ -646,8 +650,8 @@ mod tests {
                         title: "Sección española: años".into(),
                         page_index: Some(1),
                         top: None,
-                    zoom: None,
-                    children: vec![],
+                        zoom: None,
+                        children: vec![],
                     }],
                 },
                 OutlineNode {
@@ -717,7 +721,10 @@ mod tests {
         assert_eq!(hijo.title, "Apartado a)");
         assert_eq!(hijo.page_index, Some(1));
         assert!(hijo.top.is_some_and(|t| (t - 300.5).abs() < 0.01));
-        assert_eq!(hijo.zoom, None, "sin zoom se deja el que haya, como Acrobat");
+        assert_eq!(
+            hijo.zoom, None,
+            "sin zoom se deja el que haya, como Acrobat"
+        );
 
         // el destino que se escribe es el del spec, con la `y` del papel:
         // 120 pt desde arriba en una A4 son 842 − 120 = 722 desde abajo
@@ -739,7 +746,10 @@ mod tests {
             matches!(&dest[1], Object::Name(n) if n == b"XYZ"),
             "el destino tiene que ser /XYZ: {dest:?}"
         );
-        assert!(matches!(dest[2], Object::Null), "el `left` se deja como está");
+        assert!(
+            matches!(dest[2], Object::Null),
+            "el `left` se deja como está"
+        );
         let Object::Real(top) = dest[3] else {
             panic!("el `top` tiene que ir escrito: {dest:?}")
         };
@@ -860,7 +870,11 @@ mod tests {
             leido[1].top
         );
         assert_eq!(leido[1].zoom, None, "/FitH no lleva zoom");
-        assert_eq!(leido[2].page_index, Some(1), "el destino con nombre se resuelve");
+        assert_eq!(
+            leido[2].page_index,
+            Some(1),
+            "el destino con nombre se resuelve"
+        );
         assert!(leido[2].top.is_some_and(|t| (t - 342.0).abs() < 1.0));
         assert!(leido[2].zoom.is_some_and(|z| (z - 0.75).abs() < 0.01));
         std::fs::remove_file(&pdf).ok();
@@ -1245,7 +1259,11 @@ mod tests_etiquetas {
 
         // sin /PageLabels no hay nada que enseñar, y eso no es un error
         let sin = get_page_labels(work.clone()).expect("leer");
-        assert_eq!(sin, EtiquetasPaginas::default(), "un PDF liso no numera nada");
+        assert_eq!(
+            sin,
+            EtiquetasPaginas::default(),
+            "un PDF liso no numera nada"
+        );
 
         let rangos = vec![
             RangoEtiqueta {
@@ -1293,7 +1311,10 @@ mod tests_etiquetas {
 
         // quitar la numeración devuelve el documento a sus números físicos
         set_page_labels(work.clone(), Vec::new()).expect("quitar");
-        assert_eq!(get_page_labels(work.clone()).expect("leer"), EtiquetasPaginas::default());
+        assert_eq!(
+            get_page_labels(work.clone()).expect("leer"),
+            EtiquetasPaginas::default()
+        );
 
         // y ⌘Z devuelve la que había
         crate::historial::undo(work.clone()).expect("deshacer");
@@ -1313,18 +1334,20 @@ mod tests_etiquetas {
         .contains("primera página"));
         assert!(set_page_labels(
             work.clone(),
-            vec![RangoEtiqueta {
-                desde: 0,
-                estilo: "arabigo".into(),
-                prefijo: String::new(),
-                empieza_en: 1,
-            },
-            RangoEtiqueta {
-                desde: 99,
-                estilo: "romano".into(),
-                prefijo: String::new(),
-                empieza_en: 1,
-            }]
+            vec![
+                RangoEtiqueta {
+                    desde: 0,
+                    estilo: "arabigo".into(),
+                    prefijo: String::new(),
+                    empieza_en: 1,
+                },
+                RangoEtiqueta {
+                    desde: 99,
+                    estilo: "romano".into(),
+                    prefijo: String::new(),
+                    empieza_en: 1,
+                }
+            ]
         )
         .unwrap_err()
         .contains("fuera del documento"));
@@ -1344,14 +1367,28 @@ mod tests_etiquetas {
         let ficha = get_document_info(work.clone()).expect("ficha");
         assert_eq!(ficha.page_count, 2);
         assert!(ficha.bytes > 0, "el peso es el del fichero");
-        assert!(ficha.version.starts_with("1."), "versión del PDF: {}", ficha.version);
-        assert!((ficha.page_width - 595.0).abs() < 2.0, "A4: {}", ficha.page_width);
+        assert!(
+            ficha.version.starts_with("1."),
+            "versión del PDF: {}",
+            ficha.version
+        );
+        assert!(
+            (ficha.page_width - 595.0).abs() < 2.0,
+            "A4: {}",
+            ficha.page_width
+        );
         assert!(ficha.paginas_iguales, "las dos páginas miden lo mismo");
         assert!(!ficha.formulario);
         assert_eq!(ficha.firmas, 0);
-        assert!(!ficha.fuentes.is_empty(), "el texto tiene que usar alguna fuente");
         assert!(
-            ficha.fuentes.iter().all(|f| !f.nombre.is_empty() && f.tipo != "desconocida"),
+            !ficha.fuentes.is_empty(),
+            "el texto tiene que usar alguna fuente"
+        );
+        assert!(
+            ficha
+                .fuentes
+                .iter()
+                .all(|f| !f.nombre.is_empty() && f.tipo != "desconocida"),
             "cada fuente con su nombre y su tipo: {:?}",
             ficha.fuentes
         );
@@ -1365,7 +1402,12 @@ mod tests_etiquetas {
             work.clone(),
             0,
             "text".into(),
-            crate::Rect { x: 80.0, y: 200.0, w: 160.0, h: 20.0 },
+            crate::Rect {
+                x: 80.0,
+                y: 200.0,
+                w: 160.0,
+                h: 20.0,
+            },
             "nombre".into(),
             None,
             None,
@@ -1404,7 +1446,13 @@ mod tests_etiquetas {
     /// canta nadie hasta que alguien imprime el índice.
     #[test]
     fn los_romanos_y_las_letras_se_escriben_como_dice_el_spec() {
-        for (n, esperado) in [(1, "I"), (4, "IV"), (9, "IX"), (14, "XIV"), (1987, "MCMLXXXVII")] {
+        for (n, esperado) in [
+            (1, "I"),
+            (4, "IV"),
+            (9, "IX"),
+            (14, "XIV"),
+            (1987, "MCMLXXXVII"),
+        ] {
             assert_eq!(romano(n), esperado, "{n}");
         }
         // fuera de rango se dice el número, que es lo único que no engaña
@@ -1556,9 +1604,13 @@ fn fuentes_del_documento(doc: &LoDoc) -> Vec<FuenteInfo> {
             let Ok(fuentes) = recursos.get(b"Font").map(|o| resuelve(doc, o)) else {
                 continue;
             };
-            let Ok(fuentes) = fuentes.as_dict() else { continue };
+            let Ok(fuentes) = fuentes.as_dict() else {
+                continue;
+            };
             for (_, obj) in fuentes.iter() {
-                let Ok(f) = resuelve(doc, obj).as_dict() else { continue };
+                let Ok(f) = resuelve(doc, obj).as_dict() else {
+                    continue;
+                };
                 let subtype = f
                     .get(b"Subtype")
                     .and_then(|o| o.as_name())
@@ -1633,9 +1685,9 @@ pub fn get_document_info(path: String) -> Result<DocumentoInfo, String> {
                 .as_ref()
                 .map(|p| (p.width().value, p.height().value))
                 .unwrap_or((0.0, 0.0));
-            let iguales = (0..n).filter_map(|i| paginas.get(i).ok()).all(|p| {
-                (p.width().value - w).abs() < 1.0 && (p.height().value - h).abs() < 1.0
-            });
+            let iguales = (0..n)
+                .filter_map(|i| paginas.get(i).ok())
+                .all(|p| (p.width().value - w).abs() < 1.0 && (p.height().value - h).abs() < 1.0);
             Ok((n, w, h, iguales))
         })?;
         crate::with_lopdf(&path, |doc| {
@@ -1651,7 +1703,9 @@ pub fn get_document_info(path: String) -> Result<DocumentoInfo, String> {
             let mut firmas = 0u16;
             let mut otros = 0u16;
             for c in campos.map(|v| v.as_slice()).unwrap_or_default() {
-                let Ok(d) = resuelve(doc, c).as_dict() else { continue };
+                let Ok(d) = resuelve(doc, c).as_dict() else {
+                    continue;
+                };
                 match d.get(b"FT").and_then(|o| o.as_name()) {
                     Ok(t) if t == b"Sig" => firmas += 1,
                     _ => otros += 1,

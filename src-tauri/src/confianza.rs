@@ -20,9 +20,9 @@
 //! revocado esta mañana sigue encadenando con su raíz. Por eso la etiqueta
 //! dice «emitido por una autoridad reconocida» y **nunca** «válida».
 
-use der::Encode;
 #[cfg(any(not(target_os = "macos"), test))]
 use der::Decode;
+use der::Encode;
 use x509_cert::Certificate;
 
 /// El certificado encadena con una raíz del almacén del sistema.

@@ -50,10 +50,7 @@ pub fn list_attachments(path: String) -> Result<Vec<Adjunto>, String> {
                     let fichero = fichero_de(doc, &spec);
                     Adjunto {
                         name: nombre_visible(doc, &spec, &nombre),
-                        bytes: fichero
-                            .as_ref()
-                            .map(|(_, bytes)| *bytes)
-                            .unwrap_or(0),
+                        bytes: fichero.as_ref().map(|(_, bytes)| *bytes).unwrap_or(0),
                         created: fichero
                             .as_ref()
                             .map(|(fecha, _)| fecha.clone())
@@ -110,9 +107,8 @@ pub fn add_attachment(
     file_path: String,
     description: Option<String>,
 ) -> Result<(), String> {
-    let bytes = std::fs::read(&file_path).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido leer {file_path}: {e}"))
-    })?;
+    let bytes = std::fs::read(&file_path)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer {file_path}: {e}")))?;
     let nombre = std::path::Path::new(&file_path)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -210,13 +206,11 @@ pub fn open_attachment(path: String, index: u16) -> Result<String, String> {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let dir = std::env::temp_dir().join(format!("vitela-adjunto-{nanos}"));
-    std::fs::create_dir_all(&dir).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido preparar el adjunto: {e}"))
-    })?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido preparar el adjunto: {e}")))?;
     let destino = dir.join(nombre_seguro(&nombre));
-    std::fs::write(&destino, bytes).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido preparar el adjunto: {e}"))
-    })?;
+    std::fs::write(&destino, bytes)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido preparar el adjunto: {e}")))?;
     Ok(destino.to_string_lossy().into_owned())
 }
 
@@ -286,7 +280,11 @@ pub fn set_layer_visible(work_path: String, index: u16, visible: bool) -> Result
         } else if !apagadas.contains(&id) {
             apagadas.push(id);
         }
-        let root = doc.trailer.get(b"Root").and_then(|o| o.as_reference()).map_err(|e| e.to_string())?;
+        let root = doc
+            .trailer
+            .get(b"Root")
+            .and_then(|o| o.as_reference())
+            .map_err(|e| e.to_string())?;
         let oc_ref = doc
             .get_object(root)
             .and_then(|o| o.as_dict())
@@ -478,7 +476,11 @@ fn stream_de(doc: &lopdf::Document, spec: &Dictionary) -> Option<lopdf::ObjectId
 fn fichero_de(doc: &lopdf::Document, spec: &Dictionary) -> Option<(String, u64)> {
     let id = stream_de(doc, spec)?;
     let stream = doc.get_object(id).ok()?.as_stream().ok()?;
-    let params = stream.dict.get(b"Params").ok().and_then(|o| dict_de(doc, o));
+    let params = stream
+        .dict
+        .get(b"Params")
+        .ok()
+        .and_then(|o| dict_de(doc, o));
     let tam = params
         .as_ref()
         .and_then(|p| p.get(b"Size").ok())
@@ -528,12 +530,7 @@ fn reescribe_arbol(
     pares.sort_by(|a, b| a.0.cmp(&b.0));
     let names: Vec<Object> = pares
         .into_iter()
-        .flat_map(|(n, id)| {
-            vec![
-                crate::documento::cadena_pdf(&n),
-                Object::Reference(id),
-            ]
-        })
+        .flat_map(|(n, id)| vec![crate::documento::cadena_pdf(&n), Object::Reference(id)])
         .collect();
     let mut arbol = Dictionary::new();
     arbol.set("Names", Object::Array(names));
@@ -720,7 +717,10 @@ mod tests {
                 .starts_with("vitela-adjunto-"),
             "cada uno en su carpeta, para que el barrido se las lleve"
         );
-        assert!(open_attachment(work.clone(), 7).is_err(), "un índice que no existe");
+        assert!(
+            open_attachment(work.clone(), 7).is_err(),
+            "un índice que no existe"
+        );
 
         std::fs::remove_dir_all(ruta.parent().unwrap()).ok();
         for f in [&pdf, &xml] {
@@ -763,7 +763,11 @@ mod tests {
             oc.set("OCGs", Object::Array(vec![Object::Reference(ocg_id)]));
             oc.set("D", Object::Dictionary(d));
             let oc_id = doc.add_object(Object::Dictionary(oc));
-            let root = doc.trailer.get(b"Root").and_then(|o| o.as_reference()).unwrap();
+            let root = doc
+                .trailer
+                .get(b"Root")
+                .and_then(|o| o.as_reference())
+                .unwrap();
             doc.get_object_mut(root)
                 .and_then(|o| o.as_dict_mut())
                 .unwrap()
@@ -775,7 +779,10 @@ mod tests {
             nuevo.extend_from_slice(&contenido);
             nuevo.extend_from_slice(b"\nEMC\n");
             doc.change_page_content(page_id, nuevo).expect("contenido");
-            let page = doc.get_object_mut(page_id).and_then(|o| o.as_dict_mut()).unwrap();
+            let page = doc
+                .get_object_mut(page_id)
+                .and_then(|o| o.as_dict_mut())
+                .unwrap();
             let mut props = Dictionary::new();
             props.set("Capa0", Object::Reference(ocg_id));
             let mut recursos = page
@@ -836,7 +843,11 @@ mod tests {
             let mut oc = Dictionary::new();
             oc.set("OCGs", Object::Array(vec![Object::Reference(ocg_id)]));
             oc.set("D", Object::Dictionary(d));
-            let root = doc.trailer.get(b"Root").and_then(|o| o.as_reference()).unwrap();
+            let root = doc
+                .trailer
+                .get(b"Root")
+                .and_then(|o| o.as_reference())
+                .unwrap();
             doc.get_object_mut(root)
                 .and_then(|o| o.as_dict_mut())
                 .unwrap()
@@ -847,7 +858,10 @@ mod tests {
             nuevo.extend_from_slice(&contenido);
             nuevo.extend_from_slice(b"\nEMC\n");
             doc.change_page_content(page_id, nuevo).expect("contenido");
-            let page = doc.get_object_mut(page_id).and_then(|o| o.as_dict_mut()).unwrap();
+            let page = doc
+                .get_object_mut(page_id)
+                .and_then(|o| o.as_dict_mut())
+                .unwrap();
             let mut props = Dictionary::new();
             props.set("Capa0", Object::Reference(ocg_id));
             let mut recursos = page
@@ -880,7 +894,8 @@ mod tests {
     fn hay_tinta(work: &str) -> bool {
         let png = crate::render_page_png(work.to_string(), 0, 300, true).expect("render");
         let img = image::load_from_memory(&png).expect("PNG").to_rgba8();
-        img.pixels().any(|p| p.0[0] < 200 && p.0[1] < 200 && p.0[2] < 200)
+        img.pixels()
+            .any(|p| p.0[0] < 200 && p.0[1] < 200 && p.0[2] < 200)
     }
 }
 
@@ -900,7 +915,10 @@ const LADO_CHINCHETA: f32 = 20.0;
 fn apariencia_chincheta(doc: &mut LoDoc, color: [f32; 3]) -> ObjectId {
     let l = LADO_CHINCHETA;
     let mut ops = String::new();
-    ops.push_str(&format!("{:.3} {:.3} {:.3} rg\n", color[0], color[1], color[2]));
+    ops.push_str(&format!(
+        "{:.3} {:.3} {:.3} rg\n",
+        color[0], color[1], color[2]
+    ));
     ops.push_str("0.2 0.2 0.2 RG\n0.8 w\n");
     // la cabeza
     ops.push_str(&format!(
@@ -1017,7 +1035,10 @@ pub fn add_file_attachment_annotation(
         // el texto del comentario es el nombre del fichero: es lo que el
         // panel de comentarios tiene que enseñar en su fila
         annot.set("Contents", crate::documento::cadena_pdf(&nombre));
-        annot.set("C", Object::Array(vec![0.99.into(), 0.73.into(), 0.18.into()]));
+        annot.set(
+            "C",
+            Object::Array(vec![0.99.into(), 0.73.into(), 0.18.into()]),
+        );
         annot.set("F", 4i64); // Print
         annot.set("T", crate::documento::cadena_pdf(&autor));
         annot.set("CreationDate", Object::string_literal(fecha.clone()));
@@ -1051,7 +1072,10 @@ fn fichero_de_la_chincheta(
                 .get(annot_index as usize)
                 .ok_or("Ese adjunto ya no está en la página")?;
             let annot = dict_de(doc, objeto).ok_or("Ese comentario ya no está en la página")?;
-            if annot.get(b"Subtype").and_then(|o| o.as_name()).unwrap_or_default()
+            if annot
+                .get(b"Subtype")
+                .and_then(|o| o.as_name())
+                .unwrap_or_default()
                 != b"FileAttachment"
             {
                 return Err("Ese comentario no lleva ningún fichero adjunto".into());
@@ -1092,13 +1116,11 @@ pub fn open_page_attachment(
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let dir = std::env::temp_dir().join(format!("vitela-adjunto-{nanos}"));
-    std::fs::create_dir_all(&dir).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido preparar el adjunto: {e}"))
-    })?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido preparar el adjunto: {e}")))?;
     let destino = dir.join(nombre_seguro(&nombre));
-    std::fs::write(&destino, bytes).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido preparar el adjunto: {e}"))
-    })?;
+    std::fs::write(&destino, bytes)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido preparar el adjunto: {e}")))?;
     Ok(destino.to_string_lossy().into_owned())
 }
 
@@ -1114,9 +1136,8 @@ pub fn save_page_attachment(
 ) -> Result<u64, String> {
     let (_, bytes) = fichero_de_la_chincheta(&path, page_index, annot_index)?;
     let n = bytes.len() as u64;
-    std::fs::write(&dest_path, bytes).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}"))
-    })?;
+    std::fs::write(&dest_path, bytes)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}")))?;
     Ok(n)
 }
 
@@ -1232,7 +1253,10 @@ mod tests_chincheta {
         // qué programa abrirlo) y con los bytes del original
         let ruta = open_page_attachment(work.clone(), 0, 0).expect("abrir");
         let abierto = std::path::Path::new(&ruta);
-        assert!(abierto.exists(), "la ruta que se devuelve no existe: {ruta}");
+        assert!(
+            abierto.exists(),
+            "la ruta que se devuelve no existe: {ruta}"
+        );
         assert_eq!(
             abierto.file_name().and_then(|n| n.to_str()),
             Some("adjuntos-chincheta-sacar-factura.xml")
@@ -1241,27 +1265,15 @@ mod tests_chincheta {
 
         // y guardar lo escribe donde diga la UI, diciendo cuántos bytes
         let destino = std::env::temp_dir().join("adjuntos-chincheta-guardada.xml");
-        let n = save_page_attachment(
-            work.clone(),
-            0,
-            0,
-            destino.to_string_lossy().into_owned(),
-        )
-        .expect("guardar");
+        let n = save_page_attachment(work.clone(), 0, 0, destino.to_string_lossy().into_owned())
+            .expect("guardar");
         assert_eq!(n as usize, contenido.len());
         assert_eq!(std::fs::read(&destino).expect("leer"), contenido);
 
         // un comentario que no lleva fichero lo dice en llano, no falla
         // con jerga ni devuelve una ruta vacía
-        crate::anotaciones::add_note(
-            work.clone(),
-            0,
-            300.0,
-            300.0,
-            "Una nota".into(),
-            None,
-        )
-        .expect("nota");
+        crate::anotaciones::add_note(work.clone(), 0, 300.0, 300.0, "Una nota".into(), None)
+            .expect("nota");
         let e = open_page_attachment(work.clone(), 0, 1).unwrap_err();
         assert!(e.contains("no lleva ningún fichero"), "aviso en llano: {e}");
         let e = save_page_attachment(work.clone(), 0, 9, destino.to_string_lossy().into_owned())

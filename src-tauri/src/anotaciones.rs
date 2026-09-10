@@ -1,10 +1,11 @@
 //! Anotaciones básicas: resaltado, trazo (Ink), nota, listado y borrado.
 
-use crate::{cirugia_en_hilo, on_pdfium_thread, pdfium, save_and_close, with_doc, with_lopdf, Geo, Rect};
 use crate::historial::mutacion;
+use crate::{
+    cirugia_en_hilo, on_pdfium_thread, pdfium, save_and_close, with_doc, with_lopdf, Geo, Rect,
+};
 use pdfium_render::prelude::*;
 use serde::Serialize;
-
 
 /// Añade un trazo a mano alzada como anotación Ink con su apariencia
 /// (un path dentro de la anotación), de modo que se puede borrar
@@ -24,58 +25,60 @@ pub fn add_stroke(
     }
     let c = color.unwrap_or([226, 61, 61, 255]);
     let w = width.unwrap_or(2.0).clamp(0.5, 12.0);
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let geo = Geo::de_pagina(&page).propia();
-        let puntos: Vec<(f32, f32)> = points.iter().map(|p| geo.ui_a_pdf(p[0], p[1])).collect();
-        let mut annot = page
-            .annotations_mut()
-            .create_ink_annotation()
-            .map_err(|e| e.to_string())?;
-        annot.set_is_printed(true).map_err(|e| e.to_string())?;
-        // /C antes de añadir el path (con /AP PDFium ya no deja fijarlo);
-        // es lo que lee get_annotations, el color del path no se ve fuera
-        annot
-            .set_stroke_color(PdfColor::new(c[0], c[1], c[2], c[3]))
-            .map_err(|e| e.to_string())?;
-        const MARGIN: f32 = 3.0;
-        let min_x = puntos.iter().map(|p| p.0).fold(f32::MAX, f32::min) - MARGIN;
-        let max_x = puntos.iter().map(|p| p.0).fold(f32::MIN, f32::max) + MARGIN;
-        let min_y = puntos.iter().map(|p| p.1).fold(f32::MAX, f32::min) - MARGIN;
-        let max_y = puntos.iter().map(|p| p.1).fold(f32::MIN, f32::max) + MARGIN;
-        annot
-            .set_bounds(PdfRect::new(
-                PdfPoints::new(min_y),
-                PdfPoints::new(min_x),
-                PdfPoints::new(max_y),
-                PdfPoints::new(max_x),
-            ))
-            .map_err(|e| e.to_string())?;
-        let mut path = PdfPagePathObject::new(
-            &doc,
-            PdfPoints::new(puntos[0].0),
-            PdfPoints::new(puntos[0].1),
-            Some(PdfColor::new(c[0], c[1], c[2], c[3])),
-            Some(PdfPoints::new(w)),
-            None,
-        )
-        .map_err(|e| e.to_string())?;
-        for p in &puntos[1..] {
-            path.line_to(PdfPoints::new(p.0), PdfPoints::new(p.1))
+    mutacion(work_path, |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
                 .map_err(|e| e.to_string())?;
-        }
-        annot
-            .objects_mut()
-            .add_path_object(path)
+            let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            let geo = Geo::de_pagina(&page).propia();
+            let puntos: Vec<(f32, f32)> = points.iter().map(|p| geo.ui_a_pdf(p[0], p[1])).collect();
+            let mut annot = page
+                .annotations_mut()
+                .create_ink_annotation()
+                .map_err(|e| e.to_string())?;
+            annot.set_is_printed(true).map_err(|e| e.to_string())?;
+            // /C antes de añadir el path (con /AP PDFium ya no deja fijarlo);
+            // es lo que lee get_annotations, el color del path no se ve fuera
+            annot
+                .set_stroke_color(PdfColor::new(c[0], c[1], c[2], c[3]))
+                .map_err(|e| e.to_string())?;
+            const MARGIN: f32 = 3.0;
+            let min_x = puntos.iter().map(|p| p.0).fold(f32::MAX, f32::min) - MARGIN;
+            let max_x = puntos.iter().map(|p| p.0).fold(f32::MIN, f32::max) + MARGIN;
+            let min_y = puntos.iter().map(|p| p.1).fold(f32::MAX, f32::min) - MARGIN;
+            let max_y = puntos.iter().map(|p| p.1).fold(f32::MIN, f32::max) + MARGIN;
+            annot
+                .set_bounds(PdfRect::new(
+                    PdfPoints::new(min_y),
+                    PdfPoints::new(min_x),
+                    PdfPoints::new(max_y),
+                    PdfPoints::new(max_x),
+                ))
+                .map_err(|e| e.to_string())?;
+            let mut path = PdfPagePathObject::new(
+                &doc,
+                PdfPoints::new(puntos[0].0),
+                PdfPoints::new(puntos[0].1),
+                Some(PdfColor::new(c[0], c[1], c[2], c[3])),
+                Some(PdfPoints::new(w)),
+                None,
+            )
             .map_err(|e| e.to_string())?;
-        drop(page);
-        save_and_close(doc, &work_path)?;
-        remata_annot(&work_path, page_index, None, author)
-    }))
+            for p in &puntos[1..] {
+                path.line_to(PdfPoints::new(p.0), PdfPoints::new(p.1))
+                    .map_err(|e| e.to_string())?;
+            }
+            annot
+                .objects_mut()
+                .add_path_object(path)
+                .map_err(|e| e.to_string())?;
+            drop(page);
+            save_and_close(doc, &work_path)?;
+            remata_annot(&work_path, page_index, None, author)
+        })
+    })
 }
 
 /// Crea una nota (anotación de texto) en el punto dado (coords de UI).
@@ -91,44 +94,46 @@ pub fn add_note(
     if text.trim().is_empty() {
         return Err("La nota está vacía".into());
     }
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        let geo = Geo::de_pagina(&page).propia();
-        let mut annot = page
-            .annotations_mut()
-            .create_text_annotation(&text)
-            .map_err(|e| e.to_string())?;
-        annot.set_is_printed(true).map_err(|e| e.to_string())?;
-        const ICON: f32 = 22.0;
-        annot
-            .set_bounds(geo.ui_rect_a_pdf(&Rect {
-                x,
-                y,
-                w: ICON,
-                h: ICON,
-            }))
-            .map_err(|e| e.to_string())?;
-        drop(page);
-        save_and_close(doc, &work_path)?;
-        remata_annot(&work_path, page_index, None, author)?;
-        // el post-it de Acrobat: icono de bocadillo y ventana emergente
-        cirugia_en_hilo(&work_path, move |doc| {
-            let i = ultima_annot(doc, page_index)?;
-            let id = annot_id(doc, page_index, i)?;
-            {
-                let annot = doc
-                    .get_object_mut(id)
-                    .and_then(|o| o.as_dict_mut())
-                    .map_err(|e| e.to_string())?;
-                annot.set("Name", lopdf::Object::Name(b"Comment".to_vec()));
-            }
-            anade_popup_de(doc, page_index, id)
+    mutacion(work_path, |work_path| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
+                .map_err(|e| e.to_string())?;
+            let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            let geo = Geo::de_pagina(&page).propia();
+            let mut annot = page
+                .annotations_mut()
+                .create_text_annotation(&text)
+                .map_err(|e| e.to_string())?;
+            annot.set_is_printed(true).map_err(|e| e.to_string())?;
+            const ICON: f32 = 22.0;
+            annot
+                .set_bounds(geo.ui_rect_a_pdf(&Rect {
+                    x,
+                    y,
+                    w: ICON,
+                    h: ICON,
+                }))
+                .map_err(|e| e.to_string())?;
+            drop(page);
+            save_and_close(doc, &work_path)?;
+            remata_annot(&work_path, page_index, None, author)?;
+            // el post-it de Acrobat: icono de bocadillo y ventana emergente
+            cirugia_en_hilo(&work_path, move |doc| {
+                let i = ultima_annot(doc, page_index)?;
+                let id = annot_id(doc, page_index, i)?;
+                {
+                    let annot = doc
+                        .get_object_mut(id)
+                        .and_then(|o| o.as_dict_mut())
+                        .map_err(|e| e.to_string())?;
+                    annot.set("Name", lopdf::Object::Name(b"Comment".to_vec()));
+                }
+                anade_popup_de(doc, page_index, id)
+            })
         })
-    }))
+    })
 }
 
 /// **AC-046.** `FPDF_ImportPages` copia el grafo de objetos de las
@@ -197,8 +202,7 @@ pub(crate) fn fuente_importable(origen: &str) -> FuenteImportable {
 /// tocado algo (si no, no hace falta copiar el fichero).
 pub(crate) fn quita_popups(doc: &mut lopdf::Document) -> bool {
     use lopdf::Object;
-    let paginas: Vec<(u32, lopdf::ObjectId)> =
-        doc.get_pages().into_iter().collect();
+    let paginas: Vec<(u32, lopdf::ObjectId)> = doc.get_pages().into_iter().collect();
     let mut tocado = false;
     for (numero, page_id) in paginas {
         let Some(lista) = lista_annots(doc, (numero - 1) as u16) else {
@@ -460,7 +464,10 @@ pub(crate) fn escribe_apariencia_marca(
     if estilo == EstiloMarca::Resaltado {
         ops.push_str("/GSm gs\n");
     }
-    ops.push_str(&format!("{:.4} {:.4} {:.4} rg\n", color[0], color[1], color[2]));
+    ops.push_str(&format!(
+        "{:.4} {:.4} {:.4} rg\n",
+        color[0], color[1], color[2]
+    ));
     for (qx0, qy0, qx1, qy1) in &quads {
         let (x, y, w, h) = match estilo {
             EstiloMarca::Resaltado => (*qx0, *qy0, qx1 - qx0, qy1 - qy0),
@@ -601,16 +608,18 @@ pub(crate) fn ultima_annot(doc: &lopdf::Document, page_index: u16) -> Result<usi
         Object::Array(a) => a.len(),
         _ => return Err("El /Annots de la página no es una lista".into()),
     };
-    n.checked_sub(1).ok_or_else(|| "La página no tiene anotaciones".into())
+    n.checked_sub(1)
+        .ok_or_else(|| "La página no tiene anotaciones".into())
 }
 
 /// Autor de un comentario: el que manda la UI (preferencia del usuario) o,
 /// si no lo manda, el nombre de usuario del sistema — Acrobat tampoco
 /// pregunta la primera vez.
 pub(crate) fn autor_o_sistema(author: Option<String>) -> String {
-    let dado = author.map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
-    dado
-        .or_else(|| std::env::var("USER").ok())
+    let dado = author
+        .map(|a| a.trim().to_string())
+        .filter(|a| !a.is_empty());
+    dado.or_else(|| std::env::var("USER").ok())
         .or_else(|| std::env::var("USERNAME").ok())
         .or_else(|| std::env::var("LOGNAME").ok())
         .map(|a| a.trim().to_string())
@@ -672,7 +681,12 @@ fn zona_a_iso(zona: &str) -> String {
         } else {
             "00"
         };
-        return format!("{}{}:{}", zona.chars().next().unwrap(), &zona[1..3], minutos);
+        return format!(
+            "{}{}:{}",
+            zona.chars().next().unwrap(),
+            &zona[1..3],
+            minutos
+        );
     }
     String::new()
 }
@@ -811,10 +825,7 @@ pub fn get_annotations(path: String, page_index: u16) -> Result<Vec<AnnotationIn
 
 /// Las anotaciones de una página, tal como las ve PDFium (sin el color ni
 /// la firma, que salen de lopdf en `aplica_datos`).
-fn lee_annots(
-    doc: &PdfDocument<'static>,
-    page_index: u16,
-) -> Result<Vec<AnnotationInfo>, String> {
+fn lee_annots(doc: &PdfDocument<'static>, page_index: u16) -> Result<Vec<AnnotationInfo>, String> {
     let page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
     let geo = Geo::de_pagina(&page);
     let annotations = page.annotations();
@@ -1018,10 +1029,7 @@ pub fn datos_annots(doc: &lopdf::Document, page_index: u16) -> Option<Vec<DatosA
                 .unwrap_or_default();
             DatosAnnot {
                 color: color_annot(dict),
-                author: dict
-                    .get(b"T")
-                    .map(texto_de_cadena_pdf)
-                    .unwrap_or_default(),
+                author: dict.get(b"T").map(texto_de_cadena_pdf).unwrap_or_default(),
                 modified: dict
                     .get(b"M")
                     .map(|o| fecha_pdf_a_iso(&texto_de_cadena_pdf(o)))
@@ -1031,7 +1039,10 @@ pub fn datos_annots(doc: &lopdf::Document, page_index: u16) -> Option<Vec<DatosA
                     .and_then(|o| o.as_reference())
                     .ok()
                     .and_then(posicion),
-                state: dict.get(b"State").map(texto_de_cadena_pdf).unwrap_or_default(),
+                state: dict
+                    .get(b"State")
+                    .map(texto_de_cadena_pdf)
+                    .unwrap_or_default(),
                 es_estado: tipo_respuesta == b"StateModel",
             }
         })
@@ -1143,50 +1154,56 @@ fn hijas_de(path: &str, page_index: u16, annot_index: usize) -> Vec<usize> {
 /// Elimina la anotación con el índice dado (y su ventana emergente, si la
 /// tiene: en Acrobat el post-it se va entero).
 #[tauri::command(async)]
-pub fn remove_annotation(work_path: String, page_index: u16, annot_index: u16) -> Result<(), String> {
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
-        let era_adjunto = es_adjunto(&work_path, page_index, annot_index as usize);
-        let mut indices = vec![annot_index as usize];
-        if let Some(p) = indice_popup(&work_path, page_index, annot_index as usize) {
-            indices.push(p);
-        }
-        // el hilo entero: borrar solo la pregunta dejaría las respuestas y
-        // el estado colgando de un objeto que ya no está
-        for hija in hijas_de(&work_path, page_index, annot_index as usize) {
-            indices.push(hija);
-            if let Some(p) = indice_popup(&work_path, page_index, hija) {
+pub fn remove_annotation(
+    work_path: String,
+    page_index: u16,
+    annot_index: u16,
+) -> Result<(), String> {
+    mutacion(work_path, |work_path| {
+        on_pdfium_thread(move || {
+            let era_adjunto = es_adjunto(&work_path, page_index, annot_index as usize);
+            let mut indices = vec![annot_index as usize];
+            if let Some(p) = indice_popup(&work_path, page_index, annot_index as usize) {
                 indices.push(p);
             }
-        }
-        // de mayor a menor: borrar no invalida los índices que quedan
-        indices.sort_unstable();
-        indices.dedup();
-        indices.reverse();
-        let pdfium = pdfium()?;
-        let doc = pdfium
-            .load_pdf_from_file(&work_path, None)
-            .map_err(|e| e.to_string())?;
-        let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
-        for i in indices {
-            let annotations = page.annotations_mut();
-            let annot = annotations.get(i).map_err(|e| e.to_string())?;
-            annotations
-                .delete_annotation(annot)
+            // el hilo entero: borrar solo la pregunta dejaría las respuestas y
+            // el estado colgando de un objeto que ya no está
+            for hija in hijas_de(&work_path, page_index, annot_index as usize) {
+                indices.push(hija);
+                if let Some(p) = indice_popup(&work_path, page_index, hija) {
+                    indices.push(p);
+                }
+            }
+            // de mayor a menor: borrar no invalida los índices que quedan
+            indices.sort_unstable();
+            indices.dedup();
+            indices.reverse();
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
                 .map_err(|e| e.to_string())?;
-        }
-        drop(page);
-        save_and_close(doc, &work_path)?;
-        // un adjunto se lleva sus bytes: quitar la anotación deja el fichero
-        // incrustado dentro del PDF, sin nadie que apunte a él, y el
-        // documento sigue pesando lo mismo después de «borrar el adjunto»
-        if era_adjunto {
-            crate::cirugia_en_hilo(&work_path, |doc| {
-                doc.prune_objects();
-                Ok(())
-            })?;
-        }
-        Ok(())
-    }))
+            let mut page = doc.pages().get(page_index).map_err(|e| e.to_string())?;
+            for i in indices {
+                let annotations = page.annotations_mut();
+                let annot = annotations.get(i).map_err(|e| e.to_string())?;
+                annotations
+                    .delete_annotation(annot)
+                    .map_err(|e| e.to_string())?;
+            }
+            drop(page);
+            save_and_close(doc, &work_path)?;
+            // un adjunto se lleva sus bytes: quitar la anotación deja el fichero
+            // incrustado dentro del PDF, sin nadie que apunte a él, y el
+            // documento sigue pesando lo mismo después de «borrar el adjunto»
+            if era_adjunto {
+                crate::cirugia_en_hilo(&work_path, |doc| {
+                    doc.prune_objects();
+                    Ok(())
+                })?;
+            }
+            Ok(())
+        })
+    })
 }
 
 /// ¿Es un `/FileAttachment` la anotación que se va a borrar? Se mira antes
@@ -1205,8 +1222,10 @@ fn es_adjunto(work_path: &str, page_index: u16, annot_index: usize) -> bool {
             Object::Dictionary(d) => Some(d),
             _ => None,
         };
-        Ok(d.and_then(|d| d.get(b"Subtype").and_then(|o| o.as_name()).ok())
-            .is_some_and(|n| n == b"FileAttachment"))
+        Ok(
+            d.and_then(|d| d.get(b"Subtype").and_then(|o| o.as_name()).ok())
+                .is_some_and(|n| n == b"FileAttachment"),
+        )
     })
     .unwrap_or(false)
 }
@@ -1264,14 +1283,22 @@ pub(crate) fn quita_annot(
 /// `/Contents`, su `/DA` y su `/BS`. Sin esto, corregir el texto cambiaría
 /// el dato y no lo que se ve. Para el resto de tipos no hay nada que hacer:
 /// ni las notas ni las marcas sacan su apariencia del texto.
-pub(crate) fn regenera_freetext(doc: &mut lopdf::Document, id: lopdf::ObjectId) -> Result<(), String> {
+pub(crate) fn regenera_freetext(
+    doc: &mut lopdf::Document,
+    id: lopdf::ObjectId,
+) -> Result<(), String> {
     use lopdf::Object;
     let annot = doc
         .get_object(id)
         .and_then(|o| o.as_dict())
         .map_err(|e| e.to_string())?
         .clone();
-    if annot.get(b"Subtype").and_then(|o| o.as_name()).unwrap_or_default() != b"FreeText" {
+    if annot
+        .get(b"Subtype")
+        .and_then(|o| o.as_name())
+        .unwrap_or_default()
+        != b"FreeText"
+    {
         return Ok(());
     }
     let rect: Vec<f32> = annot
@@ -1316,11 +1343,16 @@ pub(crate) fn regenera_freetext(doc: &mut lopdf::Document, id: lopdf::ObjectId) 
         .map(|a| a.iter().filter_map(numero).collect())
         .unwrap_or_default();
     let (x0, y0) = (rect[0].min(rect[2]), rect[1].min(rect[3]));
-    let linea: Vec<(f32, f32)> = cl.chunks(2)
+    let linea: Vec<(f32, f32)> = cl
+        .chunks(2)
         .filter(|c| c.len() == 2)
         .map(|c| (c[0] - x0, c[1] - y0))
         .collect();
-    let rd = if rd.len() == 4 { [rd[0], rd[1], rd[2], rd[3]] } else { [0.0; 4] };
+    let rd = if rd.len() == 4 {
+        [rd[0], rd[1], rd[2], rd[3]]
+    } else {
+        [0.0; 4]
+    };
     let ap_id = crate::anotaciones2::apariencia_freetext_con_llamada(
         doc, w, h, &texto, size, color, border, rd, &linea,
     );
@@ -1377,72 +1409,74 @@ pub fn set_annotation_color(
     annot_index: u16,
     color: [u8; 4],
 ) -> Result<(), String> {
-    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
-        recolorea_objetos(&work_path, page_index, annot_index, color)?;
-        let fecha = fecha_pdf_ahora();
-        cirugia_en_hilo(&work_path, move |doc| {
-            let i = annot_index as usize;
-            let id = annot_id(doc, page_index, i)?;
-            let subtipo = doc
-                .get_object(id)
-                .and_then(|o| o.as_dict())
-                .and_then(|d| d.get(b"Subtype"))
-                .and_then(|o| o.as_name())
-                .map(|n| n.to_vec())
-                .unwrap_or_default();
-            {
-                let annot = doc
-                    .get_object_mut(id)
-                    .and_then(|o| o.as_dict_mut())
-                    .map_err(|e| e.to_string())?;
-                annot.set(
-                    "C",
-                    lopdf::Object::Array(vec![
-                        (color[0] as f32 / 255.0).into(),
-                        (color[1] as f32 / 255.0).into(),
-                        (color[2] as f32 / 255.0).into(),
-                    ]),
-                );
-                if color[3] < 255 {
-                    annot.set("CA", lopdf::Object::Real(color[3] as f32 / 255.0));
-                }
-                annot.set("M", lopdf::Object::string_literal(fecha));
-            }
-            let estilo = match subtipo.as_slice() {
-                b"Highlight" => Some(EstiloMarca::Resaltado),
-                b"Underline" => Some(EstiloMarca::Subrayado),
-                b"StrikeOut" => Some(EstiloMarca::Tachado),
-                _ => None,
-            };
-            if let Some(estilo) = estilo {
-                escribe_apariencia_marca(doc, page_index, i, estilo)?;
-            }
-            if subtipo.as_slice() == b"FreeText" {
-                // el color del cuadro vive en su /DA, no solo en /C
-                let da = doc
+    mutacion(work_path, move |work_path| {
+        on_pdfium_thread(move || {
+            recolorea_objetos(&work_path, page_index, annot_index, color)?;
+            let fecha = fecha_pdf_ahora();
+            cirugia_en_hilo(&work_path, move |doc| {
+                let i = annot_index as usize;
+                let id = annot_id(doc, page_index, i)?;
+                let subtipo = doc
                     .get_object(id)
                     .and_then(|o| o.as_dict())
-                    .and_then(|d| d.get(b"DA"))
-                    .map(texto_de_cadena_pdf)
+                    .and_then(|d| d.get(b"Subtype"))
+                    .and_then(|o| o.as_name())
+                    .map(|n| n.to_vec())
                     .unwrap_or_default();
-                let (size, _) = crate::anotaciones2::lee_da(&da);
-                doc.get_object_mut(id)
-                    .and_then(|o| o.as_dict_mut())
-                    .map_err(|e| e.to_string())?
-                    .set(
-                        "DA",
-                        lopdf::Object::string_literal(format!(
-                            "/Helv {size:.2} Tf {:.4} {:.4} {:.4} rg",
-                            color[0] as f32 / 255.0,
-                            color[1] as f32 / 255.0,
-                            color[2] as f32 / 255.0
-                        )),
+                {
+                    let annot = doc
+                        .get_object_mut(id)
+                        .and_then(|o| o.as_dict_mut())
+                        .map_err(|e| e.to_string())?;
+                    annot.set(
+                        "C",
+                        lopdf::Object::Array(vec![
+                            (color[0] as f32 / 255.0).into(),
+                            (color[1] as f32 / 255.0).into(),
+                            (color[2] as f32 / 255.0).into(),
+                        ]),
                     );
-                regenera_freetext(doc, id)?;
-            }
-            Ok(())
+                    if color[3] < 255 {
+                        annot.set("CA", lopdf::Object::Real(color[3] as f32 / 255.0));
+                    }
+                    annot.set("M", lopdf::Object::string_literal(fecha));
+                }
+                let estilo = match subtipo.as_slice() {
+                    b"Highlight" => Some(EstiloMarca::Resaltado),
+                    b"Underline" => Some(EstiloMarca::Subrayado),
+                    b"StrikeOut" => Some(EstiloMarca::Tachado),
+                    _ => None,
+                };
+                if let Some(estilo) = estilo {
+                    escribe_apariencia_marca(doc, page_index, i, estilo)?;
+                }
+                if subtipo.as_slice() == b"FreeText" {
+                    // el color del cuadro vive en su /DA, no solo en /C
+                    let da = doc
+                        .get_object(id)
+                        .and_then(|o| o.as_dict())
+                        .and_then(|d| d.get(b"DA"))
+                        .map(texto_de_cadena_pdf)
+                        .unwrap_or_default();
+                    let (size, _) = crate::anotaciones2::lee_da(&da);
+                    doc.get_object_mut(id)
+                        .and_then(|o| o.as_dict_mut())
+                        .map_err(|e| e.to_string())?
+                        .set(
+                            "DA",
+                            lopdf::Object::string_literal(format!(
+                                "/Helv {size:.2} Tf {:.4} {:.4} {:.4} rg",
+                                color[0] as f32 / 255.0,
+                                color[1] as f32 / 255.0,
+                                color[2] as f32 / 255.0
+                            )),
+                        );
+                    regenera_freetext(doc, id)?;
+                }
+                Ok(())
+            })
         })
-    }))
+    })
 }
 
 /// Recolorea el dibujo que llevan dentro las anotaciones con apariencia
@@ -1476,7 +1510,9 @@ fn recolorea_objetos(
         };
         if let Some(objects) = objects {
             for i in 0..objects.len() {
-                let Ok(mut obj) = objects.get(i) else { continue };
+                let Ok(mut obj) = objects.get(i) else {
+                    continue;
+                };
                 if obj.as_text_object().is_some() {
                     let _ = obj.set_fill_color(c);
                 } else {
@@ -1503,11 +1539,11 @@ fn recolorea_objetos(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine;
     #[allow(unused_imports)]
     use crate::tests::{crea_pdf, textos_de};
     #[allow(unused_imports)]
     use crate::{get_page_sizes, open_pdf, render_page_b64, render_page_png};
+    use base64::Engine;
 
     #[test]
     fn trazo_es_visible() {
@@ -1522,7 +1558,15 @@ mod tests {
         };
         let antes = decode(render_page_b64(work.clone(), 0, 200, None).unwrap());
         // trazo horizontal que pasa por (150, 120) pt
-        add_stroke(work.clone(), 0, vec![[50.0, 120.0], [250.0, 120.0]], None, None, None).expect("trazo");
+        add_stroke(
+            work.clone(),
+            0,
+            vec![[50.0, 120.0], [250.0, 120.0]],
+            None,
+            None,
+            None,
+        )
+        .expect("trazo");
         let despues = decode(render_page_b64(work.clone(), 0, 200, None).unwrap());
         let px = (150.0f32 * 200.0 / 595.0) as u32;
         let py = (120.0f32 * 200.0 / 595.0) as u32;
@@ -1662,7 +1706,8 @@ mod tests_apariencia {
     fn pixel(png: &[u8], ancho_px: u32, x_pt: f32, y_pt: f32) -> [u8; 4] {
         let img = image::load_from_memory(png).expect("PNG").to_rgba8();
         let escala = ancho_px as f32 / 595.0;
-        img.get_pixel((x_pt * escala) as u32, (y_pt * escala) as u32).0
+        img.get_pixel((x_pt * escala) as u32, (y_pt * escala) as u32)
+            .0
     }
 
     /// «Comentarios y formularios: solo el documento» del diálogo de
@@ -1677,7 +1722,12 @@ mod tests_apariencia {
         crate::anotaciones2::add_markup(
             work.clone(),
             0,
-            vec![crate::Rect { x: 40.0, y: 300.0, w: 200.0, h: 30.0 }],
+            vec![crate::Rect {
+                x: 40.0,
+                y: 300.0,
+                w: 200.0,
+                h: 30.0,
+            }],
             "highlight".into(),
             None,
             None,
@@ -1711,7 +1761,9 @@ mod tests_apariencia {
             .expect("Annots")
             .clone();
         match &annots[i] {
-            lopdf::Object::Reference(rid) => doc.get_object(*rid).unwrap().as_dict().unwrap().clone(),
+            lopdf::Object::Reference(rid) => {
+                doc.get_object(*rid).unwrap().as_dict().unwrap().clone()
+            }
             lopdf::Object::Dictionary(d) => d.clone(),
             otro => panic!("anotación inesperada: {otro:?}"),
         }
@@ -1730,7 +1782,9 @@ mod tests_apariencia {
             lopdf::Object::Reference(rid) => doc.get_object(*rid).expect("stream de apariencia"),
             otro => otro,
         };
-        obj.as_stream().map(|s| !s.content.is_empty()).unwrap_or(false)
+        obj.as_stream()
+            .map(|s| !s.content.is_empty())
+            .unwrap_or(false)
     }
 
     /// `/M` de la anotación `i` tal como está en el fichero, sin traducir.
@@ -1771,7 +1825,10 @@ mod tests_apariencia {
                 .get_object_mut(id)
                 .and_then(|o| o.as_dict_mut())
                 .map_err(|e| e.to_string())?;
-            annot.set("M", lopdf::Object::string_literal("D:20200101000000+00'00'"));
+            annot.set(
+                "M",
+                lopdf::Object::string_literal("D:20200101000000+00'00'"),
+            );
             Ok(())
         })
         .expect("envejecer la fecha");
@@ -1790,7 +1847,12 @@ mod tests_apariencia {
     }
 
     fn caja(y: f32) -> Rect {
-        Rect { x: 200.0, y, w: 200.0, h: 20.0 }
+        Rect {
+            x: 200.0,
+            y,
+            w: 200.0,
+            h: 20.0,
+        }
     }
 
     #[test]
@@ -1799,7 +1861,15 @@ mod tests_apariencia {
         crea_pdf(&["Hola"], &tmp);
         let work = tmp.to_string_lossy().into_owned();
         // zona en blanco de la página, lejos del texto
-        crate::anotaciones2::add_markup(work.clone(), 0, vec![caja(300.0)], "highlight".into(), None, None).expect("resaltar");
+        crate::anotaciones2::add_markup(
+            work.clone(),
+            0,
+            vec![caja(300.0)],
+            "highlight".into(),
+            None,
+            None,
+        )
+        .expect("resaltar");
 
         let png = render_page_png(work.clone(), 0, 300, true).expect("render");
         let [r, g, b, _] = pixel(&png, 300, 300.0, 310.0);
@@ -1831,13 +1901,22 @@ mod tests_apariencia {
         let a = &get_annotations(work.clone(), 0).expect("listar")[0];
         assert!(!a.author.is_empty(), "el autor no puede quedar vacío");
         assert!(
-            a.modified.starts_with(&format!("{}-", chrono::Local::now().format("%Y"))),
+            a.modified
+                .starts_with(&format!("{}-", chrono::Local::now().format("%Y"))),
             "fecha ISO 8601 esperada, llegó {:?}",
             a.modified
         );
 
         // con autor explícito, en todos los creadores de anotaciones
-        crate::anotaciones2::add_markup(work.clone(), 0, vec![caja(300.0)], "highlight".into(), None, Some("Jorge".into())).expect("resaltar");
+        crate::anotaciones2::add_markup(
+            work.clone(),
+            0,
+            vec![caja(300.0)],
+            "highlight".into(),
+            None,
+            Some("Jorge".into()),
+        )
+        .expect("resaltar");
         add_stroke(
             work.clone(),
             0,
@@ -1899,7 +1978,15 @@ mod tests_apariencia {
         let tmp = std::env::temp_dir().join("editor_pdf_test_ap_aplanado.pdf");
         crea_pdf(&["Hola"], &tmp);
         let work = tmp.to_string_lossy().into_owned();
-        crate::anotaciones2::add_markup(work.clone(), 0, vec![caja(300.0)], "highlight".into(), None, None).expect("resaltar");
+        crate::anotaciones2::add_markup(
+            work.clone(),
+            0,
+            vec![caja(300.0)],
+            "highlight".into(),
+            None,
+            None,
+        )
+        .expect("resaltar");
         crate::seguridad::flatten_pdf(work.clone()).expect("aplanar");
 
         let png = render_page_png(work.clone(), 0, 300, true).expect("render");
@@ -1938,7 +2025,10 @@ mod tests_apariencia {
             r > 240 && g > 240 && b > 240,
             "el subrayado no debe rellenar el quad: rgb({r},{g},{b})"
         );
-        assert!(tiene_ap_con_stream(&work, 0), "el subrayado debe llevar /AP");
+        assert!(
+            tiene_ap_con_stream(&work, 0),
+            "el subrayado debe llevar /AP"
+        );
         std::fs::remove_file(&tmp).ok();
     }
 
@@ -2035,7 +2125,10 @@ mod tests_apariencia {
                 .get_object_mut(id)
                 .and_then(|o| o.as_dict_mut())
                 .map_err(|e| e.to_string())?;
-            annot.set("M", lopdf::Object::string_literal("D:20200101000000+00'00'"));
+            annot.set(
+                "M",
+                lopdf::Object::string_literal("D:20200101000000+00'00'"),
+            );
             Ok(())
         })
         .expect("envejecer la fecha");
@@ -2065,18 +2158,19 @@ mod tests_apariencia {
         let tmp = std::env::temp_dir().join("editor_pdf_test_editar_nota.pdf");
         crea_pdf(&["Hola"], &tmp);
         let work = tmp.to_string_lossy().into_owned();
-        add_note(work.clone(), 0, 200.0, 100.0, "Primera".into(), Some("Jorge".into()))
-            .expect("nota");
-        envejece(&work, 0);
-
-        set_annotation_contents(
+        add_note(
             work.clone(),
             0,
-            0,
-            "Corregida\nen dos líneas".into(),
-            None,
+            200.0,
+            100.0,
+            "Primera".into(),
+            Some("Jorge".into()),
         )
-        .expect("corregir");
+        .expect("nota");
+        envejece(&work, 0);
+
+        set_annotation_contents(work.clone(), 0, 0, "Corregida\nen dos líneas".into(), None)
+            .expect("corregir");
 
         let a = &get_annotations(work.clone(), 0).expect("listar")[0];
         assert_eq!(a.contents, "Corregida\nen dos líneas");
@@ -2096,16 +2190,32 @@ mod tests_apariencia {
         let tmp = std::env::temp_dir().join("editor_pdf_test_recolorear.pdf");
         crea_pdf(&["Hola"], &tmp);
         let work = tmp.to_string_lossy().into_owned();
-        crate::anotaciones2::add_markup(work.clone(), 0, vec![caja(300.0)], "highlight".into(), None, None).expect("resaltar");
+        crate::anotaciones2::add_markup(
+            work.clone(),
+            0,
+            vec![caja(300.0)],
+            "highlight".into(),
+            None,
+            None,
+        )
+        .expect("resaltar");
 
         set_annotation_color(work.clone(), 0, 0, [90, 200, 250, 255]).expect("recolorear");
 
-        let [r, g, b, _] = pixel(&render_page_png(work.clone(), 0, 300, true).expect("render"), 300, 300.0, 310.0);
+        let [r, g, b, _] = pixel(
+            &render_page_png(work.clone(), 0, 300, true).expect("render"),
+            300,
+            300.0,
+            310.0,
+        );
         assert!(
             b > 200 && r < 160,
             "el resaltado sigue sin ser azul: rgb({r},{g},{b})"
         );
-        assert!(tiene_ap_con_stream(&work, 0), "el resaltado debe conservar /AP");
+        assert!(
+            tiene_ap_con_stream(&work, 0),
+            "el resaltado debe conservar /AP"
+        );
         let a = &get_annotations(work, 0).expect("listar")[0];
         assert_eq!(a.color, Some([90, 200, 250, 255]));
         std::fs::remove_file(&tmp).ok();
@@ -2124,13 +2234,18 @@ mod tests_apariencia {
 
         let nota = annot_guardada(&work, 0);
         assert_eq!(
-            nota.get(b"Name").and_then(|o| o.as_name()).unwrap_or_default(),
+            nota.get(b"Name")
+                .and_then(|o| o.as_name())
+                .unwrap_or_default(),
             b"Comment"
         );
         assert!(nota.get(b"Popup").is_ok(), "la nota debe llevar /Popup");
         let popup = annot_guardada(&work, 1);
         assert_eq!(
-            popup.get(b"Subtype").and_then(|o| o.as_name()).unwrap_or_default(),
+            popup
+                .get(b"Subtype")
+                .and_then(|o| o.as_name())
+                .unwrap_or_default(),
             b"Popup"
         );
         assert!(
@@ -2172,7 +2287,12 @@ mod tests_apariencia {
                 work.clone(),
                 0,
                 "radio".into(),
-                Rect { x: 80.0, y: 300.0 + i as f32 * 40.0, w: 14.0, h: 14.0 },
+                Rect {
+                    x: 80.0,
+                    y: 300.0 + i as f32 * 40.0,
+                    w: 14.0,
+                    h: 14.0,
+                },
                 (*valor).into(),
                 Some("sexo".into()),
                 Some((*valor).into()),
@@ -2184,13 +2304,25 @@ mod tests_apariencia {
         crate::formularios2::create_link(
             work.clone(),
             0,
-            Rect { x: 80.0, y: 500.0, w: 120.0, h: 16.0 },
+            Rect {
+                x: 80.0,
+                y: 500.0,
+                w: 120.0,
+                h: 16.0,
+            },
             Some("https://example.org".into()),
             None,
         )
         .expect("enlace");
-        add_note(work.clone(), 0, 300.0, 400.0, "Revisar la fecha".into(), None)
-            .expect("nota");
+        add_note(
+            work.clone(),
+            0,
+            300.0,
+            400.0,
+            "Revisar la fecha".into(),
+            None,
+        )
+        .expect("nota");
 
         let todas = get_document_annotations(work.clone()).expect("listar");
         assert_eq!(
@@ -2204,9 +2336,13 @@ mod tests_apariencia {
         // el índice es el del /Annots: borrar por él se lleva la nota y deja
         // el formulario donde estaba
         remove_annotation(work.clone(), 0, todas[0].annot.index).expect("borrar la nota");
-        assert!(get_document_annotations(work.clone()).expect("listar").is_empty());
+        assert!(get_document_annotations(work.clone())
+            .expect("listar")
+            .is_empty());
         assert_eq!(
-            crate::formularios::get_form_fields(work.clone(), 0).expect("campos").len(),
+            crate::formularios::get_form_fields(work.clone(), 0)
+                .expect("campos")
+                .len(),
             3,
             "el formulario sigue entero"
         );
@@ -2220,10 +2356,24 @@ mod tests_apariencia {
         let tmp = std::env::temp_dir().join("editor_pdf_test_annots_doc.pdf");
         crea_pdf(&["Uno", "Dos", "Tres"], &tmp);
         let work = tmp.to_string_lossy().into_owned();
-        add_note(work.clone(), 0, 200.0, 100.0, "En la 1".into(), Some("Jorge".into()))
-            .expect("nota 1");
-        add_note(work.clone(), 2, 200.0, 100.0, "En la 3".into(), Some("Jorge".into()))
-            .expect("nota 3");
+        add_note(
+            work.clone(),
+            0,
+            200.0,
+            100.0,
+            "En la 1".into(),
+            Some("Jorge".into()),
+        )
+        .expect("nota 1");
+        add_note(
+            work.clone(),
+            2,
+            200.0,
+            100.0,
+            "En la 3".into(),
+            Some("Jorge".into()),
+        )
+        .expect("nota 3");
         crate::anotaciones2::add_stamp(
             work.clone(),
             2,
@@ -2306,4 +2456,3 @@ mod tests_apariencia {
         std::fs::remove_file(&tmp).ok();
     }
 }
-

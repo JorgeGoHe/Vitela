@@ -220,7 +220,10 @@ pub(crate) mod prueba {
         let firma = tlv(0x03, &[0x00, 0x01, 0x02, 0x03]);
         let basica = tlv(0x30, &[datos, alg, firma].concat());
         // responseBytes ::= [0] SEQUENCE { responseType, response }
-        let tipo = tlv(0x06, &[0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01, 0x01]);
+        let tipo = tlv(
+            0x06,
+            &[0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01, 0x01],
+        );
         let bytes = tlv(0xA0, &tlv(0x30, &[tipo, tlv(0x04, &basica)].concat()));
         tlv(0x30, &[tlv(0x0A, &[0x00]), bytes].concat())
     }
@@ -254,9 +257,6 @@ mod tests {
     fn la_fecha_de_la_prueba_sale_de_la_respuesta_guardada() {
         let der = prueba::respuesta_de_prueba("20260910194012Z");
         assert_eq!(estado(&der), Some(0), "la respuesta va como concedida");
-        assert_eq!(
-            fecha_de(&der).as_deref(),
-            Some("2026-09-10T19:40:12+00:00")
-        );
+        assert_eq!(fecha_de(&der).as_deref(), Some("2026-09-10T19:40:12+00:00"));
     }
 }

@@ -60,12 +60,27 @@ pub fn export_comments_pdf(
         let mut y = 842.0 - MARGEN;
 
         // el título, una vez
-        escribe(&doc, &mut page, &format!("Comentarios de {nombre}"), negrita, 16.0, MARGEN, y - 16.0)?;
+        escribe(
+            &doc,
+            &mut page,
+            &format!("Comentarios de {nombre}"),
+            negrita,
+            16.0,
+            MARGEN,
+            y - 16.0,
+        )?;
         y -= 16.0 + 10.0;
         escribe(
             &doc,
             &mut page,
-            &format!("{total} {}", if total == 1 { "comentario" } else { "comentarios" }),
+            &format!(
+                "{total} {}",
+                if total == 1 {
+                    "comentario"
+                } else {
+                    "comentarios"
+                }
+            ),
             regular,
             CUERPO,
             MARGEN,
@@ -173,8 +188,7 @@ fn ordena(comentarios: Vec<AnotacionDoc>, orden: &str) -> Vec<AnotacionDoc> {
         let suyas: Vec<&AnotacionDoc> = respuestas
             .iter()
             .filter(|r| {
-                r.page_index == padre.page_index
-                    && r.annot.in_reply_to == Some(padre.annot.index)
+                r.page_index == padre.page_index && r.annot.in_reply_to == Some(padre.annot.index)
             })
             .collect();
         let clones: Vec<AnotacionDoc> = suyas.into_iter().cloned().collect();
@@ -268,16 +282,14 @@ pub fn es_comentario(subtipo: &str) -> bool {
 /// Escribe fuera del documento: no muta nada ni deja paso de deshacer.
 #[tauri::command(async)]
 pub fn export_comments_xfdf(work_path: String, dest_path: String) -> Result<u32, String> {
-    let xml = crate::on_pdfium_thread(move || {
-        crate::with_lopdf(&work_path, |doc| Ok(xfdf_de(doc)))
-    })?;
+    let xml =
+        crate::on_pdfium_thread(move || crate::with_lopdf(&work_path, |doc| Ok(xfdf_de(doc))))?;
     let (xml, n) = xml;
     if n == 0 {
         return Err("El documento no tiene comentarios que exportar".into());
     }
-    std::fs::write(&dest_path, xml).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}"))
-    })?;
+    std::fs::write(&dest_path, xml)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}")))?;
     Ok(n)
 }
 
@@ -322,7 +334,15 @@ fn xfdf_de(doc: &lopdf::Document) -> (String, u32) {
             if !SUBTIPOS.contains(&subtipo.as_str()) {
                 continue;
             }
-            out.push_str(&elemento(doc, d, &subtipo, page_index, &nombre_de(i), &lista, &nombre_de));
+            out.push_str(&elemento(
+                doc,
+                d,
+                &subtipo,
+                page_index,
+                &nombre_de(i),
+                &lista,
+                &nombre_de,
+            ));
             n += 1;
         }
     }
@@ -373,7 +393,10 @@ fn elemento(
         }
     }
     if let Ok(Object::Name(icono)) = d.get(b"Name") {
-        at.push(format!("icon=\"{}\"", escapa_xml(&String::from_utf8_lossy(icono))));
+        at.push(format!(
+            "icon=\"{}\"",
+            escapa_xml(&String::from_utf8_lossy(icono))
+        ));
     }
     // el hilo: a quién contesta y con qué intención (respuesta o estado de
     // revisión), que es lo que hace que la conversación llegue entera
@@ -386,10 +409,16 @@ fn elemento(
         }
     }
     if let Ok(Object::Name(rt)) = d.get(b"RT") {
-        at.push(format!("replyType=\"{}\"", escapa_xml(&String::from_utf8_lossy(rt))));
+        at.push(format!(
+            "replyType=\"{}\"",
+            escapa_xml(&String::from_utf8_lossy(rt))
+        ));
     }
     if let Ok(Object::Name(sm)) = d.get(b"StateModel") {
-        at.push(format!("statemodel=\"{}\"", escapa_xml(&String::from_utf8_lossy(sm))));
+        at.push(format!(
+            "statemodel=\"{}\"",
+            escapa_xml(&String::from_utf8_lossy(sm))
+        ));
     }
     if let Ok(estado) = d.get(b"State") {
         let texto = crate::anotaciones::texto_de_cadena_pdf(estado);
@@ -406,7 +435,10 @@ fn elemento(
     }
     if let Some(l) = numeros(d.get(b"L").ok()) {
         if l.len() == 4 {
-            at.push(format!("start=\"{},{}\" end=\"{},{}\"", l[0], l[1], l[2], l[3]));
+            at.push(format!(
+                "start=\"{},{}\" end=\"{},{}\"",
+                l[0], l[1], l[2], l[3]
+            ));
         }
     }
     at.push("flags=\"print\"".into());
@@ -424,8 +456,7 @@ fn elemento(
         if !trazos.is_empty() {
             hijos.push_str("<inklist>");
             for t in &trazos {
-                let puntos: Vec<String> =
-                    t.iter().map(|p| format!("{},{}", p.0, p.1)).collect();
+                let puntos: Vec<String> = t.iter().map(|p| format!("{},{}", p.0, p.1)).collect();
                 hijos.push_str(&format!("<gesture>{}</gesture>", puntos.join(";")));
             }
             hijos.push_str("</inklist>");
@@ -442,7 +473,12 @@ fn trazos_de(doc: &lopdf::Document, d: &lopdf::Dictionary) -> Vec<Vec<(f32, f32)
         let trazos: Vec<Vec<(f32, f32)>> = lista
             .iter()
             .filter_map(|t| numeros(Some(t)))
-            .map(|v| v.chunks(2).filter(|c| c.len() == 2).map(|c| (c[0], c[1])).collect())
+            .map(|v| {
+                v.chunks(2)
+                    .filter(|c| c.len() == 2)
+                    .map(|c| (c[0], c[1]))
+                    .collect()
+            })
             .collect();
         if !trazos.is_empty() {
             return trazos;
@@ -453,7 +489,14 @@ fn trazos_de(doc: &lopdf::Document, d: &lopdf::Dictionary) -> Vec<Vec<(f32, f32)
         .ok()
         .and_then(|ap| match ap {
             Object::Dictionary(x) => x.get(b"N").ok().cloned(),
-            Object::Reference(r) => doc.get_object(*r).ok()?.as_dict().ok()?.get(b"N").ok().cloned(),
+            Object::Reference(r) => doc
+                .get_object(*r)
+                .ok()?
+                .as_dict()
+                .ok()?
+                .get(b"N")
+                .ok()
+                .cloned(),
             _ => None,
         })
         .and_then(|n| n.as_reference().ok())
@@ -487,7 +530,10 @@ fn numeros(o: Option<&lopdf::Object>) -> Option<Vec<f32>> {
 }
 
 fn lista_num(v: &[f32]) -> String {
-    v.iter().map(|n| format!("{n}")).collect::<Vec<_>>().join(",")
+    v.iter()
+        .map(|n| format!("{n}"))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn pares(v: &[f32]) -> String {
@@ -528,9 +574,8 @@ pub(crate) fn escapa_xml(s: &str) -> String {
 /// dice de qué PDF viene, y escribirlo en otra página sería inventárselo.
 #[tauri::command(async)]
 pub fn import_comments_xfdf(work_path: String, src_path: String) -> Result<u32, String> {
-    let xml = std::fs::read_to_string(&src_path).map_err(|e| {
-        crate::mensaje_llano(format!("No se ha podido leer {src_path}: {e}"))
-    })?;
+    let xml = std::fs::read_to_string(&src_path)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer {src_path}: {e}")))?;
     let leidos = lee_xfdf(&xml)?;
     if leidos.is_empty() {
         return Err("Ese fichero no trae ningún comentario".into());
@@ -570,11 +615,10 @@ pub fn import_comments_xfdf(work_path: String, src_path: String) -> Result<u32, 
         // la apariencia de lo que Vitela sabe dibujar; sin ella el
         // resaltado importado no se vería fuera de aquí
         for (page_index, id, a) in &nuevas {
-            let indice = crate::anotaciones::lista_annots(doc, *page_index)
-                .and_then(|l| {
-                    l.iter()
-                        .position(|o| matches!(o, lopdf::Object::Reference(r) if r == id))
-                });
+            let indice = crate::anotaciones::lista_annots(doc, *page_index).and_then(|l| {
+                l.iter()
+                    .position(|o| matches!(o, lopdf::Object::Reference(r) if r == id))
+            });
             let (Some(indice), Some(estilo)) = (indice, estilo_de_marca(&a.subtipo)) else {
                 continue;
             };
@@ -641,11 +685,7 @@ fn escribe_annot(doc: &mut lopdf::Document, a: &Anot) -> lopdf::ObjectId {
     if !a.contents.is_empty() {
         d.set("Contents", crate::documento::cadena_pdf(&a.contents));
     }
-    for (clave, valor) in [
-        ("T", &a.title),
-        ("Subj", &a.subject),
-        ("State", &a.state),
-    ] {
+    for (clave, valor) in [("T", &a.title), ("Subj", &a.subject), ("State", &a.state)] {
         if !valor.is_empty() {
             d.set(clave, crate::documento::cadena_pdf(valor));
         }
@@ -711,7 +751,10 @@ fn lee_xfdf(xml: &str) -> Result<Vec<Anot>, String> {
     let mut buffer = String::new();
     // lee los atributos de un elemento de anotación
     let lee = |e: &quick_xml::events::BytesStart, subtipo: &str| -> Anot {
-        let mut a = Anot { subtipo: subtipo.to_string(), ..Default::default() };
+        let mut a = Anot {
+            subtipo: subtipo.to_string(),
+            ..Default::default()
+        };
         for at in e.attributes().flatten() {
             let clave = String::from_utf8_lossy(at.key.local_name().as_ref()).to_lowercase();
             let valor = at
@@ -826,9 +869,8 @@ fn pon_atributo(a: &mut Anot, clave: &str, valor: &str) {
         "color" => {
             let h = valor.trim_start_matches('#');
             if h.len() == 6 {
-                let byte = |i: usize| {
-                    u8::from_str_radix(&h[i..i + 2], 16).unwrap_or(0) as f32 / 255.0
-                };
+                let byte =
+                    |i: usize| u8::from_str_radix(&h[i..i + 2], 16).unwrap_or(0) as f32 / 255.0;
                 a.color = Some([byte(0), byte(2), byte(4)]);
             }
         }
@@ -886,7 +928,12 @@ mod tests {
         crate::anotaciones2::add_markup(
             work.clone(),
             0,
-            vec![crate::Rect { x: 50.0, y: 130.0, w: 120.0, h: 14.0 }],
+            vec![crate::Rect {
+                x: 50.0,
+                y: 130.0,
+                w: 120.0,
+                h: 14.0,
+            }],
             "highlight".into(),
             Some([255, 220, 0, 255]),
             Some("Ana".into()),
@@ -909,7 +956,14 @@ mod tests {
     /// el panel listaba los campos del formulario como comentarios.
     #[test]
     fn un_campo_un_enlace_y_una_firma_no_son_comentarios() {
-        for si in ["Text", "Highlight", "Ink", "FreeText", "Stamp", "FileAttachment"] {
+        for si in [
+            "Text",
+            "Highlight",
+            "Ink",
+            "FreeText",
+            "Stamp",
+            "FileAttachment",
+        ] {
             assert!(es_comentario(si), "{si} es un comentario");
         }
         for no in ["Widget", "Link", "Popup", "Sig", "Screen", "Unknown"] {
@@ -931,21 +985,53 @@ mod tests {
         let dest = std::env::temp_dir().join("comentarios2-resumen-salida.pdf");
         let d = dest.to_string_lossy().into_owned();
 
-        let n = export_comments_pdf(work.clone(), d.clone(), "pagina".into(), Some("acta.pdf".into()))
-            .expect("el resumen");
-        assert_eq!(n, 5, "las cinco filas: la nota, sus dos respuestas, el resaltado y el dibujo");
+        let n = export_comments_pdf(
+            work.clone(),
+            d.clone(),
+            "pagina".into(),
+            Some("acta.pdf".into()),
+        )
+        .expect("el resumen");
+        assert_eq!(
+            n, 5,
+            "las cinco filas: la nota, sus dos respuestas, el resaltado y el dibujo"
+        );
 
         // se abre como cualquier PDF y dice lo que tiene que decir
         let texto = crate::tests::textos_de(&dest).join(" ");
-        assert!(texto.contains("Comentarios de acta.pdf"), "la cabecera: {texto}");
-        assert!(texto.contains("Esto hay que revisarlo"), "el texto de la nota: {texto}");
-        assert!(texto.contains("Revisado, falta la fecha"), "las respuestas: {texto}");
-        assert!(texto.contains("En respuesta"), "y se ven como respuestas: {texto}");
-        assert!(texto.contains("Página 1"), "cada fila dice en qué página cae: {texto}");
-        assert!(texto.contains("Resaltado") && texto.contains("Dibujo"), "el tipo en español: {texto}");
-        assert!(texto.contains("Jorge") && texto.contains("Ana"), "quién lo dijo: {texto}");
+        assert!(
+            texto.contains("Comentarios de acta.pdf"),
+            "la cabecera: {texto}"
+        );
+        assert!(
+            texto.contains("Esto hay que revisarlo"),
+            "el texto de la nota: {texto}"
+        );
+        assert!(
+            texto.contains("Revisado, falta la fecha"),
+            "las respuestas: {texto}"
+        );
+        assert!(
+            texto.contains("En respuesta"),
+            "y se ven como respuestas: {texto}"
+        );
+        assert!(
+            texto.contains("Página 1"),
+            "cada fila dice en qué página cae: {texto}"
+        );
+        assert!(
+            texto.contains("Resaltado") && texto.contains("Dibujo"),
+            "el tipo en español: {texto}"
+        );
+        assert!(
+            texto.contains("Jorge") && texto.contains("Ana"),
+            "quién lo dijo: {texto}"
+        );
         // el nombre del temporal no se enseña nunca
-        assert!(!texto.contains("vitela-"), "el nombre del temporal: {texto}");
+        assert!(
+            !texto.contains("vitela-"),
+            "el nombre del temporal: {texto}"
+        );
 
         // ordenar por autor no parte los hilos: la respuesta va detrás de su
         // comentario aunque sea de otra persona
@@ -954,7 +1040,9 @@ mod tests {
         export_comments_pdf(work.clone(), d2s, "autor".into(), None).expect("por autor");
         let texto = crate::tests::textos_de(&d2).join(" ");
         let nota = texto.find("Esto hay que revisarlo").expect("la nota");
-        let respuesta = texto.find("Revisado, falta la fecha").expect("la respuesta");
+        let respuesta = texto
+            .find("Revisado, falta la fecha")
+            .expect("la respuesta");
         assert!(respuesta > nota, "el hilo sigue junto y en orden");
 
         // un documento sin comentarios lo dice, no escribe un PDF vacío
@@ -999,7 +1087,10 @@ mod tests {
         assert!(xml.contains("inreplyto="), "el hilo viaja: {xml}");
         assert!(xml.contains("Esto hay que revisarlo"), "el texto: {xml}");
         assert!(xml.contains("title=\"Jorge\""), "el autor: {xml}");
-        assert!(xml.contains("<inklist>"), "el dibujo sale como gestos: {xml}");
+        assert!(
+            xml.contains("<inklist>"),
+            "el dibujo sale como gestos: {xml}"
+        );
 
         // una copia limpia del mismo documento, sin un solo comentario
         let limpio = std::env::temp_dir().join("comentarios2-xfdf-limpio.pdf");
@@ -1009,34 +1100,56 @@ mod tests {
             .expect("listar")
             .is_empty());
 
-        let pasos = crate::historial::history_state(l.clone()).expect("historial").undo;
+        let pasos = crate::historial::history_state(l.clone())
+            .expect("historial")
+            .undo;
         let puestos = import_comments_xfdf(l.clone(), x.clone()).expect("importar");
         assert_eq!(puestos, n, "vuelven todos");
         assert_eq!(
-            crate::historial::history_state(l.clone()).expect("historial").undo,
+            crate::historial::history_state(l.clone())
+                .expect("historial")
+                .undo,
             pasos + 1,
             "el lote entero es un solo paso de deshacer"
         );
 
         let despues = crate::anotaciones::get_document_annotations(l.clone()).expect("listar");
-        assert_eq!(despues.len(), antes.len(), "los mismos comentarios: {despues:?}");
+        assert_eq!(
+            despues.len(),
+            antes.len(),
+            "los mismos comentarios: {despues:?}"
+        );
         for (a, b) in antes.iter().zip(despues.iter()) {
             assert_eq!(a.annot.kind, b.annot.kind);
             assert_eq!(a.annot.contents, b.annot.contents);
-            assert_eq!(a.annot.author, b.annot.author, "el autor de {:?}", a.annot.contents);
-            assert_eq!(a.annot.modified, b.annot.modified, "la fecha de {:?}", a.annot.contents);
+            assert_eq!(
+                a.annot.author, b.annot.author,
+                "el autor de {:?}",
+                a.annot.contents
+            );
+            assert_eq!(
+                a.annot.modified, b.annot.modified,
+                "la fecha de {:?}",
+                a.annot.contents
+            );
             assert_eq!(a.page_index, b.page_index);
         }
         // el anidamiento: las dos respuestas siguen colgando de la nota
-        let respuestas: Vec<&crate::anotaciones::AnotacionDoc> =
-            despues.iter().filter(|c| c.annot.in_reply_to.is_some()).collect();
+        let respuestas: Vec<&crate::anotaciones::AnotacionDoc> = despues
+            .iter()
+            .filter(|c| c.annot.in_reply_to.is_some())
+            .collect();
         assert_eq!(respuestas.len(), 2, "las dos respuestas: {despues:?}");
         let nota = despues
             .iter()
             .find(|c| c.annot.contents.contains("hay que revisarlo"))
             .expect("la nota");
         for r in &respuestas {
-            assert_eq!(r.annot.in_reply_to, Some(nota.annot.index), "cuelgan de la nota");
+            assert_eq!(
+                r.annot.in_reply_to,
+                Some(nota.annot.index),
+                "cuelgan de la nota"
+            );
         }
         // el resaltado vuelve con su apariencia, o fuera de Vitela no
         // existiría
@@ -1055,9 +1168,12 @@ mod tests {
         // un fichero que no es un XFDF se dice en llano
         let basura = std::env::temp_dir().join("comentarios2-basura.xfdf");
         std::fs::write(&basura, b"esto no es XML").expect("escribir");
-        let err = import_comments_xfdf(l.clone(), basura.to_string_lossy().into_owned())
-            .unwrap_err();
-        assert!(err.contains("comentario") || err.contains("XFDF"), "el aviso: {err}");
+        let err =
+            import_comments_xfdf(l.clone(), basura.to_string_lossy().into_owned()).unwrap_err();
+        assert!(
+            err.contains("comentario") || err.contains("XFDF"),
+            "el aviso: {err}"
+        );
         assert!(!err.contains("os error"), "jerga: {err}");
 
         for p in [&xfdf, &limpio, &basura] {

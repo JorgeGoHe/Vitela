@@ -90,22 +90,32 @@ fn lee(path: &str) -> Result<Vec<Pagina>, String> {
     let total = crate::with_doc(path, |doc| Ok(doc.pages().len()))?;
     let mut out = Vec::new();
     for p in 0..total {
-        let bloques: Vec<(String, crate::Rect)> = crate::texto::get_text_blocks(path.to_string(), p)?
-            .into_iter()
-            .filter(|b| !b.text.trim().is_empty())
-            .map(|b| {
-                (
-                    b.text.trim().to_string(),
-                    crate::Rect { x: b.x, y: b.y, w: b.w, h: b.h },
-                )
-            })
-            .collect();
+        let bloques: Vec<(String, crate::Rect)> =
+            crate::texto::get_text_blocks(path.to_string(), p)?
+                .into_iter()
+                .filter(|b| !b.text.trim().is_empty())
+                .map(|b| {
+                    (
+                        b.text.trim().to_string(),
+                        crate::Rect {
+                            x: b.x,
+                            y: b.y,
+                            w: b.w,
+                            h: b.h,
+                        },
+                    )
+                })
+                .collect();
         let palabras = bloques
             .iter()
             .flat_map(|(t, _)| palabras_de(t))
             .collect::<std::collections::BTreeSet<String>>();
         let imagenes = imagenes_de(path, p)?;
-        out.push(Pagina { bloques, palabras, imagenes });
+        out.push(Pagina {
+            bloques,
+            palabras,
+            imagenes,
+        });
     }
     Ok(out)
 }
@@ -124,21 +134,22 @@ fn imagenes_de(path: &str, page_index: u16) -> Result<Vec<Imagen>, String> {
         let mut out = Vec::new();
         for i in 0..objects.len() {
             let Ok(obj) = objects.get(i) else { continue };
-            let Some(img) = obj.as_image_object() else { continue };
+            let Some(img) = obj.as_image_object() else {
+                continue;
+            };
             let Ok(b) = obj.bounds() else { continue };
-            let rect = geo.pdf_rect_a_ui(&PdfRect::new(
-                b.bottom(),
-                b.left(),
-                b.top(),
-                b.right(),
-            ));
+            let rect = geo.pdf_rect_a_ui(&PdfRect::new(b.bottom(), b.left(), b.top(), b.right()));
             let bytes = img.get_raw_image_data().unwrap_or_default();
             let huella = Sha256::digest(&bytes)
                 .iter()
                 .map(|b| format!("{b:02x}"))
                 .collect::<String>();
             let tamano = (rect.w.round() as i32, rect.h.round() as i32);
-            out.push(Imagen { huella, tamano, rect });
+            out.push(Imagen {
+                huella,
+                tamano,
+                rect,
+            });
         }
         Ok(out)
     })
@@ -397,7 +408,11 @@ mod tests {
         let c = tres.to_string_lossy().into_owned();
 
         let d = compare_pdf(a.clone(), b.clone()).expect("comparar");
-        assert_eq!(tipos(&d), vec!["cambiado"], "la foto sustituida es un cambio");
+        assert_eq!(
+            tipos(&d),
+            vec!["cambiado"],
+            "la foto sustituida es un cambio"
+        );
         assert_eq!(d[0].rects_a.len(), 1, "el rectángulo de la foto que estaba");
         assert_eq!(d[0].rects_b.len(), 1, "y el de la que ha llegado");
         assert!(
@@ -414,7 +429,10 @@ mod tests {
         );
 
         // el mismo documento consigo mismo no tiene diferencias
-        assert_eq!(tipos(&compare_pdf(a.clone(), a.clone()).expect("comparar")), vec!["igual"]);
+        assert_eq!(
+            tipos(&compare_pdf(a.clone(), a.clone()).expect("comparar")),
+            vec!["igual"]
+        );
         // y la misma foto en otro sitio tampoco: moverla no es cambiarla
         assert_eq!(
             tipos(&compare_pdf(a.clone(), c.clone()).expect("comparar")),
@@ -437,20 +455,31 @@ mod tests {
         let dir = std::env::temp_dir();
         let uno = dir.join("comparar-uno.pdf");
         let dos = dir.join("comparar-dos.pdf");
-        crea_pdf(&["Contrato de arrendamiento", "Segunda pagina del contrato"], &uno);
+        crea_pdf(
+            &["Contrato de arrendamiento", "Segunda pagina del contrato"],
+            &uno,
+        );
 
         // dos documentos iguales: ninguna diferencia
-        crea_pdf(&["Contrato de arrendamiento", "Segunda pagina del contrato"], &dos);
+        crea_pdf(
+            &["Contrato de arrendamiento", "Segunda pagina del contrato"],
+            &dos,
+        );
         let d = compare_pdf(
             uno.to_string_lossy().into_owned(),
             dos.to_string_lossy().into_owned(),
         )
         .expect("comparar");
         assert_eq!(tipos(&d), vec!["igual", "igual"], "{d:?}");
-        assert!(d.iter().all(|x| x.rects_a.is_empty() && x.rects_b.is_empty()));
+        assert!(d
+            .iter()
+            .all(|x| x.rects_a.is_empty() && x.rects_b.is_empty()));
 
         // una palabra cambiada: una página cambiada, con su rectángulo
-        crea_pdf(&["Contrato de compraventa", "Segunda pagina del contrato"], &dos);
+        crea_pdf(
+            &["Contrato de compraventa", "Segunda pagina del contrato"],
+            &dos,
+        );
         let d = compare_pdf(
             uno.to_string_lossy().into_owned(),
             dos.to_string_lossy().into_owned(),
@@ -461,7 +490,10 @@ mod tests {
         assert_eq!(d[0].rects_b.len(), 1);
         assert!(d[0].texto_a.contains("arrendamiento"));
         assert!(d[0].texto_b.contains("compraventa"));
-        assert!(d[0].rects_a[0].w > 10.0, "el rectángulo tiene que estar puesto");
+        assert!(
+            d[0].rects_a[0].w > 10.0,
+            "el rectángulo tiene que estar puesto"
+        );
 
         // **una página insertada al principio no desplaza el resto**: es
         // el caso que hace inútil comparar la 1 con la 1
@@ -481,7 +513,11 @@ mod tests {
         assert_eq!(tipos(&d), vec!["añadido", "igual", "igual"], "{d:?}");
         assert_eq!(d[0].pagina_b, Some(0));
         assert_eq!(d[0].pagina_a, None);
-        assert_eq!(d[1].pagina_a, Some(0), "la del contrato sigue siendo la misma");
+        assert_eq!(
+            d[1].pagina_a,
+            Some(0),
+            "la del contrato sigue siendo la misma"
+        );
         assert_eq!(d[1].pagina_b, Some(1));
 
         // y quitar una se cuenta como lo que es

@@ -150,7 +150,11 @@ pub(crate) fn recupera_en(fichero: &std::path::Path) -> Vec<Sesion> {
     let mut repetidas: Vec<Sesion> = Vec::new();
     for s in vivas {
         let mismo = (!s.original_path.is_empty())
-            .then(|| unicas.iter().position(|o| o.original_path == s.original_path))
+            .then(|| {
+                unicas
+                    .iter()
+                    .position(|o| o.original_path == s.original_path)
+            })
             .flatten();
         match mismo {
             Some(i) if unicas[i].cuando >= s.cuando => repetidas.push(s),
@@ -171,7 +175,9 @@ pub(crate) fn recupera_en(fichero: &std::path::Path) -> Vec<Sesion> {
 /// la primera. Con tres documentos apuntados, proteger uno y barrer los
 /// otros dos es peor que no barrer nada.
 pub(crate) fn copias_apuntadas() -> Vec<String> {
-    let Some(f) = fichero() else { return Vec::new() };
+    let Some(f) = fichero() else {
+        return Vec::new();
+    };
     lee_todo(&f).into_iter().map(|s| s.work_path).collect()
 }
 
@@ -222,7 +228,10 @@ pub fn borra_sesion(work_path: String) -> Result<(), String> {
 /// es cerrar la app entera). Con la lista vacía, el fichero se va.
 pub(crate) fn borra_en(fichero: &std::path::Path, work_path: Option<&str>) {
     let quedan: Vec<Sesion> = match work_path.filter(|w| !w.is_empty()) {
-        Some(w) => lee_todo(fichero).into_iter().filter(|s| s.work_path != w).collect(),
+        Some(w) => lee_todo(fichero)
+            .into_iter()
+            .filter(|s| s.work_path != w)
+            .collect(),
         None => Vec::new(),
     };
     let _ = escribe(fichero, quedan);
@@ -238,7 +247,9 @@ pub(crate) fn borra_en(fichero: &std::path::Path, work_path: Option<&str>) {
 /// pestaña.
 #[tauri::command(async)]
 pub fn recover_session() -> Result<Vec<Sesion>, String> {
-    let Some(f) = fichero() else { return Ok(Vec::new()) };
+    let Some(f) = fichero() else {
+        return Ok(Vec::new());
+    };
     Ok(recupera_en(&f))
 }
 
@@ -281,11 +292,7 @@ mod tests {
             .expect("apuntar la copia de la copia");
 
         let ofrecidas = recupera_en(&f);
-        assert_eq!(
-            ofrecidas.len(),
-            2,
-            "un documento, un apunte: {ofrecidas:?}"
-        );
+        assert_eq!(ofrecidas.len(), 2, "un documento, un apunte: {ofrecidas:?}");
         assert_eq!(
             ofrecidas
                 .iter()
@@ -307,8 +314,8 @@ mod tests {
         // adoptar la copia recuperada no hace otra: la `work_path` que se
         // devuelve es la misma, así que el apunte que se borra al guardar
         // es el que hay
-        let info = crate::adopt_session(copia.to_string_lossy().into_owned())
-            .expect("adoptar la copia");
+        let info =
+            crate::adopt_session(copia.to_string_lossy().into_owned()).expect("adoptar la copia");
         assert_eq!(info.work_path, copia.to_string_lossy());
         assert_eq!(info.page_count, 1);
         crate::close_document(info.work_path).expect("cerrar");
@@ -341,7 +348,10 @@ mod tests {
         assert_eq!(s.work_path, work);
         assert_eq!(s.original_path, "/Users/jorge/facturas/factura.pdf");
         assert!(s.modificado);
-        assert_eq!(s.name, "factura.pdf", "la banda dice el nombre del original");
+        assert_eq!(
+            s.name, "factura.pdf",
+            "la banda dice el nombre del original"
+        );
         assert!(!s.cuando.is_empty());
 
         // guardar deja el documento sin cambios pendientes: nada que ofrecer
@@ -352,7 +362,10 @@ mod tests {
         apunta_en(&f, &work, "", true).expect("apuntar");
         assert_eq!(recupera_en(&f).len(), 1);
         let _ = std::fs::remove_file(&f);
-        assert!(recupera_en(&f).is_empty(), "cerrado limpio, nada que recuperar");
+        assert!(
+            recupera_en(&f).is_empty(),
+            "cerrado limpio, nada que recuperar"
+        );
         std::fs::remove_file(&copia).ok();
     }
 
@@ -409,7 +422,11 @@ mod tests {
         apunta_en(&f, &viva.replace(".pdf", "-2.pdf"), "/tmp/y.pdf", false).expect("guardado");
 
         let ofrecidas = recupera_en(&f);
-        assert_eq!(ofrecidas.len(), 1, "solo uno se puede recuperar: {ofrecidas:?}");
+        assert_eq!(
+            ofrecidas.len(),
+            1,
+            "solo uno se puede recuperar: {ofrecidas:?}"
+        );
         assert_eq!(ofrecidas[0].work_path, viva);
         // los apuntes inútiles se retiran solos, y el bueno se queda
         let quedan = lee_todo(&f);
