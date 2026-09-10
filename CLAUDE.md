@@ -1233,7 +1233,7 @@ compila los instaladores a mano o al etiquetar `v*`.
   - Documento: `organizar-paginas`, `recortar-pagina`, `marca-de-agua`,
     `encabezado-pie`, `quitar-marca-de-agua`, `quitar-encabezados`,
     `anadir-campo`, `reconocer-campos`, `anadir-enlace`,
-    `adjuntar-fichero`, `firmar`, `proteger`,
+    `adjuntar-fichero`, `firmar`, `certificar`, `proteger`,
     `quitar-proteccion`, `aplanar`, `redactar`, `sanitizar`,
     `propiedades`, `exportar-imagenes`, `exportar-texto`, `exportar-word`,
     `exportar-comentarios`, `importar-comentarios`, `comprimir`.

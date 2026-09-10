@@ -92,6 +92,24 @@ fn e(
     })
 }
 
+/// Como [`e`], pero marcando la entrada **`pendiente_ui`**: la mitad de la
+/// interfaz de ese id llega en otra rama del mismo ciclo. El test cruzado
+/// avisa por stderr en vez de fallar y la marca se quita al integrar.
+fn ep(
+    id: &'static str,
+    etiqueta: &'static str,
+    atajo: Option<&'static str>,
+    necesita_documento: bool,
+) -> Elemento {
+    Elemento::Accion(Entrada {
+        id,
+        etiqueta,
+        atajo,
+        necesita_documento,
+        pendiente_ui: true,
+    })
+}
+
 fn sep() -> Elemento {
     Elemento::Separador
 }
@@ -203,6 +221,10 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                 e("adjuntar-fichero", "Adjuntar fichero…", None, true),
                 sep(),
                 e("firmar", "Firma digital (certificado)…", None, true),
+                // certificar es firmar **y** decir qué se puede cambiar
+                // después: va justo debajo de firmar, que es donde lo pone
+                // Acrobat
+                ep("certificar", "Certificar documento…", None, true),
                 e("proteger", "Proteger con contraseña…", None, true),
                 e("quitar-proteccion", "Quitar la contraseña…", None, true),
                 e("aplanar", "Fijar las anotaciones en la página…", None, true),

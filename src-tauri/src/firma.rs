@@ -787,6 +787,16 @@ pub struct FirmaInfo {
     /// válidas». Deducirlo mirando solo la primera `FirmaInfo` es lo que
     /// no puede hacer la UI.
     pub documento_intacto: bool,
+    /// **Esta firma certifica el documento** y con qué nivel de `/DocMDP`:
+    /// `Some(1)` ningún cambio, `Some(2)` rellenar formularios y firmar,
+    /// `Some(3)` además comentar. `None` es una firma normal.
+    ///
+    /// Es la mitad que distingue «Firmado por Jorge» de «**Certificado**
+    /// por Jorge · se pueden rellenar los formularios», que es lo que dice
+    /// Acrobat. Se lee de la referencia de transformación del propio
+    /// diccionario de firma y, si el catálogo señala esta firma en su
+    /// `/Perms /DocMDP` sin nivel escrito, del defecto del spec (2).
+    pub certifica: Option<u8>,
 }
 
 /// Firma comprobada y documento intacto.
@@ -841,6 +851,7 @@ pub fn verify_signatures(path: String) -> Result<Vec<FirmaInfo>, String> {
 fn firmas_de(doc: &LoDoc, bytes: &[u8]) -> Vec<FirmaInfo> {
     let mut vistos: Vec<lopdf::ObjectId> = Vec::new();
     let mut out = Vec::new();
+    let certificadora = perms_docmdp(doc);
     for (n, page_id) in doc.get_pages().values().enumerate() {
         let Some(annots) = crate::anotaciones::lista_annots(doc, n as u16) else {
             continue;
@@ -861,7 +872,8 @@ fn firmas_de(doc: &LoDoc, bytes: &[u8]) -> Vec<FirmaInfo> {
                 continue;
             };
             let rect = rect_del_widget(doc, &annot, *page_id);
-            out.push(lee_firma(&sig, bytes, Some(n as u16), rect));
+            let nivel = nivel_docmdp(&sig, certificadora == Some(*sig_id));
+            out.push(lee_firma(&sig, bytes, Some(n as u16), rect, nivel));
         }
     }
     // firmas cuyo campo no cuelga de ninguna página (raro, pero legal)
@@ -870,10 +882,51 @@ fn firmas_de(doc: &LoDoc, bytes: &[u8]) -> Vec<FirmaInfo> {
             continue;
         }
         if let Some(sig) = dict_de(doc, &Object::Reference(id)) {
-            out.push(lee_firma(&sig, bytes, None, None));
+            let nivel = nivel_docmdp(&sig, certificadora == Some(id));
+            out.push(lee_firma(&sig, bytes, None, None, nivel));
         }
     }
     out
+}
+
+/// Cuál es la firma que **certifica** el documento, según el catálogo:
+/// `/Root /Perms /DocMDP`. Es donde mira Acrobat, y es la única forma de
+/// saber que un `/DocMDP` escrito en un diccionario de firma está de
+/// verdad en vigor para el documento.
+fn perms_docmdp(doc: &LoDoc) -> Option<lopdf::ObjectId> {
+    let root = doc.trailer.get(b"Root").and_then(|o| o.as_reference()).ok()?;
+    let catalogo = dict_de(doc, &Object::Reference(root))?;
+    let perms = dict_de(doc, catalogo.get(b"Perms").ok()?)?;
+    perms.get(b"DocMDP").and_then(|o| o.as_reference()).ok()
+}
+
+/// El nivel de certificación de una firma: la `/P` de la referencia de
+/// transformación con `/TransformMethod /DocMDP`. `señalada` dice si el
+/// catálogo apunta a esta firma; con eso y sin `/P` escrita se toma el
+/// defecto del spec, que es 2.
+fn nivel_docmdp(sig: &Dictionary, senalada: bool) -> Option<u8> {
+    let referencias = sig.get(b"Reference").and_then(|o| o.as_array()).ok();
+    let mut nivel = None;
+    for r in referencias.into_iter().flatten() {
+        let Object::Dictionary(d) = r else { continue };
+        if d.get(b"TransformMethod").and_then(|o| o.as_name()).unwrap_or_default() != b"DocMDP" {
+            continue;
+        }
+        nivel = d
+            .get(b"TransformParams")
+            .and_then(|o| o.as_dict())
+            .ok()
+            .and_then(|p| p.get(b"P").and_then(|o| o.as_i64()).ok())
+            .filter(|n| (1..=3).contains(n))
+            .map(|n| n as u8)
+            .or(Some(2));
+        break;
+    }
+    match (nivel, senalada) {
+        (Some(n), _) => Some(n),
+        (None, true) => Some(2),
+        (None, false) => None,
+    }
 }
 
 fn dict_de(doc: &LoDoc, o: &Object) -> Option<Dictionary> {
@@ -947,6 +1000,7 @@ fn lee_firma(
     bytes: &[u8],
     page_index: Option<u16>,
     rect: Option<crate::Rect>,
+    certifica: Option<u8>,
 ) -> FirmaInfo {
     let texto = |clave: &[u8]| {
         sig.get(clave)
@@ -977,6 +1031,7 @@ fn lee_firma(
         // lo pone `verify_signatures` cuando ya están todas leídas: es del
         // documento, no de esta firma
         documento_intacto: false,
+        certifica,
     };
     let rangos: Vec<usize> = sig
         .get(b"ByteRange")
@@ -2251,6 +2306,66 @@ mod tests {
         );
 
         for f in [&src, &cert, &segunda, &normal] {
+            std::fs::remove_file(f).ok();
+        }
+    }
+
+    /// **Certificar tiene que verse después.** Sin esto la función es
+    /// invisible en cuanto se cierra el diálogo: la banda de apertura
+    /// seguiría diciendo «Firmado por Jorge» donde Acrobat dice
+    /// «Certificado por Jorge · se pueden rellenar los formularios».
+    #[test]
+    fn verificar_dice_si_una_firma_certifica_y_con_que_nivel() {
+        let dir = std::env::temp_dir();
+        let src = dir.join("firma-certifica-campo.pdf");
+        let normal = dir.join("firma-certifica-campo-normal.pdf");
+        let cert = dir.join("firma-certifica-campo-cert.pdf");
+        let encima = dir.join("firma-certifica-campo-encima.pdf");
+        crea_pdf(&["Pliego de condiciones"], &src);
+
+        // una firma normal no certifica nada
+        sign(
+            &src.to_string_lossy(),
+            &normal.to_string_lossy(),
+            &credenciales(),
+            None,
+            &Apariencia::default(),
+        )
+        .expect("firmar");
+        let firmas = verify_signatures(normal.to_string_lossy().into_owned()).expect("verificar");
+        assert_eq!(firmas.len(), 1);
+        assert_eq!(firmas[0].certifica, None, "firmar no es certificar");
+
+        // certificar a nivel 2 se lee tal cual
+        certify(
+            &src.to_string_lossy(),
+            &cert.to_string_lossy(),
+            &credenciales(),
+            None,
+            &Apariencia::default(),
+            2,
+        )
+        .expect("certificar");
+        let firmas = verify_signatures(cert.to_string_lossy().into_owned()).expect("verificar");
+        assert_eq!(firmas.len(), 1);
+        assert_eq!(firmas[0].certifica, Some(2));
+
+        // y con una firma normal detrás, cada una dice lo suyo: la
+        // certificación es de la primera y sigue siéndolo
+        sign(
+            &cert.to_string_lossy(),
+            &encima.to_string_lossy(),
+            &otras_credenciales(),
+            None,
+            &Apariencia::default(),
+        )
+        .expect("firmar encima");
+        let firmas = verify_signatures(encima.to_string_lossy().into_owned()).expect("verificar");
+        assert_eq!(firmas.len(), 2);
+        assert_eq!(firmas[0].certifica, Some(2));
+        assert_eq!(firmas[1].certifica, None);
+
+        for f in [&src, &normal, &cert, &encima] {
             std::fs::remove_file(f).ok();
         }
     }
