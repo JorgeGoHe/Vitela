@@ -863,6 +863,160 @@ compila los instaladores a mano o al etiquetar `v*`.
   - `cerrar-documento` estrena el acelerador **⌘W** (`menu.rs`). Cierra la
     **pestaña**, no la ventana: `cerrar-solicitado` sigue sin saber quién
     lo disparó, así que quien decide es la interfaz, que sabe cuántas hay.
+- Comandos del ciclo 9:
+  - **La quinta costura del test cruzado** (`puente_dev`, AC-074 y
+    AC-075). Dos cruces más, y con ellos son seis:
+    `el_tipo_que_declara_la_ui_es_el_que_devuelve_el_comando` exige que un
+    comando que devuelve una lista se declare como lista en `api.ts`, y que
+    uno que devuelve un `struct` con campos nombrados **no** se declare
+    como lista; `invoke` devuelve el tipo que se le ponga, así que ni `tsc`
+    ni los otros asertos veían que `get_page_labels` diera
+    `{ rangos, etiquetas }` donde la interfaz esperaba un array —abrir
+    cualquier PDF dejaba la ventana en blanco—. Un `void` o un `unknown`
+    no cuentan: son «no miro lo que devuelve».
+    `la_tabla_del_puente_dice_lo_mismo_que_las_firmas_de_los_comandos`
+    cruza el `match` de `despachar` con las firmas, nombre a nombre y
+    opcionalidad a opcionalidad: esa tabla es una copia a mano y nadie la
+    miraba, y por eso «Numerar páginas…» fallaba con un 400 en toda sesión
+    de QA por navegador y funcionaba en la app. Las excepciones van en
+    `TIPOS_PENDIENTES` y en `PUENTE_A_MANO`, que fallan al envejecer.
+  - **Certificar se ve** (`firma.rs`): `FirmaInfo` gana `certifica:
+    Option<u8>`, leído de la referencia de transformación `/DocMDP` y del
+    `/Perms` del catálogo, que es donde mira Acrobat. Sin él la función
+    era invisible en cuanto se cerraba el diálogo.
+  - **Sello de tiempo (RFC 3161) y `/DSS`** (`tsa.rs`, `firma.rs`):
+    `sign_pdf`, `sign_pdf_p12` y `certify_pdf` aceptan `tsa_url` y `ltv` y
+    devuelven `InformeFirma { sellada, sello, aviso, ltv }`. El token se
+    pide sobre la firma ya hecha y entra como **atributo no firmado** del
+    CMS, así que la firma vale igual si no llega; `verify_signatures` lo
+    devuelve en `sello_de_tiempo { fecha, autoridad }`. Si el servidor no
+    contesta, se firma sin sello y el aviso lo dice nombrando el «servidor
+    de tiempo» (la interfaz lo reconoce para preguntar «¿firmar sin
+    sello?»): tirar la firma después de elegir destino sería lo peor que
+    podría pasar ahí. **Sin crates nuevas**: el protocolo va por HTTP, el
+    token viene firmado y la petición solo lleva un hash, así que TLS no
+    añadiría nada; el DER se escribe y se lee a mano y el POST cabe en
+    `std::net`. Con `ltv` los certificados se archivan en el `/DSS` y la
+    cadena de un `.p12` viaja además dentro del CMS. **Sin OCSP ni CRL**:
+    Vitela no comprueba revocación en ningún sitio y no puede archivar
+    pruebas que nunca obtiene.
+  - **Sellos dinámicos** (`anotaciones2.rs`): `add_stamp` acepta
+    `dinamico`, la segunda línea del sello —ya compuesta por la interfaz, o
+    el nombre de una plantilla (`revisado`, `recibido`, `aprobado`) o una
+    libre con `{autor}`, `{fecha}` y `{hora}`, que se resuelve aquí—. Va
+    debajo de la palabra grande al 45 % del cuerpo, como la de Acrobat.
+  - **El adjunto de una página sale** (`adjuntos.rs`):
+    `open_page_attachment(path, page_index, annot_index)` lo deja en el
+    temporal con su nombre y su extensión y devuelve la ruta;
+    `save_page_attachment(…, dest_path)` lo escribe donde diga la interfaz.
+    Se sabía meter un fichero en una página y no sacarlo, que es el
+    callejón sin salida más literal que ha tenido la aplicación.
+  - **El fondo, entero** (`paginas2.rs`): `add_background(work_path,
+    color?, image_png?, opacity?, page_indices?)` pinta un color sólido a
+    sangre —el caso por defecto de Acrobat— o una imagen ajustada sin
+    deformarla, y sustituye el que hubiera. `remove_background(work_path,
+    dry_run)` → `{ objetos, textos }` lo quita: el fondo se escribe como un
+    Form XObject marcado con la clave privada `/Vitela /Fondo`, invocado
+    desde un flujo de contenido propio que va el primero de la página y
+    lleva la misma marca, así que quitarlo no adivina por posición; los
+    `textos` son los que se pusieron como marca de agua detrás del
+    contenido, que sí se reconocen por dónde y cómo están.
+  - **Buscar en una carpeta** (`busqueda.rs`): `search_folder(dir, query,
+    match_case, whole_word, context, recursivo)` devuelve una fila por
+    fichero (`path`, `nombre`, `coincidencias`, `error`). Un PDF que no se
+    puede abrir no rompe la búsqueda: sale con las coincidencias vacías y
+    su motivo en llano. Emite `buscando-carpeta` con
+    `{ hechos, total, fichero }` antes de mirar cada uno, y
+    `cancel_search()` la corta **devolviendo lo encontrado**. Cada
+    documento se suelta del caché al terminarlo.
+  - **La composición de impresión** (`imprimir.rs`): `compose_print(
+    work_path, modo, opciones)` con `"nup"`, `"folleto"` y `"poster"`
+    escribe un PDF aparte —no toca la copia de trabajo ni gasta un paso de
+    deshacer— y dice cuántas hojas de papel salen. El folleto ordena para
+    grapar por el centro (con ocho páginas: 8-1, 2-7, 6-3, 4-5) y sabe
+    sacar solo el anverso o solo el reverso. Por dentro las tres son
+    páginas nuevas con las viejas dentro como Form XObject, todo con lopdf
+    —convertir una página en XObject no lo expone pdfium-render— y con el
+    `/Rotate` horneado en la matriz: se compone lo que se ve.
+  - **La auditoría de espacio** (`exportar.rs`): `audit_pdf(path)` →
+    `[{ categoria, bytes, porcentaje }]` con las nueve de Acrobat. Lo que
+    no se sabe atribuir va a «lo demás», así que la suma es el tamaño del
+    fichero y no una cuenta que no cuadra con lo que dice el Finder.
+    `compress_pdf` gana las tres casillas del Optimizer
+    (`quitar_adjuntos`, `quitar_metadatos`, `aplanar_formularios`) y con
+    alguna puesta un documento sin imágenes deja de ser un error.
+  - **Cifrado por certificado** (`seguridad.rs`):
+    `encrypt_pdf_cert(work_path, dest_path, destinatarios)` con
+    `{ cert_path, permisos }` por destinatario. Es el mismo AES-256 y lo
+    que cambia es cómo viaja su clave: `/Filter /Adobe.PubSec` con un
+    `/Recipients` de sobres CMS `EnvelopedData` —la semilla y los permisos
+    de cada uno, envueltos con su clave pública— y la clave del fichero
+    sale del SHA-256 de la semilla seguida de esos sobres. **Vitela los
+    escribe y todavía no los abre**: haría falta la clave privada del
+    destinatario, que no tiene por dónde entrar; abrir uno lo dice en llano
+    en vez de dejar a nadie probando contraseñas que no existen.
+  - **Exportar a HTML** (`exportar.rs`): `export_html(work_path,
+    dest_path, rango)` escribe una `<div class="pagina">` por página con
+    los bloques colocados, las imágenes en `<destino>_files` y los enlaces
+    como `<a>`. Sin JavaScript y sin dependencias; el texto del PDF es
+    contenido ajeno y va escapado, y de los enlaces solo salen http, https
+    y mailto. `Rango` acepta la lista de índices y la sintaxis «1-3, 8».
+  - **Comparar** (`comparar.rs`): `compare_pdf(a, b)` → una entrada por
+    página con `tipo`, las dos páginas emparejadas y los rectángulos y el
+    texto de cada lado. Las páginas se emparejan **por parecido** (la
+    subsecuencia común más larga con el Jaccard de sus palabras), que es lo
+    que impide que insertar una página al principio marque el documento
+    entero. La granularidad es el bloque, que es la unidad que se sabe
+    señalar en la página. No toca ninguno de los dos ficheros.
+  - **Formas con su subtipo** (`anotaciones2.rs`): `add_shape` escribe
+    `/Square`, `/Circle` y `/Line` (la flecha, con su `/LE`) y su `/AP`
+    dibujado a mano, en vez de una `Ink` con el dibujo dentro. La excusa
+    era pdfium-render y el ciclo 8 la retiró con `add_measure`. Mover una
+    rehace la apariencia y arrastra los puntos del `/L`; una marca de
+    redacción se distingue por su `/Vitela /Redact`. Y `add_measure` acepta
+    `escala { unidades_por_punto, unidad, razon, decimales }`, con la que
+    escribe el `/Measure` del spec: sin ella no se escribe, porque uno
+    inventado diría que el PDF trae una escala que no trae.
+  - **La vista inicial** (`documento.rs`): `get_open_action` /
+    `set_open_action` con `VistaInicial { page_index, top, zoom, ajuste,
+    disposicion, panel, marcadores }` sobre el `/OpenAction`, el
+    `/PageLayout` y el `/PageMode`. El vocabulario es el de la aplicación y
+    no el del spec, y la casilla `marcadores` manda sobre el nombre del
+    modo. Una ficha vacía devuelve el documento a «lo que decida el visor».
+    `get_document_info` gana además `creado`, `modificado` y `aplicacion`,
+    del `/Info`, vacías si el documento no las trae.
+  - `insert_pdf_at` acepta `page_indices`: el rango del documento que
+    entra, que hasta ahora era todo o nada.
+  - **La ranura de la biblioteca** (`firmas_visuales.rs`): `FirmaGuardada`
+    gana `ranura` («firma», «iniciales» o «sello»), que guardan
+    `save_stored_signature` e `import_signature_file` y cambia
+    `set_signature_slot`. Vivía en el `localStorage` de la interfaz y se
+    perdía al limpiarlo.
+  - **Recuperar no duplica** (AC-077): `adopt_session(work_path)` abre una
+    copia de trabajo que ya existe y la registra, en vez de copiarla otra
+    vez como hace `open_pdf`; y `recupera_en` no ofrece dos veces el mismo
+    documento —de dos apuntes con el mismo original se queda el más
+    reciente—. Antes, guardar borraba solo el apunte nuevo y la banda
+    volvía a ofrecer un documento ya guardado.
+  - **Los argumentos que no casan, en llano**: `mensaje_llano` reconoce el
+    «missing field» de serde y el «invalid args» de Tauri y los cuenta como
+    lo que son —la aplicación no ha mandado todos los datos—, con el
+    detalle técnico en stderr. La banda enseñaba el nombre del módulo de
+    Rust, en inglés, y acusaba al usuario de un fallo que no era suyo.
+  - **El panel de capas: techo por escrito** (5.2 del ciclo 9). Se buscó la
+    vía y no está: la API pública de PDFium que envuelve pdfium-render
+    0.8.37 no expone contexto de contenido opcional —no hay nada parecido a
+    un `FPDF_CreateOCContext`, que vive en su `CPDF_OCContext` interno—, así
+    que no se puede apagar una capa **solo en la vista**. `set_layer_visible`
+    seguirá escribiendo el `/OFF` del documento, con su paso de deshacer y
+    su aviso, y la fila se queda en ⚠️ por límite del motor, como «Crear PDF
+    desde Word». **Deja de contarse como deuda.**
+  - **Word por columnas: techo por escrito** (5.3). Agrupar bloques por su
+    `x` para sacarlos como una tabla de una fila adivina una maqueta que el
+    PDF no guarda: dos columnas de texto y una tabla de dos celdas son
+    idénticas ahí dentro, y equivocarse rompe el documento de quien lo
+    abra en Word. El `.docx` se queda como está —texto, estilo, color e
+    imágenes en su sitio—, dicho antes de elegir destino.
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (cada uno con su envoltorio en camelCase):
     - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la
@@ -1344,7 +1498,9 @@ compila los instaladores a mano o al etiquetar `v*`.
   `texto.rs`, `imagenes.rs`, `documento.rs`, `seguridad.rs`/`seguridad2.rs`,
   `exportar.rs`, `firma.rs`, `confianza.rs`, `firmas_visuales.rs`,
   `comentarios.rs`/`comentarios2.rs`, `adjuntos.rs`, `historial.rs`,
-  `recientes.rs`, `recuperacion.rs`, `menu.rs`, `puente_dev.rs`.
+  `recientes.rs`, `recuperacion.rs`, `menu.rs`, `puente_dev.rs`, y desde
+  el ciclo 9 `imprimir.rs` (folleto, N-up y póster), `tsa.rs` (el sello de
+  tiempo) y `comparar.rs`.
   `generate_handler!` y `despachar` referencian los comandos por ruta de
   módulo (con re-exports no funciona el macro).
 - **Estructura de la UI**: `App.tsx` conserva el ciclo de apertura, la
@@ -1678,6 +1834,15 @@ compila los instaladores a mano o al etiquetar `v*`.
    con destino fino y ⌘B, comentarios que salen en tres formatos (texto,
    resumen en PDF y XFDF) y vuelven a entrar, medir con las tres
    herramientas de Acrobat, modo lectura y herramienta Mano
+11. ✅ Lo que sale del documento y lo que entra en él: buscar en toda una
+   carpeta con su progreso, imprimir en folleto, varias páginas por hoja o
+   póster, exportar a HTML y comparar dos versiones emparejando las
+   páginas por parecido. La firma sube de nivel con el sello de tiempo de
+   una autoridad y los certificados archivados, y se puede cifrar para
+   unos destinatarios en vez de con una contraseña. Certificar y el fondo
+   se ven por fin, el adjunto de una página se saca, y las capas y las
+   columnas de Word tienen su techo escrito
+
 10. ✅ El documento como objeto: etiquetas de página (`/PageLabels`), fondo
    (la marca de agua debajo del contenido), numeración Bates completa y las
    propiedades de ⌘D con las fuentes y la seguridad. Recuperación de varios
