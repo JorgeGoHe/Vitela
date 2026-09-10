@@ -885,7 +885,11 @@ export type RangoEtiquetas = {
 /** Las etiquetas de página del documento (`/PageLabels`). Un PDF que no las
  *  trae devuelve la lista vacía, y entonces la página se llama por su
  *  número físico. */
-export function getPageLabels(path: string): Promise<RangoEtiquetas[]> {
+/** Rangos de numeración del documento y la etiqueta ya compuesta de cada
+ *  página (vacía si el PDF no lleva `/PageLabels`). */
+export type EtiquetasPaginas = { rangos: RangoEtiquetas[]; etiquetas: string[] };
+
+export function getPageLabels(path: string): Promise<EtiquetasPaginas> {
   return invoke("get_page_labels", { path });
 }
 

@@ -1648,7 +1648,7 @@ function App() {
     let cancelled = false;
     getPageLabels(workPath)
       .then((r) => {
-        if (!cancelled) setEtiquetas(r);
+        if (!cancelled) setEtiquetas(r.rangos);
       })
       .catch(() => {
         if (!cancelled) setEtiquetas([]);

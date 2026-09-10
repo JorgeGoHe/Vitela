@@ -237,7 +237,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "get_metadata" => cmd!(documento::get_metadata, { path: String }),
         "get_document_info" => cmd!(documento::get_document_info, { path: String }),
         "get_page_labels" => cmd!(documento::get_page_labels, { path: String }),
-        "set_page_labels" => cmd!(documento::set_page_labels, { work_path: String, labels: Vec<documento::RangoEtiqueta> }),
+        "set_page_labels" => cmd!(documento::set_page_labels, { work_path: String, rangos: Vec<documento::RangoEtiqueta> }),
         "set_metadata" => cmd!(documento::set_metadata, { work_path: String, meta: documento::Metadata }),
         "get_links" => cmd!(documento::get_links, { path: String, page_index: u16 }),
         "encrypt_pdf" => cmd!(seguridad::encrypt_pdf, { work_path: String, dest_path: Option<String>, user_password: String, owner_password: Option<String>, permisos: Option<seguridad::Permisos> }),
