@@ -476,6 +476,9 @@ compila los instaladores a mano o al etiquetar `v*`.
     pase con lopdf. El mando de la UI se retiró ese mismo ciclo por un
     desencuentro entre las dos mitades (R24) y vuelve en el 7 (R32); desde
     R32b el operador sobrevive a mover y a estirar el bloque.
+    pase con lopdf. El mando de la UI se retiró en ese mismo ciclo y
+    **volvió en el 7** (R32), que es cuando las dos mitades se
+    encontraron.
   - `crop_image(work, page, object_index, rect)` (`imagenes.rs`): recorta
     el **bitmap**, no la caja, por el camino de `replace_image`, así que
     lo que queda fuera desaparece del fichero en vez de esconderse detrás.
@@ -879,6 +882,125 @@ compila los instaladores a mano o al etiquetar `v*`.
     confianza es del certificado y la validez del documento) y la banda de
     recuperación se pliega a un botón «Recuperar…» de la barra en cuanto se
     abre otro documento.
+- **La mitad de la UI del ciclo 7** (según el desarrollador de interfaz):
+  - Comandos nuevos que llama la UI, con los nombres de argumento en
+    camelCase que exige el test cruzado:
+    - `add_text_block` y `edit_text_block` **vuelven a mandar
+      `charSpacing`** (R32): el desplegable «Espaciado entre caracteres»
+      está otra vez en la fila contextual del modo Editar, con 0 («Normal»,
+      el defecto de Acrobat), 0,5, 1 y 2 pt. El tooltip dice qué hace, no
+      cómo se llama el operador.
+    - `edit_text_block` devuelve **`InformeEdicion { lineas, se_sale,
+      reflujo }`** y la UI usa `se_sale` para la banda de «no cabe en la
+      página»: la estimación propia con `ajustaLineas` se borró (R33). Y
+      manda **siempre `reflow: true` con el texto de un solo bloque**
+      (R39/AC-061): quien reconoce el párrafo, lo reparte y recoloca las
+      líneas de abajo es el backend. La UI no manda el párrafo entero ni
+      decide si lo hay —medirlo por la altura del bloque no se cumplía casi
+      nunca (AC-062)— ni borra líneas.
+    - `erase_ink_area(workPath, pageIndex, rect)` → `{ tocados, borrados }`
+      (R34): la goma manda la zona **una vez** y el backend busca los trazos
+      que la tocan. `erase_ink` ya no se llama desde la UI: un pase de goma
+      era N pasos de deshacer y la banda prometía uno.
+    - `pdf_from_images` devuelve `{ paginas, saltadas }` (R35): con
+      saltadas, la banda dice «19 de 20 páginas · foto-7.heic no se ha
+      podido leer», el diálogo se queda abierto con esas filas marcadas y el
+      PDF a medias no se abre encima. La lista se ordena además arrastrando,
+      no solo con ▲▼.
+    - `detect_form_fields(workPath, pageIndices)` → `CampoPropuesto
+      { page_index, rect, kind, name, confianza }` (H7): «Reconocer
+      campos…» **propone y no escribe**. Las propuestas se pintan en su capa
+      (`CapaPropuestas`), se renombran con doble clic y se quitan con Supr,
+      y la barra ofrece «Revisar uno a uno», «Crear todos» y «Cancelar».
+      Crear es un `create_form_field` por campo **más `squash_history`**,
+      así que un ⌘Z devuelve el formulario entero; el `rect` se manda tal
+      como llega (espacio propio de la página) y `confianza < 0,6` es lo que
+      la UI marca como «sin confirmar».
+    - `export_comments_pdf(workPath, destPath, orden, documentName)`,
+      `export_comments_xfdf(workPath, destPath)` e
+      `import_comments_xfdf(workPath, srcPath)` (H9): «Exportar
+      comentarios…» pregunta el formato antes de pedir destino
+      (`DialogoComentarios`: .txt, .pdf con su orden —«por página» por
+      defecto— y .xfdf) y el resumen en PDF se abre al terminar. «Importar
+      comentarios…» añade en una sola mutación y dice cuántos.
+    - `get_outline` / `set_outline` con `OutlineNode` + `top` y `zoom`
+      (H8): el destino fino. La UI captura el punto de lectura de ahora
+      mismo —el mismo que apila ⌥←— y al seguir un marcador aplica primero
+      el zoom, luego la página y, cuando el visor ya tiene su alto,
+      el desplazamiento dentro de la hoja. Un `/Fit` ajeno llega sin los dos
+      y se comporta como antes.
+    - `get_form_fields` con `read_only` y `tooltip` en `FormFieldInfo`
+      (R40/AC-065, AC-066): el campo de solo lectura se pinta apagado y no
+      coge el clic, y el `/TU` del PDF es el título que sale al pasar el
+      ratón. `set_form_checked` manda **siempre `checked: true` en un
+      radio** (un radio se marca, no se conmuta: AC-063) y el grupo se
+      relee entero tras la respuesta.
+    - `verify_signatures` con `documento_intacto` en `FirmaInfo`
+      (R41/AC-064): con varias firmas y ninguna modificada, la banda dice
+      «N firmas válidas · el documento no ha cambiado desde la última». Una
+      revisión que solo añade una firma no es una manipulación.
+    - `borra_sesion` manda `workPath`: con varios documentos abiertos,
+      cerrar uno no puede llevarse el apunte de sesión de otro.
+  - **Ids del menú nativo que enruta la UI y que tienen que existir en
+    `menu::estructura()`**: `leer-en-voz-alta` (Ver) y
+    `exportar-comentarios` (Documento), que son los de R36, más tres que
+    nacen con las funciones de este ciclo: **`reconocer-campos`**,
+    **`adjuntar-fichero`** e **`importar-comentarios`**. El test cruzado los
+    exige en los dos sentidos.
+  - **Medir, las tres de Acrobat** (R38): Distancia (arrastre) ·
+    **Perímetro** · **Área**, las dos últimas por vértices —clic por punto,
+    doble clic o Enter cierra, Retroceso quita el último, Esc cancela—, con
+    la cifra en vivo junto al cursor. El perímetro suma los tramos y el área
+    usa la fórmula del polígono (Gauss), no la caja que lo envuelve. La capa
+    tiene su propio `onMouseMove` (`.medida-captura`) porque el despachador
+    de la página se salta el ratón sin botón pulsado, y **el orden de las
+    ramas de `Pagina.tsx` no se toca**. «Dejar la medida puesta» está
+    también **después** de medir, en la propia etiqueta, y el trazo y su
+    texto se funden en un paso de historial (`squash_history`, AC-069).
+    Sigue escribiéndose con `add_stroke` + `add_text_block`: la anotación
+    `/Line` con `/Measure` espera al contrato del backend.
+  - **Modo lectura** (⇧⌘H) y **herramienta Mano** (H10): el primero esconde
+    barra, fila contextual y panel reusando lo que ya hace
+    `.app.presentacion`, sin salir de la ventana, y deja la píldora como
+    salida (Esc también); en Acrobat es ⌘H, que en macOS se queda AppKit
+    («Ocultar Vitela»). La Mano es la **barra espaciadora mantenida**
+    (`useMano`): el arrastre entra por el visor en fase de captura, así que
+    la herramienta activa no dibuja mientras se desplaza, y se suelta
+    también al perder el foco la ventana. Sin botón propio: son gestos, y
+    están en `DialogoAtajos`.
+  - **Marcadores** (H8): ⌘B crea uno con el texto seleccionado por título
+    (recortado a 60 caracteres) o «Página N». La página **dueña** de la
+    selección se lo dice a `App` por un callback (`onSeleccion`), porque la
+    selección del visor no es del DOM. En `PanelMarcadores`: F2 renombra,
+    Supr borra —con ⌘Z, sin confirmar— y arrastrar anida (el tercio de en
+    medio de una fila es «dentro de esta»).
+  - **Pestañas** (H6): la fila **solo se pinta a partir del segundo
+    documento**. El estado del activo vive en los `useState` de siempre; el
+    de los demás, en `pestanas: Pestana[]` (copia de trabajo, fichero
+    original, protección, escala, página, zoom, scroll, giro, panel abierto
+    e historial de vistas). Al cambiar de pestaña se vuelca el estado vivo y
+    se aplica el de destino con un `docVersion + 1`, que es lo que hace que
+    todo lo derivado —tamaños, miniaturas, marcadores, comentarios,
+    adjuntos, capas, firmas y los contadores de deshacer— se relea solo.
+    Abrir otro documento **ya no pregunta** por los cambios (no se descarta
+    nada) y ya no llama a `close_document`: la pregunta es del cierre.
+    Cerrar una pestaña con cambios la trae a pantalla antes de preguntar, y
+    salir de la app pregunta por todos los documentos con cambios, uno a
+    uno. ⌃Tab y ⇧⌃Tab rotan; **⌘1…⌘9 no saltan a la pestaña N** a propósito
+    (⌘1 y ⌘2 son el zoom). El evento `cerrar-solicitado` no dice si ha sido
+    ⌘W, el botón rojo o ⌘Q, así que sigue tratándose como «cerrar la app»:
+    una pestaña se cierra con su «×» o con «Cerrar documento».
+  - **Iconos**: «Medir» y «Llamada» dejan de reusar `hf` y `forward` y
+    tienen el suyo (`ruler`, `callout`); nuevos también `libro` (modo
+    lectura) y `clip` («Adjuntar fichero…», que hasta ahora no se podía
+    poner el primero porque su única puerta era una pestaña que solo existe
+    cuando ya hay uno).
+  - **Lo que se queda fuera y por qué**: «Guardar imagen como…» (H10.3)
+    necesita un comando que escriba los bytes en el disco —`get_image_data`
+    solo los devuelve en base64 y la UI no tiene acceso al sistema de
+    ficheros—, así que no se ofrece un botón que no funcionaría; y el codo
+    de dos tramos de la llamada necesita un punto más en el contrato de
+    `add_callout`, que hoy solo acepta `punta`.
 - **Menú nativo** (`menu.rs`): Archivo, Editar, Ver, Documento, Ventana y
   Ayuda en la barra del sistema, espejo del menú «Acciones» de la app —
   con esto la búsqueda de menús de macOS encuentra por fin «Marca de
@@ -924,6 +1046,8 @@ compila los instaladores a mano o al etiquetar `v*`.
     `encabezado-pie`, `quitar-marca-de-agua`, `quitar-encabezados`,
     `anadir-campo`, `reconocer-campos`, `anadir-enlace`,
     `adjuntar-fichero`, `firmar`, `proteger`,
+    `reconocer-campos`, `anadir-campo`, `anadir-enlace`,
+    `adjuntar-fichero`, `importar-comentarios`, `firmar`, `proteger`,
     `quitar-proteccion`, `aplanar`, `redactar`, `sanitizar`,
     `propiedades`, `exportar-imagenes`, `exportar-texto`, `exportar-word`,
     `exportar-comentarios`, `importar-comentarios`, `comprimir`.
@@ -1254,6 +1378,9 @@ compila los instaladores a mano o al etiquetar `v*`.
   Marcadores y ⌥⌘3 Comentarios (abren la pestaña Y le llevan el foco) ·
   ⌘L pantalla completa (Esc sale) · ⇧⌘L modo nocturno del documento ·
   ⌥← y ⌥→ historial de vistas · ⇧⌘Y leer en voz alta desde esta página ·
+  ⌘B marcador aquí (con el texto seleccionado por título) · ⇧⌘H modo
+  lectura · barra espaciadora mantenida, la Mano · ⌃Tab y ⇧⌃Tab, el
+  documento siguiente y el anterior ·
   ⇧⌘N ir a la página · ⌘/ y F1 abren los atajos (la pantalla se lista a sí
   misma) · ←/→ página anterior y siguiente · Esc para la lectura, quita las
   coincidencias de búsqueda y, si no hay, sale de la herramienta · Supr
@@ -1358,6 +1485,11 @@ compila los instaladores a mano o al etiquetar `v*`.
    documentos abiertos a la vez en el caché del hilo de PDFium. Queda
    fuera de esta rama la fila de pestañas y la lista de sesiones de
    recuperación, que son la mitad de interfaz de esa función.
+9. ✅ Varios documentos a la vez (pestañas, solo a partir del segundo),
+   reconocer campos de formulario proponiendo y sin escribir, marcadores
+   con destino fino y ⌘B, comentarios que salen en tres formatos (texto,
+   resumen en PDF y XFDF) y vuelven a entrar, medir con las tres
+   herramientas de Acrobat, modo lectura y herramienta Mano
 
 ## Convenciones
 

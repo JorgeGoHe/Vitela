@@ -1957,7 +1957,7 @@ textarea {
 }
 
 /* la goma: el círculo del tamaño del borrado y la zona que se va a llevar
-   (lo que se ve es exactamente lo que se le manda a `erase_ink`) */
+   (lo que se ve es exactamente lo que se le manda a `erase_ink_area`) */
 .goma-cursor {
   position: absolute;
   border: 1px solid var(--fg-muted);

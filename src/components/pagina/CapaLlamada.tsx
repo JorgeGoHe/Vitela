@@ -99,7 +99,7 @@ export default function CapaLlamada({
       {mode === "draw" && tool.goma && (
         <>
           {/* lo que se ve es lo que se borra: la zona pintada es la misma
-              que se le manda a `erase_ink` */}
+              que se le manda a `erase_ink_area` */}
           {gomaRect && (
             <div
               className="goma-zona"
