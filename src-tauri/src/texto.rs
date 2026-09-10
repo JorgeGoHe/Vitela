@@ -1,6 +1,6 @@
 //! Edición real de texto: bloques del content stream, fuentes y texto nuevo.
 
-use crate::{on_pdfium_thread, pdfium, save_and_close, with_doc};
+use crate::{on_pdfium_thread, pdfium, save_and_close, with_doc, with_lopdf};
 use crate::historial::mutacion;
 use pdfium_render::prelude::*;
 use serde::Serialize;
@@ -998,22 +998,17 @@ fn regular(b: u8) -> bool {
     )
 }
 
-/// Escribe `<tc> Tc` justo detrás del `BT` de los bloques cuyo ordinal está
-/// en `ordinales`, y `0 Tc` antes de su `ET` para que el espaciado no se
-/// escape al resto de la página (`Tc` es estado gráfico, no del bloque).
+/// Recorre un content stream token a token **sobre los bytes**, y no con
+/// `Content::decode`: el analizador de contenido de lopdf 0.34 no entiende
+/// las imágenes en línea (`BI … ID … EI`) y en un PDF de fuera se
+/// atragantaría. Saltando cadenas, hexadecimales y comentarios, lo demás se
+/// conserva byte a byte y esto no puede fallar.
 ///
-/// Se hace **a mano sobre los bytes** y no con `Content::decode`: el
-/// analizador de contenido de lopdf 0.34 no entiende las imágenes en línea
-/// (`BI … ID … EI`) y en un PDF de fuera se atragantaría; recorriendo los
-/// bytes —saltando cadenas, hexadecimales y comentarios— lo demás se
-/// conserva byte a byte y esto no puede fallar. Devuelve el contenido
-/// nuevo, cuántos `BT` ha visto y si ha cambiado algo.
-fn inserta_tc(datos: &[u8], desde: usize, ordinales: &[usize], tc: f32) -> (Vec<u8>, usize, bool) {
-    let mut out = Vec::with_capacity(datos.len() + 32);
+/// A `f` le llega cada trozo del stream en orden, con `true` cuando es un
+/// token de verdad (`BT`, `Tc`, un número) y `false` cuando es relleno que
+/// solo hay que copiar (espacios, cadenas, comentarios).
+fn recorre_stream(datos: &[u8], mut f: impl FnMut(&[u8], bool)) {
     let mut i = 0usize;
-    let mut n = desde;
-    let mut dentro = false;
-    let mut cambiado = false;
     while i < datos.len() {
         match datos[i] {
             // comentario: hasta el final de la línea
@@ -1022,7 +1017,7 @@ fn inserta_tc(datos: &[u8], desde: usize, ordinales: &[usize], tc: f32) -> (Vec<
                 while i < datos.len() && datos[i] != b'\n' && datos[i] != b'\r' {
                     i += 1;
                 }
-                out.extend_from_slice(&datos[ini..i]);
+                f(&datos[ini..i], false);
             }
             // cadena literal, con anidamiento y escapes
             b'(' => {
@@ -1043,7 +1038,8 @@ fn inserta_tc(datos: &[u8], desde: usize, ordinales: &[usize], tc: f32) -> (Vec<
                     }
                     i += 1;
                 }
-                out.extend_from_slice(&datos[ini..i.min(datos.len())]);
+                i = i.min(datos.len());
+                f(&datos[ini..i], false);
             }
             // `<<` abre diccionario; `<` solo, una cadena hexadecimal
             b'<' => {
@@ -1056,38 +1052,109 @@ fn inserta_tc(datos: &[u8], desde: usize, ordinales: &[usize], tc: f32) -> (Vec<
                     }
                     i = (i + 1).min(datos.len());
                 }
-                out.extend_from_slice(&datos[ini..i]);
+                f(&datos[ini..i], false);
             }
             b if regular(b) => {
                 let ini = i;
                 while i < datos.len() && regular(datos[i]) {
                     i += 1;
                 }
-                let token = &datos[ini..i];
-                if token == b"BT" {
-                    let toca = ordinales.contains(&n);
-                    n += 1;
-                    out.extend_from_slice(token);
-                    if toca {
-                        out.extend_from_slice(format!(" {tc} Tc").as_bytes());
-                        dentro = true;
-                        cambiado = true;
-                    }
-                } else if token == b"ET" && dentro {
-                    out.extend_from_slice(b"0 Tc ");
-                    out.extend_from_slice(token);
-                    dentro = false;
-                } else {
-                    out.extend_from_slice(token);
-                }
+                f(&datos[ini..i], true);
             }
-            b => {
-                out.push(b);
+            _ => {
+                f(&datos[i..i + 1], false);
                 i += 1;
             }
         }
     }
+}
+
+/// Escribe `<tc> Tc` justo detrás del `BT` de los bloques cuyo ordinal está
+/// en `ordinales`, y `0 Tc` antes de su `ET` para que el espaciado no se
+/// escape al resto de la página (`Tc` es estado gráfico, no del bloque).
+///
+/// Devuelve el contenido nuevo, cuántos `BT` ha visto y si ha cambiado algo.
+fn inserta_tc(datos: &[u8], desde: usize, ordinales: &[usize], tc: f32) -> (Vec<u8>, usize, bool) {
+    let mut out = Vec::with_capacity(datos.len() + 32);
+    let mut n = desde;
+    let mut dentro = false;
+    let mut cambiado = false;
+    recorre_stream(datos, |trozo, es_token| {
+        if es_token && trozo == b"BT" {
+            let toca = ordinales.contains(&n);
+            n += 1;
+            out.extend_from_slice(trozo);
+            if toca {
+                out.extend_from_slice(format!(" {tc} Tc").as_bytes());
+                dentro = true;
+                cambiado = true;
+            }
+        } else if es_token && trozo == b"ET" && dentro {
+            out.extend_from_slice(b"0 Tc ");
+            out.extend_from_slice(trozo);
+            dentro = false;
+        } else {
+            out.extend_from_slice(trozo);
+        }
+    });
     (out, n, cambiado)
+}
+
+/// El espaciado que lleva escrito el bloque cuyo ordinal es `ordinal`: el
+/// operando del **primer** `Tc` que aparece dentro de su `BT … ET` (el
+/// segundo es el `0 Tc` con el que se cierra). Devuelve también cuántos
+/// `BT` ha visto, para poder encadenar varios streams de la misma página.
+fn lee_tc(datos: &[u8], desde: usize, ordinal: usize) -> (Option<f32>, usize) {
+    let mut n = desde;
+    let mut dentro = false;
+    let mut ultimo: Option<f32> = None;
+    let mut hallado: Option<f32> = None;
+    recorre_stream(datos, |trozo, es_token| {
+        if !es_token {
+            return;
+        }
+        if trozo == b"BT" {
+            dentro = n == ordinal;
+            n += 1;
+            ultimo = None;
+        } else if trozo == b"ET" {
+            dentro = false;
+        } else if trozo == b"Tc" {
+            if dentro && hallado.is_none() {
+                hallado = ultimo;
+            }
+            ultimo = None;
+        } else {
+            ultimo = std::str::from_utf8(trozo).ok().and_then(|s| s.parse().ok());
+        }
+    });
+    (hallado, n)
+}
+
+/// El espaciado entre caracteres que lleva escrito un bloque de la página,
+/// o `None` si no lleva ninguno (que es lo mismo que llevar `0 Tc`).
+///
+/// Es la mitad que le faltaba a [`escribe_espaciado`]: mover o estirar un
+/// bloque regenera el content stream con `FPDF_GenerateContent`, que **no
+/// vuelve a escribir el `Tc`**, así que hay que leerlo antes y reponerlo
+/// después.
+pub(crate) fn lee_espaciado(doc: &lopdf::Document, page_index: u16, ordinal: usize) -> Option<f32> {
+    let pid = *doc.get_pages().get(&(page_index as u32 + 1))?;
+    let mut vistos = 0usize;
+    for id in doc.get_page_contents(pid) {
+        let Ok(stream) = doc.get_object(id).and_then(lopdf::Object::as_stream) else {
+            continue;
+        };
+        let datos = stream
+            .decompressed_content()
+            .unwrap_or_else(|_| stream.content.clone());
+        let (tc, ahora) = lee_tc(&datos, vistos, ordinal);
+        vistos = ahora;
+        if let Some(tc) = tc {
+            return espaciado(Some(tc));
+        }
+    }
+    None
 }
 
 /// Escribe el espaciado entre caracteres de unos bloques de la página.
@@ -1160,6 +1227,12 @@ pub fn move_text_block(
             .map_err(crate::mensaje_llano)?;
         let mut page = doc.pages().get(page_index).map_err(crate::mensaje_llano)?;
         let geo = crate::Geo::de_pagina(&page).propia();
+        // el espaciado que lleva el bloque, ANTES de tocarlo:
+        // `FPDF_GenerateContent` regenera el content stream y no vuelve a
+        // escribir el `Tc`, así que arrastrar el bloque se lo llevaba por
+        // delante y el texto volvía a juntarse solo (R32b)
+        let ordinal = ordinal_de_texto(&page, object_index as usize);
+        let tc = with_lopdf(&work_path, |d| Ok(lee_espaciado(d, page_index, ordinal)))?;
         let mut obj = page
             .objects_mut()
             .get(object_index as usize)
@@ -1179,7 +1252,8 @@ pub fn move_text_block(
         drop(obj);
         page.regenerate_content().map_err(|e| e.to_string())?;
         drop(page);
-        save_and_close(doc, &work_path)
+        save_and_close(doc, &work_path)?;
+        repon_espaciado(&work_path, page_index, ordinal, tc)
     }))
 }
 
@@ -1206,6 +1280,9 @@ pub fn resize_text_block(
             .load_pdf_from_file(&work_path, None)
             .map_err(crate::mensaje_llano)?;
         let mut page = doc.pages().get(page_index).map_err(crate::mensaje_llano)?;
+        // el espaciado del bloque, antes de estirarlo: ver `move_text_block`
+        let ordinal = ordinal_de_texto(&page, object_index as usize);
+        let tc = with_lopdf(&work_path, |d| Ok(lee_espaciado(d, page_index, ordinal)))?;
         let mut obj = page
             .objects_mut()
             .get(object_index as usize)
@@ -1234,8 +1311,24 @@ pub fn resize_text_block(
         drop(obj);
         page.regenerate_content().map_err(|e| e.to_string())?;
         drop(page);
-        save_and_close(doc, &work_path)
+        save_and_close(doc, &work_path)?;
+        repon_espaciado(&work_path, page_index, ordinal, tc)
     }))
+}
+
+/// Vuelve a escribir el `Tc` que [`lee_espaciado`] había apuntado, en el
+/// mismo bloque y dentro de la misma mutación. Sin nada que reponer no
+/// toca el fichero: no hay por qué reescribirlo entero para nada.
+fn repon_espaciado(
+    work_path: &str,
+    page_index: u16,
+    ordinal: usize,
+    tc: Option<f32>,
+) -> Result<(), String> {
+    let Some(tc) = tc else { return Ok(()) };
+    crate::cirugia_en_hilo(work_path, |doc| {
+        escribe_espaciado(doc, page_index, &[ordinal], tc)
+    })
 }
 
 /// Borra un bloque de texto del content stream.
@@ -1363,6 +1456,86 @@ mod tests {
             vuelta.w
         );
         std::fs::remove_file(&tmp).ok();
+    }
+
+    /// **R32b.** `FPDF_GenerateContent` no vuelve a escribir el `Tc` al
+    /// regenerar el content stream de la página, así que mover o estirar un
+    /// bloque le borraba el espaciado que se le acababa de poner: el texto
+    /// se volvía a juntar solo, sin que nadie lo hubiera pedido. Los dos
+    /// comandos lo leen antes de tocar el bloque y lo reponen al terminar,
+    /// dentro de la misma mutación (un solo ⌘Z).
+    #[test]
+    fn mover_y_estirar_un_bloque_conservan_el_espaciado() {
+        let tmp = std::env::temp_dir().join("texto-espaciado-superviviente.pdf");
+        crea_pdf(&["Texto original"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        let antes = get_text_blocks(work.clone(), 0).expect("bloques")[0].clone();
+
+        edit_text_block(
+            work.clone(),
+            0,
+            antes.object_index,
+            "Texto original".into(),
+            None,
+            None,
+            None,
+            Some(2.0),
+            None,
+        )
+        .expect("corregir con espaciado");
+        let separado = get_text_blocks(work.clone(), 0).expect("bloques")[0].clone();
+        assert!(
+            separado.w > antes.w + 10.0,
+            "el espaciado tenía que haber ensanchado el bloque: {:.1} → {:.1}",
+            antes.w,
+            separado.w
+        );
+
+        // moverlo no puede juntar las letras otra vez
+        move_text_block(work.clone(), 0, separado.object_index, 100.0, 400.0)
+            .expect("mover el bloque");
+        let contenido = contenido_de(&work);
+        assert!(
+            contenido.contains("2 Tc"),
+            "el `Tc` tenía que sobrevivir a mover: {contenido}"
+        );
+        let movido = get_text_blocks(work.clone(), 0).expect("bloques")[0].clone();
+        assert!(
+            (movido.w - separado.w).abs() < 1.5,
+            "mover no cambia el ancho, y sin el `Tc` habría vuelto a {:.1}: {:.1}",
+            antes.w,
+            movido.w
+        );
+
+        // y estirarlo tampoco
+        resize_text_block(
+            work.clone(),
+            0,
+            movido.object_index,
+            movido.w * 1.5,
+            movido.h * 1.5,
+        )
+        .expect("estirar el bloque");
+        let contenido = contenido_de(&work);
+        assert!(
+            contenido.contains("2 Tc"),
+            "el `Tc` tenía que sobrevivir a estirar: {contenido}"
+        );
+        let estirado = get_text_blocks(work.clone(), 0).expect("bloques")[0].clone();
+        assert!(
+            estirado.w > movido.w,
+            "estirar agranda el bloque: {:.1} → {:.1}",
+            movido.w,
+            estirado.w
+        );
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// El content stream de la primera página, en llano.
+    fn contenido_de(work: &str) -> String {
+        let doc = lopdf::Document::load(work).expect("releer con lopdf");
+        let pid = doc.get_pages()[&1];
+        String::from_utf8_lossy(&doc.get_page_content(pid).expect("content stream")).into_owned()
     }
 
     /// **R24.** El texto nuevo también lo acepta, y en un bloque de varias
