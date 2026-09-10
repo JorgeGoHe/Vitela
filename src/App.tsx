@@ -28,6 +28,7 @@ import { useReemplazo } from "./hooks/useReemplazo";
 import { useFirmas } from "./hooks/useFirmas";
 import { useHerramienta } from "./hooks/useHerramienta";
 import { useLectura } from "./hooks/useLectura";
+import { useMano } from "./hooks/useMano";
 import { destinoDe, esquemaDe, esquemaPermitido } from "./enlaces";
 import { open, save, openUrl } from "./dialogos";
 import {
@@ -346,6 +347,10 @@ function App() {
   const [viewerW, setViewerW] = useState<number | null>(null);
   const [viewerH, setViewerH] = useState<number | null>(null);
   const viewerRef = useRef<HTMLElement | null>(null);
+  // herramienta Mano: la barra espaciadora mantenida convierte el cursor en
+  // mano y arrastrar desplaza, como en Acrobat. Sin botón propio en la fila
+  // de modos: es un gesto, y está en los atajos
+  const mano = useMano(viewerRef, pageCount > 0);
   const [sidebarVisible, setSidebarVisible] = useState(
     window.innerWidth >= 900,
   );
@@ -456,6 +461,7 @@ function App() {
   // «Modo lectura»: el documento con su píldora y nada más, sin salir de la
   // ventana (esa es la diferencia con la pantalla completa)
   const [modoLectura, setModoLectura] = useState(false);
+  // herramienta Mano: la barra espaciadora mantenida, como en Acrobat
   // en presentación la píldora asoma al acercar el ratón al borde inferior
   const [pildoraVisible, setPildoraVisible] = useState(false);
   // historial de vistas (⌥← / ⌥→): el modelo del navegador, dos pilas
@@ -3386,7 +3392,9 @@ function App() {
     <div
       className={`app${pantallaCompleta ? " presentacion" : ""}${
         pantallaCompleta && pildoraVisible ? " pildora" : ""
-      }${modoLectura ? " lectura" : ""}`}
+      }${modoLectura ? " lectura" : ""}${mano.activa ? " mano" : ""}${
+        mano.arrastrando ? " mano-tirando" : ""
+      }`}
       style={{ "--bandas": bandas } as CSSProperties}
     >
       <header className="toolbar">
@@ -4329,6 +4337,7 @@ function App() {
             }`}
             ref={viewerRef}
             onScroll={onViewerScroll}
+            onMouseDownCapture={mano.activa ? mano.empieza : undefined}
             onClick={
               // en presentación el clic avanza, como en Acrobat
               pantallaCompleta ? () => gotoPage(paginaVecina(1)) : undefined

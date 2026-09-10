@@ -68,6 +68,10 @@ const GRUPOS: { titulo: string; atajos: Atajo[] }[] = [
       [atajo("N", "shift cmd"), "Ir a la página"],
       [`${atajo("←", "")} · ${atajo("→", "")}`, "Página anterior y siguiente"],
       [
+        atajo("Espacio", ""),
+        "Mantenerla: mano para desplazar el documento arrastrando",
+      ],
+      [
         atajo("Esc", ""),
         "Parar la lectura, quitar las coincidencias, o salir de la herramienta",
       ],

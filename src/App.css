@@ -926,6 +926,19 @@ textarea {
   display: none;
 }
 
+/* herramienta Mano: mientras se mantiene la barra espaciadora, todo el
+   visor es mano —también las capas de las páginas, que traen su propio
+   cursor por modo— */
+.app.mano .viewer,
+.app.mano .viewer * {
+  cursor: grab;
+}
+
+.app.mano-tirando .viewer,
+.app.mano-tirando .viewer * {
+  cursor: grabbing;
+}
+
 /* «Modo lectura»: lo mismo que esconde la presentación, pero la ventana se
    queda como está y la píldora no se va (es la salida) */
 .app.lectura .toolbar,
