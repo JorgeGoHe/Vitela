@@ -221,6 +221,21 @@ pub(crate) fn olvida_proteccion(work_path: &str) {
     protecciones().remove(work_path);
 }
 
+/// Deja la protección **exactamente** como dice el paso de historial, sea
+/// una o ninguna. Lo llama deshacer/rehacer: la protección puesta no vive
+/// en el fichero (la copia de trabajo no puede ir cifrada) y sin esto un ⌘Z
+/// devolvía el documento pero no su contraseña.
+pub(crate) fn repon_proteccion(work_path: &str, proteccion: Option<Proteccion>) {
+    match proteccion {
+        Some(p) => {
+            protecciones().insert(work_path.to_string(), p);
+        }
+        None => {
+            protecciones().remove(work_path);
+        }
+    }
+}
+
 /// Quita la protección del documento abierto: ni se guardará cifrado ni
 /// pedirá contraseña al abrirlo. Es la acción explícita «Quitar la
 /// contraseña…», que la UI solo ofrece si el documento tenía una.
@@ -228,6 +243,11 @@ pub(crate) fn olvida_proteccion(work_path: &str) {
 /// La copia de trabajo de un PDF protegido ya está en claro (la descifra
 /// `open_pdf`), así que aquí solo hay que olvidar la protección puesta y
 /// barrer cualquier `/Encrypt` que quedara en el fichero.
+///
+/// **Se deshace como todo lo demás** (R51): la protección puesta no vive en
+/// el fichero, así que hasta el ciclo 8 un ⌘Z devolvía el documento y no la
+/// contraseña —y el documento se guardaba en claro sin que nadie lo hubiera
+/// pedido—. Ahora la protección viaja dentro del paso de historial.
 #[tauri::command(async)]
 pub fn remove_encryption(work_path: String) -> Result<(), String> {
     // escribe la copia de trabajo, así que va envuelta en `mutacion` como
@@ -1175,6 +1195,26 @@ mod tests {
         crate::save_pdf(work.clone(), guardado.to_string_lossy().to_string()).expect("reguardar");
         let claro = crate::open_pdf(guardado.to_string_lossy().to_string(), None)
             .expect("abrir sin contraseña");
+        crate::close_document(claro.work_path).expect("cerrar");
+
+        // **R51.** Y ⌘Z la devuelve. La protección puesta no vive en el
+        // fichero —la copia de trabajo no puede ir cifrada—, así que sin
+        // guardarla en el paso de historial deshacer devolvía el documento
+        // y no la contraseña: el siguiente Guardar escribía en claro un
+        // documento que el usuario creía protegido.
+        crate::historial::undo(work.clone()).expect("deshacer");
+        crate::save_pdf(work.clone(), guardado.to_string_lossy().to_string())
+            .expect("guardar tras deshacer");
+        assert_eq!(
+            crate::open_pdf(guardado.to_string_lossy().to_string(), None).unwrap_err(),
+            "PASSWORD_REQUIRED",
+            "deshacer «Quitar la contraseña…» tiene que devolver la contraseña"
+        );
+        // y rehacer la vuelve a quitar
+        crate::historial::redo(work.clone()).expect("rehacer");
+        crate::save_pdf(work.clone(), guardado.to_string_lossy().to_string()).expect("reguardar");
+        let claro = crate::open_pdf(guardado.to_string_lossy().to_string(), None)
+            .expect("rehacer la deja abrir sin contraseña");
         crate::close_document(claro.work_path).expect("cerrar");
 
         crate::close_document(work).expect("cerrar la copia");

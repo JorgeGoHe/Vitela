@@ -22,11 +22,22 @@ pub(crate) const MAX_PASOS: usize = 20;
 /// donde la copia es real.
 const MAX_BYTES: u64 = 512 * 1024 * 1024;
 
+/// Un paso: la instantánea del fichero **y lo que del documento no vive en
+/// el fichero**. Hoy eso es solo la protección puesta esperando a Guardar
+/// (ver «Protección» en CLAUDE.md), que se anota en un mapa aparte porque
+/// la copia de trabajo no puede ir cifrada. Sin guardarla aquí, deshacer
+/// «Quitar la contraseña…» devolvía el fichero y no la contraseña, y el
+/// documento se guardaba en claro sin que nadie lo hubiera pedido.
+struct Paso {
+    snap: PathBuf,
+    proteccion: Option<crate::seguridad::Proteccion>,
+}
+
 #[derive(Default)]
 struct Historial {
     /// De más antigua a más reciente.
-    deshacer: Vec<PathBuf>,
-    rehacer: Vec<PathBuf>,
+    deshacer: Vec<Paso>,
+    rehacer: Vec<Paso>,
     seq: u64,
 }
 
@@ -100,9 +111,12 @@ fn empuja(work_path: &str) -> Result<(), String> {
                 crate::mensaje_llano(format!("No se ha podido guardar el paso de deshacer: {e}"))
             })?;
             for viejo in h.rehacer.drain(..) {
-                let _ = std::fs::remove_file(viejo);
+                let _ = std::fs::remove_file(viejo.snap);
             }
-            h.deshacer.push(snap);
+            h.deshacer.push(Paso {
+                snap,
+                proteccion: crate::seguridad::proteccion_de(&work_path),
+            });
             Ok(())
         })
     })
@@ -114,7 +128,7 @@ fn empuja(work_path: &str) -> Result<(), String> {
 fn recorta(work_path: &str) {
     con(work_path, |h| {
         while h.deshacer.len() > MAX_PASOS {
-            let _ = std::fs::remove_file(h.deshacer.remove(0));
+            let _ = std::fs::remove_file(h.deshacer.remove(0).snap);
         }
     });
 }
@@ -123,7 +137,7 @@ fn recorta(work_path: &str) {
 fn descarta_ultimo(work_path: &str) {
     con(work_path, |h| {
         if let Some(p) = h.deshacer.pop() {
-            let _ = std::fs::remove_file(p);
+            let _ = std::fs::remove_file(p.snap);
         }
     });
 }
@@ -179,7 +193,7 @@ fn intercambia(work_path: &str, hacia_atras: bool) -> Result<HistoryState, Strin
         p
     });
     std::fs::copy(work_path, &actual).map_err(|e| e.to_string())?;
-    if let Err(e) = std::fs::rename(&origen, work_path) {
+    if let Err(e) = std::fs::rename(&origen.snap, work_path) {
         let _ = std::fs::remove_file(&actual);
         // devolver la instantánea a su pila: no se ha perdido nada
         con(work_path, |h| {
@@ -187,8 +201,15 @@ fn intercambia(work_path: &str, hacia_atras: bool) -> Result<HistoryState, Strin
         });
         return Err(format!("No se ha podido restaurar el documento: {e}"));
     }
+    // la protección viaja con el paso: deshacer «Quitar la contraseña…»
+    // tiene que devolver también la contraseña
+    let vuelve = Paso {
+        snap: actual,
+        proteccion: crate::seguridad::proteccion_de(work_path),
+    };
+    crate::seguridad::repon_proteccion(work_path, origen.proteccion);
     con(work_path, |h| {
-        if hacia_atras { h.rehacer.push(actual) } else { h.deshacer.push(actual) }
+        if hacia_atras { h.rehacer.push(vuelve) } else { h.deshacer.push(vuelve) }
     });
     estado(work_path)
 }
@@ -219,7 +240,7 @@ pub fn squash_history(work_path: String, steps: u16) -> Result<HistoryState, Str
     on_pdfium_thread(move || {
         let sobran = con(&work_path, |h| {
             let n = (steps as usize).min(h.deshacer.len());
-            let quitar: Vec<PathBuf> = if n > 1 {
+            let quitar: Vec<Paso> = if n > 1 {
                 let desde = h.deshacer.len() - n + 1;
                 h.deshacer.drain(desde..).collect()
             } else {
@@ -228,7 +249,7 @@ pub fn squash_history(work_path: String, steps: u16) -> Result<HistoryState, Str
             quitar
         });
         for p in sobran {
-            let _ = std::fs::remove_file(p);
+            let _ = std::fs::remove_file(p.snap);
         }
         estado(&work_path)
     })
@@ -243,7 +264,7 @@ pub(crate) fn limpia(work_path: &str) {
     };
     if let Some(h) = h {
         for p in h.deshacer.into_iter().chain(h.rehacer) {
-            let _ = std::fs::remove_file(p);
+            let _ = std::fs::remove_file(p.snap);
         }
     }
 }

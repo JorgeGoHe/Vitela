@@ -721,11 +721,16 @@ pub fn add_free_text(
 /// (`/LE /OpenArrow`) sobre lo que se quiere señalar. El gesto es el de
 /// Acrobat: clic donde señala, arrastrar hasta donde va el texto.
 ///
-/// `rect` es la **caja del texto** y `punta` el punto al que apunta, los
-/// dos en el espacio propio de la página (la UI convierte antes de
-/// mandar). El `/Rect` de la anotación abarca las dos cosas —es lo que
-/// exige el spec, y lo que hace que arrastrarla se lleve la punta— y el
-/// `/RD` dice dónde queda la caja dentro de él.
+/// `rect` es la **caja del texto**, `punta` el punto al que apunta y `codo`
+/// el punto intermedio opcional, los tres en el espacio propio de la página
+/// (la UI convierte antes de mandar). El `/Rect` de la anotación abarca
+/// todo —es lo que exige el spec, y lo que hace que arrastrarla se lleve la
+/// línea entera— y el `/RD` dice dónde queda la caja dentro de él.
+///
+/// **El codo** (R52) es lo que Acrobat dibuja por defecto: la línea sale de
+/// la caja en horizontal, dobla y llega a la punta. Sin `codo` sale la
+/// recta de siempre, que es lo que hace Acrobat cuando se arrastra en
+/// diagonal.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 pub fn add_callout(
@@ -736,6 +741,7 @@ pub fn add_callout(
     text: String,
     color: [u8; 4],
     author: Option<String>,
+    codo: Option<[f32; 2]>,
 ) -> Result<(), String> {
     if text.trim().is_empty() {
         return Err("La llamada está vacía".into());
@@ -761,15 +767,19 @@ pub fn add_callout(
             caja.top().value,
         );
         let (px, py) = geo.ui_a_pdf(punta[0], punta[1]);
-        // el ancla: el centro del lado de la caja que mira a la punta, que
-        // es de donde sale la línea en Acrobat
-        let ancla = ancla_de_la_caja((bx0, by0, bx1, by1), (px, py));
-        // el /Rect abarca la caja Y la punta, con hueco para la flecha
+        let codo = codo.map(|c| geo.ui_a_pdf(c[0], c[1]));
+        // el ancla: el centro del lado de la caja que mira a **por donde
+        // llega la línea** (el codo si lo hay, la punta si no), que es de
+        // donde sale en Acrobat
+        let hacia = codo.unwrap_or((px, py));
+        let ancla = ancla_de_la_caja((bx0, by0, bx1, by1), hacia);
+        // el /Rect abarca la caja Y toda la línea, con hueco para la flecha
         const AIRE: f32 = 10.0;
-        let x0 = bx0.min(px - AIRE);
-        let y0 = by0.min(py - AIRE);
-        let x1 = bx1.max(px + AIRE);
-        let y1 = by1.max(py + AIRE);
+        let (kx, ky) = codo.unwrap_or((px, py));
+        let x0 = bx0.min(px - AIRE).min(kx - AIRE);
+        let y0 = by0.min(py - AIRE).min(ky - AIRE);
+        let x1 = bx1.max(px + AIRE).max(kx + AIRE);
+        let y1 = by1.max(py + AIRE).max(ky + AIRE);
         let rd = [bx0 - x0, by0 - y0, x1 - bx1, y1 - by1];
         let (w, h) = (x1 - x0, y1 - y0);
         let (r, g, b) = (
@@ -777,7 +787,12 @@ pub fn add_callout(
             color[1] as f32 / 255.0,
             color[2] as f32 / 255.0,
         );
-        let linea = [(px - x0, py - y0), (ancla.0 - x0, ancla.1 - y0)];
+        // el primer punto es la punta: ahí va el remate que declara /LE
+        let mut linea = vec![(px - x0, py - y0)];
+        if let Some((cx, cy)) = codo {
+            linea.push((cx - x0, cy - y0));
+        }
+        linea.push((ancla.0 - x0, ancla.1 - y0));
         let ap_id = apariencia_freetext_con_llamada(
             doc, w, h, &text, size, [r, g, b], true, rd, &linea,
         );
@@ -796,10 +811,14 @@ pub fn add_callout(
         );
         // el /CL empieza en la punta: es ahí donde va el remate que declara
         // /LE
-        annot.set(
-            "CL",
-            Object::Array(vec![px.into(), py.into(), ancla.0.into(), ancla.1.into()]),
-        );
+        let mut cl: Vec<Object> = vec![px.into(), py.into()];
+        if let Some((cx, cy)) = codo {
+            cl.push(cx.into());
+            cl.push(cy.into());
+        }
+        cl.push(ancla.0.into());
+        cl.push(ancla.1.into());
+        annot.set("CL", Object::Array(cl));
         annot.set("LE", Object::Name(b"OpenArrow".to_vec()));
         annot.set(
             "DA",
@@ -1660,6 +1679,7 @@ mod tests {
             "Esta cota está mal".into(),
             [226, 61, 61, 255],
             Some("Ana".into()),
+            None,
         )
         .expect("crear la llamada");
 
@@ -1715,8 +1735,63 @@ mod tests {
             "  ".into(),
             [0, 0, 0, 255],
             None,
+            None,
         )
         .is_err());
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    /// **R52.** El codo: en Acrobat la línea de una llamada sale de la caja,
+    /// **dobla** y llega a la punta. Vitela solo sabía trazar la recta, así
+    /// que una llamada que tenía que rodear una cota pasaba por encima de
+    /// ella.
+    #[test]
+    fn la_llamada_con_codo_escribe_tres_puntos_y_los_arrastra_juntos() {
+        let tmp = std::env::temp_dir().join("anot2-llamada-codo.pdf");
+        crea_pdf(&["Plano"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        add_callout(
+            work.clone(),
+            0,
+            Rect { x: 250.0, y: 120.0, w: 160.0, h: 50.0 },
+            [90.0, 300.0],
+            "Esta cota está mal".into(),
+            [226, 61, 61, 255],
+            None,
+            Some([160.0, 200.0]),
+        )
+        .expect("crear la llamada con codo");
+
+        let cl = numeros_de(&work, 0, b"CL");
+        assert_eq!(cl.len(), 6, "punta, codo y ancla: {cl:?}");
+        let rect = numeros_de(&work, 0, b"Rect");
+        for (x, y) in [(cl[0], cl[1]), (cl[2], cl[3])] {
+            assert!(
+                x >= rect[0] && x <= rect[2] && y >= rect[1] && y <= rect[3],
+                "el /Rect tiene que abarcar también el codo: {rect:?} vs {:?}",
+                (x, y)
+            );
+        }
+        // el dibujo lleva los dos tramos
+        let ap = ap_crudo(&work, 0);
+        assert!(ap.matches(" l ").count() >= 2, "dos tramos de línea: {ap}");
+
+        // y arrastrar la caja se lleva la línea entera, codo incluido
+        let antes = cl.clone();
+        let ui = &crate::anotaciones::get_annotations(work.clone(), 0).expect("listar")[0];
+        transform_annotation(work.clone(), 0, 0, ui.x + 40.0, ui.y + 25.0, ui.w, ui.h)
+            .expect("mover");
+        let rect2 = numeros_de(&work, 0, b"Rect");
+        let cl2 = numeros_de(&work, 0, b"CL");
+        assert_eq!(cl2.len(), 6, "el codo no se pierde al mover: {cl2:?}");
+        let (dx, dy) = (rect2[0] - rect[0], rect2[1] - rect[1]);
+        for i in 0..3 {
+            assert!(
+                (cl2[i * 2] - antes[i * 2] - dx).abs() < 0.6
+                    && (cl2[i * 2 + 1] - antes[i * 2 + 1] - dy).abs() < 0.6,
+                "el punto {i} tiene que moverse con el /Rect: {antes:?} → {cl2:?}"
+            );
+        }
         std::fs::remove_file(&tmp).ok();
     }
 
