@@ -704,6 +704,18 @@ pub struct FirmaInfo {
     /// «ECDSA P-256 / SHA-384». Con lo no soportado, lo que se ha
     /// encontrado, para que se pueda contar.
     pub algoritmo: String,
+    /// **Del documento, no de esta firma**: vale lo mismo en todas las de
+    /// la lista. Es cierto cuando todas las firmas están en `"ok"` y una de
+    /// ellas cubre el fichero entero —que solo puede ser la última—, o sea
+    /// cuando no hay nada escrito después de la última firma.
+    ///
+    /// Existe porque con dos firmas la banda decía «la firma es válida,
+    /// pero hay cambios posteriores que no avala» (AC-064): el «cambio» era
+    /// la segunda firma. Una revisión que solo añade una firma no es una
+    /// manipulación, y Acrobat dice «Firmado y todas las firmas son
+    /// válidas». Deducirlo mirando solo la primera `FirmaInfo` es lo que
+    /// no puede hacer la UI.
+    pub documento_intacto: bool,
 }
 
 /// Firma comprobada y documento intacto.
@@ -739,7 +751,18 @@ pub fn verify_signatures(path: String) -> Result<Vec<FirmaInfo>, String> {
         }
         let doc = LoDoc::load_mem(&bytes)
             .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer el PDF: {e}")))?;
-        Ok(firmas_de(&doc, &bytes))
+        let mut firmas = firmas_de(&doc, &bytes);
+        // el veredicto del DOCUMENTO: todas las firmas comprobadas y nada
+        // escrito después de la última (solo la última puede cubrir el
+        // fichero entero). Va repetido en cada una porque la lista es lo
+        // que viaja a la UI, y así no tiene que deducirlo de la primera
+        let intacto = !firmas.is_empty()
+            && firmas.iter().all(|f| f.estado == ESTADO_OK)
+            && firmas.iter().any(|f| f.covers_whole_file);
+        for f in &mut firmas {
+            f.documento_intacto = intacto;
+        }
+        Ok(firmas)
     })
 }
 
@@ -880,6 +903,9 @@ fn lee_firma(
         // mientras no se compruebe nada, lo honesto es «no se sabe»
         estado: ESTADO_DESCONOCIDO.to_string(),
         algoritmo: String::new(),
+        // lo pone `verify_signatures` cuando ya están todas leídas: es del
+        // documento, no de esta firma
+        documento_intacto: false,
     };
     let rangos: Vec<usize> = sig
         .get(b"ByteRange")
@@ -2180,6 +2206,90 @@ mod tests {
         );
 
         for p in [&src, &una, &dos, &tres] {
+            std::fs::remove_file(p).ok();
+        }
+    }
+
+    /// **R41b (AC-064).** Con dos firmas válidas, el documento está
+    /// intacto: la segunda firma no es un «cambio posterior» que la primera
+    /// no avale. Acrobat dice «Firmado y todas las firmas son válidas»; la
+    /// banda de Vitela decía «la firma es válida, pero hay cambios
+    /// posteriores que no avala», y el cambio era la otra firma.
+    ///
+    /// El veredicto es del **documento** y por eso viaja en cada
+    /// `FirmaInfo` con el mismo valor: la UI no tiene que deducirlo de la
+    /// primera de la lista, que es justo lo que salía mal.
+    #[test]
+    fn con_dos_firmas_validas_el_documento_esta_intacto() {
+        let dir = std::env::temp_dir();
+        let src = dir.join("firma-intacto.pdf");
+        let una = dir.join("firma-intacto-1.pdf");
+        let dos = dir.join("firma-intacto-2.pdf");
+        let tocado = dir.join("firma-intacto-tocado.pdf");
+        crea_pdf(&["Contrato"], &src);
+        sign(
+            &src.to_string_lossy(),
+            &una.to_string_lossy(),
+            &credenciales(),
+            None,
+            &Apariencia::default(),
+        )
+        .expect("la primera firma");
+        let firmas = verify_signatures(una.to_string_lossy().into_owned()).expect("verificar");
+        assert_eq!(firmas.len(), 1);
+        assert!(firmas[0].documento_intacto, "una firma sola: {:?}", firmas[0]);
+
+        sign(
+            &una.to_string_lossy(),
+            &dos.to_string_lossy(),
+            &otras_credenciales(),
+            None,
+            &Apariencia::default(),
+        )
+        .expect("la segunda firma");
+        let firmas = verify_signatures(dos.to_string_lossy().into_owned()).expect("verificar");
+        assert_eq!(firmas.len(), 2);
+        assert!(
+            !firmas[0].covers_whole_file,
+            "la primera no cubre el fichero: detrás está la segunda"
+        );
+        assert!(
+            firmas.iter().all(|f| f.documento_intacto),
+            "las dos son válidas y nada se ha escrito después: {firmas:?}"
+        );
+
+        // y una revisión que NO es una firma sí es un cambio sin avalar
+        let base = std::fs::read(&dos).expect("leer");
+        let doc = LoDoc::load(&dos).expect("cargar");
+        let mut inc = lopdf::IncrementalDocument::create_from(base, doc);
+        let id = inc.new_document.add_object(Object::string_literal("después de firmar"));
+        let root = inc
+            .get_prev_documents()
+            .trailer
+            .get(b"Root")
+            .and_then(|o| o.as_reference())
+            .expect("root");
+        inc.opt_clone_object_to_new_document(root).expect("clonar");
+        inc.new_document
+            .get_object_mut(root)
+            .and_then(|o| o.as_dict_mut())
+            .expect("catálogo")
+            .set("Vitela", Object::Reference(id));
+        let mut out = Vec::new();
+        inc.save_to(&mut out).expect("guardar");
+        std::fs::write(&tocado, &out).expect("escribir");
+
+        let firmas = verify_signatures(tocado.to_string_lossy().into_owned()).expect("verificar");
+        assert!(
+            firmas.iter().all(|f| f.estado == ESTADO_OK),
+            "las dos firmas siguen cuadrando con lo que firmaron: {firmas:?}"
+        );
+        assert!(
+            firmas.iter().all(|f| !f.documento_intacto),
+            "pero hay una revisión detrás que ninguna avala: {firmas:?}"
+        );
+
+        for p in [&src, &una, &dos, &tocado] {
             std::fs::remove_file(p).ok();
         }
     }
