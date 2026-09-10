@@ -211,11 +211,22 @@ pub fn duplicate_page(work_path: String, page_index: u16) -> Result<u16, String>
     }))
 }
 
-/// Inserta todas las páginas de otro PDF en la posición dada. Devuelve el
-/// total resultante (generaliza `merge_pdf`, que solo añade al final).
+/// Inserta en la posición dada las páginas de otro PDF: todas, o **solo
+/// las que se pidan** (`page_indices`, base 0, en el orden en que
+/// lleguen). Devuelve el total resultante (generaliza `merge_pdf`, que
+/// solo añade al final).
+///
+/// El rango del origen es R57: el diálogo preguntaba antes o después de
+/// qué página y entraba el documento entero, y quien inserta un anexo de
+/// tres páginas de un PDF de cuarenta tenía que insertarlo todo y borrar.
 #[tauri::command(async)]
-pub fn insert_pdf_at(work_path: String, other_path: String, index: u16) -> Result<u16, String> {
-    mutacion(work_path, |work_path| on_pdfium_thread(move || {
+pub fn insert_pdf_at(
+    work_path: String,
+    other_path: String,
+    index: u16,
+    page_indices: Option<Vec<u16>>,
+) -> Result<u16, String> {
+    mutacion(work_path, move |work_path| on_pdfium_thread(move || {
         let pdfium = pdfium()?;
         let mut doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -226,7 +237,24 @@ pub fn insert_pdf_at(work_path: String, other_path: String, index: u16) -> Resul
         let other = pdfium
             .load_pdf_from_file(fuente.ruta(), None)
             .map_err(|e| e.to_string())?;
-        let rango = format!("1-{}", other.pages().len());
+        // el rango que entiende PDFium va en base 1 y por comas; sin lista,
+        // el documento entero
+        let rango = match &page_indices {
+            Some(v) => {
+                let dentro: Vec<String> = v
+                    .iter()
+                    .filter(|i| **i < other.pages().len())
+                    .map(|i| (i + 1).to_string())
+                    .collect();
+                if dentro.is_empty() {
+                    return Err(
+                        "Ninguna de esas páginas está en el documento que se inserta".into(),
+                    );
+                }
+                dentro.join(",")
+            }
+            None => format!("1-{}", other.pages().len()),
+        };
         let index = index.min(doc.pages().len());
         doc.pages_mut()
             .copy_pages_from_document(&other, &rango, index)
@@ -728,6 +756,45 @@ mod tests {
                     .collect()
             }
         })
+    }
+
+    /// **R57 — el rango del documento que entra.** «Insertar PDF aquí…»
+    /// preguntaba antes o después de qué página y metía el documento
+    /// entero: quien inserta un anexo de tres páginas de un PDF de cuarenta
+    /// tenía que meterlo todo y borrar treinta y siete.
+    #[test]
+    fn insertar_un_pdf_puede_traerse_solo_unas_paginas() {
+        let destino = std::env::temp_dir().join("paginas2-insertar-rango.pdf");
+        let origen = std::env::temp_dir().join("paginas2-insertar-rango-origen.pdf");
+        crea_pdf(&["Contrato A", "Contrato B"], &destino);
+        crea_pdf(&["Anexo uno", "Anexo dos", "Anexo tres", "Anexo cuatro"], &origen);
+        let work = destino.to_string_lossy().to_string();
+        let otro = origen.to_string_lossy().to_string();
+
+        // solo la segunda y la cuarta del origen, detrás de la primera
+        let total = insert_pdf_at(work.clone(), otro.clone(), 1, Some(vec![1, 3]))
+            .expect("insertar el rango");
+        assert_eq!(total, 4);
+        let t = textos(&work);
+        assert!(t[0].contains("Contrato A"));
+        assert!(t[1].contains("Anexo dos"), "la 2 tendría que ser el anexo dos: {t:?}");
+        assert!(t[2].contains("Anexo cuatro"), "y la 3 el cuatro: {t:?}");
+        assert!(t[3].contains("Contrato B"));
+
+        // sin lista sigue entrando el documento entero, como hasta ahora
+        crate::historial::undo(work.clone()).expect("deshacer");
+        assert_eq!(
+            insert_pdf_at(work.clone(), otro.clone(), 2, None).expect("insertar entero"),
+            6
+        );
+
+        // y un rango que no toca ninguna página se dice, no se traga
+        crate::historial::undo(work.clone()).expect("deshacer");
+        assert!(insert_pdf_at(work.clone(), otro, 0, Some(vec![9]))
+            .unwrap_err()
+            .contains("Ninguna de esas páginas"));
+        std::fs::remove_file(&destino).ok();
+        std::fs::remove_file(&origen).ok();
     }
 
     /// **El fondo, entero** (orden 1.4 del ciclo 9). Acrobat abre su

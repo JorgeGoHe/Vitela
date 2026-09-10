@@ -488,7 +488,7 @@ mod tests {
         );
         // 3. insert_pdf_at
         assert_eq!(
-            crate::paginas2::insert_pdf_at(d.clone(), cn.clone(), 0).expect("insert_pdf_at"),
+            crate::paginas2::insert_pdf_at(d.clone(), cn.clone(), 0, None).expect("insert_pdf_at"),
             7
         );
         // 4. duplicate_page sobre la página que lleva la nota

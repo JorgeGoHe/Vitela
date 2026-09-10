@@ -222,7 +222,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "add_blank_page" => cmd!(paginas2::add_blank_page, { work_path: String, index: u16 }),
         "pdf_from_images" => cmd!(paginas2::pdf_from_images, { image_paths: Vec<String>, dest_path: String, tamano: String }),
         "duplicate_page" => cmd!(paginas2::duplicate_page, { work_path: String, page_index: u16 }),
-        "insert_pdf_at" => cmd!(paginas2::insert_pdf_at, { work_path: String, other_path: String, index: u16 }),
+        "insert_pdf_at" => cmd!(paginas2::insert_pdf_at, { work_path: String, other_path: String, index: u16, page_indices: Option<Vec<u16>> }),
         "replace_pages" => cmd!(paginas2::replace_pages, { work_path: String, page_indices: Vec<u16>, other_path: String, other_indices: Option<Vec<u16>> }),
         "split_pdf" => cmd!(paginas2::split_pdf, { work_path: String, dest_dir: String, modo: String, cada: Option<u16> }),
         "merge_many" => cmd!(paginas2::merge_many, { work_path: String, others: Vec<String>, at: Option<u16> }),
@@ -505,7 +505,13 @@ mod tests {
     /// del backend sin vía de acceso: existe, está probada y el usuario no
     /// puede llegar a ella. Fue el estado exacto de `char_spacing` durante
     /// un ciclo entero. La lista tiene que quedar vacía al cerrar el ciclo.
-    const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[(
+    const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[
+        (
+            "insert_pdf_at",
+            "page_indices",
+            "ciclo 9 (R57): el campo «Páginas del documento que entra» de \
+             DialogoInsertar llega con la interfaz",
+        ),(
         "add_stamp",
         "dinamico",
         "ciclo 9: los sellos dinámicos esperan a la galería de sellos de la \
