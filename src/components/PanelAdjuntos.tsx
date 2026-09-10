@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import type { Adjunto } from "../api";
-import { MOD, tamanoFichero } from "../tipos";
+import { fechaAnotacion, MOD, tamanoFichero } from "../tipos";
 import Icon from "./Icon";
 
 /**
@@ -79,7 +79,9 @@ export default function PanelAdjuntos({
           <span className="adj-nombre">{a.name}</span>
           <span className="adj-dato dato">
             {tamanoFichero(a.bytes)}
-            {a.created ? ` · ${a.created}` : ""}
+            {/* la fecha del `/Filespec` llega en ISO: en una interfaz en
+                español se escribe como en el resto de la app */}
+            {a.created ? ` · ${fechaAnotacion(a.created) || a.created}` : ""}
           </span>
           {a.description && (
             <span className="adj-descripcion">{a.description}</span>

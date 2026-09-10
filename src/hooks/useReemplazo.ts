@@ -61,9 +61,11 @@ export function useReemplazo(ctx: {
     async (todas: boolean) => {
       if (!workPath || matches.length === 0 || !query) return;
       const aTratar = todas ? matches : matches.slice(matchIdx, matchIdx + 1);
-      // dos coincidencias de la misma línea son un solo bloque, y
-      // `replace_text` cambia las dos de una pasada
-      const vistos = new Set<string>();
+      // UNA entrada por coincidencia, también cuando dos caen en la misma
+      // línea: `replace_text` agrupa las del mismo bloque y cambia tantas
+      // apariciones como entradas le lleguen (`veces`), así que mandar una
+      // sola dejaba viva la segunda «Vitela» de la línea y el recuento decía
+      // 3 de 4 (AC-053)
       const lote: Reemplazo[] = [];
       let fuera = 0;
       for (const m of aTratar) {
@@ -71,9 +73,6 @@ export function useReemplazo(ctx: {
           fuera++;
           continue;
         }
-        const clave = `${m.page_index}:${m.block_index}`;
-        if (vistos.has(clave)) continue;
-        vistos.add(clave);
         lote.push({
           page_index: m.page_index,
           block_index: m.block_index,

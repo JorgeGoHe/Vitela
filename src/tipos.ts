@@ -269,6 +269,8 @@ export function plural(n: number, singular: string, plural: string): string {
 /** «834 KB» o «2,41 MB»: por debajo de 1 MB dos decimales de MB no
  *  distinguen nada, y la coma decimal es la que escribe el español. */
 export function tamanoFichero(bytes: number): string {
+  // por debajo de 1 KB se dicen los bytes: «0 KB» se lee como «está vacío»
+  if (bytes < 1024) return `${bytes} ${bytes === 1 ? "byte" : "bytes"}`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(2).replace(".", ",")} MB`;
 }

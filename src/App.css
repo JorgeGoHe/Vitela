@@ -1803,6 +1803,13 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+/* la sesión sin guardar, plegada a un botón de la barra: sigue a mano y
+   deja de ocupar una fila sobre el documento */
+.recuperar-plegado {
+  color: var(--accent);
+  font-size: 12px;
+}
+
 /* la fila se puede recorrer con el teclado, como la de comentarios */
 .adj-row:focus-visible {
   outline: 2px solid var(--accent);

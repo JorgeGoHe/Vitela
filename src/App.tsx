@@ -251,7 +251,13 @@ function resumenFirmas(firmas: FirmaInfo[]): string {
     firmas.length > 1
       ? `Firmado por ${firmas.length} personas`
       : `Firmado${quien ? ` por ${quien}` : ""}${cuando}`;
-  return `${cabecera} · el documento no ha cambiado desde la firma`;
+  // la confianza NO cambia el color de la banda —es del certificado, no del
+  // documento—, pero sí se dice: quien venga de Acrobat lee el verde como
+  // «esto es de fiar» y aquí el verde solo promete que nadie lo ha tocado
+  const sinRaiz = firmas.some((f) => f.confianza !== "raiz_conocida");
+  return `${cabecera} · el documento no ha cambiado desde la firma${
+    sinRaiz ? " · no se ha comprobado quién emitió el certificado" : ""
+  }`;
 }
 
 /** Punto de lectura al que vuelve ⌥←: página, scroll y zoom. */
@@ -515,6 +521,10 @@ function App() {
   // sesión que quedó a medias en un cierre inesperado: una banda de una línea,
   // no un modal, que es como Vitela cuenta todo lo demás
   const [sesionRota, setSesionRota] = useState<Sesion | null>(null);
+  // en cuanto se abre otro documento la banda se pliega a un botón discreto
+  // de la barra: obligaba a decidir sobre trabajo perdido en el peor momento
+  // y ocupaba una fila sobre el documento durante toda la sesión
+  const [sesionPlegada, setSesionPlegada] = useState(false);
   const [descartarAsk, setDescartarAsk] = useState<Sesion | null>(null);
   // «Exportar a Word»: el aviso de lo que no sale va ANTES de elegir destino
   const [wordAsk, setWordAsk] = useState(false);
@@ -619,6 +629,9 @@ function App() {
       else if (prefs.zoomInicial === "100") setZoom(1);
       else setZoom(cargaZoom());
       setDocVersion((v) => v + 1);
+      // la sesión sin guardar sigue esperando, pero ya no en mitad de la
+      // pantalla: se pliega al botón «Recuperar…» de la barra
+      setSesionPlegada(true);
       viewerRef.current?.scrollTo({ top: 0 });
       scrollAnchorRef.current = null;
       // el menú nativo se monta una sola vez, en el arranque y sin documento:
@@ -1220,7 +1233,7 @@ function App() {
     if (!dest) return;
     try {
       await saveAttachment(workPath, index, dest);
-      setNotice(`Adjunto guardado en ${dest}`);
+      setNotice(`${a.name} guardado en ${dest}`);
     } catch (e) {
       setError(String(e));
     }
@@ -3176,7 +3189,7 @@ function App() {
   const bandas =
     (error ? 1 : 0) +
     (bandaFirmas && firmasDoc.length > 0 ? 1 : 0) +
-    (sesionRota ? 1 : 0) +
+    (sesionRota && !sesionPlegada ? 1 : 0) +
     (notice ? 1 : 0);
 
   return (
@@ -3234,6 +3247,19 @@ function App() {
             >
               se protegerá al guardar
             </span>
+          )}
+          {sesionRota && sesionPlegada && (
+            <button
+              className="btn recuperar-plegado"
+              title={`Tenías cambios sin guardar en ${
+                sesionRota.original_path?.split(/[\\/]/).pop() ??
+                "un documento sin fichero"
+              }`}
+              onClick={() => setSesionPlegada(false)}
+            >
+              <Icon name="undo" size={13} />
+              Recuperar…
+            </button>
           )}
           {ocupado && <span className="status dato">trabajando…</span>}
         </div>
@@ -3420,7 +3446,7 @@ function App() {
           </button>
         </div>
       )}
-      {sesionRota && (
+      {sesionRota && !sesionPlegada && (
         <div className="banner-recuperar">
           <p>
             Tenías cambios sin guardar en{" "}
