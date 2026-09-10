@@ -1835,6 +1835,24 @@ textarea {
   stroke: none;
 }
 
+/* el botón que deja puesta la medida recién hecha, dentro de su etiqueta */
+.medida-dejar {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card-bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.medida-dejar:hover {
+  background: var(--btn-hover);
+}
+
 .medida-caja {
   position: absolute;
   border: 1.5px solid var(--accent);

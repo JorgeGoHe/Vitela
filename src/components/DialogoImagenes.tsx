@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { TamanoImagenes } from "../api";
 import { open } from "../dialogos";
 import { useModal } from "../hooks/useModal";
@@ -36,6 +36,9 @@ export default function DialogoImagenes({
   onClose: () => void;
 }) {
   const [rutas, setRutas] = useState<string[]>([]);
+  const [dropIdx, setDropIdx] = useState<number | null>(null);
+  const arrastreRef = useRef<number | null>(null);
+  const dropRef = useRef<number | null>(null);
   const [tamano, setTamano] = useState<TamanoImagenes>("a4");
   const confirmar = () => {
     if (rutas.length > 0) onConfirm({ rutas, tamano });
@@ -68,6 +71,25 @@ export default function DialogoImagenes({
     });
   }
 
+  /** Y arrastrando, que es como se ordena en «Combinar ficheros» y en el
+   *  panel de páginas: el orden de la lista es el orden de las páginas. */
+  function suelta() {
+    const desde = arrastreRef.current;
+    const hueco = dropRef.current;
+    arrastreRef.current = null;
+    dropRef.current = null;
+    setDropIdx(null);
+    if (desde === null || hueco === null) return;
+    const hasta = hueco > desde ? hueco - 1 : hueco;
+    if (hasta === desde) return;
+    setRutas((v) => {
+      const copia = [...v];
+      const [r] = copia.splice(desde, 1);
+      copia.splice(hasta, 0, r);
+      return copia;
+    });
+  }
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
@@ -83,8 +105,9 @@ export default function DialogoImagenes({
         <h3>Crear PDF desde imágenes</h3>
         {rutas.length === 0 && (
           <p className="sign-empty">
-            Una imagen por página, en el orden de la lista. El documento que
-            tengas abierto no se toca: sale un fichero nuevo.
+            Una imagen por página, en el orden de la lista —que se cambia
+            arrastrando o con ▲▼—. El documento que tengas abierto no se
+            toca: sale un fichero nuevo.
           </p>
         )}
         {rutas.length > 0 && (
@@ -93,7 +116,31 @@ export default function DialogoImagenes({
               const { nombre, dir } = partesDe(r);
               const mala = fallos.includes(r);
               return (
-                <div key={`${r}-${i}`} className="combinar-fila">
+                <div
+                  key={`${r}-${i}`}
+                  className={`combinar-fila${dropIdx === i ? " drop-antes" : ""}${
+                    dropIdx === i + 1 ? " drop-despues" : ""
+                  }`}
+                  draggable
+                  onDragStart={(e) => {
+                    arrastreRef.current = i;
+                    e.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragOver={(e) => {
+                    if (arrastreRef.current === null) return;
+                    e.preventDefault();
+                    const caja = e.currentTarget.getBoundingClientRect();
+                    const destino =
+                      e.clientY < caja.top + caja.height / 2 ? i : i + 1;
+                    dropRef.current = destino;
+                    setDropIdx(destino);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    suelta();
+                  }}
+                  onDragEnd={suelta}
+                >
                   <span className="dato combinar-orden">{i + 1}</span>
                   <span className="combinar-nombre">
                     <span>{nombre}</span>

@@ -123,6 +123,10 @@ const ICONS: Record<string, string[]> = {
   moon: ["M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"],
   back: ["M19 12H5", "m12 19-7-7 7-7"],
   forward: ["M5 12h14", "m12 5 7 7-7 7"],
+  // clip: «Adjuntar fichero…»
+  clip: [
+    "M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48",
+  ],
   // libro abierto: «Modo lectura»
   libro: [
     "M2 4.5h6a3 3 0 0 1 3 3V20a2.5 2.5 0 0 0-2.5-2H2Z",

@@ -74,11 +74,23 @@ export function useMedida(ctx: {
   size: PageSize;
   tool: ToolProps;
   onPageMutated: (page: number) => void;
+  /** Funde los últimos pasos del historial en uno: dejar una medida son dos
+   *  comandos (el trazo y su texto) y un solo gesto del usuario. */
+  onAgrupar: (pasos: number) => void;
   onError: (e: unknown) => void;
   onNotice: (texto: string) => void;
 }) {
-  const { workPath, index, mode, size, tool, onPageMutated, onError, onNotice } =
-    ctx;
+  const {
+    workPath,
+    index,
+    mode,
+    size,
+    tool,
+    onPageMutated,
+    onAgrupar,
+    onError,
+    onNotice,
+  } = ctx;
   const [medidaDraft, setMedidaDraft] = useState<Medida | null>(null);
   const medidaStartRef = useRef<{ x: number; y: number } | null>(null);
   const medidaLiveRef = useRef<Medida | null>(null);
@@ -171,6 +183,9 @@ export function useMedida(ctx: {
         fontSize: 9,
         color,
       });
+      // el trazo y su texto son dos comandos y un solo gesto: se funden en
+      // un paso de historial, o «⌘Z la quita» pedía dos ⌘Z (AC-069)
+      onAgrupar(2);
       onPageMutated(index);
       onNotice(`Medida puesta: ${texto} · ${MOD}Z la quita`);
     } catch (e) {
@@ -187,6 +202,23 @@ export function useMedida(ctx: {
       ],
       etiquetaDe(d),
     );
+  }
+
+  /** «Dejarla puesta» **después** de medir: quien mide, ve el número y
+   *  luego quiere conservarlo no tiene que marcar una casilla y volver a
+   *  medir. Es el mismo trabajo que hace la casilla de la fila contextual,
+   *  con la medida que hay en pantalla. */
+  function dejaLaDeAhora() {
+    if (medidaDraft) {
+      dejaMedida(medidaDraft);
+      setMedidaDraft(null);
+      return;
+    }
+    if (!cerrada || vertices.length < 2) return;
+    const pts = tipo === "area" ? [...vertices, vertices[0]] : vertices;
+    escribeMedida(pts, etiquetaPoligono(vertices));
+    setVertices([]);
+    setCerrada(false);
   }
 
   /** Clic en la página con una herramienta de vértices: pone uno más, o
@@ -287,6 +319,9 @@ export function useMedida(ctx: {
     setCursor,
     anadeVertice,
     cierra,
+    dejaLaDeAhora,
+    /** Hay una medida hecha en pantalla que se puede dejar puesta. */
+    hayMedida: medidaDraft !== null || (cerrada && vertices.length >= 2),
   };
 }
 

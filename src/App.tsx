@@ -232,11 +232,28 @@ function resumenRedaccion(r: RedactReport): string {
   return partes.join(" y ");
 }
 
+/** Un documento firmado por varias personas cuya última firma cubre el
+ *  fichero entero está **intacto**, y la anterior no tiene que avalar la
+ *  revisión que la sigue: firmar detrás de otro es lo normal, no una
+ *  manipulación. Lo dice el backend (`documento_intacto`), que es quien ha
+ *  mirado los bytes. */
+function documentoIntacto(firmas: FirmaInfo[]): boolean {
+  const ultima = firmas[firmas.length - 1];
+  return (
+    firmas.length > 1 &&
+    ultima?.documento_intacto === true &&
+    firmas.every(
+      (f) => estadoDeFirma(f).nivel !== "mal" && f.estado !== "desconocido",
+    )
+  );
+}
+
 /** La banda de firmas: una sola línea, sin jerga, y con el peor de los tres
  *  estados —una firma que no se ha podido comprobar no se pinta en rojo—. */
 function estadoBanda(firmas: FirmaInfo[]): NivelFirma {
   const niveles = firmas.map((f) => estadoDeFirma(f).nivel);
   if (niveles.includes("mal")) return "mal";
+  if (documentoIntacto(firmas)) return "ok";
   if (niveles.includes("duda")) return "duda";
   return "ok";
 }
@@ -245,7 +262,10 @@ function estadoBanda(firmas: FirmaInfo[]): NivelFirma {
 function resumenFirmas(firmas: FirmaInfo[]): string {
   // la que no está bien manda: se dice quién firmó y qué pasa con ella, sin
   // dar por buena la primera solo porque sea la primera
-  const dudosa = firmas.find((f) => estadoDeFirma(f).nivel !== "ok");
+  const intacto = documentoIntacto(firmas);
+  const dudosa = intacto
+    ? undefined
+    : firmas.find((f) => estadoDeFirma(f).nivel !== "ok");
   if (dudosa) {
     const suyo = dudosa.name || dudosa.cert_subject || "";
     const texto = estadoDeFirma(dudosa).texto;
@@ -260,6 +280,15 @@ function resumenFirmas(firmas: FirmaInfo[]): string {
     firmas.length > 1
       ? `Firmado por ${firmas.length} personas`
       : `Firmado${quien ? ` por ${quien}` : ""}${cuando}`;
+  // con varias firmas, lo que importa es que nadie haya tocado el documento
+  // detrás de la última: la anterior no tiene que avalar la revisión que la
+  // sigue, que es exactamente lo que hace Acrobat
+  if (intacto) {
+    const sinRaizTodas = firmas.some((f) => f.confianza !== "raiz_conocida");
+    return `${plural(firmas.length, "firma válida", "firmas válidas")} · el documento no ha cambiado desde la última${
+      sinRaizTodas ? " · no se ha comprobado quién emitió los certificados" : ""
+    }`;
+  }
   // la confianza NO cambia el color de la banda —es del certificado, no del
   // documento—, pero sí se dice: quien venga de Acrobat lee el verde como
   // «esto es de fiar» y aquí el verde solo promete que nadie lo ha tocado
@@ -1314,6 +1343,10 @@ function App() {
     }
   }
 
+  /** «Adjuntar fichero…»: hasta ahora solo se llegaba desde la pestaña
+   *  «Adjuntos», que solo existe cuando el documento **ya** lleva uno, así
+   *  que el primer adjunto no se podía poner. Ahora está también en el
+   *  menú, y al terminar abre la pestaña, que es donde queda. */
   async function anadirAdjunto() {
     if (!workPath) return;
     const sel = await open({ multiple: false, title: "Añadir un adjunto" });
@@ -1321,6 +1354,7 @@ function App() {
     try {
       await addAttachment(workPath, sel, "");
       afterMutation(pageCount);
+      abrirPestana("adjuntos");
       setNotice(`Adjunto añadido · ${MOD}Z para deshacer`);
     } catch (e) {
       setError(String(e));
@@ -3353,6 +3387,7 @@ function App() {
     "quitar-marca-de-agua": () => askRemoveMarginal("watermark"),
     "quitar-encabezados": () => askRemoveMarginal("header"),
     "reconocer-campos": reconocerCampos,
+    "adjuntar-fichero": anadirAdjunto,
     "anadir-campo": () => {
       selectMode("select");
       setMode("form-new");
@@ -3709,6 +3744,7 @@ function App() {
                   setMode("redact");
                 }}
                 reconocerCampos={reconocerCampos}
+                adjuntarFichero={anadirAdjunto}
                 nuevoCampo={() => {
                   selectMode("select");
                   setMode("form-new");
@@ -4596,6 +4632,7 @@ function App() {
                   registerEl={registerEl}
                   onAnnotated={afterAnnotate}
                   onPageMutated={afterPageMutation}
+                  onAgruparHistorial={historial.agrupar}
                   onDocMutated={afterMutation}
                   onError={mostrarError}
                   onNotice={mostrarAviso}

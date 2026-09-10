@@ -43,6 +43,8 @@ export default function CapaMedida({
     cerrada,
     vertices,
     setCursor,
+    dejaLaDeAhora,
+    hayMedida,
   } = medida;
   const [cuanto, setCuanto] = useState("");
   const [unidad, setUnidad] = useState(1);
@@ -92,6 +94,16 @@ export default function CapaMedida({
               style={{ left: ultimo.x * scale + 10, top: ultimo.y * scale + 10 }}
             >
               {etiquetaPoligono(enCurso)}
+              {cerrada && (
+                <button
+                  className="medida-dejar"
+                  title="Escribir esta medida en el documento"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={dejaLaDeAhora}
+                >
+                  Dejarla puesta
+                </button>
+              )}
             </span>
           )}
         </>
@@ -114,6 +126,19 @@ export default function CapaMedida({
             }}
           >
             {calibre ? "¿cuánto mide?" : etiquetaDe(d)}
+            {/* decidirlo DESPUÉS de medir: quien ve el número y entonces lo
+                quiere conservar no tiene que marcar una casilla y volver a
+                medir */}
+            {!calibre && hayMedida && (
+              <button
+                className="medida-dejar"
+                title="Escribir esta medida en el documento"
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={dejaLaDeAhora}
+              >
+                Dejarla puesta
+              </button>
+            )}
           </span>
         </>
       )}

@@ -1102,6 +1102,11 @@ export type FirmaInfo = {
   covers_whole_file: boolean;
   /** El contenido firmado sigue siendo el que hay. */
   digest_ok: boolean;
+  /** **Del documento, no de esta firma**: no hay ningún cambio detrás de la
+   *  última firma. Una revisión que solo añade otra firma no es un cambio
+   *  que haya que denunciar, y sin este dato la banda acusaba de
+   *  manipulación a un documento firmado por dos personas. */
+  documento_intacto: boolean;
   cert_subject: string;
   cert_issuer: string;
   /** Quién responde por el certificado, evaluado contra el almacén de

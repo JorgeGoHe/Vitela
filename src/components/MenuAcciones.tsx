@@ -64,6 +64,7 @@ export default function MenuAcciones({
   redactar,
   nuevoCampo,
   reconocerCampos,
+  adjuntarFichero,
   nuevoEnlace,
   printDocument,
   abrirExportar,
@@ -111,6 +112,9 @@ export default function MenuAcciones({
   /** «Reconocer campos…»: propone los campos de un formulario impreso y
    *  deja revisarlos antes de escribir nada. */
   reconocerCampos: () => void;
+  /** «Adjuntar fichero…»: el primer adjunto no se podía poner porque la
+   *  pestaña solo sale cuando ya hay alguno. */
+  adjuntarFichero: () => void;
   nuevoEnlace: () => void;
   printDocument: () => void;
   abrirExportar: () => void;
@@ -341,6 +345,11 @@ export default function MenuAcciones({
               onSelect={ejecutar(nuevoCampo)}
             />
             <Entrada icon="link" texto="Añadir enlace…" onSelect={ejecutar(nuevoEnlace)} />
+            <Entrada
+              icon="clip"
+              texto="Adjuntar fichero…"
+              onSelect={ejecutar(adjuntarFichero)}
+            />
             <div className="menu-titulo">Salida</div>
             <Entrada
               icon="printer"
