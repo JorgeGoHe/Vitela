@@ -177,6 +177,7 @@ import DialogoDividir from "./components/DialogoDividir";
 import DialogoCombinar from "./components/DialogoCombinar";
 import DialogoImagenes from "./components/DialogoImagenes";
 import DialogoAtajos from "./components/DialogoAtajos";
+import DialogoWord from "./components/DialogoWord";
 import "./App.css";
 
 const BASE_WIDTH = 900;
@@ -2507,7 +2508,7 @@ function App() {
    *  imágenes, no maquetación—. El aviso de que es una aproximación se da
    *  antes de pedir carpeta y nombre: es una función que promete mucho y da
    *  menos, y descubrirlo con el fichero ya escrito es tarde. */
-  async function exportarWord() {
+  async function exportarWord(paginas: number[] | null) {
     if (!workPath) return;
     setWordAsk(false);
     const dest = await save({
@@ -2516,9 +2517,17 @@ function App() {
       title: "Exportar a Word",
     });
     if (!dest) return;
+    const cuantas = paginas?.length ?? pageCount;
     try {
-      setNotice("Exportando a Word…", { persistente: true });
-      const r = await exportDocx(workPath, dest);
+      // `export_docx` es un solo viaje: no manda progreso ni se puede
+      // interrumpir a mitad, así que la banda dice lo que hay —cuántas
+      // páginas y que no hay vuelta atrás— en vez de fingir un contador o
+      // un Cancelar que no harían nada. La ventana sigue respondiendo.
+      setNotice("Exportando a Word… no se puede cancelar a mitad", {
+        persistente: true,
+        dato: plural(cuantas, "página", "páginas"),
+      });
+      const r = await exportDocx(workPath, dest, paginas);
       const resumen = `${plural(r.parrafos, "párrafo", "párrafos")} y ${plural(
         r.imagenes,
         "imagen",
@@ -3596,15 +3605,8 @@ function App() {
         />
       )}
       {wordAsk && (
-        <DialogoConfirmar
-          titulo="Exportar a Word"
-          cuerpo={
-            <p className="modal-file" style={{ whiteSpace: "normal" }}>
-              El texto y las imágenes salen; la maquetación de columnas y
-              tablas, no. Para un documento sencillo suele bastar.
-            </p>
-          }
-          textoConfirmar="Exportar de todos modos"
+        <DialogoWord
+          pageCount={pageCount}
           onConfirm={exportarWord}
           onClose={() => setWordAsk(false)}
         />
