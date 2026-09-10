@@ -44,6 +44,10 @@ export default function OpcionesHerramienta({
   drawColor,
   drawWidth,
   setDrawWidth,
+  goma,
+  setGoma,
+  gomaAncho,
+  setGomaAncho,
   shapeKind,
   setShapeKind,
   shapeColor,
@@ -85,6 +89,11 @@ export default function OpcionesHerramienta({
   drawColor: string;
   drawWidth: number;
   setDrawWidth: (w: number) => void;
+  /** Goma de borrar armada dentro del modo Dibujar. */
+  goma: boolean;
+  setGoma: (v: boolean) => void;
+  gomaAncho: number;
+  setGomaAncho: (v: number) => void;
   shapeKind: ShapeKind;
   setShapeKind: (k: ShapeKind) => void;
   shapeColor: string;
@@ -357,6 +366,68 @@ export default function OpcionesHerramienta({
               </option>
             ))}
           </select>
+          {/* la goma es un conmutador del propio modo Dibujar, no un modo
+              nuevo: se enciende, se borra lo que sobra y se sigue dibujando */}
+          <span className="grupo-sep" />
+          <button
+            className={`btn${goma ? " on" : ""}`}
+            title="Goma de borrar: quita el trozo del trazo que tapa, no el trazo entero"
+            aria-pressed={goma}
+            onClick={() => setGoma(!goma)}
+          >
+            <Icon name="close" size={13} />
+            Goma
+          </button>
+          {goma && (
+            <select
+              className="size-select"
+              title="Tamaño de la goma"
+              aria-label="Tamaño de la goma"
+              value={gomaAncho}
+              onChange={(e) => setGomaAncho(Number(e.target.value))}
+            >
+              {[8, 16, 28, 48].map((w) => (
+                <option key={w} value={w}>
+                  {w} pt
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+      {mode === "callout" && (
+        <div className="tool-options">
+          <span>Llamada</span>
+          <div className="swatches">
+            {SHAPE_COLORS.map((c) => (
+              <button
+                key={c}
+                className={`swatch${freeTextColor === c ? " on" : ""}`}
+                style={{ background: c }}
+                title={NOMBRE_COLOR[c] ?? c}
+                aria-label={NOMBRE_COLOR[c] ?? c}
+                aria-pressed={freeTextColor === c}
+                onClick={() => cambiaColorAccion("cuadro", c)}
+              />
+            ))}
+          </div>
+          <select
+            className="size-select"
+            title="Tamaño de la letra"
+            aria-label="Tamaño de la letra"
+            value={freeTextSize}
+            onChange={(e) => setFreeTextSize(Number(e.target.value))}
+          >
+            {[9, 10, 12, 14, 18, 24].map((t) => (
+              <option key={t} value={t}>
+                {t} pt
+              </option>
+            ))}
+          </select>
+          <span className="opt-hint">
+            Clic donde quieres que señale y arrastra hasta donde va el texto ·
+            Esc cancela
+          </span>
         </div>
       )}
       {mode === "shape" && (

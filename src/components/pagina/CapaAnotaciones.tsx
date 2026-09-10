@@ -41,7 +41,8 @@ export function MarcasAnotaciones({
   anotaciones: Anotaciones;
   scale: number;
 }) {
-  const { annots, annotDraft, startAnnotAction, setNotePopover } = anotaciones;
+  const { annots, annotDraft, startAnnotAction, setNotePopover, comentarMarca } =
+    anotaciones;
   return (
     <>
       {annots
@@ -105,16 +106,27 @@ export function MarcasAnotaciones({
               <div
                 key={`hm${a.index}-${j}`}
                 className="annot-hit-markup"
-                title={`${KIND_LABELS[a.kind] ?? a.kind} · clic para opciones`}
+                title={`${KIND_LABELS[a.kind] ?? a.kind} · clic para opciones · doble clic para comentar`}
                 style={{
                   left: r.x * scale,
                   top: r.y * scale,
                   width: r.w * scale,
                   height: r.h * scale,
                 }}
+                onMouseDown={(e) => {
+                  // el doble clic es de la marca: sin esto el despachador de
+                  // la capa de texto seleccionaba la palabra de debajo
+                  if (e.detail >= 2) e.stopPropagation();
+                }}
                 onClick={(e) => {
                   e.stopPropagation();
                   setNotePopover((p) => (p?.index === a.index ? null : a));
+                }}
+                onDoubleClick={(e) => {
+                  // el comentario asociado a un resaltado: el mismo textarea
+                  // que abre el doble clic sobre una nota
+                  e.stopPropagation();
+                  comentarMarca(a);
                 }}
               />
             )),

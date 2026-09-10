@@ -462,6 +462,35 @@ export function addFreeText(args: {
   return invoke("add_free_text", { author: null, ...args });
 }
 
+/** Llamada (callout) de Acrobat: un `/FreeText` con la línea `/CL` y su
+ *  punta de flecha señalando un punto de la página. El `rect` es la caja del
+ *  texto y `punta` el punto al que apunta, los dos en el espacio propio de
+ *  la página. */
+export function addCallout(args: {
+  workPath: string;
+  pageIndex: number;
+  rect: { x: number; y: number; w: number; h: number };
+  punta: [number, number];
+  text: string;
+  color: Rgba;
+  author?: string | null;
+}): Promise<void> {
+  return invoke("add_callout", { author: null, ...args });
+}
+
+/** Goma de borrar del dibujo: quita del trazo (`Ink`) los segmentos que
+ *  caen dentro del rectángulo y vuelve a dibujar su apariencia, en vez de
+ *  llevarse el trazo entero. Coordenadas en el espacio propio de la
+ *  página. */
+export function eraseInk(
+  workPath: string,
+  pageIndex: number,
+  annotIndex: number,
+  rect: { x: number; y: number; w: number; h: number },
+): Promise<void> {
+  return invoke("erase_ink", { workPath, pageIndex, annotIndex, rect });
+}
+
 /** Reescribe el texto de un comentario ya creado; el backend refresca `/M`
  *  (y `/T` si llega `author`). */
 export function setAnnotationContents(args: {

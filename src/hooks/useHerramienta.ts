@@ -51,6 +51,10 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
   // el color real del bloque que está seleccionado: es lo que pinta el
   // swatch «A» («el que ya tenga»), que hasta ahora era una letra gris
   const [textColorBloque, setTextColorBloque] = useState<string | null>(null);
+  // goma de borrar del modo Dibujar: un conmutador, no un modo aparte, con
+  // el cursor redondo del tamaño del borrado (Acrobat)
+  const [goma, setGoma] = useState(false);
+  const [gomaAncho, setGomaAncho] = useState(16);
   // marca de «rellenar y firmar» armada, si la hay
   const [fillMark, setFillMark] = useState<MarcaRellenar | null>(null);
   const [fillColor, setFillColor] = useState(
@@ -110,6 +114,8 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
       textColor,
       textAlign,
       textLineHeight,
+      goma,
+      gomaAncho,
       onTextBlockPicked: setTextColorBloque,
       fillMark,
       fillColor,
@@ -134,6 +140,8 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
       textColor,
       textAlign,
       textLineHeight,
+      goma,
+      gomaAncho,
       fillMark,
       fillColor,
       activeSig,
@@ -167,6 +175,10 @@ export function useHerramienta(activeSig: ToolProps["activeSig"]) {
     setTextAlign,
     textLineHeight,
     setTextLineHeight,
+    goma,
+    setGoma,
+    gomaAncho,
+    setGomaAncho,
     textColorBloque,
     fillMark,
     setFillMark,

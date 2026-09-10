@@ -133,6 +133,8 @@ export type Mode =
   | "form-new"
   | "link-new"
   | "freetext"
+  /** Llamada: clic donde señala, arrastre hasta donde va el texto. */
+  | "callout"
   /** Dibujar el recuadro donde se verá la firma con certificado. */
   | "firma-cert";
 export type ShapeKind = "rect" | "ellipse" | "line" | "arrow";

@@ -7,8 +7,10 @@ import {
 } from "react";
 import { invoke } from "../../ipc";
 import {
+  addCallout,
   addFreeText,
   addMarkup,
+  eraseInk,
   addShape,
   addStamp,
   setAnnotationColor,
@@ -116,6 +118,23 @@ export function useAnotaciones(ctx: {
   const freeTextStartRef = useRef<{ x: number; y: number } | null>(null);
   const freeTextLiveRef = useRef<(Rect & { text: string }) | null>(null);
 
+  // llamada (callout): la punta la marca el clic y el arrastre lleva la
+  // caja del texto, que es el gesto de Acrobat
+  const [calloutDraft, setCalloutDraft] = useState<
+    (Rect & { punta: { x: number; y: number }; text: string }) | null
+  >(null);
+  const calloutStartRef = useRef<{ x: number; y: number } | null>(null);
+  const calloutLiveRef = useRef<
+    (Rect & { punta: { x: number; y: number }; text: string }) | null
+  >(null);
+
+  // goma de borrar: la zona que se va a llevar (lo que se ve es lo que se
+  // borra) y la posición del cursor redondo
+  const [gomaRect, setGomaRect] = useState<Rect | null>(null);
+  const [gomaPos, setGomaPos] = useState<{ x: number; y: number } | null>(null);
+  const gomaStartRef = useRef<{ x: number; y: number } | null>(null);
+  const gomaLiveRef = useRef<Rect | null>(null);
+
   const [shapeDraft, setShapeDraft] = useState<{
     x1: number;
     y1: number;
@@ -138,6 +157,13 @@ export function useAnotaciones(ctx: {
     setFreeTextDraft(null);
     freeTextStartRef.current = null;
     freeTextLiveRef.current = null;
+    setCalloutDraft(null);
+    calloutStartRef.current = null;
+    calloutLiveRef.current = null;
+    setGomaRect(null);
+    setGomaPos(null);
+    gomaStartRef.current = null;
+    gomaLiveRef.current = null;
     setAnnotDraft(null);
     annotActionRef.current = null;
     annotLiveRef.current = null;
@@ -270,6 +296,64 @@ export function useAnotaciones(ctx: {
       setFreeTextDraft(null);
       onModeChange("select");
       onAnnotated(index);
+    } catch (e) {
+      onError(e);
+    }
+  }
+
+  /** Crea la llamada con lo escrito dentro (⌘Enter o «Añadir»). La caja se
+   *  parte en líneas al ancho pedido, igual que el cuadro de texto: la
+   *  apariencia que se guarda es la que se ve al escribir. */
+  async function commitCallout() {
+    const d = calloutDraft;
+    if (!workPath || !d) return;
+    if (!d.text.trim()) {
+      setCalloutDraft(null);
+      return;
+    }
+    const lineas = ajustaLineas(d.text, d.w, tool.freeTextSize);
+    const alto = Math.max(d.h, altoCuadro(lineas.length, tool.freeTextSize));
+    const punta = puntoAPagina(d.punta, size);
+    try {
+      await addCallout({
+        workPath,
+        pageIndex: index,
+        rect: rectAPagina({ x: d.x, y: d.y, w: d.w, h: alto }, size),
+        punta: [punta.x, punta.y],
+        text: lineas.join("\n"),
+        color: hexToRgba(tool.freeTextColor),
+        author: autorComentarios(),
+      });
+      setCalloutDraft(null);
+      onModeChange("select");
+      onAnnotated(index);
+    } catch (e) {
+      onError(e);
+    }
+  }
+
+  /** Goma: se lleva de cada trazo (`Ink`) los segmentos que caen dentro de
+   *  la zona borrada, no el trazo entero. La zona es la que se pinta
+   *  mientras se arrastra, así que lo que se ve es lo que se va. */
+  async function borraConGoma(zona: Rect) {
+    if (!workPath) return;
+    const tocados = annots.filter(
+      (a) =>
+        a.kind === "Ink" &&
+        a.x < zona.x + zona.w &&
+        a.x + a.w > zona.x &&
+        a.y < zona.y + zona.h &&
+        a.y + a.h > zona.y,
+    );
+    if (tocados.length === 0) return;
+    const pr = rectAPagina(zona, size);
+    try {
+      // de mayor a menor: borrar un trazo entero puede reordenar `/Annots`
+      for (const a of [...tocados].sort((x, y) => y.index - x.index)) {
+        await eraseInk(workPath, index, a.index, pr);
+      }
+      onAnnotated(index);
+      onNotice(`Borrado · ${MOD}Z lo devuelve`);
     } catch (e) {
       onError(e);
     }
@@ -518,6 +602,14 @@ export function useAnotaciones(ctx: {
     if (hit) setNotePopover(hit);
   }
 
+  /** Doble clic sobre un resaltado, un subrayado o un tachado: abre el
+   *  mismo `textarea` que ya abre sobre una nota, que es lo que hace
+   *  Acrobat cuando se le asocia un comentario a una marca. */
+  const comentarMarca = useCallback((a: AnnotationInfo) => {
+    setNotePopover(a);
+    setNoteEdit({ index: a.index, text: a.contents });
+  }, []);
+
   function startAnnotAction(
     e: MouseEvent<HTMLElement>,
     a: AnnotationInfo,
@@ -588,6 +680,19 @@ export function useAnotaciones(ctx: {
     freeTextStartRef,
     freeTextLiveRef,
     commitFreeText,
+    calloutDraft,
+    setCalloutDraft,
+    calloutStartRef,
+    calloutLiveRef,
+    commitCallout,
+    gomaRect,
+    setGomaRect,
+    gomaPos,
+    setGomaPos,
+    gomaStartRef,
+    gomaLiveRef,
+    borraConGoma,
+    comentarMarca,
     markupSelection,
     commitShape,
     placeStamp,

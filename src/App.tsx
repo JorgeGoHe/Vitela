@@ -3148,6 +3148,12 @@ function App() {
       hint: "Comentario encima del documento (no cambia el texto del PDF)",
     },
     {
+      id: "callout",
+      icon: "forward",
+      label: "Llamada",
+      hint: "Señalar algo con una línea y escribir al lado (clic donde señala, arrastra hasta el texto)",
+    },
+    {
       id: "edit",
       icon: "textedit",
       label: "Editar",
@@ -3269,7 +3275,7 @@ function App() {
             {(
               [
                 ["select"],
-                ["draw", "note", "freetext", "shape", "stamp"],
+                ["draw", "note", "freetext", "callout", "shape", "stamp"],
                 ["edit", "image"],
                 ["firmar"],
               ] as Mode[][]
@@ -3944,6 +3950,10 @@ function App() {
         drawColor={herramienta.drawColor}
         drawWidth={herramienta.drawWidth}
         setDrawWidth={herramienta.setDrawWidth}
+        goma={herramienta.goma}
+        setGoma={herramienta.setGoma}
+        gomaAncho={herramienta.gomaAncho}
+        setGomaAncho={herramienta.setGomaAncho}
         shapeKind={herramienta.shapeKind}
         setShapeKind={herramienta.setShapeKind}
         shapeColor={herramienta.shapeColor}

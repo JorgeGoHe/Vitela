@@ -179,3 +179,44 @@ export function cardTop(
   if (!displayHeight || debajo + alto <= displayHeight) return debajo;
   return Math.max(0, top - 6 - alto);
 }
+
+/**
+ * Zona que se lleva la goma: la caja barrida por el arrastre, engordada con
+ * el radio del borrado. Es exactamente la que se pinta mientras se arrastra,
+ * así que lo que se ve es lo que se borra.
+ */
+export function zonaGoma(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  ancho: number,
+): Rect {
+  const r = ancho / 2;
+  return {
+    x: Math.min(a.x, b.x) - r,
+    y: Math.min(a.y, b.y) - r,
+    w: Math.abs(b.x - a.x) + ancho,
+    h: Math.abs(b.y - a.y) + ancho,
+  };
+}
+
+/**
+ * Caja del texto de una llamada: sale donde se suelta el arrastre, con el
+ * tamaño por defecto del cuadro de texto y sin salirse del papel. La punta
+ * (lo que se señala) viaja con ella.
+ */
+export function cajaLlamada(
+  punta: { x: number; y: number },
+  destino: { x: number; y: number },
+  size: PageSize,
+): Rect & { punta: { x: number; y: number }; text: string } {
+  const w = Math.min(180, Math.max(60, size.width - 8));
+  const h = 48;
+  return {
+    punta,
+    x: Math.max(4, Math.min(destino.x, size.width - w - 4)),
+    y: Math.max(4, Math.min(destino.y, size.height - h - 4)),
+    w,
+    h,
+    text: "",
+  };
+}

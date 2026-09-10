@@ -13,7 +13,13 @@ import {
   type ShapeKind,
 } from "../tipos";
 import type { Alineacion } from "../api";
-import { pagePoint, rectAPagina, resizeRect } from "../hooks/pagina/geometria";
+import {
+  cajaLlamada,
+  pagePoint,
+  rectAPagina,
+  resizeRect,
+  zonaGoma,
+} from "../hooks/pagina/geometria";
 import { useEnlaces } from "../hooks/pagina/useEnlaces";
 import { useFormularios } from "../hooks/pagina/useFormularios";
 import { useImagenes } from "../hooks/pagina/useImagenes";
@@ -23,6 +29,7 @@ import { useSeleccionTexto } from "../hooks/pagina/useSeleccionTexto";
 import { useTexto } from "../hooks/pagina/useTexto";
 import CapaAnotaciones, { MarcasAnotaciones } from "./pagina/CapaAnotaciones";
 import CapaAreas from "./pagina/CapaAreas";
+import CapaLlamada from "./pagina/CapaLlamada";
 import CapaEnlaces from "./pagina/CapaEnlaces";
 import CapaFormularios from "./pagina/CapaFormularios";
 import CapaImagenes from "./pagina/CapaImagenes";
@@ -37,6 +44,10 @@ export type MarcaRellenar = "check" | "cross" | "dot" | "line";
 export type ToolProps = {
   drawColor: string;
   drawWidth: number;
+  /** Goma de borrar armada dentro del modo Dibujar. */
+  goma: boolean;
+  /** Diámetro del borrado, en puntos de página. */
+  gomaAncho: number;
   markupPending: string | null;
   onMarkupPending: (c: string | null) => void;
   markupColors: { resaltar: string; subrayar: string; tachar: string };
@@ -371,6 +382,14 @@ function Pagina({
     if (e.button !== 0) return;
     const { x, y } = pagePoint(e, scale, viewRotation);
     if (mode === "draw") {
+      // la goma es un conmutador del mismo modo, no un modo aparte
+      if (tool.goma) {
+        anotaciones.gomaStartRef.current = { x, y };
+        anotaciones.setGomaPos({ x, y });
+        anotaciones.gomaLiveRef.current = null;
+        anotaciones.setGomaRect(null);
+        return;
+      }
       anotaciones.strokeLiveRef.current = [[x, y]];
       anotaciones.setStrokePts([[x, y]]);
       return;
@@ -444,6 +463,13 @@ function Pagina({
       anotaciones.setFreeTextDraft(null);
       return;
     }
+    if (mode === "callout") {
+      // el clic marca la PUNTA (lo que se señala) y el arrastre lleva la
+      // caja del texto, que es el gesto de Acrobat
+      anotaciones.calloutStartRef.current = { x, y };
+      anotaciones.setCalloutDraft(null);
+      return;
+    }
     if (!seleccion.pageText) return;
     claimSel(index);
     // doble clic: palabra; triple: línea (no arranca arrastre)
@@ -508,6 +534,16 @@ function Pagina({
       return;
     }
     if (mode === "draw") {
+      if (tool.goma) {
+        const p = pagePoint(e, scale, viewRotation);
+        anotaciones.setGomaPos(p);
+        const start = anotaciones.gomaStartRef.current;
+        if (!start) return;
+        const d = zonaGoma(start, p, tool.gomaAncho);
+        anotaciones.gomaLiveRef.current = d;
+        anotaciones.setGomaRect(d);
+        return;
+      }
       if (anotaciones.strokeLiveRef.current.length === 0) return;
       const { x, y } = pagePoint(e, scale, viewRotation);
       anotaciones.strokeLiveRef.current = [...anotaciones.strokeLiveRef.current, [x, y]];
@@ -593,6 +629,15 @@ function Pagina({
       };
       anotaciones.freeTextLiveRef.current = d;
       anotaciones.setFreeTextDraft(d);
+      return;
+    }
+    if (mode === "callout") {
+      const start = anotaciones.calloutStartRef.current;
+      if (!start) return;
+      const { x, y } = pagePoint(e, scale, viewRotation);
+      const d = cajaLlamada(start, { x, y }, size);
+      anotaciones.calloutLiveRef.current = d;
+      anotaciones.setCalloutDraft(d);
       return;
     }
     if (mode === "form-new" || mode === "link-new") {
@@ -715,6 +760,19 @@ function Pagina({
       enlaces.linkStartRef.current = null;
       return;
     }
+    if (mode === "callout") {
+      const start = anotaciones.calloutStartRef.current;
+      anotaciones.calloutStartRef.current = null;
+      const d = anotaciones.calloutLiveRef.current;
+      anotaciones.calloutLiveRef.current = null;
+      if (!start) return;
+      // un clic simple vale: la caja sale al lado de la punta, para no
+      // obligar a arrastrar cuando solo se quiere señalar
+      anotaciones.setCalloutDraft(
+        d ?? cajaLlamada(start, { x: start.x + 60, y: start.y + 40 }, size),
+      );
+      return;
+    }
     if (mode === "freetext") {
       const start = anotaciones.freeTextStartRef.current;
       anotaciones.freeTextStartRef.current = null;
@@ -759,6 +817,18 @@ function Pagina({
         texto.setBlockDraft(null);
         texto.commitTextBlock(a.orig, draft);
       }
+      return;
+    }
+    if (mode === "draw" && tool.goma) {
+      const start = anotaciones.gomaStartRef.current;
+      anotaciones.gomaStartRef.current = null;
+      const d = anotaciones.gomaLiveRef.current;
+      anotaciones.gomaLiveRef.current = null;
+      anotaciones.setGomaRect(null);
+      if (!start) return;
+      // un toque sin arrastre también borra: la goma se usa a base de
+      // toquecitos sobre lo que sobra
+      anotaciones.borraConGoma(d ?? zonaGoma(start, start, tool.gomaAncho));
       return;
     }
     if (mode === "draw" && anotaciones.strokeLiveRef.current.length > 0) anotaciones.finishStroke();
@@ -853,6 +923,12 @@ function Pagina({
             displayHeight={altoHoja}
             tool={tool}
             onQuitarMarca={(annotIndex) => quitarMarca(index, annotIndex)}
+          />
+          <CapaLlamada
+            mode={mode}
+            anotaciones={anotaciones}
+            scale={scale}
+            tool={tool}
           />
           <CapaAreas
             mode={mode}

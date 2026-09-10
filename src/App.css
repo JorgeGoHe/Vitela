@@ -1188,6 +1188,7 @@ textarea {
 
 .textlayer.mode-firmar,
 .textlayer.mode-freetext,
+.textlayer.mode-callout,
 .textlayer.mode-shape,
 .textlayer.mode-crop,
 .textlayer.mode-form-new,
@@ -1691,6 +1692,36 @@ textarea {
 /* el recuadro de la firma se dibuja como el de recortar */
 .textlayer.mode-firma-cert {
   cursor: crosshair;
+}
+
+/* la llamada: la línea y la punta que señalan, mientras se escribe */
+.callout-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 29;
+}
+
+/* la goma: el círculo del tamaño del borrado y la zona que se va a llevar
+   (lo que se ve es exactamente lo que se le manda a `erase_ink`) */
+.goma-cursor {
+  position: absolute;
+  border: 1px solid var(--fg-muted);
+  border-radius: 50%;
+  background: rgba(253, 253, 251, 0.35);
+  pointer-events: none;
+  z-index: 31;
+}
+
+.goma-zona {
+  position: absolute;
+  border: 1px dashed var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  pointer-events: none;
+  z-index: 30;
 }
 
 /* borrador del cuadro de texto: la caja que se está escribiendo antes de
