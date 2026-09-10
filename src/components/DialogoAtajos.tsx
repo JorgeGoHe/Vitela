@@ -29,6 +29,7 @@ const GRUPOS: { titulo: string; atajos: Atajo[] }[] = [
       [atajo("O"), "Abrir un PDF"],
       [atajo("S"), "Guardar"],
       [atajo("S", "shift cmd"), "Guardar como"],
+      [atajo("W"), "Cerrar el documento (la pestaña de delante)"],
       [atajo("P"), "Imprimir"],
       // ⌃Tab no lleva ⌘ en ningún sistema: se escribe a mano
       [

@@ -125,6 +125,7 @@ import {
   cargaPreferencias,
   cargaZoom,
   cargaVista,
+  cuandoLlano,
   estadoDeFirma,
   fechaLarga,
   type NivelFirma,
@@ -625,14 +626,15 @@ function App() {
   const [outline, setOutlineState] = useState<OutlineNode[]>([]);
   const [propsDraft, setPropsDraft] = useState<Metadata | null>(null);
   const [prefsAbiertas, setPrefsAbiertas] = useState(false);
-  // sesión que quedó a medias en un cierre inesperado: una banda de una línea,
-  // no un modal, que es como Vitela cuenta todo lo demás
-  const [sesionRota, setSesionRota] = useState<Sesion | null>(null);
+  // sesiones que quedaron a medias en un cierre inesperado: una banda de una
+  // línea, no un modal, que es como Vitela cuenta todo lo demás. Son varias
+  // porque pueden ser varios los documentos que estaban abiertos con cambios
+  const [sesionesRotas, setSesionesRotas] = useState<Sesion[]>([]);
   // en cuanto se abre otro documento la banda se pliega a un botón discreto
   // de la barra: obligaba a decidir sobre trabajo perdido en el peor momento
   // y ocupaba una fila sobre el documento durante toda la sesión
   const [sesionPlegada, setSesionPlegada] = useState(false);
-  const [descartarAsk, setDescartarAsk] = useState<Sesion | null>(null);
+  const [descartarAsk, setDescartarAsk] = useState<Sesion[] | null>(null);
   // «Exportar a Word»: el aviso de lo que no sale va ANTES de elegir destino
   const [wordAsk, setWordAsk] = useState(false);
   // «Crear PDF desde imágenes…»: se ofrece también sin documento, que es
@@ -886,45 +888,83 @@ function App() {
     };
   }, [recientes, fichasRecientes]);
 
-  /** Al arrancar: si quedó una sesión sin guardar, se ofrece recuperarla.
-   *  La copia de trabajo ya estaba en temp; lo que faltaba era el apunte. */
+  /** Los documentos de una lista de sesiones, en llano: el nombre de
+   *  fichero de cada uno, o «un documento sin fichero» si no tenía ruta.
+   *  Con más de tres se cuentan, que es lo que cabe en una línea. */
+  function nombresDeSesiones(lista: Sesion[]): string {
+    const nombres = lista.map(
+      (s) => s.original_path?.split(/[\\/]/).pop() ?? "un documento sin fichero",
+    );
+    if (nombres.length > 3)
+      return `${nombres.length} documentos: ${nombres.slice(0, 3).join(", ")}…`;
+    return nombres.join(", ");
+  }
+
+  /** Al arrancar: si quedaron sesiones sin guardar, se ofrecen. Las copias
+   *  de trabajo ya estaban en temp; lo que faltaba era el apunte. */
   useEffect(() => {
     recoverSession()
-      .then((s) => {
-        if (s?.modificado) setSesionRota(s);
+      .then((lista) => {
+        const vivas = lista.filter((s) => s.modificado);
+        if (vivas.length > 0) setSesionesRotas(vivas);
       })
       .catch(() => {});
   }, []);
 
-  /** Abre la copia de trabajo que quedó, conservando su fichero original:
-   *  ⌘S escribe donde el usuario espera y no en el temporal. */
-  async function recuperarSesion(s: Sesion) {
-    setSesionRota(null);
-    const work = await openPath(s.work_path, undefined, s.original_path);
-    if (!work) {
+  /** Abre las copias de trabajo que quedaron, **cada una en su pestaña** y
+   *  conservando su fichero original: ⌘S escribe donde el usuario espera y
+   *  no en el temporal. Todas quedan marcadas con cambios sin guardar, que
+   *  es lo que son: si no, cambiar de pestaña las daría por guardadas. */
+  async function recuperarSesiones(lista: Sesion[]) {
+    setSesionesRotas([]);
+    const abiertas: string[] = [];
+    for (const s of lista) {
+      const work = await openPath(s.work_path, undefined, s.original_path);
+      if (!work) continue;
+      abiertas.push(work);
+      if (!s.original_path) setNombreProvisional("Documento recuperado");
+    }
+    if (abiertas.length === 0) {
       setError("La copia con los cambios ya no está: no se ha podido recuperar");
       return;
     }
-    if (!s.original_path) setNombreProvisional("Documento recuperado");
     setModified(true);
-    setNotice(
-      s.original_path
-        ? `Recuperados los cambios sin guardar de ${s.original_path}`
-        : "Recuperado el documento sin guardar",
+    setPestanas((v) =>
+      v.map((p) =>
+        abiertas.includes(p.workPath) ? { ...p, modified: true } : p,
+      ),
     );
+    const uno = lista.length === 1 ? lista[0] : null;
+    setNotice(
+      uno
+        ? uno.original_path
+          ? `Recuperados los cambios sin guardar de ${uno.original_path}`
+          : "Recuperado el documento sin guardar"
+        : `${plural(abiertas.length, "documento recuperado", "documentos recuperados")}, cada uno en su pestaña`,
+    );
+    if (abiertas.length < lista.length)
+      setError(
+        `${plural(lista.length - abiertas.length, "documento no se ha podido recuperar", "documentos no se han podido recuperar")}: su copia con los cambios ya no está`,
+      );
   }
 
-  /** No guardar: se borra la copia y el apunte, y se dice. Es el único
+  /** No guardar: se borran las copias y los apuntes, y se dice. Es el único
    *  borrado irreversible de trabajo del usuario que hay en la app, así que
-   *  pregunta antes, como el diálogo de cierre —y se llama igual que allí,
-   *  que es lo que hace que se reconozca. */
-  function descartarSesion(s: Sesion) {
-    setSesionRota(null);
-    invoke("close_document", { workPath: s.work_path }).catch(() => {});
-    borraSesion(s.work_path).catch((e) =>
-      console.warn("no se ha podido borrar el apunte de sesión:", e),
+   *  pregunta antes —una sola vez, aunque sean varios—, como el diálogo de
+   *  cierre, y se llama igual que allí, que es lo que hace que se reconozca. */
+  function descartarSesiones(lista: Sesion[]) {
+    setSesionesRotas([]);
+    for (const s of lista) {
+      invoke("close_document", { workPath: s.work_path }).catch(() => {});
+      borraSesion(s.work_path).catch((e) =>
+        console.warn("no se ha podido borrar el apunte de sesión:", e),
+      );
+    }
+    setNotice(
+      lista.length === 1
+        ? "Descartados los cambios sin guardar de la sesión anterior"
+        : `Descartados los cambios sin guardar de ${plural(lista.length, "documento", "documentos")}`,
     );
-    setNotice("Descartados los cambios sin guardar de la sesión anterior");
   }
 
   /** Abre un fichero. Con pestañas no hay nada que preguntar: el documento
@@ -2106,6 +2146,14 @@ function App() {
       } else if (mod && e.key === "o") {
         e.preventDefault();
         openFile();
+      } else if (mod && (e.key === "w" || e.key === "W") && pageCount > 0) {
+        // ⌘W cierra la PESTAÑA, como en Acrobat, y lo decide la UI, que es
+        // la única que sabe cuántos documentos hay abiertos: el evento
+        // `cerrar-solicitado` no dice si ha sido ⌘W, el botón rojo o ⌘Q y
+        // sigue significando «cerrar la app». Con la última pestaña se
+        // vuelve al estado vacío; la ventana solo la cierra el botón rojo
+        e.preventDefault();
+        closeDocument();
       } else if (mod && (e.key === "s" || e.key === "S")) {
         e.preventDefault();
         if (e.shiftKey) {
@@ -3839,7 +3887,7 @@ function App() {
   const bandas =
     (error ? 1 : 0) +
     (bandaFirmas && firmasDoc.length > 0 ? 1 : 0) +
-    (sesionRota && !sesionPlegada ? 1 : 0) +
+    (sesionesRotas.length > 0 && !sesionPlegada ? 1 : 0) +
     (propuestas.length > 0 ? 1 : 0) +
     (notice ? 1 : 0);
 
@@ -3901,13 +3949,12 @@ function App() {
               se protegerá al guardar
             </span>
           )}
-          {sesionRota && sesionPlegada && (
+          {sesionesRotas.length > 0 && sesionPlegada && (
             <button
               className="btn recuperar-plegado"
-              title={`Tenías cambios sin guardar en ${
-                sesionRota.original_path?.split(/[\\/]/).pop() ??
-                "un documento sin fichero"
-              }`}
+              title={`Tenías cambios sin guardar en ${nombresDeSesiones(
+                sesionesRotas,
+              )} · ${cuandoLlano(sesionesRotas[0].cuando)}`}
               onClick={() => setSesionPlegada(false)}
             >
               <Icon name="undo" size={13} />
@@ -4134,22 +4181,23 @@ function App() {
           </button>
         </div>
       )}
-      {sesionRota && !sesionPlegada && (
+      {sesionesRotas.length > 0 && !sesionPlegada && (
         <div className="banner-recuperar">
           <p>
             Tenías cambios sin guardar en{" "}
-            <span className="dato">
-              {sesionRota.original_path?.split(/[\\/]/).pop() ??
-                "un documento sin fichero"}
-            </span>
+            <span className="dato">{nombresDeSesiones(sesionesRotas)}</span>
+            {" · "}
+            {/* nunca se ofrece recuperar sin decir cuándo fue: volver a algo
+                de hace tres semanas sin saberlo es peor que no ofrecerlo */}
+            <span className="dato">{cuandoLlano(sesionesRotas[0].cuando)}</span>
           </p>
           <button
             className="btn btn-primary"
-            onClick={() => recuperarSesion(sesionRota)}
+            onClick={() => recuperarSesiones(sesionesRotas)}
           >
-            Recuperar
+            {sesionesRotas.length > 1 ? "Recuperar todos" : "Recuperar"}
           </button>
-          <button className="btn" onClick={() => setDescartarAsk(sesionRota)}>
+          <button className="btn" onClick={() => setDescartarAsk(sesionesRotas)}>
             No guardar
           </button>
         </div>
@@ -4336,17 +4384,20 @@ function App() {
           titulo="No guardar los cambios"
           cuerpo={
             <p className="modal-file" style={{ whiteSpace: "normal" }}>
-              Se borrará la copia con los cambios sin guardar de{" "}
-              {descartarAsk.original_path ?? "un documento sin fichero"}. Es lo
-              único que queda de ese trabajo y no se podrá recuperar.
+              {descartarAsk.length === 1
+                ? `Se borrará la copia con los cambios sin guardar de ${
+                    descartarAsk[0].original_path ?? "un documento sin fichero"
+                  }.`
+                : `Se borrarán las copias con los cambios sin guardar de los ${descartarAsk.length} documentos: ${nombresDeSesiones(descartarAsk)}.`}{" "}
+              Es lo único que queda de ese trabajo y no se podrá recuperar.
             </p>
           }
           textoConfirmar="No guardar"
           peligro
           onConfirm={() => {
-            const s = descartarAsk;
+            const lista = descartarAsk;
             setDescartarAsk(null);
-            descartarSesion(s);
+            descartarSesiones(lista);
           }}
           onClose={() => setDescartarAsk(null)}
         />

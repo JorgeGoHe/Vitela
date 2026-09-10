@@ -665,6 +665,31 @@ export function fechaLarga(iso: string): string {
   });
 }
 
+/** «hoy a las 19:40», «ayer a las 19:40» o «el 3 de septiembre a las
+ *  19:40», a partir del ISO 8601 del apunte de sesión. No se ofrece
+ *  recuperar nada sin decir **cuándo** fue: recuperar algo de hace tres
+ *  semanas sin saberlo es peor que no ofrecerlo. */
+export function cuandoLlano(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const hora = d.toLocaleTimeString("es-ES", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const dia = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const hoy = new Date();
+  const cero = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+  const dias = Math.round((cero.getTime() - dia.getTime()) / 86400000);
+  if (dias === 0) return `hoy a las ${hora}`;
+  if (dias === 1) return `ayer a las ${hora}`;
+  const fecha = d.toLocaleDateString("es-ES", {
+    day: "numeric",
+    month: "long",
+    ...(d.getFullYear() === hoy.getFullYear() ? {} : { year: "numeric" }),
+  });
+  return `el ${fecha} a las ${hora}`;
+}
+
 /* ---- opciones de búsqueda (persistidas en localStorage) ---- */
 
 const CLAVE_BUSQUEDA = "editorPdf.opcionesBusqueda";

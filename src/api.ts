@@ -1344,8 +1344,11 @@ export function borraSesion(workPath: string): Promise<void> {
   return invoke("borra_sesion", { workPath });
 }
 
-/** La sesión que quedó a medias, si la hubo. */
-export function recoverSession(): Promise<Sesion | null> {
+/** Las sesiones que quedaron a medias: **una por documento** que tenía
+ *  cambios y cuya copia de trabajo sigue en el disco. La lista puede venir
+ *  vacía, que es el caso normal. Acrobat ofrece recuperar todos los
+ *  documentos que estaban abiertos, no solo el último que se tocó. */
+export function recoverSession(): Promise<Sesion[]> {
   return invoke("recover_session");
 }
 
