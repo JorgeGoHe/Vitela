@@ -9,18 +9,26 @@ function Entrada({
   icon,
   texto,
   atajo,
+  motivo,
   onSelect,
 }: {
   icon: string;
   texto: string;
   atajo?: string;
+  /** Por qué la entrada no se puede usar ahora mismo. Con motivo se enseña
+   *  apagada y lo dice al pasar el ratón, como Acrobat: esconderla dejaría
+   *  al usuario buscando una función que existe. */
+  motivo?: string;
   onSelect: () => void;
 }) {
   return (
     <button
       className="btn"
       role="menuitem"
-      title={atajo ? `${texto.replace(/…$/, "")} (${atajo})` : undefined}
+      disabled={!!motivo}
+      title={
+        motivo ?? (atajo ? `${texto.replace(/…$/, "")} (${atajo})` : undefined)
+      }
       onClick={onSelect}
     >
       <Icon name={icon} size={14} />
@@ -56,6 +64,8 @@ export default function MenuAcciones({
   openProperties,
   abrirPreferencias,
   signPdf,
+  certificar,
+  puedeCertificar,
   abrirProteger,
   puedeQuitarProteccion,
   quitarProteccion,
@@ -101,6 +111,12 @@ export default function MenuAcciones({
   openProperties: () => void;
   abrirPreferencias: () => void;
   signPdf: () => void;
+  /** «Certificar documento…»: firmar diciendo además qué se puede cambiar
+   *  después sin romper el sello. */
+  certificar: () => void;
+  /** Solo la primera firma puede certificar; con una puesta, la entrada se
+   *  enseña apagada con el motivo al lado. */
+  puedeCertificar: boolean;
   abrirProteger: () => void;
   /** Solo se ofrece quitar la contraseña si el documento la tiene. */
   puedeQuitarProteccion: boolean;
@@ -309,6 +325,16 @@ export default function MenuAcciones({
               icon="sign"
               texto="Firma digital (certificado)…"
               onSelect={ejecutar(signPdf)}
+            />
+            <Entrada
+              icon="sign"
+              texto="Certificar documento…"
+              motivo={
+                puedeCertificar
+                  ? undefined
+                  : "Ya hay una firma: solo la primera puede certificar"
+              }
+              onSelect={ejecutar(certificar)}
             />
             <Entrada
               icon="lock"

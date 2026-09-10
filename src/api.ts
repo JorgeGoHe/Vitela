@@ -1368,6 +1368,13 @@ export type FirmaInfo = {
   /** Página del recuadro de la firma, si es visible. */
   page_index: number | null;
   rect: { x: number; y: number; w: number; h: number } | null;
+  /** Nivel del `/DocMDP` cuando esta firma **certifica** el documento (1, 2
+   *  o 3); sin él, es una firma normal. Certificar dice «esta es la versión
+   *  buena» y qué se puede cambiar después sin romper el sello, así que la
+   *  banda y la tarjeta lo cuentan aparte: sin eso la función es invisible
+   *  justo después de usarla. Opcional porque un backend anterior no lo
+   *  trae, como `required` en los campos de formulario. */
+  certifica?: NivelCertificacion | null;
 };
 
 /** Comprueba las firmas de un PDF. Sin firmas, lista vacía. */
@@ -1403,6 +1410,38 @@ export function signPdf(
   } & AparienciaFirma,
 ): Promise<void> {
   return invoke("sign_pdf", { reason: null, ...SIN_APARIENCIA, ...args });
+}
+
+/** Los tres niveles del `/DocMDP`, con el número que escribe el PDF. La
+ *  interfaz **nunca** enseña el número: enseña qué se puede hacer después. */
+export type NivelCertificacion = 1 | 2 | 3;
+
+/** Certificar: la firma más el `/DocMDP` que dice qué se puede cambiar
+ *  después sin romperla. Acepta los dos caminos del certificado (el .p12 con
+ *  su contraseña o el .pem con su clave aparte) en un solo comando, y la
+ *  misma apariencia visible que firmar. **Solo la primera firma puede
+ *  certificar**: el sello avala el documento entero. */
+export function certifyPdf(
+  args: {
+    workPath: string;
+    destPath: string;
+    nivel: NivelCertificacion;
+    certPemPath?: string | null;
+    keyPemPath?: string | null;
+    p12Path?: string | null;
+    password?: string | null;
+    reason?: string | null;
+  } & AparienciaFirma,
+): Promise<void> {
+  return invoke("certify_pdf", {
+    certPemPath: null,
+    keyPemPath: null,
+    p12Path: null,
+    password: null,
+    reason: null,
+    ...SIN_APARIENCIA,
+    ...args,
+  });
 }
 
 /** Firma con un contenedor .p12/.pfx protegido con contraseña. */

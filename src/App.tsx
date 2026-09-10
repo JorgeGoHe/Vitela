@@ -65,6 +65,7 @@ import {
   setMenuState,
   signPdf,
   signPdfP12,
+  certifyPdf,
   touchRecent,
   uiLista,
   verifySignatures,
@@ -139,6 +140,7 @@ import {
   type RangoEtiquetas,
   estadoDeFirma,
   fechaLarga,
+  permisosCertificacion,
   type NivelFirma,
   filasDePaginas,
   FIRMA_VACIA,
@@ -322,10 +324,16 @@ function resumenFirmas(firmas: FirmaInfo[]): string {
   }
   const quien = firmas[0].name || firmas[0].cert_subject || "";
   const cuando = firmas[0].signed_at ? ` el ${fechaLarga(firmas[0].signed_at)}` : "";
+  // certificar no es firmar: dice que ESTA es la versión buena y qué se
+  // puede cambiar sin romper el sello, así que la banda lo nombra y lo
+  // cuenta —sin eso la función es invisible en cuanto se ha usado—
+  const certifica = firmas[0].certifica;
   const cabecera =
     firmas.length > 1
       ? `Firmado por ${firmas.length} personas`
-      : `Firmado${quien ? ` por ${quien}` : ""}${cuando}`;
+      : `${certifica ? "Certificado" : "Firmado"}${quien ? ` por ${quien}` : ""}${cuando}${
+          certifica ? ` · ${permisosCertificacion(certifica)}` : ""
+        }`;
   // con varias firmas, lo que importa es que nadie haya tocado el documento
   // detrás de la última: la anterior no tiene que avalar la revisión que la
   // sigue, que es exactamente lo que hace Acrobat
@@ -568,6 +576,9 @@ function App() {
     rect: { x: number; y: number; w: number; h: number };
   } | null>(null);
   const [firmaDraft, setFirmaDraft] = useState<FirmaDraft>(FIRMA_VACIA);
+  // certificar es firmar diciendo además qué se puede tocar después, así que
+  // comparte el recuadro, el diálogo y el destino: solo cambia el comando
+  const [certificando, setCertificando] = useState(false);
   // el atajo de una pestaña la abre Y le lleva el foco: subir el contador es
   // la señal para el panel (un booleano no distinguiría dos peticiones)
   const [focoComentarios, setFocoComentarios] = useState(0);
@@ -3903,6 +3914,26 @@ function App() {
   function empezarFirma() {
     if (!workPath) return;
     setActiveSig(null);
+    setCertificando(false);
+    setMode("firma-cert");
+    setNotice(
+      "Arrastra en la página el recuadro donde quieres que se vea la firma",
+    );
+  }
+
+  /** «Certificar documento…»: el mismo gesto que firmar —primero el
+   *  recuadro— porque para el usuario es la misma operación con una
+   *  promesa más. Con una firma ya puesta no se ofrece: el `/DocMDP` avala
+   *  el documento entero y detrás de otra firma hay bytes que esta no ha
+   *  visto, así que se dice el motivo antes y no se falla después. */
+  function empezarCertificacion() {
+    if (!workPath) return;
+    if (firmasDoc.length > 0) {
+      setNotice("Ya hay una firma: solo la primera puede certificar");
+      return;
+    }
+    setActiveSig(null);
+    setCertificando(true);
     setMode("firma-cert");
     setNotice(
       "Arrastra en la página el recuadro donde quieres que se vea la firma",
@@ -3932,9 +3963,31 @@ function App() {
       signerName: d.signerName.trim() || null,
       signaturePng: png,
     };
+    const esP12 = /\.(p12|pfx)$/i.test(d.certPath);
     try {
+      if (certificando) {
+        setNotice("Certificando…", { persistente: true });
+        await certifyPdf({
+          workPath,
+          destPath: dest,
+          nivel: d.nivel,
+          certPemPath: esP12 ? null : d.certPath,
+          keyPemPath: esP12 ? null : d.keyPath,
+          p12Path: esP12 ? d.certPath : null,
+          password: esP12 ? d.password : null,
+          reason: d.reason.trim() || null,
+          ...apariencia,
+        });
+        setFirmaRect(null);
+        setCertificando(false);
+        setFirmaDraft({ ...d, password: "" });
+        setNotice(
+          `Certificado y guardado en ${dest} · ${permisosCertificacion(d.nivel)}`,
+        );
+        return;
+      }
       setNotice("Firmando…", { persistente: true });
-      if (/\.(p12|pfx)$/i.test(d.certPath)) {
+      if (esP12) {
         await signPdfP12({
           workPath,
           destPath: dest,
@@ -4097,6 +4150,7 @@ function App() {
       setMode("link-new");
     },
     firmar: empezarFirma,
+    certificar: empezarCertificacion,
     proteger: () =>
       setProtectDraft({ user: "", owner: "", ...TODO_PERMITIDO }),
     "quitar-proteccion": () => {
@@ -4451,6 +4505,8 @@ function App() {
                 askRemoveMarginal={askRemoveMarginal}
                 openProperties={openProperties}
                 signPdf={empezarFirma}
+                certificar={empezarCertificacion}
+                puedeCertificar={firmasDoc.length === 0}
                 abrirProteger={() =>
                   setProtectDraft({
                     user: "",
@@ -4622,12 +4678,16 @@ function App() {
       {firmaRect && (
         <DialogoFirmar
           inicial={firmaDraft}
+          certificar={certificando}
           pagina={firmaRect.page + 1}
           rect={firmaRect.rect}
           firmas={firmas}
           firmasPrevias={firmasDoc}
           onConfirm={aplicarFirma}
-          onClose={() => setFirmaRect(null)}
+          onClose={() => {
+            setFirmaRect(null);
+            setCertificando(false);
+          }}
         />
       )}
 

@@ -3,7 +3,13 @@ import type { FirmaGuardada } from "../api";
 import { open } from "../dialogos";
 import { useModal } from "../hooks/useModal";
 import type { FirmaInfo } from "../api";
-import { fechaLarga, type FirmaDraft, type Rect } from "../tipos";
+import {
+  fechaLarga,
+  permisosCertificacion,
+  type FirmaDraft,
+  type Rect,
+} from "../tipos";
+import type { NivelCertificacion } from "../api";
 import Icon from "./Icon";
 
 /** Nombre de fichero de una ruta, para no enseñar la ruta entera. */
@@ -11,14 +17,29 @@ function nombreDe(ruta: string): string {
   return ruta.split(/[\\/]/).pop() ?? ruta;
 }
 
+/** Las tres opciones del `/DocMDP`, con el texto en llano y no el número:
+ *  el usuario elige qué se podrá hacer después, no un nivel. La 2 es la que
+ *  trae puesta Acrobat. */
+const NIVELES: { nivel: NivelCertificacion; texto: string }[] = [
+  { nivel: 1, texto: "Nadie puede cambiar nada" },
+  { nivel: 2, texto: "Se pueden rellenar los formularios y firmar" },
+  { nivel: 3, texto: "Además se puede comentar" },
+];
+
 /**
  * Un único diálogo para firmar con certificado: qué fichero hace falta y
  * por qué, el motivo, el nombre que se verá y la firma manuscrita que se
  * dibuja dentro del recuadro. Antes eran tres diálogos del sistema
  * encadenados sin explicación (U-13).
+ *
+ * Con `certificar` es el mismo diálogo con **un solo control más** —las tres
+ * opciones del `/DocMDP`—, porque certificar es firmar diciendo además qué
+ * se puede tocar después: dos diálogos distintos para lo mismo obligarían a
+ * aprender dos.
  */
 export default function DialogoFirmar({
   inicial,
+  certificar,
   pagina,
   rect,
   firmas,
@@ -27,6 +48,8 @@ export default function DialogoFirmar({
   onClose,
 }: {
   inicial: FirmaDraft;
+  /** Certificar en vez de firmar: añade el nivel y cambia los textos. */
+  certificar: boolean;
   /** Página (desde 1) donde se ha dibujado el recuadro. */
   pagina: number;
   /** El recuadro dibujado, para enseñar la previa con su proporción. */
@@ -76,13 +99,13 @@ export default function DialogoFirmar({
         className="modal"
         role="dialog"
         aria-modal="true"
-        aria-label="Firmar con certificado"
+        aria-label={certificar ? "Certificar documento" : "Firmar con certificado"}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
         ref={ref}
         tabIndex={-1}
       >
-        <h3>Firmar con certificado</h3>
+        <h3>{certificar ? "Certificar documento" : "Firmar con certificado"}</h3>
         <p className="modal-file" style={{ whiteSpace: "normal" }}>
           La firma se verá en el recuadro que has dibujado en la página{" "}
           <span className="dato">{pagina}</span>. Hace falta tu certificado
@@ -100,6 +123,26 @@ export default function DialogoFirmar({
               return `Ya lo ha firmado ${quien}${cuando}; tu firma se añadirá detrás sin tocar la suya: el fichero crece por el final y los bytes de antes se quedan donde estaban.`;
             })()}
           </p>
+        )}
+        {certificar && (
+          <>
+            <span className="card-label">Qué se podrá cambiar después</span>
+            {NIVELES.map((n) => (
+              <label className="opt-check" key={n.nivel}>
+                <input
+                  type="radio"
+                  name="nivel-certificacion"
+                  checked={d.nivel === n.nivel}
+                  onChange={() => setD({ ...d, nivel: n.nivel })}
+                />
+                {n.texto}
+              </label>
+            ))}
+            <p className="modal-file" style={{ whiteSpace: "normal" }}>
+              Certificar dice que <strong>esta</strong> es la versión buena del
+              documento. Cualquier otro cambio romperá el sello.
+            </p>
+          </>
         )}
         <span className="card-label">Certificado</span>
         <div className="card-actions" style={{ justifyContent: "flex-start" }}>
@@ -187,7 +230,8 @@ export default function DialogoFirmar({
             />
           )}
           <span className="firma-previa-pie dato">
-            Firmado por {d.signerName.trim() || "(el nombre del certificado)"}
+            {certificar ? "Certificado" : "Firmado"} por{" "}
+            {d.signerName.trim() || "(el nombre del certificado)"}
             <br />
             {new Date().toLocaleDateString("es-ES")}
           </span>
@@ -202,12 +246,14 @@ export default function DialogoFirmar({
             disabled={!listo}
             title={
               listo
-                ? "Se pedirá dónde guardar el PDF firmado"
+                ? certificar
+                  ? `Se pedirá dónde guardar el PDF certificado · ${permisosCertificacion(d.nivel)}`
+                  : "Se pedirá dónde guardar el PDF firmado"
                 : "Falta el certificado (y su contraseña o su clave)"
             }
             onClick={confirmar}
           >
-            Firmar y guardar como…
+            {certificar ? "Certificar y guardar como…" : "Firmar y guardar como…"}
           </button>
         </div>
       </div>

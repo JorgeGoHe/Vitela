@@ -1,5 +1,5 @@
 import type { FirmaInfo } from "../api";
-import { estadoDeFirma, fechaLarga } from "../tipos";
+import { estadoDeFirma, fechaLarga, permisosCertificacion } from "../tipos";
 import Icon from "./Icon";
 
 /** El certificado no está caducado sino al revés: su periodo de validez
@@ -93,6 +93,14 @@ export default function PanelFirmasDoc({
             <span className="firma-quien">
               {f.name || f.cert_subject || "Firmante sin nombre"}
             </span>
+            {/* una firma que certifica avala el documento entero y dice qué
+                se puede cambiar detrás sin romperlo: es otra cosa que firmar
+                y la tarjeta lo dice con las mismas palabras que la banda */}
+            {!!f.certifica && (
+              <span className="firma-linea">
+                Certifica el documento · {permisosCertificacion(f.certifica)}
+              </span>
+            )}
             {f.signed_at && (
               <span className="firma-linea dato">{fechaLarga(f.signed_at)}</span>
             )}

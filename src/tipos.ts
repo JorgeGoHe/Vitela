@@ -4,6 +4,7 @@
  */
 import type {
   EstadoFirma,
+  NivelCertificacion,
   OrdenComentarios,
   RangoEtiquetas,
   Rgba,
@@ -612,6 +613,9 @@ export type FirmaDraft = {
   signerName: string;
   /** Id de la firma manuscrita guardada que se dibuja en el recuadro. */
   firmaId: string;
+  /** Qué se podrá cambiar después al **certificar** (el `/DocMDP`). El 2 es
+   *  el de Acrobat y el que trae puesto el diálogo. */
+  nivel: NivelCertificacion;
 };
 
 export const FIRMA_VACIA: FirmaDraft = {
@@ -621,7 +625,17 @@ export const FIRMA_VACIA: FirmaDraft = {
   reason: "",
   signerName: "",
   firmaId: "",
+  nivel: 2,
 };
+
+/** Lo que deja hacer un documento certificado, dicho como lo entiende quien
+ *  lo abre y no con el número del `/DocMDP`. Lo usan el diálogo, la banda de
+ *  apertura y la tarjeta del panel, para que las tres digan lo mismo. */
+export function permisosCertificacion(nivel: number): string {
+  if (nivel === 1) return "nadie puede cambiar nada";
+  if (nivel === 3) return "se pueden rellenar los formularios, firmar y comentar";
+  return "se pueden rellenar los formularios y firmar";
+}
 
 /** Lo que se ha comprobado de una firma, dicho en llano. Nunca «CMS», ni
  *  «ByteRange», ni «digest»: el usuario quiere saber si el documento es el
