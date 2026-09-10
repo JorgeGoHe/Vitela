@@ -514,65 +514,20 @@ mod tests {
     /// llamada de forma que un motor sin ese comando no rompa nada. La
     /// lista tiene que quedar vacía al cerrar el ciclo, y se queja también
     /// cuando el comando ya existe.
-    const COMANDOS_PENDIENTES: &[(&str, &str)] = &[(
-        "read_certificate",
-        "pendiente_backend: orden 20 del ciclo 10 — la UI ya nombra a los \
-         destinatarios del cifrado por su CN; sin el comando se queda con el \
-         nombre del fichero",
-    )];
+    const COMANDOS_PENDIENTES: &[(&str, &str)] = &[];
 
     /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada
     /// es una función rota que el usuario no puede usar, así que la lista
     /// tiene que quedar vacía: está aquí solo mientras el arreglo vive en
     /// la otra mitad.
-    const ARGUMENTOS_PENDIENTES: &[(&str, &str)] = &[
-        (
-            "open_pdf",
-            "pendiente_backend: C-3 del ciclo 10 — la UI ya manda key_path y \
-             key_password para abrir un PDF cifrado por certificado",
-        ),
-        (
-            "export_pages_png",
-            "pendiente_backend: C-12 del ciclo 10 — la UI ya manda \
-             page_indices para exportar solo un rango",
-        ),
-        (
-            "crop_page",
-            "pendiente_backend: C-12 del ciclo 10 — la UI ya manda margenes \
-             en puntos para recortar por la medida exacta",
-        ),
-    ];
+    const ARGUMENTOS_PENDIENTES: &[(&str, &str)] = &[];
 
     /// Parámetros opcionales de un comando que **ninguna** llamada de la UI
     /// manda, con su motivo. Un `Option<T>` que nadie manda es una capacidad
     /// del backend sin vía de acceso: existe, está probada y el usuario no
     /// puede llegar a ella. Fue el estado exacto de `char_spacing` durante
     /// un ciclo entero. La lista tiene que quedar vacía al cerrar el ciclo.
-    const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[
-        (
-            "open_pdf",
-            "key_path",
-            "pendiente_ui: lo manda la UI en C-3 del ciclo 10, cuando `CERT_KEY_REQUIRED` \
-             abre el diálogo que pide tu certificado con clave privada",
-        ),
-        (
-            "open_pdf",
-            "key_password",
-            "pendiente_ui: lo manda la UI en C-3 del ciclo 10, la contraseña del .p12",
-        ),
-        (
-            "export_pages_png",
-            "page_indices",
-            "pendiente_ui: lo manda la UI en C-12 del ciclo 10, con el bloque \
-             `RangoPaginas` que ya usan imprimir, la marca de agua y Word",
-        ),
-        (
-            "crop_page",
-            "margenes",
-            "pendiente_ui: lo manda la UI en C-12 del ciclo 10, los márgenes numéricos \
-             del diálogo de recortar",
-        ),
-    ];
+    const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[];
 
     /// **R45b.** Parámetros **obligatorios** en Rust que el envoltorio de
     /// `api.ts` declara opcionales (`workPath?: string`, un tipo que admite
@@ -1550,34 +1505,7 @@ mod tests {
 
     /// Comandos que devuelven un `struct` y cuyo envoltorio declara un tipo
     /// primitivo o `void` **a propósito**, con su motivo. Cierra vacía.
-    const RETORNOS_IGNORADOS: &[(&str, &str)] = &[
-        (
-            "compose_print",
-            "pendiente_ui: AC-087, `composePrint` declara `Promise<string>` sobre un \
-             `Composicion` y `App.tsx` le pasa el objeto entero a `open_pdf` como \
-             ruta; lo arregla la UI en R64 del ciclo 10",
-        ),
-        (
-            "sign_pdf",
-            "pendiente_ui: AC-079, el envoltorio declara `void` sobre el \
-             `InformeFirma`, así que la banda anuncia el sello de tiempo por \
-             haberlo pedido y no por tenerlo; lo arregla la UI en R64",
-        ),
-        (
-            "sign_pdf_p12",
-            "pendiente_ui: AC-079, lo mismo con el certificado en .p12",
-        ),
-        (
-            "certify_pdf",
-            "pendiente_ui: AC-079, lo mismo al certificar",
-        ),
-        (
-            "export_html",
-            "pendiente_ui: `exportHtml` declara `void` sobre el `InformeHtml`, así \
-             que la banda no puede decir cuántas páginas, imágenes y enlaces han \
-             salido, que es lo que dicen las otras exportaciones",
-        ),
-    ];
+    const RETORNOS_IGNORADOS: &[(&str, &str)] = &[];
 
     /// Los `struct` con campos nombrados del core, que es lo que viaja a la
     /// UI como objeto JSON.
@@ -1690,11 +1618,7 @@ mod tests {
     ///
     /// Cada entrada es (`comando.parametro`, motivo) y la lista cierra
     /// vacía.
-    const CAMPOS_PENDIENTES: &[(&str, &str)] = &[(
-        "set_open_action.vista",
-        "pendiente_ui: AC-086, la UI declara cuatro de los siete campos y `zoom` \
-         como texto; lo arregla en R64 del ciclo 10",
-    )];
+    const CAMPOS_PENDIENTES: &[(&str, &str)] = &[];
 
     /// Tipos de la UI que este test no sabe leer, con su motivo. Cierra
     /// vacía o crece con razón escrita.
@@ -1711,11 +1635,6 @@ mod tests {
             "no es del usuario: sin él la composición va a un temporal que barre el \
              arranque, que es lo que quiere la interfaz. Lo usan los tests para \
              escribir donde les conviene",
-        ),
-        (
-            "compose_print.opciones.con_anotaciones",
-            "pendiente_ui: lo manda la UI en C-2 del ciclo 10, cuando el desplegable \
-             «Solo el documento» tenga que saltarse el aplanado",
         ),
     ];
 

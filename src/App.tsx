@@ -3745,6 +3745,7 @@ function App() {
     const dest = await composePrint(workPath, o.composicion, {
       page_indices: idx,
       ...o.comp,
+      con_anotaciones: o.conMarcas,
     });
     const info = await invoke<{ page_count: number; work_path: string }>(
       "open_pdf",
@@ -4083,9 +4084,13 @@ function App() {
         persistente: true,
         dato: plural(cuantas, "página", "páginas"),
       });
-      await exportHtml(workPath, dest, paginas);
+      const r = await exportHtml(workPath, dest, paginas);
+      const detalle = [
+        plural(r.imagenes, "imagen", "imágenes"),
+        plural(r.enlaces, "enlace", "enlaces"),
+      ].join(" y ");
       setNotice(
-        `${plural(cuantas, "página exportada", "páginas exportadas")} en ${nombreDeFichero(dest)} · las imágenes, en la carpeta de al lado`,
+        `${plural(r.paginas, "página exportada", "páginas exportadas")} en ${nombreDeFichero(dest)} · ${detalle}${r.imagenes > 0 ? " · las imágenes, en la carpeta de al lado" : ""}`,
         { titulo: dest },
       );
     } catch (e) {

@@ -1086,6 +1086,10 @@ export type OpcionesComposicion = {
   escala_por_ciento: number;
   solape_mm: number;
   marcas: boolean;
+  /** Si los comentarios y los campos rellenados salen en las hojas
+   *  compuestas (lo que hace «Documento y marcas»); con «Solo el
+   *  documento» va a `false` y el backend se salta el aplanado. */
+  con_anotaciones?: boolean;
 };
 
 /** Lo que sale de componer: el PDF temporal y las cuentas que hacen falta
@@ -1383,9 +1387,19 @@ export function exportHtml(
   workPath: string,
   destPath: string,
   rango: number[] | null,
-): Promise<void> {
+): Promise<InformeHtml> {
   return invoke("export_html", { workPath, destPath, rango });
 }
+
+/** Lo que ha salido en el `.html`: cuántas páginas, bloques de texto,
+ *  imágenes y enlaces. Es lo que la banda cuenta al terminar, en vez de
+ *  repetir lo que se pidió. */
+export type InformeHtml = {
+  paginas: number;
+  bloques: number;
+  imagenes: number;
+  enlaces: number;
+};
 
 export function exportDocx(
   workPath: string,
