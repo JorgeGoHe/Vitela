@@ -8,6 +8,7 @@ export default function DialogoConfirmar({
   titulo,
   cuerpo,
   textoConfirmar,
+  textoCancelar = "Cancelar",
   peligro = false,
   secundario,
   onConfirm,
@@ -16,6 +17,9 @@ export default function DialogoConfirmar({
   titulo: string;
   cuerpo: ReactNode;
   textoConfirmar: string;
+  /** La salida, cuando «Cancelar» no dice lo que pasa al pulsarla («Dejarlo
+   *  sin sello»: el documento ya está firmado y guardado). */
+  textoCancelar?: string;
   peligro?: boolean;
   secundario?: { texto: string; onClick: () => void };
   onConfirm: () => void;
@@ -39,7 +43,7 @@ export default function DialogoConfirmar({
         {cuerpo}
         <div className="card-actions">
           <button className="btn" onClick={onClose}>
-            Cancelar
+            {textoCancelar}
           </button>
           {secundario && (
             <button className="btn" onClick={secundario.onClick}>

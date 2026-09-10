@@ -1067,14 +1067,29 @@ export type OpcionesComposicion = {
   marcas: boolean;
 };
 
+/** Lo que sale de componer: el PDF temporal y las cuentas que hacen falta
+ *  para decirlo en el pie del diálogo. Declararlo como una ruta a secas
+ *  hacía que la interfaz le pasara el objeto entero a `open_pdf` y que
+ *  folleto, N-up y póster no imprimieran nada. */
+export type Composicion = {
+  /** El PDF compuesto, para rasterizarlo e imprimirlo. */
+  path: string;
+  /** Hojas de **papel**: en un folleto a doble cara, la mitad de las caras. */
+  hojas: number;
+  /** Caras impresas (las páginas del PDF compuesto). */
+  caras: number;
+  /** Páginas del documento que han entrado. */
+  paginas: number;
+};
+
 /** Compone las páginas nuevas —folleto, varias por hoja o póster— en un PDF
- *  temporal y devuelve su ruta. **No toca el documento**: lo que se compone
- *  es lo que se va a imprimir, y se rasteriza por el camino de siempre. */
+ *  temporal. **No toca el documento**: lo que se compone es lo que se va a
+ *  imprimir, y se rasteriza por el camino de siempre. */
 export function composePrint(
   workPath: string,
   modo: ModoComposicion,
   opciones: OpcionesComposicion,
-): Promise<string> {
+): Promise<Composicion> {
   return invoke("compose_print", { workPath, modo, opciones });
 }
 
@@ -1089,14 +1104,26 @@ export function composePrint(
  *  traduce el camelCase de los argumentos de primer nivel, como el `props`
  *  de `create_form_field` y los rangos de `set_page_labels`. */
 export type VistaInicial = {
-  /** Página de arranque, desde 0. */
-  page_index: number;
-  /** "defecto", "pagina" (la página entera), "ancho" o "100". */
-  zoom: string;
-  /** "defecto", "una", "continuo", "dos" o "dos-continuo". */
+  /** Página de arranque, desde 0; `null` es «la que decida el visor». */
+  page_index: number | null;
+  /** A qué altura de la página se llega, en el espacio propio de la página
+   *  con el origen arriba-izquierda, como el `top` de un marcador. */
+  top: number | null;
+  /** El zoom, 1 = 100 %. **Es un número**: durante un ciclo la interfaz metía
+   *  aquí el modo de encaje («ancho») y el comando fallaba siempre, así que
+   *  «Vista inicial» no se llegaba a guardar nunca. */
+  zoom: number | null;
+  /** Cómo se encaja la página: `"zoom"` (el zoom manda), `"pagina"`,
+   *  `"ancho"`, `"alto"` o `""` si el documento no dice nada. */
+  ajuste: string;
+  /** `"una"`, `"continuo"`, `"dos"`, `"dos-continuo"` o `""`. */
   disposicion: string;
-  /** El panel de marcadores abierto al abrir el documento. */
-  marcadores: boolean;
+  /** Panel desplegado al abrir: `"ninguno"`, `"marcadores"`, `"miniaturas"`,
+   *  `"adjuntos"`, `"capas"`, `"pantalla-completa"` o `""`. */
+  panel: string;
+  /** El panel de marcadores abierto al abrir el documento; manda sobre
+   *  `panel`, porque es la casilla que enseña el diálogo. */
+  marcadores: boolean | null;
 };
 
 export function getOpenAction(path: string): Promise<VistaInicial> {

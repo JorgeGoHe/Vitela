@@ -3,17 +3,56 @@ import type { DocumentInfo, Metadata, VistaInicial } from "../api";
 import { fechaLarga, plural, tamanoFichero } from "../tipos";
 import { useModal } from "../hooks/useModal";
 
-/** Las opciones de zoom de arranque, con el nombre que usa la píldora. */
-const ZOOMS: [string, string][] = [
-  ["defecto", "La del visor (predeterminado)"],
-  ["pagina", "La página entera"],
-  ["ancho", "El ancho de la página"],
-  ["100", "Tamaño real (100 %)"],
+/** Cómo se encaja la página al abrir. En el PDF esto son **dos** datos —el
+ *  modo de encaje (`ajuste`) y, solo con «tamaño real», el zoom— y aquí un
+ *  desplegable, que es lo que se elige. Meter «ancho» en el zoom hacía que
+ *  el comando rechazara la llamada entera y que la vista inicial no se
+ *  guardara nunca. */
+type OpcionZoom = {
+  valor: string;
+  etiqueta: string;
+  ajuste: string;
+  zoom: number | null;
+};
+
+const ZOOMS: OpcionZoom[] = [
+  { valor: "defecto", etiqueta: "La del visor (predeterminado)", ajuste: "", zoom: null },
+  { valor: "pagina", etiqueta: "La página entera", ajuste: "pagina", zoom: null },
+  { valor: "ancho", etiqueta: "El ancho de la página", ajuste: "ancho", zoom: null },
+  { valor: "alto", etiqueta: "El alto de la página", ajuste: "alto", zoom: null },
+  { valor: "100", etiqueta: "Tamaño real (100 %)", ajuste: "zoom", zoom: 1 },
 ];
 
-/** Las cuatro disposiciones de Acrobat, más «la del visor». */
+/** Qué opción del desplegable describe la vista que trae el documento. Un
+ *  zoom fijo distinto del 100 % se enseña tal cual en vez de disfrazarse de
+ *  «la del visor»: cambiarlo en silencio sería tocar lo que no se ha
+ *  pedido. */
+function opcionesDeZoom(v: VistaInicial): OpcionZoom[] {
+  const fijoRaro =
+    v.ajuste === "zoom" && v.zoom != null && Math.abs(v.zoom - 1) > 0.001;
+  return fijoRaro
+    ? [
+        {
+          valor: "otro",
+          etiqueta: `Tamaño fijo (${Math.round((v.zoom ?? 1) * 100)} %)`,
+          ajuste: "zoom",
+          zoom: v.zoom,
+        },
+        ...ZOOMS,
+      ]
+    : ZOOMS;
+}
+
+function zoomElegido(v: VistaInicial): string {
+  if (v.ajuste === "zoom")
+    return v.zoom != null && Math.abs(v.zoom - 1) > 0.001 ? "otro" : "100";
+  return ZOOMS.find((z) => z.ajuste === v.ajuste)?.valor ?? "defecto";
+}
+
+/** Las cuatro disposiciones de Acrobat, más «la del visor», que en el PDF
+ *  es no escribir `/PageLayout` (la cadena vacía). */
 const DISPOSICIONES: [string, string][] = [
-  ["defecto", "La del visor (predeterminada)"],
+  ["", "La del visor (predeterminada)"],
   ["una", "Una sola página"],
   ["continuo", "Continua"],
   ["dos", "Dos páginas"],
@@ -125,7 +164,7 @@ export default function DialogoPropiedades({
                   style={{ width: 80 }}
                   min={1}
                   max={Math.max(1, pageCount)}
-                  value={v.page_index + 1}
+                  value={(v.page_index ?? 0) + 1}
                   onChange={(e) =>
                     setV({
                       ...v,
@@ -141,12 +180,17 @@ export default function DialogoPropiedades({
                 <span className="card-label">Zoom</span>
                 <select
                   className="size-select"
-                  value={v.zoom}
-                  onChange={(e) => setV({ ...v, zoom: e.target.value })}
+                  value={zoomElegido(v)}
+                  onChange={(e) => {
+                    const o = opcionesDeZoom(v).find(
+                      (z) => z.valor === e.target.value,
+                    );
+                    if (o) setV({ ...v, ajuste: o.ajuste, zoom: o.zoom });
+                  }}
                 >
-                  {ZOOMS.map(([valor, etiqueta]) => (
-                    <option key={valor} value={valor}>
-                      {etiqueta}
+                  {opcionesDeZoom(v).map((z) => (
+                    <option key={z.valor} value={z.valor}>
+                      {z.etiqueta}
                     </option>
                   ))}
                 </select>
@@ -169,7 +213,7 @@ export default function DialogoPropiedades({
             <label className="opt-check">
               <input
                 type="checkbox"
-                checked={v.marcadores}
+                checked={!!v.marcadores}
                 onChange={(e) => setV({ ...v, marcadores: e.target.checked })}
               />
               Abrir con el panel de marcadores a la vista
