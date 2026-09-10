@@ -17,6 +17,15 @@ pub struct FormFieldInfo {
     /// Campo obligatorio (`/Ff` bit 2, heredado del padre si el widget no
     /// lo lleva): la UI le pinta el borde del acento, como Acrobat.
     pub required: bool,
+    /// Campo bloqueado (`/Ff` bit 1, heredado igual). Acrobat lo pinta
+    /// apagado y no le da el foco; sin este dato la UI no podía saberlo y
+    /// un campo de solo lectura se dejaba cambiar (AC-065). Los tres
+    /// comandos que rellenan lo rechazan aunque la UI se despiste.
+    pub read_only: bool,
+    /// `/TU`: el texto de ayuda que Acrobat enseña al pasar el ratón. Se
+    /// escribía en el fichero desde el ciclo 6 y no se leía, así que no
+    /// había forma de verlo (AC-066).
+    pub tooltip: String,
     pub x: f32,
     pub y: f32,
     pub w: f32,
@@ -31,10 +40,11 @@ pub fn get_form_fields(path: String, page_index: u16) -> Result<Vec<FormFieldInf
         // el bit de «obligatorio» y el estado de las casillas los lee
         // lopdf: pdfium-render 0.8 no expone el `/Ff` del campo, y su
         // `is_checked()` miente en un grupo de radios (AC-063)
-        let (obligatorios, marcados) = crate::with_lopdf(&path, |doc| {
+        let (obligatorios, marcados, ayudas) = crate::with_lopdf(&path, |doc| {
             Ok((
                 banderas_de_annots(doc, page_index),
                 marcados_de_annots(doc, page_index),
+                tooltips_de_annots(doc, page_index),
             ))
         })
         .unwrap_or_default();
@@ -120,6 +130,10 @@ pub fn get_form_fields(path: String, page_index: u16) -> Result<Vec<FormFieldInf
                     required: obligatorios
                         .get(i)
                         .is_some_and(|f| f & crate::formularios2::OBLIGATORIO != 0),
+                    read_only: obligatorios
+                        .get(i)
+                        .is_some_and(|f| f & crate::formularios2::SOLO_LECTURA_FF != 0),
+                    tooltip: ayudas.get(i).cloned().unwrap_or_default(),
                     x: caja.x,
                     y: caja.y,
                     w: caja.w,
@@ -140,6 +154,7 @@ pub fn set_form_text(
     value: String,
 ) -> Result<(), String> {
     mutacion(work_path, |work_path| on_pdfium_thread(move || {
+        niega_si_es_solo_lectura(&work_path, page_index, annot_index)?;
         let pdfium = pdfium()?;
         let doc = pdfium
             .load_pdf_from_file(&work_path, None)
@@ -225,6 +240,55 @@ fn marcados_de_annots(doc: &lopdf::Document, page_index: u16) -> Vec<bool> {
         .collect()
 }
 
+/// El `/TU` de cada anotación de la página, heredado del padre igual que
+/// el `/Ff`, en el orden de `/Annots`.
+fn tooltips_de_annots(doc: &lopdf::Document, page_index: u16) -> Vec<String> {
+    use lopdf::Object;
+    let Some(lista) = crate::anotaciones::lista_annots(doc, page_index) else {
+        return Vec::new();
+    };
+    lista
+        .iter()
+        .map(|o| {
+            let Object::Reference(id) = o else { return String::new() };
+            let Ok(d) = doc.get_object(*id).and_then(|o| o.as_dict()) else {
+                return String::new();
+            };
+            let mut actual = d.clone();
+            for _ in 0..8 {
+                if let Ok(tu) = actual.get(b"TU") {
+                    return crate::anotaciones::texto_de_cadena_pdf(tu);
+                }
+                let Ok(padre) = actual.get(b"Parent").and_then(|o| o.as_reference()) else {
+                    break;
+                };
+                let Ok(d) = doc.get_object(padre).and_then(|o| o.as_dict()) else {
+                    break;
+                };
+                actual = d.clone();
+            }
+            String::new()
+        })
+        .collect()
+}
+
+/// Se niega a rellenar un campo bloqueado (`/Ff` bit 1). En Acrobat un
+/// campo de solo lectura ni siquiera acepta el foco; aquí el aviso llega
+/// aunque la interfaz se despiste, porque el que decide qué se escribe en
+/// el documento es el backend.
+fn niega_si_es_solo_lectura(path: &str, page_index: u16, annot_index: u16) -> Result<(), String> {
+    let bloqueado = crate::with_lopdf(path, |doc| {
+        Ok(banderas_de_annots(doc, page_index)
+            .get(annot_index as usize)
+            .is_some_and(|f| f & crate::formularios2::SOLO_LECTURA_FF != 0))
+    })
+    .unwrap_or(false);
+    if bloqueado {
+        return Err("Ese campo es de solo lectura: el formulario no deja cambiarlo".into());
+    }
+    Ok(())
+}
+
 /// El nombre de un estado de botón (`/AS`, `/V`): puede llegar como nombre
 /// o **como cadena** —PDFium escribe `"/Yes"` al marcar una casilla desde
 /// su API—, y entonces trae la barra pegada delante.
@@ -297,6 +361,7 @@ pub fn set_form_checked(
     let radio = {
         let w = work_path.clone();
         on_pdfium_thread(move || {
+            niega_si_es_solo_lectura(&w, page_index, annot_index)?;
             crate::with_lopdf(&w, |doc| Ok(padre_de_radio(doc, page_index, annot_index)))
         })?
     };
@@ -447,6 +512,12 @@ pub fn set_form_choice(
 ) -> Result<(), String> {
     crate::cirugia(&work_path, move |doc| {
         use lopdf::Object;
+        if banderas_de_annots(doc, page_index)
+            .get(field_index as usize)
+            .is_some_and(|f| f & crate::formularios2::SOLO_LECTURA_FF != 0)
+        {
+            return Err("Ese campo es de solo lectura: el formulario no deja cambiarlo".into());
+        }
         let lista = crate::anotaciones::lista_annots(doc, page_index)
             .ok_or("La página no tiene campos de formulario")?;
         let widget_id = match lista.get(field_index as usize) {

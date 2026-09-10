@@ -235,6 +235,9 @@ pub(crate) const RADIO_FF: i64 = RADIO;
 const COMBO: i64 = 131_072;
 /// `/Ff` bit 1: solo lectura.
 const SOLO_LECTURA: i64 = 1;
+/// El mismo bit, para quien tenga que reconocer un campo bloqueado desde
+/// fuera del módulo (los tres comandos que rellenan).
+pub(crate) const SOLO_LECTURA_FF: i64 = SOLO_LECTURA;
 /// `/Ff` bit 2: obligatorio.
 pub(crate) const OBLIGATORIO: i64 = 2;
 
@@ -1317,6 +1320,129 @@ mod tests {
         crate::formularios::get_form_fields(work.to_string(), 0)
             .map(|c| c.is_empty())
             .unwrap_or(true)
+    }
+
+    /// **R42b (AC-065 y AC-066).** Un campo de solo lectura no se rellena,
+    /// y el texto de ayuda que se escribe en el fichero se puede leer.
+    ///
+    /// Hasta el ciclo 6, `get_form_fields` devolvía `required` y nada más:
+    /// la UI no podía saber que un campo estaba bloqueado y lo dejaba
+    /// cambiar, y el `/TU` viajaba al PDF sin que hubiera forma de verlo.
+    #[test]
+    fn un_campo_de_solo_lectura_no_se_rellena_y_su_ayuda_se_lee() {
+        let pdf = std::env::temp_dir().join("formularios2-solo-lectura.pdf");
+        crea_pdf(&["Formulario"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        create_form_field(
+            work.clone(),
+            0,
+            "text".into(),
+            Rect { x: 60.0, y: 200.0, w: 200.0, h: 20.0 },
+            "expediente".into(),
+            None,
+            None,
+            None,
+            Some(PropsCampo {
+                tooltip: Some("El número que sale en la carta".into()),
+                solo_lectura: true,
+                valor_defecto: Some("2026/0001".into()),
+                ..Default::default()
+            }),
+        )
+        .expect("crear el campo bloqueado");
+        create_form_field(
+            work.clone(),
+            0,
+            "text".into(),
+            Rect { x: 60.0, y: 240.0, w: 200.0, h: 20.0 },
+            "comentario".into(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("crear el campo normal");
+
+        let campos = crate::formularios::get_form_fields(work.clone(), 0).expect("campos");
+        let bloqueado = campos.iter().find(|c| c.name == "expediente").expect("el bloqueado");
+        let libre = campos.iter().find(|c| c.name == "comentario").expect("el libre");
+        assert!(bloqueado.read_only, "el bit 1 del /Ff se lee");
+        assert!(!libre.read_only);
+        assert_eq!(bloqueado.tooltip, "El número que sale en la carta");
+        assert_eq!(libre.tooltip, "", "sin /TU, sin ayuda que enseñar");
+
+        // y no se deja cambiar, aunque la interfaz se despiste
+        let err = crate::formularios::set_form_text(
+            work.clone(),
+            0,
+            bloqueado.annot_index,
+            "otra cosa".into(),
+        )
+        .unwrap_err();
+        assert!(err.contains("solo lectura"), "el aviso: {err}");
+        assert!(!err.contains("Ff") && !err.contains("os error"), "jerga: {err}");
+        let campos = crate::formularios::get_form_fields(work.clone(), 0).expect("campos");
+        assert_eq!(
+            campos.iter().find(|c| c.name == "expediente").unwrap().value,
+            "2026/0001",
+            "el valor no ha cambiado"
+        );
+
+        // el campo normal sí
+        crate::formularios::set_form_text(work.clone(), 0, libre.annot_index, "vale".into())
+            .expect("rellenar el campo normal");
+
+        // una lista bloqueada tampoco: es el caso con el que se encontró
+        create_form_field(
+            work.clone(),
+            0,
+            "list".into(),
+            Rect { x: 60.0, y: 300.0, w: 200.0, h: 20.0 },
+            "idioma".into(),
+            None,
+            None,
+            Some(vec!["Castellano".into(), "Euskera".into()]),
+            Some(PropsCampo { solo_lectura: true, ..Default::default() }),
+        )
+        .expect("crear la lista bloqueada");
+        let lista = crate::formularios::get_form_fields(work.clone(), 0)
+            .expect("campos")
+            .into_iter()
+            .find(|c| c.name == "idioma")
+            .expect("la lista");
+        assert!(lista.read_only);
+        let err = crate::formularios::set_form_choice(
+            work.clone(),
+            0,
+            lista.annot_index,
+            "Euskera".into(),
+        )
+        .unwrap_err();
+        assert!(err.contains("solo lectura"), "el aviso: {err}");
+
+        // y una casilla bloqueada
+        create_form_field(
+            work.clone(),
+            0,
+            "checkbox".into(),
+            Rect { x: 300.0, y: 200.0, w: 16.0, h: 16.0 },
+            "leido".into(),
+            None,
+            None,
+            None,
+            Some(PropsCampo { solo_lectura: true, ..Default::default() }),
+        )
+        .expect("crear la casilla bloqueada");
+        let casilla = crate::formularios::get_form_fields(work.clone(), 0)
+            .expect("campos")
+            .into_iter()
+            .find(|c| c.name == "leido")
+            .expect("la casilla");
+        let err =
+            crate::formularios::set_form_checked(work.clone(), 0, casilla.annot_index, true)
+                .unwrap_err();
+        assert!(err.contains("solo lectura"), "el aviso: {err}");
+        std::fs::remove_file(&pdf).ok();
     }
 
     /// **R40b (AC-063).** Un grupo de radios recién creado tiene que salir
