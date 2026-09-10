@@ -459,6 +459,42 @@ mod tests {
     /// la otra mitad.
     const ARGUMENTOS_PENDIENTES: &[(&str, &str)] = &[];
 
+    /// Parámetros opcionales de un comando que **ninguna** llamada de la UI
+    /// manda, con su motivo. Un `Option<T>` que nadie manda es una capacidad
+    /// del backend sin vía de acceso: existe, está probada y el usuario no
+    /// puede llegar a ella. Fue el estado exacto de `char_spacing` durante
+    /// un ciclo entero. La lista tiene que quedar vacía al cerrar el ciclo.
+    const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[
+        (
+            "edit_text_block",
+            "char_spacing",
+            "pendiente_ui — R32: el mando de «Espaciado entre caracteres» \
+             vuelve a la fila contextual del modo Editar en la rama de la \
+             interfaz. El backend está entero desde el ciclo 6 y desde R32b \
+             sobrevive a mover y a estirar el bloque",
+        ),
+        (
+            "add_text_block",
+            "char_spacing",
+            "pendiente_ui — R32: el mismo mando, para el texto nuevo",
+        ),
+        (
+            "set_annotation_state",
+            "author",
+            "pendiente_ui — la UI manda `author` (el de Preferencias) en los \
+             seis comandos que crean anotaciones y no en este, así que el \
+             estado de revisión se firma con el usuario del sistema. Es una \
+             línea en el hook del panel de comentarios",
+        ),
+        (
+            "borra_sesion",
+            "work_path",
+            "pendiente_ui — H6: con un solo documento abierto basta borrar el \
+             apunte de sesión sin decir cuál; en cuanto haya varios, cerrar \
+             uno solo puede llevarse el suyo",
+        ),
+    ];
+
     /// Llamadas cuyos argumentos no son un objeto literal y el test no
     /// puede leer (`invoke("render_page", args, opts)`, que arma el objeto
     /// según las opciones). Se enumeran para que no crezcan en silencio.
@@ -934,6 +970,60 @@ mod tests {
             fallos.is_empty(),
             "los argumentos de la UI y los de los comandos no dicen lo mismo:\n  {}",
             fallos.join("\n  ")
+        );
+
+        // **R37.** La tercera forma de desencontrarse: un `Option<T>` que
+        // ningún `invoke` manda jamás. No es un error de nadie —el comando
+        // funciona, el test de arriba no tiene nada que cruzar— y por eso
+        // hacía falta mirarlo aparte: es una función escrita, probada y sin
+        // camino hasta el usuario.
+        let mut huerfanos: Vec<String> = Vec::new();
+        for (comando, params) in &comandos {
+            let suyas: Vec<&Llamada> = llamadas.iter().filter(|l| &l.comando == comando).collect();
+            // un comando que nadie llama ya lo canta el otro test, y uno
+            // cuyos argumentos no se pueden leer no dice nada de nadie
+            if suyas.is_empty() || suyas.iter().any(|l| !l.completa) {
+                continue;
+            }
+            let mandadas: Vec<String> = suyas
+                .iter()
+                .flat_map(|l| l.claves.iter())
+                .map(|c| a_snake(c))
+                .collect();
+            for p in params.iter().filter(|p| !p.obligatorio) {
+                if mandadas.contains(&p.nombre) {
+                    continue;
+                }
+                if PARAMETROS_PENDIENTES
+                    .iter()
+                    .any(|(c, n, _)| c == comando && *n == p.nombre)
+                {
+                    continue;
+                }
+                huerfanos.push(format!("{comando}.{}", p.nombre));
+            }
+        }
+        huerfanos.sort();
+        assert!(
+            huerfanos.is_empty(),
+            "estos parámetros opcionales no los manda ninguna llamada de la \
+             UI, así que son capacidad de backend sin vía de acceso: \
+             {huerfanos:?}. Si están a medio integrar, van en \
+             PARAMETROS_PENDIENTES con su motivo"
+        );
+        let sobra: Vec<&str> = PARAMETROS_PENDIENTES
+            .iter()
+            .filter(|(c, n, _)| {
+                llamadas
+                    .iter()
+                    .filter(|l| &l.comando == c && l.completa)
+                    .any(|l| l.claves.iter().any(|k| a_snake(k) == *n))
+            })
+            .map(|(_, n, _)| *n)
+            .collect();
+        assert!(
+            sobra.is_empty(),
+            "la UI ya manda estos parámetros: fuera de PARAMETROS_PENDIENTES {sobra:?}"
         );
     }
 }
