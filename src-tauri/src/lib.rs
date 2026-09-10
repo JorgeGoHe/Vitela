@@ -1162,6 +1162,8 @@ pub fn run() {
             busqueda::get_page_text,
             get_page_sizes,
             busqueda::search_pdf,
+            busqueda::search_folder,
+            busqueda::cancel_search,
             paginas::delete_page,
             paginas::rotate_page,
             paginas::move_page,

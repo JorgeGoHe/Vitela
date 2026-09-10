@@ -20,7 +20,7 @@ pub struct PageText {
     pub chars: Vec<CharBox>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct SearchMatch {
     pub page_index: u16,
     pub rects: Vec<Rect>,
@@ -305,6 +305,309 @@ fn bloque_en(bloques: &[(u32, Rect)], r: &Rect) -> Option<u32> {
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
         .map(|(i, _)| *i)
+}
+
+/// Lo encontrado en un fichero de la carpeta. Es la fila plegable de la
+/// lista de resultados: el nombre, cuántas coincidencias y cuáles.
+///
+/// Un PDF que **no se ha podido abrir** —con contraseña, o roto— también
+/// sale, con `coincidencias` vacía y el motivo en `error`: la búsqueda no
+/// se rompe por uno, y quien busca en una carpeta de doscientos tiene que
+/// enterarse de que dos no se han mirado. Los que se leen bien y no tienen
+/// ninguna coincidencia no salen.
+#[derive(Serialize, Debug)]
+pub struct ResultadoFichero {
+    pub path: String,
+    /// El nombre del fichero, sin la carpeta: es lo que enseña la fila.
+    pub nombre: String,
+    pub coincidencias: Vec<SearchMatch>,
+    /// Vacío cuando el fichero se ha leído bien; si no, la frase en llano.
+    pub error: String,
+}
+
+/// La bandera de cancelación de la búsqueda en carpeta. Es global porque
+/// solo hay una búsqueda de carpeta a la vez: la lanza el cajón de
+/// búsqueda, que es uno.
+static BUSQUEDA_CANCELADA: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Corta la búsqueda en carpeta que esté corriendo. Lo encontrado hasta
+/// ahí **se devuelve**: cancelar no es tirar el trabajo hecho, es dejar de
+/// hacer más.
+#[tauri::command(async)]
+pub fn cancel_search() -> Result<(), String> {
+    BUSQUEDA_CANCELADA.store(true, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
+}
+
+/// Los PDF de una carpeta, en orden y sin repetir. Con `recursivo` baja a
+/// las subcarpetas (hasta ocho niveles, que es de sobra y corta cualquier
+/// enlace circular). Lo que no es un PDF se ignora en silencio: una
+/// carpeta de trabajo tiene de todo.
+fn pdfs_de(dir: &std::path::Path, recursivo: bool, hondo: u8, out: &mut Vec<std::path::PathBuf>) {
+    if hondo > 8 {
+        return;
+    }
+    let Ok(entradas) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut hijos: Vec<std::path::PathBuf> = Vec::new();
+    for e in entradas.flatten() {
+        let ruta = e.path();
+        if ruta.is_dir() {
+            if recursivo {
+                hijos.push(ruta);
+            }
+            continue;
+        }
+        let es_pdf = ruta
+            .extension()
+            .and_then(|x| x.to_str())
+            .map(|x| x.eq_ignore_ascii_case("pdf"))
+            .unwrap_or(false);
+        if es_pdf {
+            out.push(ruta);
+        }
+    }
+    out.sort();
+    hijos.sort();
+    for h in hijos {
+        pdfs_de(&h, recursivo, hondo + 1, out);
+    }
+}
+
+/// **Buscar en una carpeta** (Acrobat: ⇧⌘F ▸ «Todos los documentos PDF
+/// en…»), el cuerpo sin la parte de Tauri para poder probarlo y para que
+/// el puente de QA lo llame igual.
+///
+/// `progreso(hechos, total, fichero)` se llama **antes** de mirar cada
+/// fichero, que es lo que hace que la banda diga en qué va. Cada documento
+/// se suelta del caché al terminarlo: el caché tiene tope de cuatro y
+/// buscar en trescientos ficheros no puede llenarlo de documentos que
+/// nadie va a volver a abrir.
+pub(crate) fn busca_en_carpeta(
+    dir: &str,
+    query: &str,
+    match_case: Option<bool>,
+    whole_word: Option<bool>,
+    context: Option<bool>,
+    recursivo: Option<bool>,
+    progreso: &dyn Fn(u32, u32, &str),
+) -> Result<Vec<ResultadoFichero>, String> {
+    let carpeta = std::path::Path::new(dir);
+    if !carpeta.is_dir() {
+        return Err(format!("«{dir}» no es una carpeta"));
+    }
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    BUSQUEDA_CANCELADA.store(false, std::sync::atomic::Ordering::SeqCst);
+    let mut ficheros = Vec::new();
+    pdfs_de(carpeta, recursivo.unwrap_or(false), 0, &mut ficheros);
+    let total = ficheros.len() as u32;
+    let mut out = Vec::new();
+    for (i, ruta) in ficheros.iter().enumerate() {
+        if BUSQUEDA_CANCELADA.load(std::sync::atomic::Ordering::SeqCst) {
+            break;
+        }
+        let nombre = ruta
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        progreso(i as u32, total, &nombre);
+        let path = ruta.to_string_lossy().into_owned();
+        match search_pdf(path.clone(), query.to_string(), match_case, whole_word, context) {
+            Ok(coincidencias) if !coincidencias.is_empty() => out.push(ResultadoFichero {
+                path: path.clone(),
+                nombre,
+                coincidencias,
+                error: String::new(),
+            }),
+            Ok(_) => {}
+            Err(e) => out.push(ResultadoFichero {
+                path: path.clone(),
+                nombre,
+                coincidencias: Vec::new(),
+                error: crate::mensaje_llano(e),
+            }),
+        }
+        // fuera del caché: el siguiente fichero no tiene por qué echar de
+        // él al documento que el usuario tiene abierto
+        crate::invalidate_doc_cache(&path);
+    }
+    progreso(total, total, "");
+    Ok(out)
+}
+
+/// Busca en todos los PDF de una carpeta y devuelve una fila por fichero
+/// con coincidencias (o con el motivo de no haberlo podido abrir).
+///
+/// Va emitiendo el progreso por evento —`busqueda-progreso` y
+/// `buscando-carpeta`, el mismo objeto `{ hechos, total, fichero }` en los
+/// dos— y se corta con [`cancel_search`], que deja lo encontrado hasta
+/// ahí. Sin progreso, buscar en una carpeta grande es una ventana quieta
+/// sin nada que decir.
+#[tauri::command(async)]
+pub fn search_folder(
+    app: tauri::AppHandle,
+    dir: String,
+    query: String,
+    match_case: Option<bool>,
+    whole_word: Option<bool>,
+    context: Option<bool>,
+    recursivo: Option<bool>,
+) -> Result<Vec<ResultadoFichero>, String> {
+    use tauri::Emitter;
+    let emite = |hechos: u32, total: u32, fichero: &str| {
+        let carga = serde_json::json!({
+            "hechos": hechos,
+            "total": total,
+            "fichero": fichero,
+        });
+        let _ = app.emit(EVENTO_PROGRESO, carga.clone());
+        let _ = app.emit(EVENTO_PROGRESO_ALIAS, carga);
+    };
+    busca_en_carpeta(
+        &dir,
+        &query,
+        match_case,
+        whole_word,
+        context,
+        recursivo,
+        &emite,
+    )
+}
+
+/// El evento de progreso de la búsqueda en carpeta. Se emite con **dos
+/// nombres** a propósito: el contrato del analista lo llamó
+/// `buscando-carpeta` y la orden del coordinador `busqueda-progreso`, las
+/// dos mitades se escriben en paralelo y un evento que nadie escucha es
+/// una barra de progreso que no se mueve. Al integrar se quita el que
+/// sobre.
+pub(crate) const EVENTO_PROGRESO: &str = "busqueda-progreso";
+pub(crate) const EVENTO_PROGRESO_ALIAS: &str = "buscando-carpeta";
+
+#[cfg(test)]
+mod tests_carpeta {
+    use super::*;
+    use crate::tests::crea_pdf;
+
+    /// **Buscar en una carpeta** (orden 2 del ciclo 9). Es la función de
+    /// Acrobat que más se echa de menos de las que quedaban: quien tiene
+    /// una carpeta de facturas la usa a diario, y hasta ahora había que
+    /// abrirlas de una en una.
+    ///
+    /// Lo que hay que probar además del recuento: que un PDF que no se
+    /// puede abrir **no rompe la búsqueda** —se cuenta aparte y se dice—,
+    /// que sin `recursivo` no se baja a la subcarpeta y que lo que no es
+    /// un PDF se ignora en silencio.
+    #[test]
+    fn buscar_en_una_carpeta_agrupa_por_fichero_y_no_se_rompe_con_uno_malo() {
+        let raiz = std::env::temp_dir().join(format!(
+            "busqueda-carpeta-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let dentro = raiz.join("anexos");
+        std::fs::create_dir_all(&dentro).unwrap();
+        crea_pdf(&["Factura de enero", "Total factura"], &raiz.join("uno.pdf"));
+        crea_pdf(&["Presupuesto de obra"], &raiz.join("dos.pdf"));
+        crea_pdf(&["La factura del anexo"], &dentro.join("tres.pdf"));
+        // ni un PDF ni un fichero que se deje abrir como tal
+        std::fs::write(raiz.join("notas.txt"), b"factura").unwrap();
+        std::fs::write(raiz.join("roto.pdf"), b"esto no es un PDF").unwrap();
+
+        let visto = std::sync::Mutex::new(Vec::new());
+        let progreso = |hechos: u32, total: u32, fichero: &str| {
+            visto.lock().unwrap().push((hechos, total, fichero.to_string()));
+        };
+        let r = busca_en_carpeta(
+            &raiz.to_string_lossy(),
+            "factura",
+            None,
+            None,
+            None,
+            None,
+            &progreso,
+        )
+        .expect("buscar");
+
+        // uno.pdf tiene dos coincidencias; dos.pdf ninguna y no sale;
+        // roto.pdf sale con su motivo y sin coincidencias
+        let con_coincidencias: Vec<&ResultadoFichero> =
+            r.iter().filter(|g| g.error.is_empty()).collect();
+        assert_eq!(con_coincidencias.len(), 1, "grupos: {r:?}");
+        assert_eq!(con_coincidencias[0].nombre, "uno.pdf");
+        assert_eq!(con_coincidencias[0].coincidencias.len(), 2);
+        let ilegibles: Vec<&ResultadoFichero> =
+            r.iter().filter(|g| !g.error.is_empty()).collect();
+        assert_eq!(ilegibles.len(), 1, "el PDF roto se cuenta aparte: {r:?}");
+        assert_eq!(ilegibles[0].nombre, "roto.pdf");
+        assert!(
+            ilegibles[0].coincidencias.is_empty() && !ilegibles[0].error.is_empty(),
+            "y con su motivo en llano: {:?}",
+            ilegibles[0]
+        );
+        // el .txt ni se menciona
+        assert!(!r.iter().any(|g| g.nombre.ends_with(".txt")));
+        // y sin `recursivo` la subcarpeta no se mira
+        assert!(!r.iter().any(|g| g.nombre == "tres.pdf"), "grupos: {r:?}");
+
+        // el progreso llega por cada fichero y termina en total/total
+        let visto = visto.into_inner().unwrap();
+        assert!(visto.len() >= 4, "progreso: {visto:?}");
+        assert_eq!(visto[0].1, 3, "tres PDF en la carpeta: {visto:?}");
+        let ultimo = visto.last().unwrap();
+        assert_eq!((ultimo.0, ultimo.1), (3, 3), "el último dice que ha acabado");
+
+        // con `recursivo`, la del anexo también
+        let r = busca_en_carpeta(
+            &raiz.to_string_lossy(),
+            "factura",
+            None,
+            None,
+            None,
+            Some(true),
+            &|_, _, _| {},
+        )
+        .expect("buscar hondo");
+        assert!(r.iter().any(|g| g.nombre == "tres.pdf"), "grupos: {r:?}");
+
+        // cancelar corta y **devuelve lo encontrado hasta ahí**
+        cancel_search().expect("cancelar");
+        let r = busca_en_carpeta(
+            &raiz.to_string_lossy(),
+            "factura",
+            None,
+            None,
+            None,
+            None,
+            &|_, _, _| {},
+        )
+        .expect("buscar tras cancelar");
+        assert!(
+            !r.is_empty(),
+            "la bandera se limpia al empezar: cancelar una búsqueda no puede \
+             dejar la siguiente muerta"
+        );
+
+        // una carpeta que no existe se dice en llano
+        assert!(busca_en_carpeta(
+            &raiz.join("no-existe").to_string_lossy(),
+            "factura",
+            None,
+            None,
+            None,
+            None,
+            &|_, _, _| {},
+        )
+        .unwrap_err()
+        .contains("no es una carpeta"));
+
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
 }
 
 #[cfg(test)]

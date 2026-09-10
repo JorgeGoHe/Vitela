@@ -133,6 +133,29 @@ fn atender(mut request: tiny_http::Request) {
     }
 }
 
+/// `search_folder` es el único comando que recibe el `AppHandle` de Tauri
+/// (emite el progreso por evento) y en el puente no hay ventana: la sesión
+/// de QA en el navegador llama al mismo cuerpo sin progreso, que es lo
+/// único que se pierde.
+fn busca_en_carpeta_qa(
+    dir: String,
+    query: String,
+    match_case: Option<bool>,
+    whole_word: Option<bool>,
+    context: Option<bool>,
+    recursivo: Option<bool>,
+) -> Result<Vec<crate::busqueda::ResultadoFichero>, String> {
+    crate::busqueda::busca_en_carpeta(
+        &dir,
+        &query,
+        match_case,
+        whole_word,
+        context,
+        recursivo,
+        &|_, _, _| {},
+    )
+}
+
 /// Despacha un comando por nombre con los mismos argumentos camelCase que
 /// envía la UI. Mantener sincronizado con `generate_handler!` de lib.rs.
 pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
@@ -159,6 +182,9 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "get_page_text" => cmd!(busqueda::get_page_text, { path: String, page_index: u16 }),
         "get_page_sizes" => cmd!(crate::get_page_sizes, { path: String }),
         "search_pdf" => cmd!(busqueda::search_pdf, { path: String, query: String, match_case: Option<bool>, whole_word: Option<bool>, context: Option<bool> }),
+        "search_folder" => cmd!(busca_en_carpeta_qa, { dir: String, query: String, match_case: Option<bool>, whole_word: Option<bool>, context: Option<bool>, recursivo: Option<bool> }),
+        "cancel_search" => busqueda::cancel_search()
+            .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
         "delete_page" => cmd!(paginas::delete_page, { work_path: String, page_index: u16 }),
         "rotate_page" => cmd!(paginas::rotate_page, { work_path: String, page_index: u16 }),
         "move_page" => cmd!(paginas::move_page, { work_path: String, from_index: u16, to_index: u16 }),
@@ -476,6 +502,15 @@ mod tests {
         (
             "save_page_attachment",
             "ciclo 9: «Guardar como…» del popover de la chincheta, ídem",
+        ),
+        (
+            "search_folder",
+            "ciclo 9: el segmentado «Este documento / Una carpeta…» del cajón de \
+             búsqueda llega con la interfaz",
+        ),
+        (
+            "cancel_search",
+            "ciclo 9: su botón «Cancelar» vive en la banda de progreso de esa búsqueda",
         ),
         (
             "add_background",
