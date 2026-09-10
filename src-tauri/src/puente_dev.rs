@@ -556,6 +556,9 @@ mod tests {
     struct Parametro {
         nombre: String,
         obligatorio: bool,
+        /// El tipo tal como está escrito en Rust, para poder cruzar los
+        /// `struct` anidados campo a campo (R65b).
+        tipo: String,
     }
 
     /// Los ficheros de Rust del core, con su texto.
@@ -689,6 +692,7 @@ mod tests {
                         Some(Parametro {
                             nombre: nombre.trim().to_string(),
                             obligatorio: !tipo.starts_with("Option<"),
+                            tipo: tipo.to_string(),
                         })
                     })
                     .collect();
@@ -1410,6 +1414,7 @@ mod tests {
                     Some(Parametro {
                         nombre: nombre.trim().to_string(),
                         obligatorio: !tipo.trim().starts_with("Option<"),
+                        tipo: tipo.trim().to_string(),
                     })
                 })
                 .collect();
@@ -1486,6 +1491,37 @@ mod tests {
     /// que devuelve una lista se declara como lista, y uno que devuelve un
     /// `struct` con campos nombrados **no** se declara como lista.
     const TIPOS_PENDIENTES: &[(&str, &str)] = &[];
+
+    /// Comandos que devuelven un `struct` y cuyo envoltorio declara un tipo
+    /// primitivo o `void` **a propósito**, con su motivo. Cierra vacía.
+    const RETORNOS_IGNORADOS: &[(&str, &str)] = &[
+        (
+            "compose_print",
+            "pendiente_ui: AC-087, `composePrint` declara `Promise<string>` sobre un \
+             `Composicion` y `App.tsx` le pasa el objeto entero a `open_pdf` como \
+             ruta; lo arregla la UI en R64 del ciclo 10",
+        ),
+        (
+            "sign_pdf",
+            "pendiente_ui: AC-079, el envoltorio declara `void` sobre el \
+             `InformeFirma`, así que la banda anuncia el sello de tiempo por \
+             haberlo pedido y no por tenerlo; lo arregla la UI en R64",
+        ),
+        (
+            "sign_pdf_p12",
+            "pendiente_ui: AC-079, lo mismo con el certificado en .p12",
+        ),
+        (
+            "certify_pdf",
+            "pendiente_ui: AC-079, lo mismo al certificar",
+        ),
+        (
+            "export_html",
+            "pendiente_ui: `exportHtml` declara `void` sobre el `InformeHtml`, así \
+             que la banda no puede decir cuántas páginas, imágenes y enlaces han \
+             salido, que es lo que dicen las otras exportaciones",
+        ),
+    ];
 
     /// Los `struct` con campos nombrados del core, que es lo que viaja a la
     /// UI como objeto JSON.
@@ -1584,6 +1620,391 @@ mod tests {
         out
     }
 
+    /// **R65b, la sexta costura: los `struct` anidados.** Tauri solo
+    /// traduce el camelCase de los argumentos de **primer nivel**, así que
+    /// lo que va dentro de un `struct` anidado —`vista`, `opciones`,
+    /// `props`, `fields`, `rangos`, `destinatarios`, `escala`— viaja tal
+    /// como lo escribe la UI. Un campo que sobra Tauri lo tira en silencio
+    /// y uno que falta se queda en su defecto: ni `tsc` ni las cinco
+    /// costuras anteriores ven la diferencia.
+    ///
+    /// Fue AC-086: `VistaInicial` declaraba cuatro campos donde Rust tiene
+    /// siete, y con `zoom` de otra clase. La vista inicial se guardaba a
+    /// medias y el desplegable de encaje no llegaba al documento.
+    ///
+    /// Cada entrada es (`comando.parametro`, motivo) y la lista cierra
+    /// vacía.
+    const CAMPOS_PENDIENTES: &[(&str, &str)] = &[(
+        "set_open_action.vista",
+        "pendiente_ui: AC-086, la UI declara cuatro de los siete campos y `zoom` \
+         como texto; lo arregla en R64 del ciclo 10",
+    )];
+
+    /// Tipos de la UI que este test no sabe leer, con su motivo. Cierra
+    /// vacía o crece con razón escrita.
+    const CAMPOS_SIN_LEER: &[(&str, &str)] = &[];
+
+    /// Campos de un `struct` anidado que la UI **no manda a propósito**,
+    /// con su motivo. Un campo aquí no es un descuido: es una capacidad
+    /// que no es del usuario, y decirlo por escrito es la única forma de
+    /// distinguirla de la que se quedó a medio integrar. Falla también
+    /// cuando el campo desaparece de Rust.
+    const CAMPOS_SOLO_DEL_BACKEND: &[(&str, &str)] = &[
+        (
+            "compose_print.opciones.dest_path",
+            "no es del usuario: sin él la composición va a un temporal que barre el \
+             arranque, que es lo que quiere la interfaz. Lo usan los tests para \
+             escribir donde les conviene",
+        ),
+        (
+            "compose_print.opciones.con_anotaciones",
+            "pendiente_ui: lo manda la UI en C-2 del ciclo 10, cuando el desplegable \
+             «Solo el documento» tenga que saltarse el aplanado",
+        ),
+    ];
+
+    /// Los campos de un bloque `{ … }` de TypeScript, con su tipo: como
+    /// `claves_del_bloque`, pero sin tirar la mitad derecha.
+    fn campos_del_bloque(bloque: &str) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for t in trozos(bloque, &[',', ';']) {
+            let t: String = t
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.starts_with("//") && !l.starts_with('*') && !l.starts_with("/*"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let t = t.trim();
+            let Some((clave, tipo)) = t.split_once(':') else {
+                continue;
+            };
+            let clave = clave.trim().trim_end_matches('?').trim();
+            if clave.is_empty()
+                || !clave.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                continue;
+            }
+            out.push((clave.to_string(), tipo.trim().to_string()));
+        }
+        out
+    }
+
+    /// Los `export type X = …` de la UI, con su texto a la derecha.
+    fn alias_de_la_ui(fuentes: &[(String, String)]) -> std::collections::BTreeMap<String, String> {
+        let mut out = std::collections::BTreeMap::new();
+        for (_, texto) in fuentes {
+            let mut i = 0;
+            while let Some(j) = texto[i..].find("export type ") {
+                let j = i + j + "export type ".len();
+                i = j + 1;
+                let resto = &texto[j..];
+                let Some(igual) = resto.find('=') else { continue };
+                let nombre = resto[..igual].trim();
+                if !nombre.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                    continue;
+                }
+                let tras = &resto[igual + 1..];
+                let valor = match tras.trim_start().starts_with('{') {
+                    true => {
+                        let abre = igual + 1 + tras.find('{').unwrap_or(0);
+                        match hasta_cerrar(resto, abre, '{', '}') {
+                            Some(d) => format!("{{{d}}}"),
+                            None => continue,
+                        }
+                    }
+                    false => tras[..tras.find(';').unwrap_or(tras.len())].trim().to_string(),
+                };
+                out.insert(nombre.to_string(), valor);
+            }
+        }
+        out
+    }
+
+    /// La clase de un tipo de TypeScript: `"texto"`, `"numero"`,
+    /// `"booleano"`, `"lista"`, `"objeto"` o `"otro"` (lo que no se sabe
+    /// leer, que no acusa a nadie).
+    fn clase_ts(
+        tipo: &str,
+        alias: &std::collections::BTreeMap<String, String>,
+        vueltas: u8,
+    ) -> &'static str {
+        let mut t = tipo.trim().to_string();
+        for sobra in [" | null", " | undefined", "| null", "| undefined"] {
+            t = t.replace(sobra, "");
+        }
+        let t = t.trim();
+        if t.ends_with("[]") || t.starts_with("Array<") {
+            return "lista";
+        }
+        match t {
+            "string" => return "texto",
+            "number" => return "numero",
+            "boolean" => return "booleano",
+            _ => {}
+        }
+        if t.starts_with('{') {
+            return "objeto";
+        }
+        if t.starts_with('[') {
+            return "lista";
+        }
+        // una unión de literales de texto («"a" | "b"») es texto
+        if t.starts_with('"') {
+            return "texto";
+        }
+        if vueltas < 4 {
+            if let Some(v) = alias.get(t) {
+                return clase_ts(v, alias, vueltas + 1);
+            }
+        }
+        "otro"
+    }
+
+    /// Los campos de cada `pub struct` del core, con su tipo en Rust.
+    fn campos_de_los_structs_rust(
+    ) -> std::collections::BTreeMap<String, Vec<(String, String)>> {
+        let mut out = std::collections::BTreeMap::new();
+        for texto in fuentes_del_core() {
+            let mut i = 0;
+            while let Some(j) = texto[i..].find("pub struct ") {
+                let j = i + j + "pub struct ".len();
+                i = j + 1;
+                let resto = &texto[j..];
+                let fin = resto
+                    .find(|c: char| !c.is_alphanumeric() && c != '_')
+                    .unwrap_or(resto.len());
+                let nombre = resto[..fin].to_string();
+                if !resto[fin..].trim_start().starts_with('{') {
+                    continue;
+                }
+                let abre = j + fin + resto[fin..].find('{').unwrap_or(0);
+                let Some(dentro) = hasta_cerrar(&texto, abre, '{', '}') else {
+                    continue;
+                };
+                let campos: Vec<(String, String)> = dentro
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| l.starts_with("pub "))
+                    .filter_map(|l| {
+                        let l = l.trim_start_matches("pub ").trim();
+                        let (campo, tipo) = l.split_once(':')?;
+                        Some((
+                            campo.trim().to_string(),
+                            tipo.trim().trim_end_matches(',').trim().to_string(),
+                        ))
+                    })
+                    .collect();
+                out.insert(nombre, campos);
+            }
+        }
+        out
+    }
+
+    /// La clase de un tipo de Rust, con el mismo vocabulario que `clase_ts`.
+    fn clase_rust(tipo: &str, structs: &std::collections::BTreeSet<String>) -> &'static str {
+        let t = tipo.trim();
+        if let Some(dentro) = t.strip_prefix("Option<").and_then(|d| d.strip_suffix('>')) {
+            return clase_rust(dentro, structs);
+        }
+        if t.starts_with("Vec<") || t.starts_with('[') {
+            return "lista";
+        }
+        match t {
+            "String" | "&str" => return "texto",
+            "bool" => return "booleano",
+            "f32" | "f64" | "u8" | "u16" | "u32" | "u64" | "usize" | "i8" | "i16" | "i32"
+            | "i64" | "isize" => return "numero",
+            _ => {}
+        }
+        let simple = t.rsplit("::").next().unwrap_or(t);
+        if structs.contains(simple) {
+            return "objeto";
+        }
+        "otro"
+    }
+
+    /// El tipo que la UI declara para cada argumento con nombre, leído de
+    /// las firmas de `api.ts` (`vista: VistaInicial`, `props: PropsCampo`).
+    fn tipos_de_los_argumentos_de_la_ui(
+        fuentes: &[(String, String)],
+    ) -> std::collections::BTreeMap<String, String> {
+        let mut out = std::collections::BTreeMap::new();
+        for (ruta, texto) in fuentes {
+            if !ruta.ends_with("api.ts") {
+                continue;
+            }
+            let mut i = 0;
+            while let Some(j) = texto[i..].find("export function ") {
+                let j = i + j;
+                i = j + 1;
+                let Some(p) = texto[j..].find('(').map(|k| j + k) else {
+                    continue;
+                };
+                let Some(dentro) = hasta_cerrar(texto, p, '(', ')') else {
+                    continue;
+                };
+                // `args: { … }` y la lista suelta se leen igual
+                let bloque = match dentro.find('{') {
+                    Some(k) => hasta_cerrar(dentro, k, '{', '}').unwrap_or(dentro),
+                    None => dentro,
+                };
+                for (campo, tipo) in campos_del_bloque(bloque) {
+                    out.entry(campo).or_insert(tipo);
+                }
+            }
+        }
+        out
+    }
+
+    /// **R65b.** Cruza campo a campo los `struct` que la UI manda dentro de
+    /// un argumento: nombres y clase de tipo. Lo que Rust no tiene, Tauri lo
+    /// tira sin decir nada; lo que la UI no manda se queda en su defecto.
+    #[test]
+    fn los_campos_de_un_struct_anidado_son_los_mismos_en_las_dos_mitades() {
+        let fuentes = fuentes_de_la_ui();
+        let alias = alias_de_la_ui(&fuentes);
+        let tipos_ui = tipos_de_los_argumentos_de_la_ui(&fuentes);
+        let campos_rust = campos_de_los_structs_rust();
+        let structs: std::collections::BTreeSet<String> =
+            campos_rust.keys().cloned().collect();
+        let mut fallos: Vec<String> = Vec::new();
+        let mut mirados: Vec<String> = Vec::new();
+
+        for (comando, params) in parametros_de_los_comandos() {
+            for p in &params {
+                let desnudo = p
+                    .tipo
+                    .trim()
+                    .trim_start_matches("Option<")
+                    .trim_start_matches("Vec<")
+                    .trim_end_matches('>')
+                    .trim();
+                let simple = desnudo.rsplit("::").next().unwrap_or(desnudo);
+                let Some(campos) = campos_rust.get(simple) else {
+                    continue;
+                };
+                if campos.is_empty() {
+                    continue;
+                }
+                let clave = format!("{comando}.{}", p.nombre);
+                // el nombre del argumento en la UI es el mismo (estos van en
+                // una sola palabra), y su tipo, el que declara la firma
+                let Some(tipo_ui) = tipos_ui.get(&p.nombre) else {
+                    continue;
+                };
+                let cuerpo = {
+                    let mut t = tipo_ui
+                        .trim()
+                        .trim_end_matches("[]")
+                        .replace(" | null", "")
+                        .replace(" | undefined", "")
+                        .trim()
+                        .to_string();
+                    for _ in 0..4 {
+                        if t.starts_with('{') {
+                            break;
+                        }
+                        match alias.get(t.trim()) {
+                            Some(v) => t = v.clone(),
+                            None => break,
+                        }
+                    }
+                    t
+                };
+                if !cuerpo.trim().starts_with('{') {
+                    if !CAMPOS_SIN_LEER.iter().any(|(c, _)| *c == clave) {
+                        fallos.push(format!(
+                            "{clave}: no se ha podido leer el tipo `{tipo_ui}` de la UI; \
+                             si tiene que ser así va en CAMPOS_SIN_LEER con su motivo"
+                        ));
+                    }
+                    continue;
+                }
+                mirados.push(clave.clone());
+                if CAMPOS_PENDIENTES.iter().any(|(c, _)| *c == clave) {
+                    continue;
+                }
+                let de_la_ui = campos_del_bloque(cuerpo.trim_matches(['{', '}']));
+                let nombres_ui: Vec<&str> =
+                    de_la_ui.iter().map(|(n, _)| n.as_str()).collect();
+                let faltan: Vec<&str> = campos
+                    .iter()
+                    .map(|(n, _)| n.as_str())
+                    .filter(|n| !nombres_ui.contains(n))
+                    .collect();
+                let sobran: Vec<&str> = nombres_ui
+                    .iter()
+                    .copied()
+                    .filter(|n| !campos.iter().any(|(r, _)| r == n))
+                    .collect();
+                let faltan: Vec<&str> = faltan
+                    .into_iter()
+                    .filter(|n| {
+                        !CAMPOS_SOLO_DEL_BACKEND
+                            .iter()
+                            .any(|(c, _)| *c == format!("{clave}.{n}"))
+                    })
+                    .collect();
+                if !faltan.is_empty() {
+                    fallos.push(format!(
+                        "{clave}: la UI no manda {faltan:?}, que en Rust se quedan en su \
+                         defecto. Si es a propósito, van en CAMPOS_SOLO_DEL_BACKEND con \
+                         su motivo"
+                    ));
+                }
+                if !sobran.is_empty() {
+                    fallos.push(format!(
+                        "{clave}: la UI manda {sobran:?}, que el comando no conoce y Tauri tira"
+                    ));
+                }
+                for (nombre, tipo_rust) in campos {
+                    let Some((_, tipo)) = de_la_ui.iter().find(|(n, _)| n == nombre) else {
+                        continue;
+                    };
+                    let (a, b) = (clase_rust(tipo_rust, &structs), clase_ts(tipo, &alias, 0));
+                    if a != "otro" && b != "otro" && a != b {
+                        fallos.push(format!(
+                            "{clave}.{nombre}: en Rust es {a} (`{tipo_rust}`) y en la UI {b} \
+                             (`{tipo}`)"
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            fallos.is_empty(),
+            "los `struct` anidados no dicen lo mismo en las dos mitades, y Tauri no \
+             se queja: lo que sobra lo tira y lo que falta se queda en su defecto:\n  {}",
+            fallos.join("\n  ")
+        );
+        assert!(
+            mirados.len() >= 5,
+            "se han cruzado {} structs anidados; el test se ha quedado ciego",
+            mirados.len()
+        );
+        let fantasmas: Vec<&str> = CAMPOS_PENDIENTES
+            .iter()
+            .chain(CAMPOS_SIN_LEER.iter())
+            .map(|(c, _)| *c)
+            .filter(|c| !mirados.iter().any(|m| m == c))
+            .chain(CAMPOS_SOLO_DEL_BACKEND.iter().map(|(c, _)| *c).filter(|c| {
+                // «comando.parametro.campo»: el struct tiene que seguir
+                // teniendo ese campo
+                let Some((clave, campo)) = c.rsplit_once('.') else {
+                    return true;
+                };
+                !mirados.iter().any(|m| m == clave)
+                    || !campos_rust
+                        .values()
+                        .any(|v| v.iter().any(|(n, _)| n == campo))
+            }))
+            .collect();
+        assert!(
+            fantasmas.is_empty(),
+            "estas excepciones han envejecido: {fantasmas:?}"
+        );
+    }
+
     #[test]
     fn el_tipo_que_declara_la_ui_es_el_que_devuelve_el_comando() {
         let retornos = retornos_de_los_comandos();
@@ -1596,9 +2017,27 @@ mod tests {
                 vistos.push(cmd.clone());
                 continue;
             }
-            // `void`, `unknown` y `any` son «no miro lo que devuelve»: no
-            // se desarma nada y no hay nada que pueda reventar al pintar
-            if matches!(tipo.as_str(), "void" | "unknown" | "any") {
+            // **R65b.** «No miro lo que devuelve» vale para lo que no
+            // devuelve nada que mirar; para un `struct` con campos
+            // nombrados es una promesa que la UI se cree: `composePrint`
+            // declaraba `Promise<string>` sobre un `{ path, hojas, caras,
+            // paginas }` y `open_pdf` recibía el objeto entero como ruta,
+            // con lo que ninguna composición llegaba a imprimirse (AC-087).
+            // Igual de malo es declarar `string` o `number` sobre un objeto
+            let primitivo = matches!(
+                tipo.as_str(),
+                "void" | "unknown" | "any" | "string" | "number" | "boolean"
+            );
+            if primitivo {
+                if *clase == "objeto"
+                    && !RETORNOS_IGNORADOS.iter().any(|(n, _)| *n == cmd)
+                {
+                    fallos.push(format!(
+                        "{cmd}: el comando devuelve un objeto con campos y la UI \
+                         declara `{tipo}`, así que lo que se use de él será `undefined`. \
+                         Si de verdad no se mira, va en RETORNOS_IGNORADOS con su motivo"
+                    ));
+                }
                 vistos.push(cmd);
                 continue;
             }
@@ -1623,12 +2062,13 @@ mod tests {
         );
         let fantasmas: Vec<&str> = TIPOS_PENDIENTES
             .iter()
+            .chain(RETORNOS_IGNORADOS.iter())
             .map(|(n, _)| *n)
             .filter(|n| !vistos.iter().any(|v| v == n))
             .collect();
         assert!(
             fantasmas.is_empty(),
-            "TIPOS_PENDIENTES nombra comandos que la UI ya no envuelve: {fantasmas:?}"
+            "estas excepciones nombran comandos que la UI ya no envuelve: {fantasmas:?}"
         );
     }
 }

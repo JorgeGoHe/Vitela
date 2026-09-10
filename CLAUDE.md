@@ -1043,6 +1043,28 @@ compila los instaladores a mano o al etiquetar `v*`.
     páginas y exige que las cinco cosas del catálogo sigan ahí después de
     cada una.
 
+  - **La sexta costura del test cruzado** (R65b, `puente_dev`). Dos
+    asertos más, y con ellos son ocho:
+    `los_campos_de_un_struct_anidado_son_los_mismos_en_las_dos_mitades`
+    cruza campo a campo los `struct` que la UI mete dentro de un argumento
+    —`vista`, `opciones`, `props`, `fields`, `rangos`, `destinatarios`,
+    `escala`—, comparando nombres y clase de tipo (texto, número,
+    booleano, lista, objeto). Tauri solo pasa a snake_case el primer
+    nivel: lo de dentro viaja tal cual, lo que sobra se tira sin decir
+    nada y lo que falta se queda en su defecto, así que ni `tsc` ni las
+    cinco costuras anteriores ven la diferencia. Fue AC-086, con cuatro de
+    los siete campos de la vista inicial y el zoom de otra clase. Sus
+    excepciones: `CAMPOS_PENDIENTES` (a medio integrar), `CAMPOS_SIN_LEER`
+    (tipos que el test no resuelve) y `CAMPOS_SOLO_DEL_BACKEND` (un campo
+    que la UI no manda **a propósito**, como el destino de la composición,
+    que sin él va a un temporal).
+    Y `el_tipo_que_declara_la_ui_es_el_que_devuelve_el_comando` deja de
+    tragarse un envoltorio **primitivo o `void`** sobre un comando que
+    devuelve un `struct` con campos: `composePrint` prometía
+    `Promise<string>` sobre un objeto y la ruta que se le pasaba a
+    `open_pdf` era el objeto entero, con lo que ninguna composición
+    llegaba a imprimirse (AC-087). Lo que de verdad no se mira va en
+    `RETORNOS_IGNORADOS` con su motivo.
   - **Un mensaje con carreras de espacios dentro** (C-9): un literal partido
     en varias líneas sin la barra invertida se lleva el sangrado del código
     dentro de la frase, y eso lo lee el usuario. El aviso del PDF cifrado
