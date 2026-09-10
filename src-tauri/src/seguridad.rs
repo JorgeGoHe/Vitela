@@ -1306,6 +1306,7 @@ mod tests {
             500.0,
             22.0,
             None,
+            None,
         )
         .expect("sello");
         crate::anotaciones::add_stroke(

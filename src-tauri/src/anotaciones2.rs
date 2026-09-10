@@ -229,8 +229,45 @@ pub fn add_shape(
     }))
 }
 
+/// Las tres plantillas de sello dinámico de Acrobat, cada una con su
+/// texto. Un sello dinámico es el que **compone nombre, fecha y hora en el
+/// momento de estampar** dentro de su apariencia: pasado un mes, sigue
+/// diciendo cuándo se revisó.
+const PLANTILLAS: &[(&str, &str)] = &[
+    ("revisado", "Revisado por {autor} · {fecha} {hora}"),
+    ("recibido", "Recibido por {autor} · {fecha} {hora}"),
+    ("aprobado", "Aprobado por {autor} · {fecha} {hora}"),
+];
+
+/// Resuelve la plantilla de un sello dinámico **en el backend**, que es
+/// donde está el reloj y donde ya se sabe quién firma los comentarios.
+/// `plantilla` es el nombre de una de [`PLANTILLAS`] o una plantilla libre
+/// con las mismas variables: `{autor}`, `{fecha}` (10/09/2026) y `{hora}`
+/// (19:40).
+pub(crate) fn compone_dinamico(plantilla: &str, autor: &str) -> String {
+    let clave = plantilla.trim().to_lowercase();
+    let patron = PLANTILLAS
+        .iter()
+        .find(|(nombre, _)| *nombre == clave)
+        .map(|(_, texto)| *texto)
+        .unwrap_or(plantilla);
+    let ahora = chrono::Local::now();
+    patron
+        .replace("{autor}", autor)
+        .replace("{fecha}", &ahora.format("%d/%m/%Y").to_string())
+        .replace("{hora}", &ahora.format("%H:%M").to_string())
+        .trim()
+        .to_string()
+}
+
 /// Sello de texto (APROBADO, BORRADOR…): anotación Stamp con un borde y el
 /// texto dentro, centrado en el punto dado (coords de UI).
+///
+/// Con `dinamico` es un **sello dinámico** de los de Acrobat: el texto lo
+/// compone el backend con el nombre de quien estampa y la fecha y la hora
+/// del momento (ver [`compone_dinamico`]), y entonces `text` no se usa.
+/// Componerlo aquí y no en la interfaz es lo que hace que el sello diga la
+/// verdad: el reloj y el autor de los comentarios ya viven de este lado.
 // la firma es el contrato con la UI: un argumento por propiedad del sello
 #[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
@@ -243,8 +280,13 @@ pub fn add_stamp(
     y: f32,
     font_size: f32,
     author: Option<String>,
+    dinamico: Option<String>,
 ) -> Result<(), String> {
-    let text = text.trim().to_string();
+    let autor = crate::anotaciones::autor_o_sistema(author.clone());
+    let text = match dinamico.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+        Some(plantilla) => compone_dinamico(plantilla, &autor),
+        None => text.trim().to_string(),
+    };
     if text.is_empty() {
         return Err("El sello está vacío".into());
     }
@@ -2203,7 +2245,7 @@ mod tests {
             gira(&work, veces);
 
             let (sx, sy) = vista_a_pagina(&work, 100.0, 200.0);
-            add_stamp(work.clone(), 0, "X".into(), [192, 57, 43, 255], sx, sy, 22.0, None)
+            add_stamp(work.clone(), 0, "X".into(), [192, 57, 43, 255], sx, sy, 22.0, None, None)
                 .expect("sello");
             assert!(
                 hay_tinta(&work, 100.0, 200.0),
@@ -2273,7 +2315,7 @@ mod tests {
         let pdf = std::env::temp_dir().join("anotaciones2-rotada-render-test.pdf");
         crea_pdf(&["Página"], &pdf);
         let work = pdf.to_string_lossy().to_string();
-        add_stamp(work.clone(), 0, "X".into(), [192, 57, 43, 255], 100.0, 200.0, 22.0, None)
+        add_stamp(work.clone(), 0, "X".into(), [192, 57, 43, 255], 100.0, 200.0, 22.0, None, None)
             .expect("sello");
         gira(&work, 1);
 
@@ -2491,6 +2533,87 @@ mod tests {
         assert_eq!(annots[1].color, Some([0, 0, 200, 255]));
     }
 
+    /// **Sello dinámico.** El que compone nombre, fecha y hora **en el
+    /// momento de estampar**, que es lo que lo distingue del sello de
+    /// texto de siempre: pasado un mes sigue diciendo cuándo se revisó.
+    /// Lo compone el backend, que es donde está el reloj.
+    #[test]
+    fn sello_dinamico_compone_autor_fecha_y_hora_dentro_de_la_apariencia() {
+        // la plantilla se resuelve aquí, sin tocar el PDF
+        let compuesto = compone_dinamico("revisado", "Jorge");
+        assert!(compuesto.starts_with("Revisado por Jorge · "), "{compuesto}");
+        let hoy = chrono::Local::now().format("%d/%m/%Y").to_string();
+        assert!(compuesto.contains(&hoy), "sin la fecha de hoy: {compuesto}");
+        // y una plantilla libre solo sustituye sus variables
+        assert_eq!(compone_dinamico("Visto por {autor}", "Ana"), "Visto por Ana");
+
+        let pdf = std::env::temp_dir().join("anotaciones2-stamp-dinamico-test.pdf");
+        crea_pdf(&["Página"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+        // el `text` no se usa cuando hay plantilla: lo compone el backend
+        add_stamp(
+            work.clone(),
+            0,
+            String::new(),
+            [30, 90, 180, 255],
+            300.0,
+            400.0,
+            12.0,
+            Some("Jorge".into()),
+            Some("revisado".into()),
+        )
+        .expect("sello dinámico");
+
+        let annots = crate::anotaciones::get_annotations(work.clone(), 0).expect("listar");
+        assert_eq!(annots.len(), 1);
+        assert_eq!(annots[0].kind, "Stamp");
+
+        // el texto compuesto vive DENTRO de la apariencia del sello, no en
+        // el content stream de la página: es un comentario, no contenido
+        let doc = lopdf::Document::load(&work).expect("cargar");
+        let page_id = *doc.get_pages().get(&1).expect("página 1");
+        let rid = doc
+            .get_object(page_id)
+            .and_then(|o| o.as_dict())
+            .and_then(|d| d.get(b"Annots"))
+            .and_then(|o| o.as_array())
+            .expect("Annots")[0]
+            .as_reference()
+            .expect("referencia");
+        let annot = doc.get_object(rid).and_then(|o| o.as_dict()).expect("annot");
+        let ap = annot
+            .get(b"AP")
+            .and_then(|o| o.as_dict())
+            .and_then(|d| d.get(b"N"))
+            .and_then(|o| o.as_reference())
+            .expect("/AP /N");
+        let stream = doc.get_object(ap).and_then(|o| o.as_stream()).expect("stream");
+        let contenido = stream
+            .decompressed_content()
+            .unwrap_or_else(|_| stream.content.clone());
+        // PDFium escribe las cadenas del sello en hexadecimal
+        let texto = String::from_utf8_lossy(&contenido).to_uppercase();
+        let en_hex: String = "Revisado por Jorge"
+            .bytes()
+            .map(|b| format!("{b:02X}"))
+            .collect();
+        assert!(
+            texto.contains(&en_hex),
+            "la apariencia no lleva el texto compuesto: {texto}"
+        );
+
+        // y el /Rect lo abarca: el sello dinámico es más largo que
+        // «APROBADO» y no puede salirse de su propia caja
+        let ancho_minimo = compuesto.chars().count() as f32 * 12.0 * 0.5;
+        assert!(
+            annots[0].w > ancho_minimo,
+            "el rect ({}) no abarca el texto compuesto",
+            annots[0].w
+        );
+        assert!(hay_tinta(&work, 300.0, 400.0), "el sello no se ve en el render");
+        std::fs::remove_file(&pdf).ok();
+    }
+
     #[test]
     fn sello_renderiza_borde_y_texto() {
         let pdf = std::env::temp_dir().join("anotaciones2-stamp-test.pdf");
@@ -2504,6 +2627,7 @@ mod tests {
             300.0,
             400.0,
             22.0,
+            None,
             None,
         )
         .expect("sello");
@@ -2554,6 +2678,7 @@ mod tests {
             200.0,
             600.0,
             22.0,
+            None,
             None,
         )
         .expect("sello");

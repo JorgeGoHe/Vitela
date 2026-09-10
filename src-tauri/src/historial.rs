@@ -414,7 +414,7 @@ mod tests {
         crate::texto::add_text_block(work.clone(), 0, 60.0, 400.0, "Nuevo".into(), 12.0, None, None, None, None, None)
             .unwrap();
         cuenta(&work);
-        crate::anotaciones2::add_stamp(work.clone(), 0, "OK".into(), [200, 0, 0, 255], 200.0, 200.0, 20.0, None)
+        crate::anotaciones2::add_stamp(work.clone(), 0, "OK".into(), [200, 0, 0, 255], 200.0, 200.0, 20.0, None, None)
             .unwrap();
         cuenta(&work);
         crate::paginas2::add_blank_page(work.clone(), 1).unwrap();

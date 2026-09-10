@@ -1879,6 +1879,7 @@ mod tests_apariencia {
             600.0,
             14.0,
             Some("Jorge".into()),
+            None,
         )
         .expect("sello");
 
@@ -2023,6 +2024,7 @@ mod tests_apariencia {
             300.0,
             14.0,
             Some("Jorge".into()),
+            None,
         )
         .expect("sello");
 
@@ -2230,6 +2232,7 @@ mod tests_apariencia {
             300.0,
             400.0,
             18.0,
+            None,
             None,
         )
         .expect("sello 3");
