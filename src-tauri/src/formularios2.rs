@@ -1356,6 +1356,110 @@ mod tests {
         std::fs::remove_file(&pdf).ok();
     }
 
+    /// **Exportar e importar los datos del formulario** (XFDF). Es lo que
+    /// se manda de vuelta a quien repartió el formulario: unos kilobytes
+    /// con las respuestas en vez del documento entero. Y al recibirlas, lo
+    /// que hay que saber es cuántas se han colocado y **cuántas venían de
+    /// un formulario que ya no es este**: importar rellena, no crea campos.
+    #[test]
+    fn los_datos_del_formulario_salen_y_vuelven_en_un_xfdf() {
+        let dir = std::env::temp_dir();
+        let campos = |y: f32, nombre: &str, kind: &str| CampoNuevo {
+            page_index: 0,
+            kind: kind.into(),
+            rect: Rect { x: 80.0, y, w: 160.0, h: 20.0 },
+            name: nombre.into(),
+            group: None,
+            export_value: None,
+            options: None,
+            props: None,
+        };
+        let prepara = |nombre: &str| {
+            let pdf = dir.join(nombre);
+            crea_pdf(&["Solicitud"], &pdf);
+            let work = pdf.to_string_lossy().into_owned();
+            create_form_fields(
+                work.clone(),
+                vec![campos(200.0, "nombre", "text"), campos(240.0, "acepto", "checkbox")],
+            )
+            .expect("crear el formulario");
+            work
+        };
+
+        let origen = prepara("formularios2-xfdf-origen.pdf");
+        crate::formularios::set_form_text(origen.clone(), 0, 0, "Jorge Gómez".into())
+            .expect("rellenar");
+        crate::formularios::set_form_checked(origen.clone(), 0, 1, true).expect("marcar");
+
+        let xfdf = dir.join("formularios2-datos.xfdf");
+        let d = xfdf.to_string_lossy().into_owned();
+        assert_eq!(
+            export_form_data_xfdf(origen.clone(), d.clone()).expect("exportar"),
+            2,
+            "los dos campos, con valor o sin él"
+        );
+        let xml = std::fs::read_to_string(&xfdf).expect("leer el xfdf");
+        assert!(xml.contains("name=\"nombre\""), "{xml}");
+        assert!(xml.contains("<value>Jorge Gómez</value>"), "{xml}");
+        assert!(xml.contains("name=\"acepto\""), "{xml}");
+
+        // y vuelven a otro ejemplar del mismo formulario, en blanco
+        let destino = prepara("formularios2-xfdf-destino.pdf");
+        let pasos = crate::historial::history_state(destino.clone()).expect("historial").undo;
+        assert_eq!(
+            import_form_data_xfdf(destino.clone(), d.clone()).expect("importar"),
+            ImportacionFormulario { rellenados: 2, sin_campo: 0 }
+        );
+        assert_eq!(
+            crate::historial::history_state(destino.clone()).expect("historial").undo,
+            pasos + 1,
+            "el fichero entero es un solo ⌘Z"
+        );
+        let campos_ahora = crate::formularios::get_form_fields(destino.clone(), 0).expect("campos");
+        assert_eq!(campos_ahora[0].value, "Jorge Gómez");
+        assert!(campos_ahora[1].checked, "la casilla marcada se ve marcada");
+
+        // un fichero de otra versión del formulario: lo que no cabe se
+        // cuenta y se dice, que es la pregunta de quien recibe respuestas
+        let ajeno = dir.join("formularios2-datos-ajeno.xfdf");
+        std::fs::write(
+            &ajeno,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <xfdf xmlns=\"http://ns.adobe.com/xfdf/\">\n<fields>\n\
+             <field name=\"nombre\"><value>Ana</value></field>\n\
+             <field name=\"telefono\"><value>600 000 000</value></field>\n\
+             </fields></xfdf>",
+        )
+        .expect("escribir el xfdf ajeno");
+        assert_eq!(
+            import_form_data_xfdf(destino.clone(), ajeno.to_string_lossy().into_owned())
+                .expect("importar"),
+            ImportacionFormulario { rellenados: 1, sin_campo: 1 }
+        );
+
+        // un fichero que no trae datos no se traga en silencio
+        let vacio = dir.join("formularios2-datos-vacio.xfdf");
+        std::fs::write(&vacio, "<xfdf><fields></fields></xfdf>").expect("escribir");
+        assert!(
+            import_form_data_xfdf(destino.clone(), vacio.to_string_lossy().into_owned())
+                .unwrap_err()
+                .contains("datos de formulario")
+        );
+        // y un documento sin campos tampoco escribe un fichero vacío
+        let liso = dir.join("formularios2-xfdf-liso.pdf");
+        crea_pdf(&["Sin campos"], &liso);
+        assert!(export_form_data_xfdf(
+            liso.to_string_lossy().into_owned(),
+            d.clone()
+        )
+        .unwrap_err()
+        .contains("campos de formulario"));
+
+        for f in [&xfdf, &ajeno, &vacio, &liso] {
+            std::fs::remove_file(f).ok();
+        }
+    }
+
     fn get_form_fields_vacio(work: &str) -> bool {
         crate::formularios::get_form_fields(work.to_string(), 0)
             .map(|c| c.is_empty())
@@ -2112,4 +2216,427 @@ pub fn delete_form_field(work_path: String, name: String) -> Result<(), String> 
         }
         Ok(())
     })
+}
+
+// ---------------------------------------------------------------------------
+// Los datos del formulario, fuera del PDF (XFDF)
+// ---------------------------------------------------------------------------
+
+/// Lo que ha pasado al importar unas respuestas.
+#[derive(serde::Serialize, Debug, Default, PartialEq, Eq)]
+pub struct ImportacionFormulario {
+    /// Campos del documento que han recibido su valor.
+    pub rellenados: u16,
+    /// Campos que venían en el fichero y **no existen en este documento**.
+    /// Es la pregunta real de quien recibe respuestas: si el que contestó
+    /// tenía otra versión del formulario, hay respuestas que no se pueden
+    /// colocar y hay que decirlo, no tragárselas.
+    pub sin_campo: u16,
+}
+
+/// Los campos terminales del `/AcroForm` con su **nombre completo** (el
+/// `/T` de cada nivel unido con puntos, como lo escribe el spec y como lo
+/// espera cualquier otro programa) y el id de su objeto.
+///
+/// Un campo es terminal cuando no tiene `/Kids` o cuando sus hijos son
+/// widgets sin nombre propio (un grupo de radios es **un** campo con tres
+/// hijos, no tres campos).
+fn campos_por_nombre(doc: &LoDoc) -> Vec<(String, lopdf::ObjectId)> {
+    fn baja(
+        doc: &LoDoc,
+        id: lopdf::ObjectId,
+        prefijo: &str,
+        hondo: u8,
+        vistos: &mut Vec<lopdf::ObjectId>,
+        out: &mut Vec<(String, lopdf::ObjectId)>,
+    ) {
+        if hondo > 16 || vistos.contains(&id) {
+            return; // un /Kids con un ciclo no puede colgar la app
+        }
+        vistos.push(id);
+        let Ok(d) = doc.get_object(id).and_then(|o| o.as_dict()) else {
+            return;
+        };
+        let propio = d
+            .get(b"T")
+            .and_then(|o| o.as_str())
+            .map(|s| String::from_utf8_lossy(s).into_owned())
+            .unwrap_or_default();
+        let nombre = match (prefijo.is_empty(), propio.is_empty()) {
+            (_, true) => prefijo.to_string(),
+            (true, false) => propio,
+            (false, false) => format!("{prefijo}.{propio}"),
+        };
+        let kids: Vec<lopdf::ObjectId> = d
+            .get(b"Kids")
+            .and_then(|o| o.as_array())
+            .map(|a| a.iter().filter_map(|o| o.as_reference().ok()).collect())
+            .unwrap_or_default();
+        // hijos con nombre propio = subárbol; sin nombre = widgets del campo
+        let con_nombre: Vec<lopdf::ObjectId> = kids
+            .iter()
+            .copied()
+            .filter(|k| {
+                doc.get_object(*k)
+                    .and_then(|o| o.as_dict())
+                    .map(|d| d.has(b"T"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        if con_nombre.is_empty() {
+            if !nombre.is_empty() {
+                out.push((nombre, id));
+            }
+            return;
+        }
+        for k in con_nombre {
+            baja(doc, k, &nombre, hondo + 1, vistos, out);
+        }
+    }
+
+    let mut out = Vec::new();
+    let Ok(catalog) = doc.catalog() else { return out };
+    let form = match catalog.get(b"AcroForm") {
+        Ok(Object::Reference(rid)) => doc.get_object(*rid).and_then(|o| o.as_dict()).ok(),
+        Ok(Object::Dictionary(d)) => Some(d),
+        _ => None,
+    };
+    let Some(form) = form else { return out };
+    let Ok(campos) = form.get(b"Fields").and_then(|o| match o {
+        Object::Reference(rid) => doc.get_object(*rid).and_then(|o| o.as_array()),
+        otro => otro.as_array(),
+    }) else {
+        return out;
+    };
+    let mut vistos = Vec::new();
+    for c in campos {
+        if let Ok(id) = c.as_reference() {
+            baja(doc, id, "", 0, &mut vistos, &mut out);
+        }
+    }
+    out
+}
+
+/// El valor de un campo, tal como se escribe en un XFDF: una cadena por
+/// valor (una lista de selección múltiple trae varias).
+fn valores_de(doc: &LoDoc, id: lopdf::ObjectId) -> Vec<String> {
+    // el valor de un botón es un **nombre** (`/Yes`), y PDFium lo escribe a
+    // veces como la cadena «/Yes»: en el XFDF va sin la barra, que es lo que
+    // entiende Acrobat. En un campo de texto la barra es un carácter más y
+    // no se toca.
+    let es_boton = heredado_ft(doc, id).as_deref() == Some("Btn");
+    let texto = move |o: &Object| {
+        let s = match o {
+            // una cadena PDF puede venir en UTF-16BE: leerla como bytes
+            // sueltos convertía «Gómez» en «G?mez» en el fichero que se
+            // manda de vuelta
+            Object::String(..) => crate::anotaciones::texto_de_cadena_pdf(o),
+            Object::Name(n) => String::from_utf8_lossy(n).into_owned(),
+            _ => return None,
+        };
+        Some(if es_boton { s.trim_start_matches('/').to_string() } else { s })
+    };
+    // el /V puede estar heredado del padre
+    let mut actual = Some(id);
+    let mut hondo = 0;
+    while let Some(oid) = actual {
+        hondo += 1;
+        if hondo > 16 {
+            break;
+        }
+        let Ok(d) = doc.get_object(oid).and_then(|o| o.as_dict()) else {
+            break;
+        };
+        if let Ok(v) = d.get(b"V") {
+            let v = match v {
+                Object::Reference(rid) => doc.get_object(*rid).unwrap_or(v),
+                otro => otro,
+            };
+            return match v {
+                Object::Array(a) => a.iter().filter_map(texto).collect(),
+                otro => texto(otro).into_iter().collect(),
+            };
+        }
+        actual = d.get(b"Parent").and_then(|o| o.as_reference()).ok();
+    }
+    Vec::new()
+}
+
+/// ¿Es un campo de firma? Los `/Sig` no son datos del formulario: no se
+/// exportan ni se rellenan (ni se podrían: una firma no es un valor).
+fn es_firma(doc: &LoDoc, id: lopdf::ObjectId) -> bool {
+    let mut actual = Some(id);
+    let mut hondo = 0;
+    while let Some(oid) = actual {
+        hondo += 1;
+        if hondo > 16 {
+            return false;
+        }
+        let Ok(d) = doc.get_object(oid).and_then(|o| o.as_dict()) else {
+            return false;
+        };
+        if let Ok(ft) = d.get(b"FT").and_then(|o| o.as_name()) {
+            return ft == b"Sig";
+        }
+        actual = d.get(b"Parent").and_then(|o| o.as_reference()).ok();
+    }
+    false
+}
+
+/// **Exportar los datos del formulario** a un XFDF, como «Más ▸ Exportar
+/// datos» de Acrobat: solo lo que alguien ha rellenado, sin el documento.
+/// Es lo que se manda de vuelta a quien repartió el formulario, y pesa unos
+/// kilobytes en vez de unos megas.
+///
+/// Se escribe a mano (el XML de salida es cuatro etiquetas) y se lee con
+/// `quick-xml`, por el mismo camino que estrenó el XFDF de los comentarios.
+/// Los campos de firma no salen: una firma no es un dato que se rellene.
+#[tauri::command(async)]
+pub fn export_form_data_xfdf(work_path: String, dest_path: String) -> Result<u16, String> {
+    let nombre = std::path::Path::new(&work_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let (xml, n) = crate::on_pdfium_thread(move || {
+        crate::with_lopdf(&work_path, |doc| {
+            let mut out = format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                 <xfdf xmlns=\"http://ns.adobe.com/xfdf/\" xml:space=\"preserve\">\n\
+                 <f href=\"{}\"/>\n<fields>\n",
+                crate::comentarios2::escapa_xml(&nombre)
+            );
+            let mut n = 0u16;
+            for (nombre, id) in campos_por_nombre(doc) {
+                if es_firma(doc, id) {
+                    continue;
+                }
+                out.push_str(&format!(
+                    "<field name=\"{}\">\n",
+                    crate::comentarios2::escapa_xml(&nombre)
+                ));
+                for v in valores_de(doc, id) {
+                    out.push_str(&format!(
+                        "<value>{}</value>\n",
+                        crate::comentarios2::escapa_xml(&v)
+                    ));
+                }
+                out.push_str("</field>\n");
+                n += 1;
+            }
+            out.push_str("</fields>\n</xfdf>\n");
+            Ok((out, n))
+        })
+    })?;
+    if n == 0 {
+        return Err("Este documento no tiene campos de formulario".into());
+    }
+    std::fs::write(&dest_path, xml)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}")))?;
+    Ok(n)
+}
+
+/// Lee los pares nombre → valores de un XFDF de datos.
+fn lee_xfdf_datos(xml: &str) -> Result<Vec<(String, Vec<String>)>, String> {
+    use quick_xml::events::Event;
+    let mut lector = quick_xml::Reader::from_str(xml);
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    let mut actual: Option<(String, Vec<String>)> = None;
+    let mut en_valor = false;
+    let mut buffer = String::new();
+    loop {
+        match lector.read_event() {
+            Err(e) => {
+                return Err(crate::mensaje_llano(format!(
+                    "Ese fichero no es un XFDF que se pueda leer: {e}"
+                )))
+            }
+            Ok(Event::Eof) => break,
+            Ok(Event::Start(e)) => {
+                let etiqueta = String::from_utf8_lossy(e.local_name().as_ref()).to_lowercase();
+                match etiqueta.as_str() {
+                    "field" => {
+                        let nombre = e
+                            .attributes()
+                            .flatten()
+                            .find(|a| a.key.local_name().as_ref() == b"name")
+                            .and_then(|a| String::from_utf8(a.value.to_vec()).ok())
+                            .unwrap_or_default();
+                        if let Some(campo) = actual.take() {
+                            out.push(campo);
+                        }
+                        actual = Some((nombre, Vec::new()));
+                    }
+                    "value" => {
+                        en_valor = true;
+                        buffer.clear();
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Text(t)) if en_valor => {
+                buffer.push_str(&t.decode().unwrap_or_default());
+            }
+            Ok(Event::End(e)) => {
+                let etiqueta = String::from_utf8_lossy(e.local_name().as_ref()).to_lowercase();
+                match etiqueta.as_str() {
+                    "value" => {
+                        en_valor = false;
+                        if let Some((_, valores)) = actual.as_mut() {
+                            valores.push(buffer.clone());
+                        }
+                    }
+                    "field" => {
+                        if let Some(campo) = actual.take() {
+                            out.push(campo);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(campo) = actual.take() {
+        out.push(campo);
+    }
+    out.retain(|(n, _)| !n.is_empty());
+    Ok(out)
+}
+
+/// **Importar los datos de un formulario** desde un XFDF: rellena los
+/// campos que ya existen y **no crea ninguno**. Es lo que hace Acrobat, y
+/// es lo correcto: un fichero de respuestas no puede cambiar el formulario
+/// que se repartió.
+///
+/// Dice cuántos ha rellenado y cuántos venían en el fichero y no existen en
+/// el documento, que es la pregunta de quien recibe respuestas de una
+/// versión anterior del formulario. Todo en **una** mutación.
+#[tauri::command(async)]
+pub fn import_form_data_xfdf(
+    work_path: String,
+    src_path: String,
+) -> Result<ImportacionFormulario, String> {
+    let xml = std::fs::read_to_string(&src_path)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer {src_path}: {e}")))?;
+    let datos = lee_xfdf_datos(&xml)?;
+    if datos.is_empty() {
+        return Err("Ese fichero no trae datos de formulario".into());
+    }
+    let hecho = std::sync::Arc::new(std::sync::Mutex::new(ImportacionFormulario::default()));
+    let cuenta = hecho.clone();
+    cirugia(&work_path, move |doc| {
+        let campos: std::collections::HashMap<String, lopdf::ObjectId> =
+            campos_por_nombre(doc).into_iter().collect();
+        let mut informe = ImportacionFormulario::default();
+        for (nombre, valores) in datos {
+            let Some(id) = campos.get(&nombre).copied() else {
+                informe.sin_campo += 1;
+                continue;
+            };
+            if es_firma(doc, id) {
+                informe.sin_campo += 1;
+                continue;
+            }
+            rellena_campo(doc, id, &valores)?;
+            informe.rellenados += 1;
+        }
+        pide_apariencias(doc)?;
+        *cuenta.lock().unwrap_or_else(|e| e.into_inner()) = informe;
+        Ok(())
+    })?;
+    let informe = std::mem::take(&mut *hecho.lock().unwrap_or_else(|e| e.into_inner()));
+    Ok(informe)
+}
+
+/// Escribe el `/V` de un campo y, si es un botón, el `/AS` de sus widgets:
+/// el `/AS` es el estado que el visor pinta, y sin él una casilla marcada
+/// se ve sin marcar (AC-063).
+fn rellena_campo(doc: &mut LoDoc, id: lopdf::ObjectId, valores: &[String]) -> Result<(), String> {
+    let (es_boton, kids) = {
+        let d = doc
+            .get_object(id)
+            .and_then(|o| o.as_dict())
+            .map_err(|e| e.to_string())?;
+        let ft = heredado_ft(doc, id);
+        let kids: Vec<lopdf::ObjectId> = d
+            .get(b"Kids")
+            .and_then(|o| o.as_array())
+            .map(|a| a.iter().filter_map(|o| o.as_reference().ok()).collect())
+            .unwrap_or_default();
+        (ft.as_deref() == Some("Btn"), kids)
+    };
+    let valor = valores.first().cloned().unwrap_or_default();
+    let nuevo = if es_boton {
+        Object::Name(valor.as_bytes().to_vec())
+    } else if valores.len() > 1 {
+        Object::Array(
+            valores
+                .iter()
+                .map(|v| crate::documento::cadena_pdf(v))
+                .collect(),
+        )
+    } else {
+        crate::documento::cadena_pdf(&valor)
+    };
+    doc.get_object_mut(id)
+        .and_then(|o| o.as_dict_mut())
+        .map_err(|e| e.to_string())?
+        .set("V", nuevo);
+    if es_boton {
+        // el hijo cuyo /AP tiene ese estado se enciende; los hermanos, /Off
+        let objetivo = valor.as_bytes().to_vec();
+        let hijos = if kids.is_empty() { vec![id] } else { kids };
+        for k in hijos {
+            let suyo = estados_de_ap(doc, k).contains(&valor);
+            if let Ok(d) = doc.get_object_mut(k).and_then(|o| o.as_dict_mut()) {
+                d.set(
+                    "AS",
+                    Object::Name(if suyo { objetivo.clone() } else { b"Off".to_vec() }),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// El `/FT` del campo, heredándolo del padre como dice el spec.
+fn heredado_ft(doc: &LoDoc, id: lopdf::ObjectId) -> Option<String> {
+    let mut actual = Some(id);
+    let mut hondo = 0;
+    while let Some(oid) = actual {
+        hondo += 1;
+        if hondo > 16 {
+            return None;
+        }
+        let d = doc.get_object(oid).and_then(|o| o.as_dict()).ok()?;
+        if let Ok(ft) = d.get(b"FT").and_then(|o| o.as_name()) {
+            return Some(String::from_utf8_lossy(ft).into_owned());
+        }
+        actual = d.get(b"Parent").and_then(|o| o.as_reference()).ok();
+    }
+    None
+}
+
+/// Los estados que el `/AP /N` de un widget sabe pintar («Yes», «Off»…).
+fn estados_de_ap(doc: &LoDoc, id: lopdf::ObjectId) -> Vec<String> {
+    let Ok(d) = doc.get_object(id).and_then(|o| o.as_dict()) else {
+        return Vec::new();
+    };
+    let ap = match d.get(b"AP") {
+        Ok(Object::Reference(rid)) => doc.get_object(*rid).and_then(|o| o.as_dict()).ok(),
+        Ok(Object::Dictionary(d)) => Some(d),
+        _ => None,
+    };
+    let Some(ap) = ap else { return Vec::new() };
+    let n = match ap.get(b"N") {
+        Ok(Object::Reference(rid)) => doc.get_object(*rid).and_then(|o| o.as_dict()).ok(),
+        Ok(Object::Dictionary(d)) => Some(d),
+        _ => None,
+    };
+    n.map(|d| {
+        d.iter()
+            .map(|(k, _)| String::from_utf8_lossy(k).into_owned())
+            .collect()
+    })
+    .unwrap_or_default()
 }

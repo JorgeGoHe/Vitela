@@ -262,6 +262,8 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "export_docx" => cmd!(exportar::export_docx, { work_path: String, dest_path: String, page_indices: Option<Vec<u16>> }),
         "compress_pdf" => cmd!(exportar::compress_pdf, { work_path: String, quality: u8, max_dpi: u16 }),
         "create_form_field" => cmd!(crate::formularios2::create_form_field, { work_path: String, page_index: u16, kind: String, rect: crate::Rect, name: String, group: Option<String>, export_value: Option<String>, options: Option<Vec<String>>, props: Option<crate::formularios2::PropsCampo> }),
+        "export_form_data_xfdf" => cmd!(crate::formularios2::export_form_data_xfdf, { work_path: String, dest_path: String }),
+        "import_form_data_xfdf" => cmd!(crate::formularios2::import_form_data_xfdf, { work_path: String, src_path: String }),
         "create_form_fields" => cmd!(crate::formularios2::create_form_fields, { work_path: String, fields: Vec<crate::formularios2::CampoNuevo> }),
         "detect_form_fields" => cmd!(crate::formularios2::detect_form_fields, { work_path: String, page_indices: Option<Vec<u16>> }),
         "delete_form_field" => cmd!(crate::formularios2::delete_form_field, { work_path: String, name: String }),
@@ -466,6 +468,8 @@ mod tests {
         ("add_bates", "pendiente_ui — tanda 3 del ciclo 8: el diálogo de Bates completo (prefijo, sufijo, dígitos, inicio y rango)"),
         ("get_document_info", "pendiente_ui — tanda 3 del ciclo 8: las propiedades ampliadas de ⌘D (fuentes, tamaños y seguridad)"),
         ("add_file_attachment_annotation", "pendiente_ui — tanda 4 del ciclo 8: la chincheta de «Comentar ▸ Adjuntar archivo»"),
+        ("export_form_data_xfdf", "pendiente_ui — tanda 6 del ciclo 8: «Más ▸ Exportar datos» del formulario"),
+        ("import_form_data_xfdf", "pendiente_ui — tanda 6 del ciclo 8: «Más ▸ Importar datos» del formulario"),
     ];
 
     /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada

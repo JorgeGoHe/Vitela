@@ -344,7 +344,7 @@ fn elemento(
     let etiqueta = subtipo.to_lowercase();
     let mut at: Vec<String> = vec![
         format!("page=\"{page_index}\""),
-        format!("name=\"{}\"", escapa(nombre)),
+        format!("name=\"{}\"", escapa_xml(nombre)),
     ];
     if let Some(r) = numeros(d.get(b"Rect").ok()) {
         at.push(format!("rect=\"{}\"", lista_num(&r)));
@@ -368,12 +368,12 @@ fn elemento(
         if let Ok(v) = d.get(clave) {
             let texto = crate::anotaciones::texto_de_cadena_pdf(v);
             if !texto.is_empty() {
-                at.push(format!("{nombre_at}=\"{}\"", escapa(&texto)));
+                at.push(format!("{nombre_at}=\"{}\"", escapa_xml(&texto)));
             }
         }
     }
     if let Ok(Object::Name(icono)) = d.get(b"Name") {
-        at.push(format!("icon=\"{}\"", escapa(&String::from_utf8_lossy(icono))));
+        at.push(format!("icon=\"{}\"", escapa_xml(&String::from_utf8_lossy(icono))));
     }
     // el hilo: a quién contesta y con qué intención (respuesta o estado de
     // revisión), que es lo que hace que la conversación llegue entera
@@ -382,19 +382,19 @@ fn elemento(
             .iter()
             .position(|o| matches!(o, Object::Reference(r) if *r == padre))
         {
-            at.push(format!("inreplyto=\"{}\"", escapa(&nombre_de(i))));
+            at.push(format!("inreplyto=\"{}\"", escapa_xml(&nombre_de(i))));
         }
     }
     if let Ok(Object::Name(rt)) = d.get(b"RT") {
-        at.push(format!("replyType=\"{}\"", escapa(&String::from_utf8_lossy(rt))));
+        at.push(format!("replyType=\"{}\"", escapa_xml(&String::from_utf8_lossy(rt))));
     }
     if let Ok(Object::Name(sm)) = d.get(b"StateModel") {
-        at.push(format!("statemodel=\"{}\"", escapa(&String::from_utf8_lossy(sm))));
+        at.push(format!("statemodel=\"{}\"", escapa_xml(&String::from_utf8_lossy(sm))));
     }
     if let Ok(estado) = d.get(b"State") {
         let texto = crate::anotaciones::texto_de_cadena_pdf(estado);
         if !texto.is_empty() {
-            at.push(format!("state=\"{}\"", escapa(&texto)));
+            at.push(format!("state=\"{}\"", escapa_xml(&texto)));
         }
     }
     // la geometría propia de cada tipo
@@ -417,7 +417,7 @@ fn elemento(
         .map(crate::anotaciones::texto_de_cadena_pdf)
         .unwrap_or_default();
     if !contenido.is_empty() {
-        hijos.push_str(&format!("<contents>{}</contents>", escapa(&contenido)));
+        hijos.push_str(&format!("<contents>{}</contents>", escapa_xml(&contenido)));
     }
     if subtipo == "Ink" {
         let trazos = trazos_de(doc, d);
@@ -498,7 +498,7 @@ fn pares(v: &[f32]) -> String {
         .join(";")
 }
 
-fn escapa(s: &str) -> String {
+pub(crate) fn escapa_xml(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {

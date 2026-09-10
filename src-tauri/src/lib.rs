@@ -1210,6 +1210,8 @@ pub fn run() {
             exportar::compress_pdf,
             formularios2::create_form_field,
             formularios2::create_form_fields,
+            formularios2::export_form_data_xfdf,
+            formularios2::import_form_data_xfdf,
             formularios2::detect_form_fields,
             formularios2::create_link,
             formularios2::delete_form_field,
