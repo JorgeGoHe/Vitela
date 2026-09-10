@@ -4014,10 +4014,15 @@ function App() {
         compressOpts.quitarMetadatos,
         compressOpts.aplanarFormularios,
       );
+      // el antes→después es el resultado de TODO lo que se ha hecho: con las
+      // casillas puestas y un PDF sin imágenes, «no había imágenes que
+      // comprimir» escondía los adjuntos quitados y el formulario aplanado
       setNotice(
-        r.imagenes === 0
-          ? "No había imágenes que comprimir."
-          : `${plural(r.imagenes, "imagen recomprimida", "imágenes recomprimidas")}: ${tamanoFichero(r.antes)} → ${tamanoFichero(r.despues)}`,
+        r.imagenes > 0
+          ? `${plural(r.imagenes, "imagen recomprimida", "imágenes recomprimidas")}: ${tamanoFichero(r.antes)} → ${tamanoFichero(r.despues)}`
+          : r.despues < r.antes
+            ? `Sin imágenes que recomprimir; con lo demás: ${tamanoFichero(r.antes)} → ${tamanoFichero(r.despues)}`
+            : "No había imágenes que comprimir ni nada más que quitar: el documento se queda como estaba.",
       );
       afterMutation(pageCount);
     } catch (e) {

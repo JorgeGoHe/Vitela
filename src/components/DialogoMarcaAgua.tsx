@@ -376,7 +376,11 @@ export default function DialogoMarcaAgua({
           Se añade como contenido del documento; la previa es aproximada.
           {alFondo &&
             " Detrás del contenido queda tapada donde la página lleve una imagen o un fondo opaco."}
-          {" Se puede quitar después con «Quitar fondo…»."}
+          {/* cada uno se quita con SU botón: mandar al equivocado es peor
+              que no decir nada */}
+          {alFondo
+            ? " Se puede quitar después con «Quitar fondo…»."
+            : " Se puede quitar después con «Quitar marca de agua…»."}
         </p>
         {error && (
           <p className="modal-error" role="alert">

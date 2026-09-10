@@ -221,7 +221,9 @@ export default function Comparador({
           {difs === null
             ? "Comparando…"
             : total === 0
-              ? "Sin diferencias"
+              ? /* se compara el texto: decir «sin diferencias» a secas
+                   promete haber mirado la página entera */
+                "Sin diferencias de texto"
               : `${actual + 1} de ${total}`}
         </span>
         <button
