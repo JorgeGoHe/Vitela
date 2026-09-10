@@ -1200,6 +1200,8 @@ pub fn run() {
             adjuntos::list_attachments,
             adjuntos::save_attachment,
             adjuntos::add_attachment,
+            adjuntos::add_file_attachment_annotation,
+            adjuntos::add_file_attachment_annotation,
             adjuntos::delete_attachment,
             adjuntos::open_attachment,
             adjuntos::list_layers,

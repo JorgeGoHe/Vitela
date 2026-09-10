@@ -1145,6 +1145,7 @@ fn hijas_de(path: &str, page_index: u16, annot_index: usize) -> Vec<usize> {
 #[tauri::command(async)]
 pub fn remove_annotation(work_path: String, page_index: u16, annot_index: u16) -> Result<(), String> {
     mutacion(work_path, |work_path| on_pdfium_thread(move || {
+        let era_adjunto = es_adjunto(&work_path, page_index, annot_index as usize);
         let mut indices = vec![annot_index as usize];
         if let Some(p) = indice_popup(&work_path, page_index, annot_index as usize) {
             indices.push(p);
@@ -1175,8 +1176,39 @@ pub fn remove_annotation(work_path: String, page_index: u16, annot_index: u16) -
         }
         drop(page);
         save_and_close(doc, &work_path)?;
+        // un adjunto se lleva sus bytes: quitar la anotación deja el fichero
+        // incrustado dentro del PDF, sin nadie que apunte a él, y el
+        // documento sigue pesando lo mismo después de «borrar el adjunto»
+        if era_adjunto {
+            crate::cirugia_en_hilo(&work_path, |doc| {
+                doc.prune_objects();
+                Ok(())
+            })?;
+        }
         Ok(())
     }))
+}
+
+/// ¿Es un `/FileAttachment` la anotación que se va a borrar? Se mira antes
+/// de tocar nada, que después ya no está.
+fn es_adjunto(work_path: &str, page_index: u16, annot_index: usize) -> bool {
+    use lopdf::Object;
+    crate::with_lopdf(work_path, |doc| {
+        let Some(annots) = lista_annots(doc, page_index) else {
+            return Ok(false);
+        };
+        let Some(o) = annots.get(annot_index) else {
+            return Ok(false);
+        };
+        let d = match o {
+            Object::Reference(id) => doc.get_object(*id).and_then(|o| o.as_dict()).ok(),
+            Object::Dictionary(d) => Some(d),
+            _ => None,
+        };
+        Ok(d.and_then(|d| d.get(b"Subtype").and_then(|o| o.as_name()).ok())
+            .is_some_and(|n| n == b"FileAttachment"))
+    })
+    .unwrap_or(false)
 }
 
 /// Quita una anotación del `/Annots` de su página con lopdf (para los

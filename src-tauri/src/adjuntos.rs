@@ -14,7 +14,7 @@
 //! contexto OCG en el render, que pdfium-render 0.8 no expone.
 
 use crate::{cirugia, on_pdfium_thread, with_lopdf};
-use lopdf::{Dictionary, Object, Stream};
+use lopdf::{Dictionary, Document as LoDoc, Object, ObjectId, Stream};
 use serde::Serialize;
 
 /// Un fichero metido dentro del PDF.
@@ -881,5 +881,239 @@ mod tests {
         let png = crate::render_page_png(work.to_string(), 0, 300, true).expect("render");
         let img = image::load_from_memory(&png).expect("PNG").to_rgba8();
         img.pixels().any(|p| p.0[0] < 200 && p.0[1] < 200 && p.0[2] < 200)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// El adjunto que es un comentario (`/FileAttachment`)
+// ---------------------------------------------------------------------------
+
+/// Lado del icono de la chincheta, en puntos. Es el tamaño con el que
+/// Acrobat pinta los suyos, y como el del post-it **no se redimensiona**:
+/// un icono más grande no dice nada más.
+const LADO_CHINCHETA: f32 = 20.0;
+
+/// El `/AP` de la chincheta: PDFium no lo escribe para este subtipo (como
+/// no lo escribe para las notas), así que se dibuja a mano en coordenadas
+/// locales, con `/BBox 0 0 lado lado`, para que se vea en cualquier visor y
+/// se imprima.
+fn apariencia_chincheta(doc: &mut LoDoc, color: [f32; 3]) -> ObjectId {
+    let l = LADO_CHINCHETA;
+    let mut ops = String::new();
+    ops.push_str(&format!("{:.3} {:.3} {:.3} rg\n", color[0], color[1], color[2]));
+    ops.push_str("0.2 0.2 0.2 RG\n0.8 w\n");
+    // la cabeza
+    ops.push_str(&format!(
+        "{:.2} {:.2} {:.2} {:.2} re\n",
+        l * 0.28,
+        l * 0.55,
+        l * 0.44,
+        l * 0.30
+    ));
+    // el cuello y la aguja
+    ops.push_str(&format!(
+        "{:.2} {:.2} {:.2} {:.2} re\n",
+        l * 0.40,
+        l * 0.30,
+        l * 0.20,
+        l * 0.25
+    ));
+    ops.push_str("B\n");
+    ops.push_str(&format!("{:.2} {:.2} m\n", l * 0.50, l * 0.30));
+    ops.push_str(&format!("{:.2} {:.2} l\nS\n", l * 0.50, l * 0.06));
+
+    let mut forma = Dictionary::new();
+    forma.set("Type", Object::Name(b"XObject".to_vec()));
+    forma.set("Subtype", Object::Name(b"Form".to_vec()));
+    forma.set("FormType", 1i64);
+    forma.set(
+        "BBox",
+        Object::Array(vec![0.into(), 0.into(), l.into(), l.into()]),
+    );
+    forma.set("Resources", Object::Dictionary(Dictionary::new()));
+    doc.add_object(Stream::new(forma, ops.into_bytes()))
+}
+
+/// **Adjuntar un fichero como comentario**: la chincheta de Acrobat
+/// («Comentar ▸ Adjuntar archivo»). El fichero viaja dentro del PDF, en la
+/// página y en el punto donde se pincha, y sale en el panel de comentarios
+/// como uno más.
+///
+/// **Es distinto del adjunto del documento** (`add_attachment`): aquel va
+/// en el árbol `/Names → /EmbeddedFiles`, no tiene sitio en ninguna página
+/// y se abre desde el panel de adjuntos. Este está *en* la página, donde
+/// alguien lo puso, y es parte de la revisión.
+///
+/// `x` e `y` van en el espacio propio de la página, como el resto de
+/// comandos que escriben. El icono no se redimensiona: `transform_annotation`
+/// lo mueve, como al post-it.
+#[tauri::command(async)]
+pub fn add_file_attachment_annotation(
+    work_path: String,
+    page_index: u16,
+    x: f32,
+    y: f32,
+    file_path: String,
+    author: Option<String>,
+) -> Result<(), String> {
+    let bytes = std::fs::read(&file_path)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer {file_path}: {e}")))?;
+    let nombre = std::path::Path::new(&file_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or("Ese fichero no tiene nombre")?;
+    let autor = crate::anotaciones::autor_o_sistema(author);
+    let fecha = crate::anotaciones::fecha_pdf_ahora();
+    cirugia(&work_path, move |doc| {
+        let page_id = *doc
+            .get_pages()
+            .get(&(page_index as u32 + 1))
+            .ok_or("Página fuera de rango")?;
+        let geo = crate::formularios2::geo_pagina(doc, page_id)?;
+        let caja = geo.ui_rect_a_pdf(&crate::Rect {
+            x,
+            y,
+            w: LADO_CHINCHETA,
+            h: LADO_CHINCHETA,
+        });
+
+        let tam = bytes.len() as i64;
+        let mut stream_dict = Dictionary::new();
+        stream_dict.set("Type", Object::Name(b"EmbeddedFile".to_vec()));
+        let mut params = Dictionary::new();
+        params.set("Size", Object::Integer(tam));
+        params.set("CreationDate", Object::string_literal(fecha.clone()));
+        params.set("ModDate", Object::string_literal(fecha.clone()));
+        stream_dict.set("Params", Object::Dictionary(params));
+        let mut stream = Stream::new(stream_dict, bytes);
+        let _ = stream.compress();
+        let stream_id = doc.add_object(Object::Stream(stream));
+
+        let mut ef = Dictionary::new();
+        ef.set("F", Object::Reference(stream_id));
+        let mut spec = Dictionary::new();
+        spec.set("Type", Object::Name(b"Filespec".to_vec()));
+        spec.set("F", crate::documento::cadena_pdf(&nombre));
+        spec.set("UF", crate::documento::cadena_pdf(&nombre));
+        spec.set("EF", Object::Dictionary(ef));
+        let spec_id = doc.add_object(Object::Dictionary(spec));
+
+        let ap_id = apariencia_chincheta(doc, [0.99, 0.73, 0.18]);
+        let mut annot = Dictionary::new();
+        annot.set("Type", Object::Name(b"Annot".to_vec()));
+        annot.set("Subtype", Object::Name(b"FileAttachment".to_vec()));
+        annot.set(
+            "Rect",
+            Object::Array(vec![
+                caja.left().value.into(),
+                caja.bottom().value.into(),
+                caja.right().value.into(),
+                caja.top().value.into(),
+            ]),
+        );
+        annot.set("FS", Object::Reference(spec_id));
+        // el nombre del icono del spec; Acrobat ofrece cuatro y la chincheta
+        // es el suyo por defecto
+        annot.set("Name", Object::Name(b"PushPin".to_vec()));
+        // el texto del comentario es el nombre del fichero: es lo que el
+        // panel de comentarios tiene que enseñar en su fila
+        annot.set("Contents", crate::documento::cadena_pdf(&nombre));
+        annot.set("C", Object::Array(vec![0.99.into(), 0.73.into(), 0.18.into()]));
+        annot.set("F", 4i64); // Print
+        annot.set("T", crate::documento::cadena_pdf(&autor));
+        annot.set("CreationDate", Object::string_literal(fecha.clone()));
+        annot.set("M", Object::string_literal(fecha));
+        let mut ap = Dictionary::new();
+        ap.set("N", Object::Reference(ap_id));
+        annot.set("AP", Object::Dictionary(ap));
+        let annot_id = doc.add_object(annot);
+        crate::formularios2::anade_a_annots(doc, page_id, annot_id)
+    })
+}
+
+#[cfg(test)]
+mod tests_chincheta {
+    use super::*;
+    use crate::tests::crea_pdf;
+
+    /// **Adjuntar un fichero como comentario.** En Acrobat es «Comentar ▸
+    /// Adjuntar archivo»: una chincheta en la página, con el fichero
+    /// dentro, que sale en el panel de comentarios como uno más. No es el
+    /// adjunto del documento, que no está en ninguna página.
+    ///
+    /// Y lo que hay que probar de verdad: **borrar la chincheta se lleva
+    /// los bytes**. Quitar la anotación y dejar el fichero incrustado
+    /// dentro del PDF haría que el documento siguiera pesando lo mismo
+    /// después de borrar el adjunto, que es exactamente el defecto que
+    /// `sanitize_pdf` aprendió a no tener.
+    #[test]
+    fn la_chincheta_lleva_el_fichero_dentro_y_borrarla_se_lo_lleva() {
+        let pdf = std::env::temp_dir().join("adjuntos-chincheta.pdf");
+        crea_pdf(&["Contrato"], &pdf);
+        let work = pdf.to_string_lossy().into_owned();
+        let factura = std::env::temp_dir().join("adjuntos-chincheta-factura.xml");
+        // grande y **sin compresión posible**, para que su peso se note en
+        // el fichero: un texto repetido cabría en unos cientos de bytes
+        let mut semilla: u32 = 12345;
+        let ruido: Vec<u8> = (0..40_000)
+            .map(|_| {
+                semilla = semilla.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (semilla >> 24) as u8
+            })
+            .collect();
+        std::fs::write(&factura, &ruido).expect("escribir el adjunto");
+
+        add_file_attachment_annotation(
+            work.clone(),
+            0,
+            120.0,
+            200.0,
+            factura.to_string_lossy().into_owned(),
+            Some("Jorge".into()),
+        )
+        .expect("adjuntar");
+        let con_adjunto = std::fs::metadata(&work).expect("peso").len();
+
+        // sale como comentario, con el nombre del fichero y su autor
+        let anots = crate::anotaciones::get_document_annotations(work.clone()).expect("listar");
+        assert_eq!(anots.len(), 1, "la chincheta es un comentario: {anots:?}");
+        assert_eq!(anots[0].annot.kind, "FileAttachment");
+        assert_eq!(anots[0].annot.contents, "adjuntos-chincheta-factura.xml");
+        assert_eq!(anots[0].annot.author, "Jorge");
+        assert!(!anots[0].annot.modified.is_empty());
+        // y no es un adjunto del documento: el panel de adjuntos no cambia
+        assert!(
+            list_attachments(work.clone()).expect("adjuntos").is_empty(),
+            "el adjunto del documento y el comentario son cosas distintas"
+        );
+        // se ve en el render: PDFium no le escribe la apariencia y por eso
+        // se dibuja a mano
+        crate::render_page_png(work.clone(), 0, 200, true).expect("render con la chincheta");
+
+        // borrarla se lleva la anotación **y los bytes**
+        crate::anotaciones::remove_annotation(work.clone(), 0, anots[0].annot.index)
+            .expect("borrar");
+        assert!(crate::anotaciones::get_document_annotations(work.clone())
+            .expect("listar")
+            .is_empty());
+        let sin_adjunto = std::fs::metadata(&work).expect("peso").len();
+        assert!(
+            sin_adjunto + 30_000 < con_adjunto,
+            "los bytes del fichero tienen que irse con la chincheta: {con_adjunto} → {sin_adjunto}"
+        );
+
+        // un fichero que no está no es una anotación a medias
+        assert!(add_file_attachment_annotation(
+            work.clone(),
+            0,
+            120.0,
+            200.0,
+            "/no/existe/factura.xml".into(),
+            None,
+        )
+        .unwrap_err()
+        .contains("factura.xml"));
+        std::fs::remove_file(&factura).ok();
+        std::fs::remove_file(&pdf).ok();
     }
 }

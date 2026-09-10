@@ -254,6 +254,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
         "list_attachments" => cmd!(crate::adjuntos::list_attachments, { path: String }),
         "save_attachment" => cmd!(crate::adjuntos::save_attachment, { path: String, index: u16, dest_path: String }),
         "add_attachment" => cmd!(crate::adjuntos::add_attachment, { work_path: String, file_path: String, description: Option<String> }),
+        "add_file_attachment_annotation" => cmd!(crate::adjuntos::add_file_attachment_annotation, { work_path: String, page_index: u16, x: f32, y: f32, file_path: String, author: Option<String> }),
         "delete_attachment" => cmd!(crate::adjuntos::delete_attachment, { work_path: String, index: u16 }),
         "open_attachment" => cmd!(crate::adjuntos::open_attachment, { path: String, index: u16 }),
         "list_layers" => cmd!(crate::adjuntos::list_layers, { path: String }),
@@ -468,6 +469,7 @@ mod tests {
         ("set_page_labels", "pendiente_ui — tanda 3 del ciclo 8: «Organizar páginas ▸ Numerar páginas»"),
         ("add_bates", "pendiente_ui — tanda 3 del ciclo 8: el diálogo de Bates completo (prefijo, sufijo, dígitos, inicio y rango)"),
         ("get_document_info", "pendiente_ui — tanda 3 del ciclo 8: las propiedades ampliadas de ⌘D (fuentes, tamaños y seguridad)"),
+        ("add_file_attachment_annotation", "pendiente_ui — tanda 4 del ciclo 8: la chincheta de «Comentar ▸ Adjuntar archivo»"),
     ];
 
     /// Comandos cuyos argumentos **no casan hoy** y su motivo. Cada entrada
