@@ -1,7 +1,7 @@
 /** Campos de formulario (modo selección), su tarjeta y la del campo nuevo. */
 import { useState } from "react";
 import type { TipoCampo } from "../../api";
-import type { Mode } from "../../tipos";
+import type { FormFieldInfo, Mode } from "../../tipos";
 import { clampCardLeft } from "../../hooks/pagina/geometria";
 import type { Formularios } from "../../hooks/pagina/useFormularios";
 import Icon from "../Icon";
@@ -14,6 +14,18 @@ type Props = {
   /** «Resaltar campos existentes» de Acrobat. */
   resaltarCampos: boolean;
 };
+
+/** Lo que se lee al pasar el ratón: el texto de ayuda que trae el PDF
+ *  (`/TU`), que es lo que enseña Acrobat, y si no lo trae, el nombre del
+ *  campo. Detrás va lo que hay que saber antes de tocarlo. */
+function tituloCampo(f: FormFieldInfo): string {
+  const base = f.tooltip?.trim() || f.name;
+  const notas = [
+    f.required ? "obligatorio" : null,
+    f.read_only ? "solo lectura" : null,
+  ].filter(Boolean);
+  return notas.length > 0 ? `${base} · ${notas.join(" · ")}` : base;
+}
 
 /** Los que se rellenan eligiendo, no escribiendo. */
 const ELECCION = ["ComboBox", "ListBox"];
@@ -52,6 +64,8 @@ export default function CapaFormularios({
     setFormOptions,
     formTooltip,
     setFormTooltip,
+    formValorDefecto,
+    setFormValorDefecto,
     formObligatorio,
     setFormObligatorio,
     formSoloLectura,
@@ -88,8 +102,9 @@ export default function CapaFormularios({
               <select
                 key={`f${f.annot_index}`}
                 className={`form-field form-choice${resaltarCampos ? " resaltado" : ""}`}
-                title={f.name}
-                aria-label={f.name}
+                title={tituloCampo(f)}
+                aria-label={tituloCampo(f)}
+                disabled={f.read_only}
                 // una lista se pinta como lista: con `size` el navegador
                 // enseña las opciones dentro del recuadro, en vez de estirar
                 // un desplegable al alto del campo
@@ -120,12 +135,13 @@ export default function CapaFormularios({
               key={`f${f.annot_index}`}
               className={`form-field${resaltarCampos ? " resaltado" : ""}${
                 f.required ? " obligatorio" : ""
-              }`}
+              }${f.read_only ? " solo-lectura" : ""}`}
               role="button"
               tabIndex={0}
-              title={f.required ? `${f.name} · obligatorio` : f.name}
-              aria-label={f.required ? `${f.name}, obligatorio` : f.name}
+              title={tituloCampo(f)}
+              aria-label={tituloCampo(f)}
               aria-required={f.required || undefined}
+              aria-disabled={f.read_only || undefined}
               style={caja}
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => {
@@ -286,6 +302,16 @@ export default function CapaFormularios({
                     placeholder="Texto de ayuda al pasar el ratón"
                     value={formTooltip}
                     onChange={(e) => setFormTooltip(e.target.value)}
+                  />
+                </div>
+                <div className="card-row">
+                  <input
+                    type="text"
+                    className="stamp-input"
+                    aria-label="Valor por defecto"
+                    placeholder="Valor por defecto"
+                    value={formValorDefecto}
+                    onChange={(e) => setFormValorDefecto(e.target.value)}
                   />
                 </div>
                 <label className="opt-check">

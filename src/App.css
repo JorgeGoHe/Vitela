@@ -926,6 +926,13 @@ textarea {
   display: none;
 }
 
+/* un campo de solo lectura se ve apagado y no se deja tocar, como en
+   Acrobat: hasta ahora se dejaba cambiar y el cambio iba al fichero */
+.form-field.solo-lectura {
+  opacity: 0.55;
+  cursor: default;
+}
+
 /* «Reconocer campos…»: la propuesta, todavía no escrita en el PDF. Borde
    del acento y su nombre encima, como la vista previa de Acrobat */
 .campo-propuesto {

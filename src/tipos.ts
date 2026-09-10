@@ -73,6 +73,11 @@ export type FormFieldInfo = {
   /** Campo obligatorio (bit 2 de `/Ff`). Los PDFs que no lo declaren y los
    *  motores que no lo lean lo dejan sin definir: entonces no se pinta. */
   required?: boolean;
+  /** Campo de solo lectura (bit 1 de `/Ff`): se pinta apagado y no acepta
+   *  cambios, como en Acrobat. Opcional por lo mismo que `required`. */
+  read_only?: boolean;
+  /** Texto de ayuda del campo (`/TU`): es el que sale al pasar el ratón. */
+  tooltip?: string;
   x: number;
   y: number;
   w: number;

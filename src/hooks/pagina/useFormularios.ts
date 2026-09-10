@@ -62,6 +62,7 @@ export function useFormularios(ctx: {
   const [formOptions, setFormOptions] = useState("");
   // «Más opciones»: las propiedades del primer panel de Acrobat
   const [formTooltip, setFormTooltip] = useState("");
+  const [formValorDefecto, setFormValorDefecto] = useState("");
   const [formObligatorio, setFormObligatorio] = useState(false);
   const [formSoloLectura, setFormSoloLectura] = useState(false);
   // grupos de radio ya creados en esta sesión: con uno dibujado, el
@@ -159,7 +160,7 @@ export function useFormularios(ctx: {
   }
 
   async function elegirOpcion(field: FormFieldInfo, value: string) {
-    if (!workPath) return;
+    if (!workPath || field.read_only) return;
     try {
       await setFormChoice(workPath, index, field.annot_index, value);
       onAnnotated(index);
@@ -168,15 +169,35 @@ export function useFormularios(ctx: {
     }
   }
 
-  async function toggleFormCheck(field: FormFieldInfo) {
+  /** Vuelve a leer los campos de la página: marcar un radio cambia a sus
+   *  hermanos, y hasta que llegan los datos frescos el grupo miente. */
+  async function releeCampos() {
     if (!workPath) return;
+    try {
+      const f = await invoke<FormFieldInfo[]>("get_form_fields", {
+        path: workPath,
+        pageIndex: index,
+      });
+      setFormFields(f);
+    } catch {
+      /* si no se pueden releer, el refresco de la página los traerá */
+    }
+  }
+
+  async function toggleFormCheck(field: FormFieldInfo) {
+    if (!workPath || field.read_only) return;
     try {
       await invoke("set_form_checked", {
         workPath,
         pageIndex: index,
         annotIndex: field.annot_index,
-        checked: !field.checked,
+        // un radio se **marca**, no se conmuta: es lo que hace Acrobat, y
+        // conmutarlo era lo que dejaba el grupo entero sin poder marcarse
+        // cuando la lectura decía que ya lo estaban todos
+        checked: field.kind === "RadioButton" ? true : !field.checked,
       });
+      // marcar una opción apaga a sus hermanas: el grupo se relee entero
+      await releeCampos();
       onAnnotated(index);
     } catch (e) {
       onError(e);
@@ -184,6 +205,9 @@ export function useFormularios(ctx: {
   }
 
   function onFieldClick(field: FormFieldInfo) {
+    // un campo de solo lectura no se toca: en Acrobat ni siquiera coge el
+    // foco, y hasta ahora aquí se dejaba cambiar y el cambio iba al fichero
+    if (field.read_only) return;
     if (field.kind === "Text") {
       setFieldDraft({ field, text: field.value });
     } else if (field.kind === "Checkbox" || field.kind === "RadioButton") {
@@ -236,7 +260,7 @@ export function useFormularios(ctx: {
           tooltip: formTooltip.trim() || null,
           obligatorio: formObligatorio,
           solo_lectura: formSoloLectura,
-          valor_defecto: null,
+          valor_defecto: formValorDefecto.trim() || null,
           orden_tab: null,
         },
       });
@@ -275,6 +299,8 @@ export function useFormularios(ctx: {
     setFormOptions,
     formTooltip,
     setFormTooltip,
+    formValorDefecto,
+    setFormValorDefecto,
     formObligatorio,
     setFormObligatorio,
     formSoloLectura,
