@@ -1689,6 +1689,8 @@ pub fn get_document_info(path: String) -> Result<DocumentoInfo, String> {
             let paginas = doc.pages();
             let n = paginas.len();
             let primera = paginas.get(0).ok();
+            // (la ficha se pide sobre la copia de trabajo, que va en claro;
+            // si alguna vez llega un fichero cifrado, se dice en llano)
             let (w, h) = primera
                 .as_ref()
                 .map(|p| (p.width().value, p.height().value))
@@ -1697,6 +1699,14 @@ pub fn get_document_info(path: String) -> Result<DocumentoInfo, String> {
                 .filter_map(|i| paginas.get(i).ok())
                 .all(|p| (p.width().value - w).abs() < 1.0 && (p.height().value - h).abs() < 1.0);
             Ok((n, w, h, iguales))
+        })
+        .map_err(|e| {
+            if e.contains("PASSWORD_REQUIRED") || e.contains("PasswordError") {
+                "El documento está protegido con contraseña: ábrelo primero para ver su ficha"
+                    .to_string()
+            } else {
+                e
+            }
         })?;
         crate::with_lopdf(&path, |doc| {
             let catalogo = doc.catalog().ok();

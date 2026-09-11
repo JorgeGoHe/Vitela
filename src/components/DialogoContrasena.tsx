@@ -10,6 +10,7 @@ export default function DialogoContrasena({
   onClose,
   etiqueta,
   placeholder = "Contraseña",
+  error = null,
 }: {
   titulo: string;
   /** Ruta del fichero; se muestra solo el nombre. */
@@ -21,6 +22,9 @@ export default function DialogoContrasena({
   /** Texto del botón de confirmar. */
   etiqueta: string;
   placeholder?: string;
+  /** Lo que ha ido mal con la contraseña anterior, dentro del diálogo:
+   *  la banda de la aplicación queda detrás del velo. */
+  error?: string | null;
 }) {
   const { ref, onKeyDown } = useModal({ onClose, onConfirm });
 
@@ -43,7 +47,13 @@ export default function DialogoContrasena({
           placeholder={placeholder}
           value={valor}
           onChange={(e) => onChange(e.target.value)}
+          aria-invalid={error ? true : undefined}
         />
+        {error && (
+          <p className="modal-error" role="alert">
+            {error}
+          </p>
+        )}
         <div className="card-actions">
           <button className="btn" onClick={onClose}>
             Cancelar

@@ -1173,6 +1173,11 @@ pub fn verify_signatures(path: String) -> Result<Vec<FirmaInfo>, String> {
     crate::on_pdfium_thread(move || {
         let bytes = std::fs::read(&path)
             .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer el documento: {e}")))?;
+        // lo que no es un PDF no «no lleva firmas»: no se puede comprobar,
+        // y una lista vacía se leería como lo primero
+        if !bytes.starts_with(b"%PDF") {
+            return Err("No se han podido comprobar las firmas: el fichero no es un PDF".into());
+        }
         if find_subslice(&bytes, b"/ByteRange").is_none() {
             return Ok(Vec::new());
         }

@@ -692,6 +692,7 @@ function App() {
   const [pwdDraft, setPwdDraft] = useState<{
     path: string;
     password: string;
+    error?: string | null;
   } | null>(null);
   /** Un PDF cifrado **por certificado** no se abre con una contraseña: hace
    *  falta la clave privada de uno de sus destinatarios. Hasta ahora salía
@@ -1149,8 +1150,13 @@ function App() {
     } catch (e) {
       const msg = String(e);
       if (msg === "PASSWORD_REQUIRED") {
-        setPwdDraft({ path, password: "" });
-        if (password !== undefined) setError("Contraseña incorrecta");
+        // el error va dentro del diálogo: la banda de la app queda detrás
+        // del velo y nadie la ve (AC-106)
+        setPwdDraft({
+          path,
+          password: "",
+          error: password !== undefined ? "La contraseña no es correcta: vuelve a escribirla" : null,
+        });
       } else if (msg === "CERT_KEY_REQUIRED") {
         // cifrado por certificado: no hay contraseña que pedir, hay que
         // señalar la clave privada. El diálogo se queda abierto si el
@@ -1630,7 +1636,11 @@ function App() {
       // pantalla **y entonces** se pregunta, para que nadie descarte a
       // ciegas el trabajo de otra pestaña
       eligePestana(id);
-      setUnsavedAsk(() => cerrarDocumento);
+      // la acción se resuelve contra el estado VIVO cuando se conteste, no
+      // con el `cerrarDocumento` de este render, que todavía apunta al
+      // documento que estaba en pantalla: guardar la clausura cerraba la
+      // otra pestaña y borraba su copia con sus cambios (AC-105)
+      setUnsavedAsk(() => () => cerrarDocumentoRef.current());
       return;
     }
     cierraPestanaInactiva(id);
@@ -1642,6 +1652,12 @@ function App() {
     setMenuOpen(false);
     conCambiosGuardados(cerrarDocumento);
   }
+
+  /** `cerrarDocumento` del render de ahora mismo, para quien tenga que
+   *  cerrar «lo que esté en pantalla cuando se conteste» y no lo que lo
+   *  estaba al preguntar. */
+  const cerrarDocumentoRef = useRef<() => void>(() => {});
+  cerrarDocumentoRef.current = cerrarDocumento;
 
   /** Cierra el documento activo y borra su copia de trabajo. Si quedaba
    *  otro abierto, se pasa a él; si no, se vuelve al estado vacío. */
@@ -5606,7 +5622,8 @@ function App() {
           titulo="Documento protegido"
           fichero={pwdDraft.path}
           valor={pwdDraft.password}
-          onChange={(v) => setPwdDraft({ ...pwdDraft, password: v })}
+          error={pwdDraft.error ?? null}
+          onChange={(v) => setPwdDraft({ ...pwdDraft, password: v, error: null })}
           onConfirm={() => openPath(pwdDraft.path, pwdDraft.password)}
           onClose={() => setPwdDraft(null)}
           etiqueta="Abrir"

@@ -1888,6 +1888,14 @@ compila los instaladores a mano o al etiquetar `v*`.
     pasan a valer para un bloque con los dos lados emparejados. El panel
     del lado que no tiene esa hoja dice por qué está vacío.
 
+- **El grupo «Ver» del menú «Acciones» es un espejo parcial a propósito**
+  (decisión del coordinador en el ciclo 11, tras pedirse tres veces): lleva
+  reglas, guías, cuadrícula, modo nocturno, leer en voz alta, modo lectura y
+  pantalla completa, y NO el zoom, la presentación, el giro de la vista ni
+  el panel lateral, que ya tienen su mando a la vista en la píldora y en la
+  barra; repetirlos en un menú de acciones sería una lista más larga que su
+  propia utilidad. El test del espejo cruza la app → barra del sistema, así
+  que la barra sigue llevándolos todos.
 - **Menú nativo** (`menu.rs`): Archivo, Editar, Ver, Documento, Ventana y
   Ayuda en la barra del sistema, espejo del menú «Acciones» de la app —
   con esto la búsqueda de menús de macOS encuentra por fin «Marca de
