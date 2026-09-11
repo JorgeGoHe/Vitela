@@ -401,10 +401,10 @@ type Pestana = {
   nombreProvisional: string | null;
   pageCount: number;
   modified: boolean;
-  hadPassword: boolean;
   docPassword: string | null;
-  protegido: boolean;
-  protPendiente: boolean;
+  cifradoEnDisco: boolean;
+  protBackend: boolean;
+  protQuitada: boolean;
   escalaMm: number;
   /** La vista: la página, el zoom, el scroll y el panel abierto. */
   pageIndex: number;
@@ -477,7 +477,6 @@ function App() {
   const [modified, setModified] = useState(false);
   // el original iba cifrado: la copia de trabajo está en claro y al guardar
   // hay que decidir si se vuelve a proteger (la contraseña solo vive en memoria)
-  const [hadPassword, setHadPassword] = useState(false);
   const [docPassword, setDocPassword] = useState<string | null>(null);
   // lo que se contestó la primera vez en este documento: el segundo ⌘S no
   // vuelve a preguntar lo mismo (`null` = todavía no se ha preguntado)
@@ -704,11 +703,59 @@ function App() {
   // hay comparación, el visor lo ocupa ella entera
   const [comparandoCon, setComparandoCon] = useState<string | null>(null);
   // el FICHERO en disco está cifrado (se abrió con contraseña, o ya se ha
-  // guardado con la protección puesta): solo entonces la barra pone el candado
-  const [protegido, setProtegido] = useState(false);
-  // protección anotada pero todavía sin aplicar: `encrypt_pdf` sin `destPath`
-  // no cifra nada, lo hace `save_pdf`. Hasta guardar, el fichero sigue en claro
-  const [protPendiente, setProtPendiente] = useState(false);
+  // guardado con la protección puesta): con protección puesta, la barra pone
+  // el candado
+  const [cifradoEnDisco, setCifradoEnDisco] = useState(false);
+  // Hay protección puesta en el documento abierto, según el backend
+  // (`get_document_info().proteccion_pendiente`). Quién manda es él, porque
+  // la protección **viaja en el paso de historial**: sin esto, ⌘Z sobre
+  // «Quitar la contraseña…» devolvía el documento y no su contraseña
+  // (AC-099). Se relee tras cada mutación y tras deshacer.
+  const [protBackend, setProtBackend] = useState(false);
+  // La ha quitado el usuario en este documento. Es el suelo mientras un
+  // motor sin AC-099b no anote la contraseña de apertura: sin él, ese motor
+  // diría «no hay protección» desde el primer momento y el candado se
+  // apagaría solo. En cuanto el backend la anota, esta bandera sobra y se
+  // baja sola.
+  const [protQuitada, setProtQuitada] = useState(false);
+  /** Hay contraseña puesta al documento abierto, venga de la apertura o de
+   *  «Proteger con contraseña…». Es una sola cosa derivada, no tres estados
+   *  que puedan separarse. */
+  const protAnotada = protBackend || (docPassword !== null && !protQuitada);
+  /** El fichero que hay en el disco pide contraseña: el candado de la barra. */
+  const protegido = cifradoEnDisco && protAnotada;
+  /** Todavía en claro en el disco, pero se cifrará al guardar. */
+  const protPendiente = protAnotada && !cifradoEnDisco;
+  /** Hay que preguntar «¿mantengo la contraseña?» al guardar: la del
+   *  documento la sabe la interfaz y sigue puesta. */
+  const hadPassword = docPassword !== null && protAnotada;
+  // Lo que necesita `releerProteccion` sin depender de cuándo se creó el
+  // `useCallback`. `vigilar` evita una llamada por mutación en el caso
+  // normal: `get_document_info` recorre las fuentes de todas las páginas, y
+  // a un documento que nunca ha tenido contraseña no hay nada que
+  // preguntarle.
+  const protRef = useRef<{ work: string | null; vigilar: boolean }>({
+    work: null,
+    vigilar: false,
+  });
+  protRef.current = {
+    work: workPath,
+    vigilar: protAnotada || protQuitada || cifradoEnDisco,
+  };
+  /** Vuelve a preguntar al backend si el documento lleva contraseña puesta.
+   *  Se llama tras cada mutación —y deshacer es una—, que es lo que hace que
+   *  ⌘Z sobre «Quitar la contraseña…» la devuelva. */
+  const releerProteccion = useCallback(() => {
+    const { work, vigilar } = protRef.current;
+    if (!work || !vigilar) return;
+    getDocumentInfo(work)
+      .then((info) => {
+        if (protRef.current.work !== work) return;
+        setProtBackend(info.proteccion_pendiente);
+        if (info.proteccion_pendiente) setProtQuitada(false);
+      })
+      .catch(() => {});
+  }, []);
   const [quitarProtAsk, setQuitarProtAsk] = useState(false);
   const [flattenAsk, setFlattenAsk] = useState(false);
   // zonas marcadas para censurar: propuestas revisables, no censuras
@@ -1000,10 +1047,23 @@ function App() {
       setPwdDraft(null);
       setClaveDraft(null);
       setClaveError(null);
-      setProtegido(info.had_password);
-      setProtPendiente(false);
-      setHadPassword(info.had_password);
+      setCifradoEnDisco(info.had_password);
+      setProtBackend(false);
+      setProtQuitada(false);
       setDocPassword(info.had_password ? (password ?? null) : null);
+      // el backend anota la protección del documento que se abre con
+      // contraseña (AC-099b): se le pregunta para saber si la lleva. Con un
+      // motor que no lo haga, el candado lo sostiene igual la contraseña
+      // que la interfaz acaba de usar
+      if (info.had_password) {
+        const w = info.work_path;
+        getDocumentInfo(w)
+          .then((f) => {
+            if (protRef.current.work === w)
+              setProtBackend(f.proteccion_pendiente);
+          })
+          .catch(() => {});
+      }
       setMantenerClave(null);
       if (info.had_password) {
         setNotice(
@@ -1051,10 +1111,10 @@ function App() {
         nombreProvisional: null,
         pageCount: info.page_count,
         modified: false,
-        hadPassword: info.had_password,
         docPassword: info.had_password ? (password ?? null) : null,
-        protegido: info.had_password,
-        protPendiente: false,
+        cifradoEnDisco: info.had_password,
+        protBackend: false,
+        protQuitada: false,
         escalaMm: cargaEscala(original !== undefined ? original : path),
         pageIndex: 0,
         zoom: "ajuste",
@@ -1459,10 +1519,10 @@ function App() {
       nombreProvisional,
       pageCount,
       modified,
-      hadPassword,
       docPassword,
-      protegido,
-      protPendiente,
+      cifradoEnDisco,
+      protBackend,
+      protQuitada,
       escalaMm,
       pageIndex,
       zoom,
@@ -1498,10 +1558,10 @@ function App() {
     setNombreProvisional(p.nombreProvisional);
     setPageCount(p.pageCount);
     setModified(p.modified);
-    setHadPassword(p.hadPassword);
     setDocPassword(p.docPassword);
-    setProtegido(p.protegido);
-    setProtPendiente(p.protPendiente);
+    setCifradoEnDisco(p.cifradoEnDisco);
+    setProtBackend(p.protBackend);
+    setProtQuitada(p.protQuitada);
     setMantenerClave(null);
     setEscalaMm(p.escalaMm);
     setPageIndex(p.pageIndex);
@@ -1611,11 +1671,11 @@ function App() {
     setPageVersions([]);
     busqueda.limpiar(true);
     setModified(false);
-    setHadPassword(false);
     setDocPassword(null);
     setMantenerClave(null);
-    setProtegido(false);
-    setProtPendiente(false);
+    setCifradoEnDisco(false);
+    setProtBackend(false);
+    setProtQuitada(false);
     setMode("select");
     setPageIndex(0);
     // el modo lectura es del documento que se estaba leyendo: sin documento
@@ -3195,7 +3255,10 @@ function App() {
     evictAll();
     setDocVersion((v) => v + 1);
     refrescarHistorial();
-  }, [refrescarHistorial, evictAll, busquedaTrasMutacion]);
+    // la contraseña puesta viaja en el paso de historial: deshacer la
+    // devuelve, y esta es la única forma de enterarse (AC-099)
+    releerProteccion();
+  }, [refrescarHistorial, evictAll, busquedaTrasMutacion, releerProteccion]);
 
   const reemplazo = useReemplazo({
     workPath,
@@ -3515,10 +3578,10 @@ function App() {
       });
       setProtectDraft(null);
       // el candado no se pone todavía: el fichero en disco sigue en claro
-      setProtPendiente(true);
+      setProtBackend(true);
+      setProtQuitada(false);
       // manda la contraseña nueva, no la que traía el fichero al abrirse:
       // guardar ya no tiene que preguntar cuál de las dos
-      setHadPassword(false);
       setDocPassword(null);
       setModified(true);
       // la protección no entra en el historial (vive en un mapa por
@@ -3616,15 +3679,16 @@ function App() {
       await removeEncryption(workPath);
       setQuitarProtAsk(false);
       const eraPendiente = protPendiente;
-      setProtegido(false);
-      setProtPendiente(false);
-      setHadPassword(false);
-      setDocPassword(null);
+      // no se toca ni `docPassword` ni el candado: quién lleva la cuenta de
+      // la contraseña puesta es el backend, que la guarda en el paso de
+      // historial. `afterMutation` la vuelve a leer, aquí y tras ⌘Z (AC-099)
+      setProtQuitada(true);
+      setProtBackend(false);
       afterMutation(pageCount);
       setNotice(
         eraPendiente
-          ? "Ya no se protegerá al guardar: el fichero se escribirá en claro"
-          : "Contraseña quitada: al guardar, el fichero se abrirá sin pedir nada",
+          ? `Ya no se protegerá al guardar: el fichero se escribirá en claro · ${MOD}Z la devuelve`
+          : `Contraseña quitada: al guardar, el fichero se abrirá sin pedir nada · ${MOD}Z la devuelve`,
       );
     } catch (e) {
       setError(String(e));
@@ -4383,21 +4447,26 @@ function App() {
           userPassword: docPassword,
           ownerPassword: null,
         });
-        setProtegido(true);
+        setCifradoEnDisco(true);
       } else {
+        // el usuario ha dicho que no quiere la contraseña con la que se
+        // abrió el documento: hay que quitarla del documento, o `save_pdf`
+        // la aplicaría igual (la protección de apertura va anotada desde
+        // AC-099b). Deja su paso: ⌘Z la devuelve, como «Quitar la
+        // contraseña…»
+        if (hadPassword && protBackend) {
+          await removeEncryption(workPath);
+          setProtBackend(false);
+          setProtQuitada(true);
+          refrescarHistorial();
+        }
         // con protección anotada, `save_pdf` cifra al escribir: solo aquí el
         // fichero pasa a estar protegido de verdad y el candado dice la verdad
         await invoke("save_pdf", { workPath, destPath: dest });
-        if (protPendiente) {
-          setProtegido(true);
-          setProtPendiente(false);
-        } else {
-          setProtegido(false);
-        }
+        setCifradoEnDisco(protAnotada && !hadPassword);
         // a partir de aquí el fichero de `dest` va en claro: el aviso de
         // «Documento protegido» que se puso al abrirlo ya no es cierto
         if (hadPassword) setNotice(null);
-        setHadPassword(false);
         setDocPassword(null);
       }
       setOriginalPath(dest);
