@@ -1842,6 +1842,52 @@ compila los instaladores a mano o al etiquetar `v*`.
     del compresor: son el eco de las casillas que la propia interfaz acaba
     de marcar.
 
+- **La mitad de la UI del ciclo 11** (remates del cierre):
+  - **La contraseña puesta la lleva el backend** (AC-099). `protegido`,
+    `protPendiente` y `hadPassword` dejan de ser tres `useState` que pueden
+    separarse y se derivan de uno solo, `protAnotada`, que sale de
+    `get_document_info().proteccion_pendiente`. `releerProteccion` lo vuelve
+    a pedir desde `afterMutation` —y deshacer pasa por ahí—, así que ⌘Z
+    sobre «Quitar la contraseña…» la devuelve y vuelve a salir la pregunta
+    de si se mantiene. Lo pregunta **solo** en un documento que tiene o ha
+    tenido contraseña: esa ficha recorre las fuentes de cada hoja y pedirla
+    por cada trazo sería caro. `applyQuitarProteccion` ya no apaga nada por
+    su cuenta; `cifradoEnDisco` (el candado) sigue siendo de la interfaz,
+    porque habla del fichero original y no de la copia. Y guardar
+    contestando que no se mantiene llama antes a `removeEncryption`: sin
+    eso, con la protección anotada al abrir, `save_pdf` la volvería a
+    aplicar. `protQuitada` es el suelo mientras un motor no anote la
+    contraseña de apertura, y se baja sola en cuanto la anota.
+  - **El menú «Acciones», índice otra vez** (orden 7). Dos grupos nuevos:
+    «Buscar» (Buscar… y Buscar en una carpeta…) y «Ver» (Reglas, Guías,
+    Cuadrícula, Ajustar a la cuadrícula, Modo nocturno del documento, Modo
+    lectura, Pantalla completa y Leer en voz alta, que se muda ahí desde
+    «Salida»). `Entrada` acepta `activo`: un conmutador se pinta con el
+    «✓» de los menús del sistema, con `role="menuitemcheckbox"`, y reserva
+    su hueco para que las etiquetas no bailen. Cada uno llama a la entrada
+    de `accionesMenu` de su id, que es la misma función que su atajo. El
+    modo lectura estrena id (`modo-lectura`, ⇧⌘H): era lo único del grupo
+    sin sitio en la barra del sistema.
+  - **«Quitar fondo» dice también lo que no hace** (orden 8). El diálogo
+    cuenta por separado el fondo y los textos de detrás, y su segundo
+    párrafo avisa de que lo que va delante del contenido se queda, con el
+    nombre del diálogo que sí lo quita. El ensayo previo que falle se
+    cuenta en la banda y no en rojo: no toca el documento y su única tarea
+    es contestar si hay algo que quitar.
+  - **La biblioteca de firmas se relee al firmar** (orden 12). `useFirmas`
+    expone `recargar`, y `empezarFirma` y `empezarCertificacion` lo llaman
+    antes de pedir el recuadro. El diálogo de firmar no pasa por el modo
+    Firma, que era el único sitio donde se leía la lista, y una imagen
+    guardada más tarde salía como si no existiera.
+  - **El XFDF de datos** (AC-102) manda `documentName`, igual que el
+    resumen de comentarios. El parámetro llega en la otra mitad y hasta
+    entonces vive en `ARGUMENTOS_PENDIENTES`.
+  - **Comparar** (AC-100): `paginaDe` nombra una diferencia por la hoja
+    donde se puede mirar —la de la derecha si llega, la de la izquierda si
+    se va—, porque los dos tipos dejan de ser solo de página entera y
+    pasan a valer para un bloque con los dos lados emparejados. El panel
+    del lado que no tiene esa hoja dice por qué está vacío.
+
 - **Menú nativo** (`menu.rs`): Archivo, Editar, Ver, Documento, Ventana y
   Ayuda en la barra del sistema, espejo del menú «Acciones» de la app —
   con esto la búsqueda de menús de macOS encuentra por fin «Marca de
