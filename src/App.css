@@ -3113,6 +3113,12 @@ textarea {
   white-space: nowrap;
 }
 
+/* un cuerpo de confirmación de dos párrafos: lo que se va a hacer y lo que
+   NO se va a hacer, que es la mitad que evita el susto */
+.modal-file p + p {
+  margin-top: 6px;
+}
+
 .modal input {
   border: 1px solid var(--border);
   border-radius: 6px;

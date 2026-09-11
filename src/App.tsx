@@ -39,6 +39,7 @@ import {
   type Composicion,
   addBackground,
   removeBackground,
+  type FondoQuitado,
   addHeaderFooter,
   addBates,
   addWatermark,
@@ -590,8 +591,10 @@ function App() {
     paginas: number | null;
   } | null>(null);
   const [wmOpen, setWmOpen] = useState(false);
-  // cuántas cosas va a quitar «Quitar fondo…», contadas por el ensayo previo
-  const [fondoAsk, setFondoAsk] = useState<number | null>(null);
+  // qué va a quitar «Quitar fondo…», contado por el ensayo previo: los
+  // objetos del fondo (el color, la imagen) y los textos que van detrás del
+  // contenido, separados porque el diálogo los nombra
+  const [fondoAsk, setFondoAsk] = useState<FondoQuitado | null>(null);
   const [marginalAsk, setMarginalAsk] = useState<{
     zona: "watermark" | "header" | "footer";
     textos: number;
@@ -3414,22 +3417,30 @@ function App() {
     }
   }
 
-  /** «Quitar fondo…»: primero el ensayo, que cuenta lo que hay —el color, la
-   *  imagen y el texto que se pusieron como fondo o marca de agua— y solo
+  /** «Quitar fondo…»: primero el ensayo, que cuenta lo que hay —el color o
+   *  la imagen del fondo y el texto puesto DETRÁS del contenido— y solo
    *  entonces se pregunta. Sin esto, un fondo de imagen se quedaba dentro
-   *  para siempre en cuanto ⌘Z dejaba de alcanzar. */
+   *  para siempre en cuanto ⌘Z dejaba de alcanzar.
+   *
+   *  La marca de agua que va **delante** del contenido no es fondo y no
+   *  entra: se quita con «Quitar marca de agua…». */
   async function askRemoveBackground() {
     if (!workPath) return;
     try {
       const r = await removeBackground(workPath, true);
       const cuantos = (r.objetos ?? 0) + (r.textos ?? 0);
       if (cuantos === 0) {
-        setNotice("Este documento no lleva ningún fondo puesto por Vitela.");
+        setNotice(
+          "Este documento no lleva ningún fondo puesto. La marca de agua que va delante se quita con «Quitar marca de agua…».",
+        );
         return;
       }
-      setFondoAsk(cuantos);
+      setFondoAsk(r);
     } catch (e) {
-      setError(String(e));
+      // el ensayo no toca el documento: su único trabajo es contestar «¿hay
+      // fondo?», y un motor que conteste «no hay» lo dice fallando. Pintarlo
+      // en rojo sería dar por avería lo que es una respuesta
+      setNotice(String(e));
     }
   }
 
@@ -3439,7 +3450,9 @@ function App() {
     try {
       await removeBackground(workPath, false);
       afterMutation(pageCount);
-      setNotice(`Fondo quitado · ${MOD}Z para deshacer`);
+      setNotice(
+        `Fondo quitado · la marca de agua de delante se queda · ${MOD}Z para deshacer`,
+      );
     } catch (e) {
       setError(String(e));
     }
@@ -5686,11 +5699,21 @@ function App() {
         <DialogoConfirmar
           titulo="Quitar el fondo"
           cuerpo={
-            <p className="modal-file" style={{ whiteSpace: "normal" }}>
-              Se quitarán {plural(fondoAsk, "elemento", "elementos")} puestos
-              como fondo o marca de agua —el color, la imagen y el texto— en
-              todo el documento. El contenido de las páginas no se toca.
-            </p>
+            <div className="modal-file" style={{ whiteSpace: "normal" }}>
+              <p>
+                Se quitará de todo el documento{" "}
+                {fondoAsk.objetos > 0 &&
+                  `el fondo de ${plural(fondoAsk.objetos, "página", "páginas")}`}
+                {fondoAsk.objetos > 0 && fondoAsk.textos > 0 && " y "}
+                {fondoAsk.textos > 0 &&
+                  `${plural(fondoAsk.textos, "texto puesto", "textos puestos")} detrás del contenido`}
+                . El contenido de las páginas no se toca.
+              </p>
+              <p>
+                La marca de agua que va <b>delante</b> del contenido se queda:
+                esa se quita con «Quitar marca de agua…».
+              </p>
+            </div>
           }
           textoConfirmar="Quitar"
           peligro
