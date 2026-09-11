@@ -1821,7 +1821,7 @@ mod tests {
         let xfdf = dir.join("formularios2-datos.xfdf");
         let d = xfdf.to_string_lossy().into_owned();
         assert_eq!(
-            export_form_data_xfdf(origen.clone(), d.clone()).expect("exportar"),
+            export_form_data_xfdf(origen.clone(), d.clone(), None).expect("exportar"),
             2,
             "los dos campos, con valor o sin él"
         );
@@ -1829,6 +1829,25 @@ mod tests {
         assert!(xml.contains("name=\"nombre\""), "{xml}");
         assert!(xml.contains("<value>Jorge Gómez</value>"), "{xml}");
         assert!(xml.contains("name=\"acepto\""), "{xml}");
+        // **AC-102**: el `<f href>` lleva el nombre del documento, no el
+        // de la copia de trabajo, que no significa nada para quien recibe
+        // el fichero
+        assert!(
+            xml.contains("<f href=\"formularios2-xfdf-origen.pdf\"/>"),
+            "el nombre del documento en el href: {xml}"
+        );
+        let con_nombre = dir.join("formularios2-datos-nombre.xfdf");
+        export_form_data_xfdf(
+            origen.clone(),
+            con_nombre.to_string_lossy().into_owned(),
+            Some("/Users/jorge/Documentos/Solicitud de beca.pdf".into()),
+        )
+        .expect("exportar con nombre");
+        let xml2 = std::fs::read_to_string(&con_nombre).expect("leer");
+        assert!(
+            xml2.contains("<f href=\"Solicitud de beca.pdf\"/>"),
+            "el que manda la interfaz, sin su carpeta: {xml2}"
+        );
 
         // y vuelven a otro ejemplar del mismo formulario, en blanco
         let destino = prepara("formularios2-xfdf-destino.pdf");
@@ -1886,7 +1905,7 @@ mod tests {
         let liso = dir.join("formularios2-xfdf-liso.pdf");
         crea_pdf(&["Sin campos"], &liso);
         assert!(
-            export_form_data_xfdf(liso.to_string_lossy().into_owned(), d.clone())
+            export_form_data_xfdf(liso.to_string_lossy().into_owned(), d.clone(), None)
                 .unwrap_err()
                 .contains("campos de formulario")
         );
@@ -3020,11 +3039,16 @@ fn es_firma(doc: &LoDoc, id: lopdf::ObjectId) -> bool {
 /// `quick-xml`, por el mismo camino que estrenó el XFDF de los comentarios.
 /// Los campos de firma no salen: una firma no es un dato que se rellene.
 #[tauri::command(async)]
-pub fn export_form_data_xfdf(work_path: String, dest_path: String) -> Result<u16, String> {
-    let nombre = std::path::Path::new(&work_path)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+pub fn export_form_data_xfdf(
+    work_path: String,
+    dest_path: String,
+    document_name: Option<String>,
+) -> Result<u16, String> {
+    // AC-102: el `<f href>` decía «vitela-c-formulario-178910…​.pdf», que
+    // es el nombre de la copia de trabajo. Quien recibe el fichero no
+    // tiene por qué ver el temporal: se reusa lo del resumen de
+    // comentarios, que ya sabía sacar el nombre de verdad
+    let nombre = crate::comentarios::nombre_de_documento(document_name.as_deref(), &work_path);
     let (xml, n) = crate::on_pdfium_thread(move || {
         crate::with_lopdf(&work_path, |doc| {
             let mut out = format!(

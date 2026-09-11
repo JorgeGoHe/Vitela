@@ -1289,6 +1289,11 @@ compila los instaladores a mano o al etiquetar `v*`.
     enfrente vacío sin decir por qué. Los cuatro valores ya estaban
     declarados en `api.ts` y la leyenda ya tenía sus colores.
 
+  - **AC-102**: `export_form_data_xfdf(work_path, dest_path,
+    document_name?)` escribe en su `<f href>` el nombre de verdad del
+    documento —el que mande la interfaz, o el que lleva dentro la copia de
+    trabajo— en vez del temporal, reusando `comentarios::nombre_de_documento`.
+
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (cada uno con su envoltorio en camelCase):
     - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la

@@ -495,7 +495,7 @@ pub(crate) fn despachar(cmd: &str, body: Value) -> Result<Value, String> {
             cmd!(crate::formularios2::create_form_field, { work_path: String, page_index: u16, kind: String, rect: crate::Rect, name: String, group: Option<String>, export_value: Option<String>, options: Option<Vec<String>>, props: Option<crate::formularios2::PropsCampo> })
         }
         "export_form_data_xfdf" => {
-            cmd!(crate::formularios2::export_form_data_xfdf, { work_path: String, dest_path: String })
+            cmd!(crate::formularios2::export_form_data_xfdf, { work_path: String, dest_path: String, document_name: Option<String> })
         }
         "import_form_data_xfdf" => {
             cmd!(crate::formularios2::import_form_data_xfdf, { work_path: String, src_path: String })
@@ -744,7 +744,11 @@ mod tests {
     /// del backend sin vía de acceso: existe, está probada y el usuario no
     /// puede llegar a ella. Fue el estado exacto de `char_spacing` durante
     /// un ciclo entero. La lista tiene que quedar vacía al cerrar el ciclo.
-    const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[];
+    const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[(
+        "export_form_data_xfdf",
+        "document_name",
+        "pendiente_ui: AC-102 del ciclo 11",
+    )];
 
     /// **R45b.** Parámetros **obligatorios** en Rust que el envoltorio de
     /// `api.ts` declara opcionales (`workPath?: string`, un tipo que admite
