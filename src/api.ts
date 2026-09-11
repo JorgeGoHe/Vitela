@@ -927,12 +927,18 @@ export function getMetadata(path: string): Promise<Metadata> {
 export type InformeXfdf = { rellenados: number; sin_campo: number };
 
 /** Escribe los valores de los campos en un XFDF, el formato que entienden
- *  Acrobat y los gestores de formularios. */
+ *  Acrobat y los gestores de formularios.
+ *
+ *  `documentName` es el nombre que va en el `<f href>` del fichero: sin él
+ *  viajaba el de la copia de trabajo (`vitela-…-1789101267308082000.pdf`) y
+ *  lo leía quien recibiera las respuestas. Es lo mismo que hace
+ *  `export_comments`. */
 export function exportFormDataXfdf(
   workPath: string,
   destPath: string,
+  documentName?: string,
 ): Promise<number> {
-  return invoke("export_form_data_xfdf", { workPath, destPath });
+  return invoke("export_form_data_xfdf", { workPath, destPath, documentName });
 }
 
 /** Rellena los campos con los valores de un XFDF. **No crea campos**: los

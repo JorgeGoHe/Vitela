@@ -737,7 +737,13 @@ mod tests {
     /// es una función rota que el usuario no puede usar, así que la lista
     /// tiene que quedar vacía: está aquí solo mientras el arreglo vive en
     /// la otra mitad.
-    const ARGUMENTOS_PENDIENTES: &[(&str, &str)] = &[];
+    const ARGUMENTOS_PENDIENTES: &[(&str, &str)] = &[(
+        "export_form_data_xfdf",
+        "pendiente_backend: AC-102 del ciclo 11 — la interfaz manda ya \
+         `documentName` para que el `<f href>` del XFDF lleve el nombre real \
+         del documento y no el de la copia de trabajo; el parámetro llega en \
+         la otra mitad",
+    )];
 
     /// Parámetros opcionales de un comando que **ninguna** llamada de la UI
     /// manda, con su motivo. Un `Option<T>` que nadie manda es una capacidad

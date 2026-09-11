@@ -4020,7 +4020,11 @@ function App() {
     });
     if (!dest) return;
     try {
-      const cuantos = await exportFormDataXfdf(workPath, dest);
+      const cuantos = await exportFormDataXfdf(
+        workPath,
+        dest,
+        originalPath?.split(/[\\/]/).pop(),
+      );
       setNotice(
         `${plural(cuantos, "campo exportado", "campos exportados")} · ${nombreDeFichero(dest)}`,
         { titulo: dest },
