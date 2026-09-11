@@ -1233,6 +1233,16 @@ compila los instaladores a mano o al etiquetar `v*`.
     página deja **otro** formulario, con los nombres renombrados, para que
     marcar en una copia no marque en la otra.
 
+  - **AC-099b, la contraseña con la que se abrió**: `open_pdf` llama a
+    `seguridad::recuerda_proteccion_de_apertura`, que anota la protección
+    igual que `encrypt_pdf` sin `dest_path` —con esa contraseña y con los
+    permisos que el fichero lleva en su `/Encrypt /P`, deshechos por
+    `permisos_del_fichero`—. Así viaja dentro del paso de historial y ⌘Z
+    sobre «Quitar la contraseña…» la devuelve; antes el documento volvía
+    sin ella y el siguiente Guardar escribía en claro sin preguntar. La
+    interfaz deja de guardar la contraseña por su cuenta: `cifrado` y
+    `proteccion_pendiente` salen de `get_document_info`.
+
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (cada uno con su envoltorio en camelCase):
     - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la

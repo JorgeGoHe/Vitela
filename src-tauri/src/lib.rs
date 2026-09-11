@@ -552,7 +552,10 @@ fn open_pdf(
         if had_password {
             // copia descifrada (save_to_file conservaría el cifrado)
             drop(doc);
-            seguridad::guarda_descifrado(&path, password.as_deref().unwrap_or(""), &work_path)?;
+            let clave = password.as_deref().unwrap_or("");
+            seguridad::guarda_descifrado(&path, clave, &work_path)?;
+            // AC-099b: el documento llega protegido y la copia va en claro
+            seguridad::recuerda_proteccion_de_apertura(&work_path, &path, clave);
         } else {
             drop(doc);
             std::fs::copy(&path, &work_path).map_err(|e| {

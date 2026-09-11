@@ -393,6 +393,49 @@ pub(crate) fn permisos_puestos(path: &str) -> crate::documento::SeguridadInfo {
     }
 }
 
+/// Los permisos que un PDF cifrado lleva escritos en su `/Encrypt /P`,
+/// deshaciendo la máscara del spec. Sin `/Encrypt` —o con un `/P` que no
+/// se deja leer— se contesta «todo permitido», que es lo que hay que
+/// suponer de un documento del que no consta ninguna restricción.
+pub(crate) fn permisos_del_fichero(path: &str) -> Permisos {
+    let Ok(doc) = LoDoc::load(path) else {
+        return Permisos::default();
+    };
+    let enc = match doc.trailer.get(b"Encrypt") {
+        Ok(Object::Reference(rid)) => doc.get_object(*rid).and_then(|o| o.as_dict()).ok().cloned(),
+        Ok(Object::Dictionary(d)) => Some(d.clone()),
+        _ => None,
+    };
+    let Some(p) = enc.and_then(|e| e.get(b"P").and_then(|o| o.as_i64()).ok()) else {
+        return Permisos::default();
+    };
+    let bit = |n: i64| p as i32 as i64 & n != 0;
+    Permisos {
+        imprimir: bit(4),
+        copiar: bit(16),
+        editar: bit(8),
+    }
+}
+
+/// **AC-099b.** Un documento que se abre con contraseña llega ya
+/// protegido, y la copia de trabajo se guarda en claro: si nadie apunta
+/// esa protección, quitarla con «Quitar la contraseña…» y deshacer
+/// devolvía el documento y no la contraseña —y el siguiente Guardar
+/// escribía el fichero en claro sin preguntar—. Se anota igual que la que
+/// pone `encrypt_pdf` sin `dest_path`, así que viaja dentro del paso de
+/// historial (R51) y `save_pdf` la aplica.
+pub(crate) fn recuerda_proteccion_de_apertura(work_path: &str, original: &str, password: &str) {
+    if password.is_empty() {
+        return;
+    }
+    anota_proteccion(
+        work_path,
+        password.to_string(),
+        None,
+        permisos_del_fichero(original),
+    );
+}
+
 /// Olvida la protección de una copia de trabajo que se cierra.
 pub(crate) fn olvida_proteccion(work_path: &str) {
     protecciones().remove(work_path);
@@ -1701,6 +1744,62 @@ mod tests {
             "el texto sigue siendo extraíble: {} chars",
             texto.chars.len()
         );
+    }
+
+    /// **AC-099b.** Un PDF que se abre **con contraseña** llega ya
+    /// protegido: si no se anota la protección, quitarla y deshacer
+    /// devolvía el documento y no la contraseña, y el siguiente Guardar
+    /// escribía el fichero en claro sin preguntar. La promesa de R51 vale
+    /// para los dos caminos, no solo para el de «Proteger».
+    #[test]
+    fn abrir_con_contrasena_deja_la_proteccion_puesta_y_deshacer_la_devuelve() {
+        let dir = std::env::temp_dir();
+        let claro = dir.join("ac099-claro.pdf");
+        let cifrado = dir.join("ac099-cifrado.pdf");
+        crate::tests::crea_pdf(&["Uno", "Dos"], &claro);
+        encrypt_pdf(
+            claro.to_string_lossy().into_owned(),
+            Some(cifrado.to_string_lossy().into_owned()),
+            "hola1234".into(),
+            None,
+            Some(Permisos {
+                imprimir: true,
+                copiar: false,
+                editar: true,
+            }),
+        )
+        .expect("cifrar");
+
+        let info = crate::open_pdf(
+            cifrado.to_string_lossy().into_owned(),
+            Some("hola1234".into()),
+            None,
+            None,
+        )
+        .expect("abrir con contraseña");
+        assert!(info.had_password);
+        let work = info.work_path.clone();
+        let puesta = proteccion_de(&work).expect("la protección de apertura queda anotada");
+        assert_eq!(puesta.user, "hola1234");
+        assert!(!puesta.permisos.copiar, "los permisos son los del fichero");
+
+        remove_encryption(work.clone()).expect("quitar la protección");
+        assert!(proteccion_de(&work).is_none());
+        crate::historial::undo(work.clone()).expect("deshacer");
+        let vuelta = proteccion_de(&work).expect("⌘Z devuelve la contraseña");
+        assert_eq!(vuelta.user, "hola1234");
+        assert!(!vuelta.permisos.copiar);
+
+        // y lo que cuenta: el destino de Guardar vuelve a pedir contraseña
+        let dest = dir.join("ac099-tras-undo.pdf");
+        crate::save_pdf(work.clone(), dest.to_string_lossy().into_owned()).expect("guardar");
+        let sin_clave = crate::open_pdf(dest.to_string_lossy().into_owned(), None, None, None);
+        assert_eq!(
+            sin_clave.err().as_deref(),
+            Some("PASSWORD_REQUIRED"),
+            "tras deshacer, guardar vuelve a escribir el fichero protegido"
+        );
+        crate::close_document(work).ok();
     }
 
     /// Regla del proyecto (historial.rs): todo comando que escriba la copia
