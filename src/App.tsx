@@ -2329,8 +2329,10 @@ function App() {
           kind: c.kind,
           rect: c.rect,
           name: c.name,
-          group: "",
-          export_value: "",
+          // un radio reconocido trae su grupo (el texto que encabeza la
+          // fila); sin él, cada opción sería un campo suelto
+          group: c.group ?? "",
+          export_value: c.kind === "radio" ? c.name : "",
           options: [],
           props: {
             tooltip: null,

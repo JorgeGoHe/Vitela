@@ -7,11 +7,9 @@ import Icon from "./Icon";
  *  (`expired`), y decir «caducado» de un certificado que aún no había
  *  entrado en vigor sería contar lo contrario de lo que pasa. */
 function aunNoValido(f: FirmaInfo): boolean {
-  if (!f.not_before) return false;
-  const desde = new Date(f.not_before).getTime();
-  const firmado = new Date(f.signed_at || Date.now()).getTime();
-  if (Number.isNaN(desde) || Number.isNaN(firmado)) return false;
-  return desde > firmado;
+  // lo contesta el backend, que es quien ha leído el certificado y la hora
+  // de la firma; aquí no se vuelve a calcular
+  return f.not_yet_valid === true;
 }
 
 /** Quién responde por el certificado, en una línea. La confianza es del
