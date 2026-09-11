@@ -417,6 +417,11 @@ fn contexto_de(s: &str) -> Option<&str> {
 /// si el mensaje no contiene jerga y se puede dejar como está.
 fn causa_llana(s: &str) -> Option<&'static str> {
     let tiene = |aguja: &str| s.contains(aguja);
+    // AC-101: el índice de una anotación que ya no está —se ha borrado en
+    // otra pestaña, o la lista de la interfaz viene de antes de un ⌘Z—
+    if tiene("AnnotationIndexOutOfBounds") || tiene("AnnotationIndexOutOfRange") {
+        return Some("ese comentario ya no está en la página; vuelve a abrir el documento");
+    }
     if tiene("ObjectIndexOutOfBounds") || tiene("ObjectIndexOutOfRange") {
         return Some("ese elemento ya no está en la página; vuelve a abrir el documento");
     }
@@ -1881,6 +1886,17 @@ pub(crate) mod tests {
             "CERT_KEY_REQUIRED"
         );
 
+        // un PDF truncado que **sí** dice llevar firma: es el que llega
+        // por correo a medias, y el que hacía salir «Invalid
+        // cross-reference table» en la banda
+        let roto_path = std::env::temp_dir().join("editor_pdf_test_errores_firma_rota.pdf");
+        std::fs::write(
+            &roto_path,
+            b"%PDF-1.7\n/ByteRange [0 1 2 3]\ntrailer\n%%EOF\n",
+        )
+        .expect("escribir");
+        let roto = roto_path.to_string_lossy().into_owned();
+
         let casos: Vec<(&str, String)> = vec![
             (
                 "abrir un fichero dañado",
@@ -1961,6 +1977,26 @@ pub(crate) mod tests {
                 firmas_visuales::listar_firmas_en(std::path::Path::new("/nope/firmas"))
                     .unwrap_err(),
             ),
+            // **AC-101**: los cuatro que el usuario ve a diario y que
+            // seguían saliendo con el `Display` de la librería, en inglés
+            (
+                "elegir como certificado un fichero que no lo es",
+                firma::credenciales_pem("esto no es un PEM", "ni esto")
+                    .err()
+                    .expect("un PEM inventado no vale"),
+            ),
+            (
+                "insertar una imagen que no es una imagen",
+                imagenes::add_image(b.clone(), 0, d.clone(), 10.0, 10.0).unwrap_err(),
+            ),
+            (
+                "tocar una anotación con un índice que ya no existe",
+                formularios::set_form_text(b.clone(), 0, 99, "x".into()).unwrap_err(),
+            ),
+            (
+                "verificar las firmas de un PDF roto",
+                firma::verify_signatures(roto.clone()).unwrap_err(),
+            ),
             (
                 "firmar con un certificado que no está",
                 sign_pdf(
@@ -1991,6 +2027,12 @@ pub(crate) mod tests {
             "No such file",
             "Permission denied",
             "Os {",
+            // AC-101: palabras inglesas que delatan el `Display` de otra
+            // librería (el PEM, el crate `image` y el lector de lopdf)
+            "was not recognized",
+            "invalid data",
+            "cross-reference",
+            "preamble",
         ];
         for (que, e) in &casos {
             for j in jerga {
@@ -2017,6 +2059,7 @@ pub(crate) mod tests {
         std::fs::remove_file(&danado).ok();
         std::fs::remove_file(&bueno).ok();
         std::fs::remove_file(&pubsec).ok();
+        std::fs::remove_file(&roto_path).ok();
     }
 
     #[test]

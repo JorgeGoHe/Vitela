@@ -1273,6 +1273,16 @@ compila los instaladores a mano o al etiquetar `v*`.
     mover nada no la marca, y corregir una línea que se quedaba en su
     sitio no llegaba a guardarse.
 
+  - **AC-101, cuatro errores diarios en llano**: el certificado ilegible y
+    la clave privada que no lo es (`firma::credenciales_pem`), el fichero
+    que no es una imagen (`imagenes::NO_ES_IMAGEN`, porque el `Display`
+    del crate `image` nombra la extensión en inglés), el índice de
+    anotación que ya no existe (`causa_llana` reconoce ahora
+    `AnnotationIndexOutOfBounds`) y `verify_signatures` sobre un PDF
+    truncado, que decía «Invalid cross-reference table». Los cuatro están
+    en la lista de casos del test, y `jerga` gana las palabras inglesas
+    que delatan el `Display` de otra librería.
+
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (cada uno con su envoltorio en camelCase):
     - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la

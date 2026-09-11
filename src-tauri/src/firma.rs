@@ -36,14 +36,21 @@ pub struct Credenciales {
 
 /// Credenciales desde certificado + clave en PEM (RSA sin cifrar).
 pub fn credenciales_pem(cert_pem: &str, key_pem: &str) -> Result<Credenciales, String> {
-    let cert = x509_cert::Certificate::from_pem(cert_pem)
-        .map_err(|e| format!("Certificado PEM inválido: {e}"))?;
+    let cert = x509_cert::Certificate::from_pem(cert_pem).map_err(|_| {
+        "Ese fichero no es un certificado que Vitela sepa leer: tiene que ser un .pem \
+         o un .crt con el certificado dentro"
+            .to_string()
+    })?;
     let key = rsa::RsaPrivateKey::from_pkcs8_pem(key_pem)
         .or_else(|_| {
             use rsa::pkcs1::DecodeRsaPrivateKey;
             rsa::RsaPrivateKey::from_pkcs1_pem(key_pem)
         })
-        .map_err(|e| format!("Clave privada PEM inválida (RSA sin cifrar): {e}"))?;
+        .map_err(|_| {
+            "Ese fichero no es una clave privada que Vitela sepa leer: tiene que ser una \
+             clave RSA en PEM y sin contraseña"
+                .to_string()
+        })?;
     Ok(Credenciales {
         cert,
         key,
@@ -1169,8 +1176,11 @@ pub fn verify_signatures(path: String) -> Result<Vec<FirmaInfo>, String> {
         if find_subslice(&bytes, b"/ByteRange").is_none() {
             return Ok(Vec::new());
         }
-        let doc = LoDoc::load_mem(&bytes)
-            .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer el PDF: {e}")))?;
+        let doc = LoDoc::load_mem(&bytes).map_err(|_| {
+            "No se han podido comprobar las firmas: el PDF está incompleto o dañado, \
+             así que pide otra copia a quien te lo mandó"
+                .to_string()
+        })?;
         let mut firmas = firmas_de(&doc, &bytes);
         // el veredicto del DOCUMENTO: todas las firmas comprobadas y nada
         // escrito después de la última (solo la última puede cubrir el

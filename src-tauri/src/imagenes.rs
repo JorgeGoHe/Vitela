@@ -8,6 +8,13 @@ use lopdf::{Dictionary, Document as LoDoc, Object, ObjectId, Stream};
 use pdfium_render::prelude::*;
 use serde::Serialize;
 
+/// **AC-101.** Lo que se le dice a quien elige un fichero que no es una
+/// imagen. El `Display` del crate `image` va en inglés y en su jerga —«The
+/// file extension `."txt"` was not recognized as an image format»—, y esto
+/// lo lee el usuario.
+pub(crate) const NO_ES_IMAGEN: &str =
+    "Ese fichero no es una imagen que Vitela sepa leer: prueba con un PNG o un JPEG";
+
 /// Contenido de un objeto de imagen como PNG en base64 (con máscaras y
 /// transparencia aplicadas). La UI lo usa como vista previa al arrastrar.
 #[tauri::command(async)]
@@ -133,8 +140,7 @@ pub fn add_image(
 ) -> Result<(), String> {
     mutacion(work_path, |work_path| {
         on_pdfium_thread(move || {
-            let img = image::open(&image_path)
-                .map_err(|e| format!("No se ha podido leer la imagen: {e}"))?;
+            let img = image::open(&image_path).map_err(|_| NO_ES_IMAGEN.to_string())?;
             let pdfium = pdfium()?;
             let doc = pdfium
                 .load_pdf_from_file(&work_path, None)
@@ -629,8 +635,7 @@ pub fn replace_image(
 ) -> Result<(), String> {
     mutacion(work_path, |work_path| {
         on_pdfium_thread(move || {
-            let img = image::open(&image_path)
-                .map_err(|e| format!("No se ha podido leer la imagen: {e}"))?;
+            let img = image::open(&image_path).map_err(|_| NO_ES_IMAGEN.to_string())?;
             let pdfium = pdfium()?;
             let doc = pdfium
                 .load_pdf_from_file(&work_path, None)
