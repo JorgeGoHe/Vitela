@@ -1694,6 +1694,41 @@ compila los instaladores a mano o al etiquetar `v*`.
     tres entradas en `ARGUMENTOS_PENDIENTES` (`open_pdf` con la clave,
     `export_pages_png` con el rango, `crop_page` con los márgenes). **Las
     cuatro tienen que quedar vacías al integrar.**
+- **El ciclo 11** (remates antes de la entrega):
+  - **La séptima costura del test cruzado** (R-03, `puente_dev`):
+    `los_campos_que_devuelve_un_comando_los_declara_la_ui`. La sexta mira
+    lo que la interfaz mete dentro de un argumento; esta mira lo que el
+    comando contesta. Recorre el tipo de retorno de cada comando —con el
+    `Result<…, String>`, el `Vec<…>` y el `Option<…>` quitados—, busca su
+    `struct` en el core y exige que **todo campo público** esté declarado
+    en el tipo con el que `api.ts` envuelve ese `invoke`, y de la misma
+    clase (texto, número, booleano, lista, objeto). Un campo que Rust
+    serializa y TypeScript no nombra viaja en el JSON y no lo ve nadie:
+    `invoke` devuelve lo que se le declare. Fue **G-02**, con la prueba de
+    vigencia del certificado (`ltv_archivado` y `ltv_fecha`) escrita en el
+    PDF y ausente de `FirmaInfo`. No se mira el sentido contrario —lo que
+    la UI declara de más— porque ahí el `?` es deliberado: así se lee un
+    documento que viene de un motor anterior. Las excepciones van en
+    `CAMPOS_DE_RETORNO_SIN_LEER` (comando, campo, motivo), con el campo
+    `"*"` para un tipo entero que el lector no resuelva; caducan solas
+    cuando el campo llega a TypeScript o desaparece de Rust. De paso, el
+    lector de `export type` corta por el `;` de primer nivel (antes se
+    paraba en el primero de dentro del bloque), entiende las
+    intersecciones (`A & { … }`) y deshace los `#[serde(flatten)]`, que es
+    la forma de Rust de escribir esa misma intersección.
+  - **Lo que cazó al escribirla**, todo resuelto declarándolo en `api.ts`
+    sin tocar una línea de comportamiento: `zonas` de aplicar las marcas de
+    censura, `adjuntos` del compresor, `group` de un campo de formulario
+    propuesto (sin él, aceptar la propuesta de un grupo de radios pierde el
+    grupo), `paginas_iguales`, `firmas`, `proteccion_pendiente` y
+    `aplicacion` de la ficha de ⌘D, `negrita` y `cursiva` de un bloque de
+    texto, `motivos` de las imágenes que se quedan fuera, `name` del
+    apunte de recuperación y `cert_subject_dn`, `cert_issuer_dn` y
+    `not_yet_valid` de una firma. Los dos únicos que se quedan sin leer,
+    con su motivo escrito, son los booleanos `metadatos` y `formularios`
+    del compresor: son el eco de las casillas que la propia interfaz acaba
+    de marcar.
+
 - **Menú nativo** (`menu.rs`): Archivo, Editar, Ver, Documento, Ventana y
   Ayuda en la barra del sistema, espejo del menú «Acciones» de la app —
   con esto la búsqueda de menús de macOS encuentra por fin «Marca de

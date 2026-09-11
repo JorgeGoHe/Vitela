@@ -1800,9 +1800,10 @@ mod tests {
         out
     }
 
-    /// Lo que devuelve cada comando: `"lista"`, `"objeto"` o `"otro"`.
-    fn retornos_de_los_comandos() -> std::collections::BTreeMap<String, &'static str> {
-        let structs = structs_del_core();
+    /// El tipo que devuelve cada comando, tal como está escrito en su
+    /// firma y con el `Result<…, String>` ya quitado: `Vec<FirmaInfo>`,
+    /// `DocumentoAbierto`, `usize`…
+    fn retornos_crudos_de_los_comandos() -> std::collections::BTreeMap<String, String> {
         let mut out = std::collections::BTreeMap::new();
         for texto in fuentes_del_core() {
             let mut i = 0;
@@ -1830,6 +1831,18 @@ mod tests {
                     .strip_prefix("Result<")
                     .and_then(|d| d.rfind(", String>").map(|f| d[..f].trim().to_string()))
                     .unwrap_or_else(|| devuelve.to_string());
+                out.insert(nombre, dentro);
+            }
+        }
+        out
+    }
+
+    /// Lo que devuelve cada comando: `"lista"`, `"objeto"` o `"otro"`.
+    fn retornos_de_los_comandos() -> std::collections::BTreeMap<String, &'static str> {
+        let structs = structs_del_core();
+        retornos_crudos_de_los_comandos()
+            .into_iter()
+            .map(|(nombre, dentro)| {
                 let clase = if dentro.starts_with("Vec<") {
                     "lista"
                 } else {
@@ -1840,10 +1853,9 @@ mod tests {
                         "otro"
                     }
                 };
-                out.insert(nombre, clase);
-            }
-        }
-        out
+                (nombre, clase)
+            })
+            .collect()
     }
 
     /// Lo que declara devolver cada `invoke` de la UI: el `Promise<…>` de
@@ -1958,23 +1970,92 @@ mod tests {
                 {
                     continue;
                 }
+                // hasta el `;` de primer nivel: el de dentro de un bloque
+                // partía en dos `A & { zonas: number }`
                 let tras = &resto[igual + 1..];
-                let valor = match tras.trim_start().starts_with('{') {
-                    true => {
-                        let abre = igual + 1 + tras.find('{').unwrap_or(0);
-                        match hasta_cerrar(resto, abre, '{', '}') {
-                            Some(d) => format!("{{{d}}}"),
-                            None => continue,
+                let mut nivel = 0i32;
+                let mut fin = tras.len();
+                for (k, c) in tras.char_indices() {
+                    match c {
+                        '{' | '[' | '(' => nivel += 1,
+                        '}' | ']' | ')' => nivel -= 1,
+                        ';' if nivel <= 0 => {
+                            fin = k;
+                            break;
                         }
+                        _ => {}
                     }
-                    false => tras[..tras.find(';').unwrap_or(tras.len())]
-                        .trim()
-                        .to_string(),
-                };
+                }
+                let valor = tras[..fin].trim().to_string();
                 out.insert(nombre.to_string(), valor);
             }
         }
         out
+    }
+
+    /// Parte un tipo de TypeScript por sus `&` de primer nivel: una
+    /// intersección declara los campos de las dos mitades a la vez
+    /// (`AnotacionDoc = AnnotationInfo & { page_index: number }`, que es
+    /// como se lee el `#[serde(flatten)]` de Rust).
+    fn partes_intersecadas(tipo: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut nivel = 0i32;
+        let mut ini = 0usize;
+        for (i, c) in tipo.char_indices() {
+            match c {
+                '{' | '<' | '[' | '(' => nivel += 1,
+                '}' | '>' | ']' | ')' => nivel -= 1,
+                '&' if nivel == 0 => {
+                    out.push(tipo[ini..i].to_string());
+                    ini = i + c.len_utf8();
+                }
+                _ => {}
+            }
+        }
+        out.push(tipo[ini..].to_string());
+        out
+    }
+
+    /// El bloque `{ … }` que hay detrás de un tipo de la UI: se le quitan
+    /// el `[]`, el `| null` y el `| undefined`, se siguen los `export type`
+    /// que haga falta y se funden las mitades de una intersección. Lo que
+    /// no acaba en un bloque se devuelve tal cual, y quien llame decide qué
+    /// hacer con ello.
+    fn cuerpo_del_tipo(
+        tipo: &str,
+        alias: &std::collections::BTreeMap<String, String>,
+        vueltas: u8,
+    ) -> String {
+        let t = tipo
+            .trim()
+            .trim_end_matches("[]")
+            .replace(" | null", "")
+            .replace(" | undefined", "")
+            .trim()
+            .to_string();
+        if vueltas >= 5 {
+            return t;
+        }
+        let partes = partes_intersecadas(&t);
+        if partes.len() > 1 {
+            let mut dentro = String::new();
+            for parte in partes {
+                let cuerpo = cuerpo_del_tipo(&parte, alias, vueltas + 1);
+                let cuerpo = cuerpo.trim();
+                if let Some(d) = cuerpo.strip_prefix('{').and_then(|d| d.strip_suffix('}')) {
+                    dentro.push_str(d);
+                    dentro.push(';');
+                }
+            }
+            return format!("{{{dentro}}}");
+        }
+        if t.starts_with('{') {
+            return t;
+        }
+        match alias.get(t.as_str()) {
+            Some(v) => cuerpo_del_tipo(v, alias, vueltas + 1),
+            None => t,
+        }
     }
 
     /// La clase de un tipo de TypeScript: `"texto"`, `"numero"`,
@@ -2017,8 +2098,33 @@ mod tests {
         "otro"
     }
 
-    /// Los campos de cada `pub struct` del core, con su tipo en Rust.
+    /// Los campos de cada `pub struct` del core, con su tipo en Rust y
+    /// con los `#[serde(flatten)]` ya deshechos: lo que viaja a la UI es el
+    /// objeto plano, no el campo que lo contiene.
     fn campos_de_los_structs_rust() -> std::collections::BTreeMap<String, Vec<(String, String)>> {
+        let crudos = structs_rust_con_flatten();
+        let mut out = std::collections::BTreeMap::new();
+        for (nombre, campos) in &crudos {
+            let mut planos: Vec<(String, String)> = Vec::new();
+            for (campo, tipo, aplanado) in campos {
+                let simple = tipo.rsplit("::").next().unwrap_or(tipo);
+                match aplanado.then(|| crudos.get(simple)).flatten() {
+                    Some(dentro) => {
+                        planos.extend(dentro.iter().map(|(c, t, _)| (c.clone(), t.clone())))
+                    }
+                    None => planos.push((campo.clone(), tipo.clone())),
+                }
+            }
+            out.insert(nombre.clone(), planos);
+        }
+        out
+    }
+
+    /// Los campos tal como están escritos, marcando cuáles llevan
+    /// `#[serde(flatten)]`.
+    #[allow(clippy::type_complexity)]
+    fn structs_rust_con_flatten() -> std::collections::BTreeMap<String, Vec<(String, String, bool)>>
+    {
         let mut out = std::collections::BTreeMap::new();
         for texto in fuentes_del_core() {
             let mut i = 0;
@@ -2037,19 +2143,26 @@ mod tests {
                 let Some(dentro) = hasta_cerrar(&texto, abre, '{', '}') else {
                     continue;
                 };
-                let campos: Vec<(String, String)> = dentro
-                    .lines()
-                    .map(str::trim)
-                    .filter(|l| l.starts_with("pub "))
-                    .filter_map(|l| {
-                        let l = l.trim_start_matches("pub ").trim();
-                        let (campo, tipo) = l.split_once(':')?;
-                        Some((
-                            campo.trim().to_string(),
-                            tipo.trim().trim_end_matches(',').trim().to_string(),
-                        ))
-                    })
-                    .collect();
+                let mut campos: Vec<(String, String, bool)> = Vec::new();
+                let mut aplanado = false;
+                for l in dentro.lines().map(str::trim) {
+                    if l.starts_with('#') {
+                        aplanado |= l.contains("serde(flatten)");
+                        continue;
+                    }
+                    let Some(l) = l.strip_prefix("pub ") else {
+                        continue;
+                    };
+                    let Some((campo, tipo)) = l.trim().split_once(':') else {
+                        continue;
+                    };
+                    campos.push((
+                        campo.trim().to_string(),
+                        tipo.trim().trim_end_matches(',').trim().to_string(),
+                        aplanado,
+                    ));
+                    aplanado = false;
+                }
                 out.insert(nombre, campos);
             }
         }
@@ -2147,25 +2260,7 @@ mod tests {
                 let Some(tipo_ui) = tipos_ui.get(&p.nombre) else {
                     continue;
                 };
-                let cuerpo = {
-                    let mut t = tipo_ui
-                        .trim()
-                        .trim_end_matches("[]")
-                        .replace(" | null", "")
-                        .replace(" | undefined", "")
-                        .trim()
-                        .to_string();
-                    for _ in 0..4 {
-                        if t.starts_with('{') {
-                            break;
-                        }
-                        match alias.get(t.trim()) {
-                            Some(v) => t = v.clone(),
-                            None => break,
-                        }
-                    }
-                    t
-                };
+                let cuerpo = cuerpo_del_tipo(tipo_ui, &alias, 0);
                 if !cuerpo.trim().starts_with('{') {
                     if !CAMPOS_SIN_LEER.iter().any(|(c, _)| *c == clave) {
                         fallos.push(format!(
@@ -2323,6 +2418,176 @@ mod tests {
         assert!(
             fantasmas.is_empty(),
             "estas excepciones nombran comandos que la UI ya no envuelve: {fantasmas:?}"
+        );
+    }
+
+    /// **R-03, la séptima costura: los campos de un `struct` que se
+    /// DEVUELVE.** La sexta cruza lo que la interfaz **manda** dentro de un
+    /// argumento; esta cruza lo que el comando **contesta**. Un campo que
+    /// Rust serializa y `api.ts` no declara no da error en ningún sitio:
+    /// `invoke` devuelve el tipo que se le ponga, el JSON trae el campo de
+    /// más y `tsc` solo sabe del tipo declarado, así que la función
+    /// existe, viaja y nadie la ve.
+    ///
+    /// Fue **G-02**: en `a33b89c`, `FirmaInfo` ya tenía en Rust
+    /// `ltv_archivado` y `ltv_fecha` —la prueba de que el certificado
+    /// seguía vigente al firmar, escrita en el `/DSS`— y el `FirmaInfo` de
+    /// `api.ts` se quedaba en `certifica`. El trabajo se hacía, el PDF lo
+    /// guardaba y el usuario no tenía forma de saberlo. Este test lo habría
+    /// cazado con «verify_signatures: el comando devuelve `ltv_archivado` y
+    /// `FirmaInfo[]` no lo declara».
+    ///
+    /// No se mira lo contrario —un campo que la UI declara y Rust no
+    /// manda— porque ahí `?` y `| null` son deliberados: así es como se lee
+    /// un documento firmado por un motor anterior, que no trae
+    /// `sello_de_tiempo` ni `certifica`.
+    ///
+    /// Cada excepción es (comando, campo, motivo); el campo `"*"` es «el
+    /// tipo entero no se sabe leer». Falla también cuando envejece: cuando
+    /// el comando ya no devuelve ese campo y cuando la UI ya lo declara.
+    const CAMPOS_DE_RETORNO_SIN_LEER: &[(&str, &str, &str)] = &[
+        (
+            "compress_pdf",
+            "metadatos",
+            "es el eco de la casilla que la interfaz acaba de mandar \
+             (`quitarMetadatos`), no algo que el backend descubra: leerlo de \
+             vuelta sería preguntar lo que ya se sabe",
+        ),
+        (
+            "compress_pdf",
+            "formularios",
+            "el eco de `aplanarFormularios`, como el anterior. Lo que sí es un \
+             hallazgo —cuántos adjuntos se han ido— viaja en `adjuntos`, y ese \
+             sí lo declara la interfaz",
+        ),
+    ];
+
+    /// **R-03.** Cruza campo a campo los `struct` que los comandos
+    /// devuelven con el tipo que la interfaz usa para leerlos.
+    #[test]
+    fn los_campos_que_devuelve_un_comando_los_declara_la_ui() {
+        let fuentes = fuentes_de_la_ui();
+        let alias = alias_de_la_ui(&fuentes);
+        let campos_rust = campos_de_los_structs_rust();
+        let structs: std::collections::BTreeSet<String> = campos_rust.keys().cloned().collect();
+        let crudos = retornos_crudos_de_los_comandos();
+        let mut fallos: Vec<String> = Vec::new();
+        // (comando, lo que declara la UI, lo que manda Rust, se ha podido leer)
+        let mut mirados: Vec<(String, Vec<String>, Vec<String>, bool)> = Vec::new();
+
+        for (cmd, tipo_ui) in retornos_de_la_ui(&fuentes) {
+            let Some(crudo) = crudos.get(&cmd) else {
+                continue;
+            };
+            // `Result<…, String>` ya viene quitado; aquí se quitan las
+            // envolturas que no cambian los campos del objeto
+            let mut desnudo = crudo.trim().to_string();
+            for _ in 0..3 {
+                let dentro = desnudo
+                    .strip_prefix("Vec<")
+                    .or_else(|| desnudo.strip_prefix("Option<"))
+                    .and_then(|d| d.strip_suffix('>'))
+                    .map(|d| d.trim().to_string());
+                match dentro {
+                    Some(d) => desnudo = d,
+                    None => break,
+                }
+            }
+            let simple = desnudo.rsplit("::").next().unwrap_or(&desnudo).to_string();
+            let Some(campos) = campos_rust.get(&simple) else {
+                continue;
+            };
+            if campos.is_empty() {
+                continue;
+            }
+            let nombres_rust: Vec<String> = campos.iter().map(|(n, _)| n.clone()).collect();
+            let cuerpo = cuerpo_del_tipo(&tipo_ui, &alias, 0).trim().to_string();
+            if !cuerpo.starts_with('{') {
+                // un primitivo o un `void` sobre un objeto ya lo denuncia
+                // la quinta costura, y con su propia lista de excepciones
+                let primitivo = matches!(
+                    cuerpo.as_str(),
+                    "void" | "unknown" | "any" | "string" | "number" | "boolean"
+                );
+                if !primitivo
+                    && !CAMPOS_DE_RETORNO_SIN_LEER
+                        .iter()
+                        .any(|(c, campo, _)| *c == cmd && *campo == "*")
+                {
+                    fallos.push(format!(
+                        "{cmd}: no se ha podido leer el tipo `{tipo_ui}` con el que la UI \
+                         lee este comando; si tiene que ser así va en \
+                         CAMPOS_DE_RETORNO_SIN_LEER con el campo «*» y su motivo"
+                    ));
+                }
+                mirados.push((cmd, Vec::new(), nombres_rust, false));
+                continue;
+            }
+            let de_la_ui = campos_del_bloque(cuerpo.trim_matches(['{', '}']));
+            let nombres_ui: Vec<String> = de_la_ui.iter().map(|(n, _)| n.clone()).collect();
+            for (nombre, tipo_rust) in campos {
+                match de_la_ui.iter().find(|(n, _)| n == nombre) {
+                    None => {
+                        if !CAMPOS_DE_RETORNO_SIN_LEER
+                            .iter()
+                            .any(|(c, campo, _)| *c == cmd && campo == nombre)
+                        {
+                            fallos.push(format!(
+                                "{cmd}: el comando devuelve `{nombre}` y `{tipo_ui}` no lo \
+                                 declara, así que la interfaz no puede leerlo. Si de verdad \
+                                 no hace falta, va en CAMPOS_DE_RETORNO_SIN_LEER con su motivo"
+                            ));
+                        }
+                    }
+                    Some((_, tipo)) => {
+                        let (a, b) = (clase_rust(tipo_rust, &structs), clase_ts(tipo, &alias, 0));
+                        if a != "otro" && b != "otro" && a != b {
+                            fallos.push(format!(
+                                "{cmd}.{nombre}: el comando devuelve {a} (`{tipo_rust}`) y la \
+                                 UI lo lee como {b} (`{tipo}`)"
+                            ));
+                        }
+                    }
+                }
+            }
+            mirados.push((cmd, nombres_ui, nombres_rust, true));
+        }
+
+        fallos.sort();
+        fallos.dedup();
+        assert!(
+            fallos.is_empty(),
+            "lo que un comando devuelve no es lo que la interfaz declara leer, y no se \
+             queja nadie: el campo viaja en el JSON y `tsc` solo sabe del tipo \
+             declarado:\n  {}",
+            fallos.join("\n  ")
+        );
+        assert!(
+            mirados.len() >= 30,
+            "se han cruzado {} retornos con campos; el test se ha quedado ciego",
+            mirados.len()
+        );
+
+        let mut fantasmas: Vec<String> = Vec::new();
+        for (cmd, campo, _) in CAMPOS_DE_RETORNO_SIN_LEER {
+            let vistos: Vec<_> = mirados.iter().filter(|(c, ..)| c == cmd).collect();
+            if vistos.is_empty() {
+                fantasmas.push(format!("{cmd}.{campo}: ese comando ya no se cruza aquí"));
+            } else if *campo == "*" {
+                if vistos.iter().all(|(_, _, _, legible)| *legible) {
+                    fantasmas.push(format!("{cmd}: el tipo de la UI ya se sabe leer"));
+                }
+            } else if !vistos.iter().any(|(_, ui, rust, _)| {
+                rust.iter().any(|n| n == campo) && !ui.iter().any(|n| n == campo)
+            }) {
+                fantasmas.push(format!(
+                    "{cmd}.{campo}: o el comando ya no lo devuelve, o la UI ya lo declara"
+                ));
+            }
+        }
+        assert!(
+            fantasmas.is_empty(),
+            "estas excepciones han envejecido: {fantasmas:?}"
         );
     }
 }
