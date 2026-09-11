@@ -737,24 +737,14 @@ mod tests {
     /// es una función rota que el usuario no puede usar, así que la lista
     /// tiene que quedar vacía: está aquí solo mientras el arreglo vive en
     /// la otra mitad.
-    const ARGUMENTOS_PENDIENTES: &[(&str, &str)] = &[(
-        "export_form_data_xfdf",
-        "pendiente_backend: AC-102 del ciclo 11 — la interfaz manda ya \
-         `documentName` para que el `<f href>` del XFDF lleve el nombre real \
-         del documento y no el de la copia de trabajo; el parámetro llega en \
-         la otra mitad",
-    )];
+    const ARGUMENTOS_PENDIENTES: &[(&str, &str)] = &[];
 
     /// Parámetros opcionales de un comando que **ninguna** llamada de la UI
     /// manda, con su motivo. Un `Option<T>` que nadie manda es una capacidad
     /// del backend sin vía de acceso: existe, está probada y el usuario no
     /// puede llegar a ella. Fue el estado exacto de `char_spacing` durante
     /// un ciclo entero. La lista tiene que quedar vacía al cerrar el ciclo.
-    const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[(
-        "export_form_data_xfdf",
-        "document_name",
-        "pendiente_ui: AC-102 del ciclo 11",
-    )];
+    const PARAMETROS_PENDIENTES: &[(&str, &str, &str)] = &[];
 
     /// **R45b.** Parámetros **obligatorios** en Rust que el envoltorio de
     /// `api.ts` declara opcionales (`workPath?: string`, un tipo que admite
