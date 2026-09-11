@@ -878,6 +878,7 @@ function App() {
     cambiarRanura,
     removeSignature,
     onSigStamped,
+    recargar: recargarFirmas,
   } = useFirmas({
     mode,
     setMode,
@@ -4559,6 +4560,10 @@ function App() {
    *  como en Acrobat, y después se pregunta todo de una vez. */
   function empezarFirma() {
     if (!workPath) return;
+    // la biblioteca se relee aquí y no una vez por sesión: el diálogo de
+    // firmar no pasa por el modo Firma, y una firma guardada después de
+    // arrancar salía como «todavía no hay ninguna guardada»
+    recargarFirmas();
     setActiveSig(null);
     setCertificando(false);
     setMode("firma-cert");
@@ -4578,6 +4583,7 @@ function App() {
       setNotice("Ya hay una firma: solo la primera puede certificar");
       return;
     }
+    recargarFirmas();
     setActiveSig(null);
     setCertificando(true);
     setMode("firma-cert");

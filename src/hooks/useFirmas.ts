@@ -36,6 +36,16 @@ export function useFirmas(opts: {
   const optsRef = useRef(opts);
   optsRef.current = opts;
 
+  /** Vuelve a leer la biblioteca del backend. La lista no es de esta
+   *  sesión: se dibuja una firma, se importa una imagen o se cambia de
+   *  ranura, y quien tenga Vitela abierta desde antes seguía viendo la de
+   *  entonces —«todavía no hay ninguna guardada» con una guardada—. */
+  const recargar = useCallback(() => {
+    listStoredSignatures()
+      .then(setFirmas)
+      .catch((e) => optsRef.current.onError(e));
+  }, []);
+
   // La biblioteca se carga al entrar en los dos modos que la usan —la firma
   // manuscrita y la galería de sellos—; Esc cancela el estampado
   useEffect(() => {
@@ -150,6 +160,7 @@ export function useFirmas(opts: {
     saveDrawnSignature,
     cambiarRanura,
     removeSignature,
+    recargar,
     onSigStamped,
   };
 }
