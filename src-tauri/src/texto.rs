@@ -1083,6 +1083,16 @@ fn regular(b: u8) -> bool {
 /// token de verdad (`BT`, `Tc`, un número) y `false` cuando es relleno que
 /// solo hay que copiar (espacios, cadenas, comentarios).
 fn recorre_stream(datos: &[u8], mut f: impl FnMut(&[u8], bool)) {
+    recorre_stream_con_pos(datos, |r, es_token| f(&datos[r], es_token));
+}
+
+/// Lo mismo que [`recorre_stream`], pero diciendo **dónde** está cada
+/// trozo: es lo que hace falta para mover un cacho del flujo de sitio
+/// (`imagenes::reorder_image`) en vez de solo reescribirlo.
+pub(crate) fn recorre_stream_con_pos(
+    datos: &[u8],
+    mut f: impl FnMut(std::ops::Range<usize>, bool),
+) {
     let mut i = 0usize;
     while i < datos.len() {
         match datos[i] {
@@ -1092,7 +1102,7 @@ fn recorre_stream(datos: &[u8], mut f: impl FnMut(&[u8], bool)) {
                 while i < datos.len() && datos[i] != b'\n' && datos[i] != b'\r' {
                     i += 1;
                 }
-                f(&datos[ini..i], false);
+                f(ini..i, false);
             }
             // cadena literal, con anidamiento y escapes
             b'(' => {
@@ -1114,7 +1124,7 @@ fn recorre_stream(datos: &[u8], mut f: impl FnMut(&[u8], bool)) {
                     i += 1;
                 }
                 i = i.min(datos.len());
-                f(&datos[ini..i], false);
+                f(ini..i, false);
             }
             // `<<` abre diccionario; `<` solo, una cadena hexadecimal
             b'<' => {
@@ -1127,17 +1137,17 @@ fn recorre_stream(datos: &[u8], mut f: impl FnMut(&[u8], bool)) {
                     }
                     i = (i + 1).min(datos.len());
                 }
-                f(&datos[ini..i], false);
+                f(ini..i, false);
             }
             b if regular(b) => {
                 let ini = i;
                 while i < datos.len() && regular(datos[i]) {
                     i += 1;
                 }
-                f(&datos[ini..i], true);
+                f(ini..i, true);
             }
             _ => {
-                f(&datos[i..i + 1], false);
+                f(i..i + 1, false);
                 i += 1;
             }
         }

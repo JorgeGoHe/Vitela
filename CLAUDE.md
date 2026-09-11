@@ -1243,6 +1243,23 @@ compila los instaladores a mano o al etiquetar `v*`.
     interfaz deja de guardar la contraseña por su cuenta: `cifrado` y
     `proteccion_pendiente` salen de `get_document_info`.
 
+  - **AC-098, el orden de una imagen se escribe en el flujo**
+    (`imagenes.rs`): sacar el objeto y volver a añadirlo deja la lista de
+    la página bien **en memoria**, pero `FPDF_GenerateContent` no reescribe
+    el flujo de contenido en ese orden, así que al guardar la imagen volvía
+    donde estaba: se pulsaba «Enviar al fondo» y no pasaba nada.
+    `reorder_image` calcula con PDFium **cuál es entre las imágenes** de la
+    página —el mismo orden que da `get_images`— y hace el resto con lopdf:
+    `halla_imagen` recorre el flujo con `texto::recorre_stream_con_pos`
+    (que es `recorre_stream` diciendo además dónde está cada trozo),
+    llevando la pila de `q`/`Q` y la matriz acumulada, y saca el dibujo de
+    la imagen entero cuando su grupo no pinta nada más —así viajan con él
+    su recorte y su estado gráfico— o, si lo comparte, solo el `Do`, que se
+    vuelve a escribir con la matriz que tenía. El trozo se pega delante o
+    detrás y la página se queda con un flujo único. La cirugía va **dentro
+    del hilo de PDFium**: `invalidate_doc_cache` es de ese hilo, y llamarla
+    desde fuera dejaba el documento viejo en el caché.
+
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (cada uno con su envoltorio en camelCase):
     - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la

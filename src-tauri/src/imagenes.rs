@@ -4,6 +4,7 @@
 use crate::historial::mutacion;
 use crate::{on_pdfium_thread, pdfium, save_and_close, with_doc};
 use base64::Engine;
+use lopdf::{Dictionary, Document as LoDoc, Object, ObjectId, Stream};
 use pdfium_render::prelude::*;
 use serde::Serialize;
 
@@ -308,6 +309,270 @@ pub fn transform_image(
 /// poner, que es lo único que expone pdfium-render 0.8, cuidando de no
 /// soltar nunca un objeto sacado (su `Drop` destruye el objeto y PDFium
 /// casca).
+/// Multiplica dos matrices de PDF (`a` aplicada **antes** que `b`).
+fn por(a: [f64; 6], b: [f64; 6]) -> [f64; 6] {
+    [
+        a[0] * b[0] + a[1] * b[2],
+        a[0] * b[1] + a[1] * b[3],
+        a[2] * b[0] + a[3] * b[2],
+        a[2] * b[1] + a[3] * b[3],
+        a[4] * b[0] + a[5] * b[2] + b[4],
+        a[4] * b[1] + a[5] * b[3] + b[5],
+    ]
+}
+
+const IDENTIDAD: [f64; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
+fn es_identidad(m: &[f64; 6]) -> bool {
+    m.iter()
+        .zip(IDENTIDAD.iter())
+        .all(|(a, b)| (a - b).abs() < 1e-6)
+}
+
+fn escribe_cm(m: &[f64; 6]) -> String {
+    format!("{} {} {} {} {} {} cm ", m[0], m[1], m[2], m[3], m[4], m[5])
+}
+
+/// Operadores que **pintan**: son los que hacen que un `q … Q` sea el
+/// dibujo de un objeto y no solo estado gráfico o un recorte.
+fn pinta(op: &[u8]) -> bool {
+    matches!(
+        op,
+        b"S" | b"s"
+            | b"f"
+            | b"F"
+            | b"f*"
+            | b"B"
+            | b"B*"
+            | b"b"
+            | b"b*"
+            | b"sh"
+            | b"Do"
+            | b"EI"
+            | b"TJ"
+            | b"Tj"
+            | b"'"
+            | b"\""
+    )
+}
+
+/// Los nombres del `/Resources /XObject` de la página que son imágenes.
+fn nombres_de_imagen(doc: &LoDoc, page_id: ObjectId) -> Vec<Vec<u8>> {
+    let Ok((propio, heredados)) = doc.get_page_resources(page_id) else {
+        return Vec::new();
+    };
+    let mut dicts: Vec<&Dictionary> = Vec::new();
+    if let Some(d) = propio {
+        dicts.push(d);
+    }
+    for id in heredados {
+        if let Ok(d) = doc.get_object(id).and_then(|o| o.as_dict()) {
+            dicts.push(d);
+        }
+    }
+    let mut out = Vec::new();
+    for d in dicts {
+        let Ok(xo) = d.get(b"XObject").and_then(|o| match o {
+            Object::Reference(rid) => doc.get_object(*rid).and_then(|o| o.as_dict()),
+            otro => otro.as_dict(),
+        }) else {
+            continue;
+        };
+        for (nombre, valor) in xo.iter() {
+            let es_imagen = valor
+                .as_reference()
+                .ok()
+                .and_then(|rid| doc.get_object(rid).ok())
+                .and_then(|o| o.as_stream().ok())
+                .map(|s| s.dict.get(b"Subtype").and_then(|o| o.as_name()).ok() == Some(b"Image"))
+                .unwrap_or(false);
+            if es_imagen {
+                out.push(nombre.to_vec());
+            }
+        }
+    }
+    out
+}
+
+/// Dónde está el dibujo de la imagen número `ordinal` dentro del flujo de
+/// contenido de la página, y con qué transformación se pinta.
+struct Hallazgo {
+    /// El trozo que hay que quitar del flujo.
+    corte: std::ops::Range<usize>,
+    /// El trozo que hay que volver a poner, ya listo para escribir.
+    fragmento: Vec<u8>,
+}
+
+/// Busca en el flujo el `Do` de la imagen `ordinal` (contando solo las
+/// imágenes, que es el orden en el que las da `get_images`) y devuelve qué
+/// hay que cortar y qué hay que volver a escribir.
+///
+/// Si el `Do` está dentro de un `q … Q` que **no dibuja nada más**, se
+/// mueve el grupo entero: así viajan con él su recorte, su opacidad y su
+/// estado gráfico. Si no —un flujo escrito a mano donde la imagen comparte
+/// grupo con otra cosa—, se quita solo el `Do` y se vuelve a escribir con
+/// la matriz acumulada, que es lo único que se puede asegurar.
+fn halla_imagen(datos: &[u8], imagenes: &[Vec<u8>], ordinal: usize) -> Option<Hallazgo> {
+    struct Marco {
+        inicio: usize,
+        ctm: [f64; 6],
+        pintadas: usize,
+    }
+    let mut pila: Vec<Marco> = Vec::new();
+    let mut ctm = IDENTIDAD;
+    let mut pintadas = 0usize;
+    let mut vistas = 0usize;
+    let mut numeros: Vec<f64> = Vec::new();
+    let mut ultimo_nombre: Option<Vec<u8>> = None;
+    let mut ultimo_ini = 0usize;
+    let mut nombre_pendiente: Option<usize> = None;
+    // lo que se sabe de la imagen buscada, en cuanto se la encuentra
+    let mut objetivo: Option<(std::ops::Range<usize>, [f64; 6], Option<usize>)> = None;
+    let mut hallazgo: Option<Hallazgo> = None;
+    crate::texto::recorre_stream_con_pos(datos, |r, es_token| {
+        if hallazgo.is_some() {
+            return;
+        }
+        let trozo = &datos[r.clone()];
+        if !es_token {
+            // la barra de un nombre es un delimitador: el nombre viene en
+            // el token siguiente
+            if trozo == b"/" {
+                nombre_pendiente = Some(r.start);
+            }
+            return;
+        }
+        if let Some(ini) = nombre_pendiente.take() {
+            ultimo_nombre = Some(trozo.to_vec());
+            ultimo_ini = ini;
+            return;
+        }
+        // un token regular: número u operador
+        if let Ok(n) = std::str::from_utf8(trozo).unwrap_or("x").parse::<f64>() {
+            numeros.push(n);
+            return;
+        }
+        match trozo {
+            b"q" => {
+                pila.push(Marco {
+                    inicio: r.start,
+                    ctm,
+                    pintadas,
+                });
+            }
+            b"Q" => {
+                if let Some(m) = pila.pop() {
+                    ctm = m.ctm;
+                    // ¿se cierra el grupo donde estaba la imagen buscada?
+                    if let Some((corte, propia, Some(nivel))) = &objetivo {
+                        if *nivel == pila.len() && pintadas - m.pintadas == 1 {
+                            let mut fragmento = b"q ".to_vec();
+                            if !es_identidad(&m.ctm) {
+                                fragmento.extend_from_slice(escribe_cm(&m.ctm).as_bytes());
+                            }
+                            fragmento.extend_from_slice(&datos[m.inicio + 1..r.end]);
+                            hallazgo = Some(Hallazgo {
+                                corte: m.inicio..r.end,
+                                fragmento,
+                            });
+                        } else {
+                            hallazgo = Some(Hallazgo {
+                                corte: corte.clone(),
+                                fragmento: fragmento_suelto(propia, datos, corte),
+                            });
+                        }
+                    }
+                }
+            }
+            b"cm" => {
+                if numeros.len() >= 6 {
+                    let n = &numeros[numeros.len() - 6..];
+                    ctm = por([n[0], n[1], n[2], n[3], n[4], n[5]], ctm);
+                }
+            }
+            b"Do" => {
+                let nombre = ultimo_nombre.clone().unwrap_or_default();
+                if imagenes.contains(&nombre) {
+                    if vistas == ordinal {
+                        objetivo = Some((ultimo_ini..r.end, ctm, pila.len().checked_sub(1)));
+                    }
+                    vistas += 1;
+                }
+                pintadas += 1;
+            }
+            otro if pinta(otro) => pintadas += 1,
+            _ => {}
+        }
+        numeros.clear();
+    });
+    // el `Do` estaba fuera de todo `q … Q` (o el grupo no se cerró)
+    if hallazgo.is_none() {
+        if let Some((corte, propia, _)) = objetivo {
+            let fragmento = fragmento_suelto(&propia, datos, &corte);
+            hallazgo = Some(Hallazgo { corte, fragmento });
+        }
+    }
+    hallazgo
+}
+
+/// El dibujo de la imagen escrito de cero, con la matriz que tenía donde
+/// estaba: `q <matriz> cm /Nombre Do Q`.
+fn fragmento_suelto(ctm: &[f64; 6], datos: &[u8], corte: &std::ops::Range<usize>) -> Vec<u8> {
+    let mut out = b"q ".to_vec();
+    out.extend_from_slice(escribe_cm(ctm).as_bytes());
+    out.extend_from_slice(&datos[corte.clone()]);
+    out.extend_from_slice(b" Q");
+    out
+}
+
+/// **AC-098.** Lleva la imagen al fondo o al frente **en el flujo de
+/// contenido**, con lopdf. Sacar el objeto y volver a añadirlo con PDFium
+/// deja la lista bien en memoria pero `FPDF_GenerateContent` no reescribe
+/// el flujo en ese orden: al guardar, la imagen volvía donde estaba y el
+/// usuario pulsaba el botón sin que pasara nada.
+fn reordena_en_contenido(
+    doc: &mut LoDoc,
+    page_index: u16,
+    ordinal: usize,
+    al_frente: bool,
+) -> Result<(), String> {
+    let page_id = *doc
+        .get_pages()
+        .get(&(page_index as u32 + 1))
+        .ok_or("Página fuera de rango")?;
+    let imagenes = nombres_de_imagen(doc, page_id);
+    if imagenes.is_empty() {
+        return Err("La página no tiene ninguna imagen".into());
+    }
+    let datos = doc
+        .get_page_content(page_id)
+        .map_err(|e| crate::mensaje_llano(format!("No se ha podido leer la página: {e}")))?;
+    let Some(hallazgo) = halla_imagen(&datos, &imagenes, ordinal) else {
+        return Err("Esa imagen ya no está en la página".into());
+    };
+    let mut resto = Vec::with_capacity(datos.len());
+    resto.extend_from_slice(&datos[..hallazgo.corte.start]);
+    resto.extend_from_slice(&datos[hallazgo.corte.end..]);
+    let mut nuevo = Vec::with_capacity(datos.len() + 64);
+    if al_frente {
+        nuevo.extend_from_slice(&resto);
+        nuevo.push(b'\n');
+        nuevo.extend_from_slice(&hallazgo.fragmento);
+    } else {
+        nuevo.extend_from_slice(&hallazgo.fragmento);
+        nuevo.push(b'\n');
+        nuevo.extend_from_slice(&resto);
+    }
+    let mut stream = Stream::new(Dictionary::new(), nuevo);
+    stream.compress().ok();
+    let stream_id = doc.add_object(Object::Stream(stream));
+    doc.get_object_mut(page_id)
+        .and_then(|o| o.as_dict_mut())
+        .map_err(|e| e.to_string())?
+        .set("Contents", Object::Reference(stream_id));
+    Ok(())
+}
+
 #[tauri::command(async)]
 pub fn reorder_image(
     work_path: String,
@@ -317,51 +582,39 @@ pub fn reorder_image(
 ) -> Result<(), String> {
     mutacion(work_path, move |work_path| {
         on_pdfium_thread(move || {
-            let pdfium = pdfium()?;
-            let doc = pdfium
-                .load_pdf_from_file(&work_path, None)
-                .map_err(crate::mensaje_llano)?;
-            let mut page = doc.pages().get(page_index).map_err(crate::mensaje_llano)?;
-            let total = page.objects().len();
-            {
-                let obj = page
-                    .objects()
-                    .get(object_index as usize)
-                    .map_err(crate::mensaje_llano)?;
-                if obj.as_image_object().is_none() {
-                    return Err("No es una imagen".into());
+            // cuál es entre las imágenes de la página: es el orden en el
+            // que van sus `Do` en el flujo, y el mismo que devuelve
+            // `get_images`
+            let ordinal = with_doc(&work_path, |doc| {
+                let page = doc.pages().get(page_index).map_err(crate::mensaje_llano)?;
+                let objetos = page.objects();
+                if object_index as usize >= objetos.len() {
+                    return Err("Esa imagen ya no está en la página".into());
                 }
-            }
-            let ya_esta = (al_frente && object_index as usize + 1 == total)
-                || (!al_frente && object_index == 0);
-            if !ya_esta {
-                // sacar la imagen y volver a añadirla la deja la última, que es
-                // la que se pinta encima
-                let obj = page
-                    .objects_mut()
-                    .remove_object_at_index(object_index as usize)
-                    .map_err(crate::mensaje_llano)?;
-                page.objects_mut()
-                    .add_object(obj)
-                    .map_err(crate::mensaje_llano)?;
-                if !al_frente {
-                    // …y para mandarla al fondo, se pasan por detrás todos los
-                    // demás, en su mismo orden
-                    for _ in 0..total.saturating_sub(1) {
-                        let otro = page
-                            .objects_mut()
-                            .remove_object_at_index(0)
-                            .map_err(crate::mensaje_llano)?;
-                        page.objects_mut()
-                            .add_object(otro)
-                            .map_err(crate::mensaje_llano)?;
+                let mut ordinal = 0usize;
+                for i in 0..object_index as usize {
+                    if objetos
+                        .get(i)
+                        .ok()
+                        .and_then(|o| o.as_image_object().map(|_| ()))
+                        .is_some()
+                    {
+                        ordinal += 1;
                     }
                 }
-                page.regenerate_content().map_err(crate::mensaje_llano)?;
-            }
-            drop(page);
-            save_and_close(doc, &work_path)?;
-            Ok(())
+                let es_imagen = objetos
+                    .get(object_index as usize)
+                    .ok()
+                    .and_then(|o| o.as_image_object().map(|_| ()))
+                    .is_some();
+                if !es_imagen {
+                    return Err("No es una imagen".into());
+                }
+                Ok(ordinal)
+            })?;
+            crate::cirugia_en_hilo(&work_path, move |doc| {
+                reordena_en_contenido(doc, page_index, ordinal, al_frente)
+            })
         })
     })
 }
@@ -556,6 +809,66 @@ pub fn delete_image(work_path: String, page_index: u16, object_index: u32) -> Re
 
 #[cfg(test)]
 mod tests {
+
+    /// **AC-098.** «Traer al frente» y «Enviar al fondo» movían la imagen
+    /// un puesto (o ninguno) en vez de llevarla al extremo: se pulsaba y
+    /// no pasaba nada, que es peor que no tener el botón. El barrido va
+    /// por páginas de 2, 3, 5 y 10 objetos, con la imagen en el medio.
+    #[test]
+    fn al_frente_y_al_fondo_llevan_la_imagen_al_extremo() {
+        let dir = std::env::temp_dir();
+        let png = dir.join("imagenes-orden.png");
+        image::RgbaImage::from_pixel(30, 30, image::Rgba([20, 80, 220, 255]))
+            .save(&png)
+            .expect("crear el png");
+        for total in [2usize, 3, 5, 10] {
+            let pdf = dir.join(format!("imagenes-orden-{total}.pdf"));
+            crate::tests::crea_pdf(&["Orden"], &pdf);
+            let work = pdf.to_string_lossy().into_owned();
+            // el documento nace con un objeto de texto; se completa con
+            // los que falten y la imagen se pone en el medio
+            let en_medio = total / 2;
+            for n in 1..total {
+                if n == en_medio {
+                    add_image(
+                        work.clone(),
+                        0,
+                        png.to_string_lossy().into_owned(),
+                        40.0,
+                        180.0,
+                    )
+                    .expect("insertar la imagen");
+                } else {
+                    crate::texto::add_text_block(
+                        work.clone(),
+                        0,
+                        60.0,
+                        100.0 + n as f32 * 20.0,
+                        format!("Línea {n}"),
+                        12.0,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .expect("texto");
+                }
+            }
+            let indice = |work: &str| {
+                get_images(work.to_string(), 0).expect("imágenes")[0].object_index as usize
+            };
+            assert_eq!(indice(&work), en_medio, "la imagen se coloca en el medio");
+
+            reorder_image(work.clone(), 0, en_medio as u32, false).expect("al fondo");
+            assert_eq!(indice(&work), 0, "al fondo con {total} objetos");
+
+            reorder_image(work.clone(), 0, 0, true).expect("al frente");
+            assert_eq!(indice(&work), total - 1, "al frente con {total} objetos");
+            std::fs::remove_file(&pdf).ok();
+        }
+        std::fs::remove_file(&png).ok();
+    }
 
     /// «Guardar imagen como…»: el mismo bitmap que la vista previa, pero
     /// escrito directamente en el disco. Una foto de 12 MP en base64 son
