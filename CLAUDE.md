@@ -1204,6 +1204,25 @@ compila los instaladores a mano o al etiquetar `v*`.
     ahora recibe cómo llamar en llano al servidor en sus avisos. Fixtures:
     `test_ocsp_cert.pem` / `test_ocsp_key.pem`, con su AIA a un puerto de
     loopback donde el test levanta el respondedor.
+- Comandos del ciclo 11 (remates del cierre):
+  - **AC-096 (crítico), el segundo ciclo del grafo**: un grupo de botones de
+    radio es **un campo con `/Kids`** cuyos hijos apuntan al padre, y
+    `FPDF_ImportPages` lo recorría hasta comerse la pila — importar una
+    página con radios mataba el proceso entero con SIGSEGV, igual que las
+    ventanas de las notas en AC-046. `formularios2::aplana_campos` baja al
+    widget, en la copia que hace `fuente_importable`, todo lo que heredaba
+    de su campo (`HEREDABLES`: `/FT`, `/Ff`, `/V`, `/DV`, `/DA`, `/Q`,
+    `/MaxLen`, `/Opt` y `/TU`), le escribe el nombre completo —los `/T` de
+    la cadena unidos con puntos— y le quita el `/Parent`; el árbol sale del
+    catálogo. `formularios2::repon_acroform` lo vuelve a montar en el
+    destino: agrupa por nombre los widgets que no cuelgan ya de `/Fields`
+    (dos con el mismo `/T` **son el mismo campo**, que es lo que hace un
+    grupo), les pone un padre con `/Kids` cuando son varios, renombra el que
+    choque con uno que ya estaba y escribe `/DA`, `/DR` y
+    `/NeedAppearances`. Es idempotente. Los dos remates de una importación
+    caben ahora en una sola pasada de lopdf,
+    `anotaciones::remata_importacion`.
+
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (cada uno con su envoltorio en camelCase):
     - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la

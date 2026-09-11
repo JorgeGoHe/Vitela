@@ -371,7 +371,7 @@ pub fn merge_pdf(work_path: String, other_path: String) -> Result<u16, String> {
             let count = doc.pages().len();
             drop(other);
             save_and_close(doc, &work_path)?;
-            crate::anotaciones::repon_popups_en(&work_path)?;
+            crate::anotaciones::remata_importacion(&work_path)?;
             Ok(count)
         })
     })

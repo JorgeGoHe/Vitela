@@ -180,7 +180,14 @@ pub(crate) fn fuente_importable(origen: &str) -> FuenteImportable {
     let Ok(mut doc) = lopdf::Document::load(origen) else {
         return tal_cual();
     };
-    if doc.is_encrypted() || !quita_popups(&mut doc) {
+    if doc.is_encrypted() {
+        return tal_cual();
+    }
+    // dos ciclos, el mismo estropicio: la ventana de una nota (AC-046) y el
+    // par /Widget ↔ /Parent ↔ /Kids de un campo con hijos (AC-096)
+    let popups = quita_popups(&mut doc);
+    let campos = crate::formularios2::aplana_campos(&mut doc);
+    if !popups && !campos {
         return tal_cual();
     }
     let nanos = std::time::SystemTime::now()
@@ -308,6 +315,18 @@ pub(crate) fn repon_popups(doc: &mut lopdf::Document) -> Result<(), String> {
 /// que puede ser la copia de trabajo o un PDF recién escrito.
 pub(crate) fn repon_popups_en(path: &str) -> Result<(), String> {
     crate::cirugia_en_hilo(path, repon_popups)
+}
+
+/// Lo que hay que rematar **después** de importar páginas, en una sola
+/// pasada de lopdf: reponer las ventanas de las notas (AC-046) y volver a
+/// montar el `/AcroForm` con los campos que llegan (AC-096 y AC-104). Los
+/// dos son cosas que `FPDF_ImportPages` no copia o que se le quitaron
+/// antes para que no se comiera la pila.
+pub(crate) fn remata_importacion(path: &str) -> Result<(), String> {
+    crate::cirugia_en_hilo(path, |doc| {
+        repon_popups(doc)?;
+        crate::formularios2::repon_acroform(doc)
+    })
 }
 
 /// Ventana emergente de un comentario (`/Popup` con `/Open false`), a la

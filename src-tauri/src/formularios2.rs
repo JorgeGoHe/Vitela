@@ -598,6 +598,336 @@ fn crea_campo(doc: &mut LoDoc, campo: CampoNuevo) -> Result<(), String> {
     }
 }
 
+/// Claves de campo que se heredan por la cadena de `/Parent` (spec
+/// 12.7.3.2), más el `/TU` que Vitela escribe en el padre de un grupo de
+/// radios: son las que hay que bajar al widget para que el campo quepa
+/// entero en un solo diccionario.
+const HEREDABLES: [&[u8]; 9] = [
+    b"FT", b"Ff", b"V", b"DV", b"DA", b"Q", b"MaxLen", b"Opt", b"TU",
+];
+
+/// Nombre completo de un campo: los `/T` de la cadena unidos con puntos,
+/// de la raíz al widget, que es como lo escribe el spec y como lo leen los
+/// demás programas.
+fn nombre_completo(doc: &LoDoc, cadena: &[ObjectId], propio: Option<&Object>) -> String {
+    let mut partes: Vec<String> = cadena
+        .iter()
+        .rev()
+        .filter_map(|id| {
+            let d = doc.get_object(*id).ok()?.as_dict().ok()?;
+            let t = crate::anotaciones::texto_de_cadena_pdf(d.get(b"T").ok()?);
+            (!t.is_empty()).then_some(t)
+        })
+        .collect();
+    if let Some(t) = propio.map(crate::anotaciones::texto_de_cadena_pdf) {
+        if !t.is_empty() {
+            partes.push(t);
+        }
+    }
+    partes.join(".")
+}
+
+/// La cadena de padres de un objeto, del más cercano al más lejano.
+/// **Corta los ciclos**: un `/Parent` que vuelve sobre sus pasos es
+/// exactamente lo que hay que sobrevivir aquí.
+fn cadena_de_padres(doc: &LoDoc, id: ObjectId) -> Vec<ObjectId> {
+    let mut out = Vec::new();
+    let mut visto = std::collections::HashSet::new();
+    visto.insert(id);
+    let mut actual = id;
+    while let Ok(d) = doc.get_object(actual).and_then(|o| o.as_dict()) {
+        match d.get(b"Parent") {
+            Ok(Object::Reference(p)) if visto.insert(*p) => {
+                out.push(*p);
+                actual = *p;
+            }
+            _ => break,
+        }
+    }
+    out
+}
+
+/// **AC-096.** Aplana el árbol `/AcroForm` de un documento que va a servir
+/// de **origen** de una importación: baja a cada `/Widget` las claves que
+/// heredaba de su campo padre, le pone el nombre completo y le quita el
+/// `/Parent`.
+///
+/// El motivo es el mismo que el de las ventanas de las notas (AC-046): un
+/// grupo de botones de radio es **un campo con `/Kids`** cuyos hijos
+/// apuntan al padre, y `FPDF_ImportPages` recorre el grafo de la anotación
+/// recursivamente hasta comerse la pila — el proceso entero se iba con un
+/// SIGSEGV. Sin `/Parent` no hay ciclo, y el campo viaja igual porque
+/// ahora cabe en el propio widget; [`repon_acroform`] lo vuelve a montar
+/// en el destino, como `repon_popups_en` repone las ventanas.
+///
+/// Devuelve si ha tocado algo (si no, no hace falta copiar el fichero).
+pub(crate) fn aplana_campos(doc: &mut LoDoc) -> bool {
+    let paginas: Vec<u32> = doc.get_pages().keys().copied().collect();
+    let mut deberes: Vec<(ObjectId, Dictionary)> = Vec::new();
+    for numero in paginas {
+        let Some(lista) = crate::anotaciones::lista_annots(doc, (numero - 1) as u16) else {
+            continue;
+        };
+        for entrada in lista {
+            let Object::Reference(rid) = entrada else {
+                continue;
+            };
+            let Ok(d) = doc.get_object(rid).and_then(|o| o.as_dict()) else {
+                continue;
+            };
+            if d.get(b"Subtype").and_then(|o| o.as_name()).ok() != Some(b"Widget") {
+                continue;
+            }
+            let cadena = cadena_de_padres(doc, rid);
+            if cadena.is_empty() {
+                continue;
+            }
+            let mut baja = Dictionary::new();
+            let nombre = nombre_completo(doc, &cadena, d.get(b"T").ok());
+            if !nombre.is_empty() {
+                baja.set("T", Object::string_literal(nombre));
+            }
+            for clave in HEREDABLES {
+                if d.has(clave) {
+                    continue;
+                }
+                let heredado = cadena.iter().find_map(|id| {
+                    doc.get_object(*id)
+                        .ok()?
+                        .as_dict()
+                        .ok()?
+                        .get(clave)
+                        .ok()
+                        .cloned()
+                });
+                if let Some(v) = heredado {
+                    baja.set(clave.to_vec(), v);
+                }
+            }
+            deberes.push((rid, baja));
+        }
+    }
+    if deberes.is_empty() {
+        return false;
+    }
+    for (rid, baja) in deberes {
+        if let Ok(d) = doc.get_object_mut(rid).and_then(|o| o.as_dict_mut()) {
+            for (clave, valor) in baja.iter() {
+                d.set(clave.to_vec(), valor.clone());
+            }
+            d.remove(b"Parent");
+        }
+    }
+    // el árbol de campos se queda sin nadie que apunte a él: quitarlo del
+    // catálogo evita que ningún otro recorrido vuelva a pisar el ciclo
+    if let Ok(catalog_id) = doc.trailer.get(b"Root").and_then(|o| o.as_reference()) {
+        if let Ok(c) = doc.get_object_mut(catalog_id).and_then(|o| o.as_dict_mut()) {
+            c.remove(b"AcroForm");
+        }
+    }
+    true
+}
+
+/// Los campos (y sus descendientes) que ya cuelgan del `/AcroForm`.
+fn campos_colgados(doc: &LoDoc) -> std::collections::HashSet<ObjectId> {
+    let mut vistos = std::collections::HashSet::new();
+    let mut pila: Vec<ObjectId> = acroform_de(doc)
+        .and_then(|(_, f)| f.get(b"Fields").ok().cloned())
+        .map(|o| referencias_de(doc, &o))
+        .unwrap_or_default();
+    while let Some(id) = pila.pop() {
+        if !vistos.insert(id) {
+            continue;
+        }
+        if let Ok(d) = doc.get_object(id).and_then(|o| o.as_dict()) {
+            if let Ok(kids) = d.get(b"Kids") {
+                pila.extend(referencias_de(doc, kids));
+            }
+        }
+    }
+    vistos
+}
+
+/// Las referencias de un array, resolviéndolo si el propio array va por
+/// referencia.
+fn referencias_de(doc: &LoDoc, o: &Object) -> Vec<ObjectId> {
+    let arr = match o {
+        Object::Array(a) => a.clone(),
+        Object::Reference(rid) => match doc.get_object(*rid).and_then(|o| o.as_array()) {
+            Ok(a) => a.clone(),
+            Err(_) => return Vec::new(),
+        },
+        _ => return Vec::new(),
+    };
+    arr.iter().filter_map(|o| o.as_reference().ok()).collect()
+}
+
+/// El `/AcroForm` del catálogo: su id (si va por referencia) y su
+/// diccionario.
+fn acroform_de(doc: &LoDoc) -> Option<(Option<ObjectId>, Dictionary)> {
+    let catalog_id = doc
+        .trailer
+        .get(b"Root")
+        .and_then(|o| o.as_reference())
+        .ok()?;
+    let catalog = doc.get_object(catalog_id).ok()?.as_dict().ok()?;
+    match catalog.get(b"AcroForm") {
+        Ok(Object::Dictionary(d)) => Some((None, d.clone())),
+        Ok(Object::Reference(rid)) => Some((
+            Some(*rid),
+            doc.get_object(*rid).ok()?.as_dict().ok()?.clone(),
+        )),
+        _ => None,
+    }
+}
+
+/// **AC-096 y AC-104.** Vuelve a montar el `/AcroForm` de un documento que
+/// acaba de recibir páginas importadas: `FPDF_ImportPages` copia los
+/// `/Widget` de la página y **no copia el `/AcroForm` del catálogo**, así
+/// que el campo llegaba dibujado pero muerto —no se podía rellenar y
+/// `get_form_fields` devolvía la lista vacía—.
+///
+/// Recorre los widgets de todas las páginas que no cuelgan ya de
+/// `/Fields`, los agrupa por nombre (dos widgets con el mismo `/T` son el
+/// mismo campo, que es lo que hace un grupo de radios), renombra el que
+/// choque con un campo que ya estaba y los mete en `/Fields`, fundiéndolo
+/// con el que hubiera. Es idempotente: pasarlo dos veces no duplica nada.
+pub(crate) fn repon_acroform(doc: &mut LoDoc) -> Result<(), String> {
+    let colgados = campos_colgados(doc);
+    let mut usados: Vec<String> = campos_por_nombre(doc).into_iter().map(|(n, _)| n).collect();
+    // los huérfanos, en orden de página y de /Annots, agrupados por nombre
+    let mut grupos: Vec<(String, Vec<ObjectId>)> = Vec::new();
+    let paginas: Vec<u32> = doc.get_pages().keys().copied().collect();
+    for numero in paginas {
+        let Some(lista) = crate::anotaciones::lista_annots(doc, (numero - 1) as u16) else {
+            continue;
+        };
+        for entrada in lista {
+            let Object::Reference(rid) = entrada else {
+                continue;
+            };
+            if colgados.contains(&rid) {
+                continue;
+            }
+            let Ok(d) = doc.get_object(rid).and_then(|o| o.as_dict()) else {
+                continue;
+            };
+            if d.get(b"Subtype").and_then(|o| o.as_name()).ok() != Some(b"Widget") {
+                continue;
+            }
+            if d.has(b"Parent") {
+                continue;
+            }
+            let nombre = d
+                .get(b"T")
+                .map(crate::anotaciones::texto_de_cadena_pdf)
+                .unwrap_or_default();
+            if nombre.is_empty() {
+                continue;
+            }
+            match grupos.iter_mut().find(|(n, _)| *n == nombre) {
+                Some((_, ids)) => ids.push(rid),
+                None => grupos.push((nombre, vec![rid])),
+            }
+        }
+    }
+    if grupos.is_empty() {
+        return Ok(());
+    }
+    let mut nuevos: Vec<ObjectId> = Vec::new();
+    for (nombre, ids) in grupos {
+        // dos campos distintos no pueden llamarse igual: el que llega de
+        // fuera se renombra, como hace `crea_campo`
+        let mut final_ = nombre.clone();
+        let mut n = 2;
+        while usados.contains(&final_) {
+            final_ = format!("{nombre}-{n}");
+            n += 1;
+        }
+        usados.push(final_.clone());
+        if ids.len() == 1 {
+            if final_ != nombre {
+                doc.get_object_mut(ids[0])
+                    .and_then(|o| o.as_dict_mut())
+                    .map_err(|e| e.to_string())?
+                    .set("T", Object::string_literal(final_));
+            }
+            nuevos.push(ids[0]);
+            continue;
+        }
+        // varios widgets con el mismo nombre son UN campo con /Kids: es lo
+        // que hace que marcar un radio desmarque a sus hermanos
+        let mut padre = Dictionary::new();
+        padre.set("T", Object::string_literal(final_));
+        if let Ok(d) = doc.get_object(ids[0]).and_then(|o| o.as_dict()) {
+            for clave in HEREDABLES {
+                if let Ok(v) = d.get(clave) {
+                    padre.set(clave.to_vec(), v.clone());
+                }
+            }
+        }
+        let padre_id = doc.add_object(Object::Dictionary(padre));
+        let hijos: Vec<Object> = ids.iter().map(|id| Object::Reference(*id)).collect();
+        doc.get_object_mut(padre_id)
+            .and_then(|o| o.as_dict_mut())
+            .map_err(|e| e.to_string())?
+            .set("Kids", Object::Array(hijos));
+        for id in &ids {
+            if let Ok(d) = doc.get_object_mut(*id).and_then(|o| o.as_dict_mut()) {
+                d.set("Parent", Object::Reference(padre_id));
+                for clave in [&b"T"[..], b"FT", b"Ff", b"V", b"DV", b"Opt", b"TU"] {
+                    d.remove(clave);
+                }
+            }
+        }
+        nuevos.push(padre_id);
+    }
+    // y el /AcroForm: el que hubiera, con los campos nuevos detrás
+    let (form_id, mut form) = acroform_de(doc).unwrap_or((None, Dictionary::new()));
+    let mut campos: Vec<Object> = match form.get(b"Fields") {
+        Ok(o) => referencias_de(doc, o)
+            .into_iter()
+            .map(Object::Reference)
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    campos.extend(nuevos.into_iter().map(Object::Reference));
+    form.set("Fields", Object::Array(campos));
+    if !form.has(b"DA") {
+        form.set("DA", Object::string_literal("/Helv 0 Tf 0 g"));
+    }
+    if !form.has(b"DR") {
+        let mut helv = Dictionary::new();
+        helv.set("Type", Object::Name(b"Font".to_vec()));
+        helv.set("Subtype", Object::Name(b"Type1".to_vec()));
+        helv.set("BaseFont", Object::Name(b"Helvetica".to_vec()));
+        helv.set("Encoding", Object::Name(b"WinAnsiEncoding".to_vec()));
+        let mut fuentes = Dictionary::new();
+        fuentes.set("Helv", Object::Dictionary(helv));
+        let mut dr = Dictionary::new();
+        dr.set("Font", Object::Dictionary(fuentes));
+        form.set("DR", Object::Dictionary(dr));
+    }
+    form.set("NeedAppearances", Object::Boolean(true));
+    match form_id {
+        Some(rid) => {
+            *doc.get_object_mut(rid).map_err(|e| e.to_string())? = Object::Dictionary(form);
+        }
+        None => {
+            let catalog_id = doc
+                .trailer
+                .get(b"Root")
+                .and_then(|o| o.as_reference())
+                .map_err(|e| e.to_string())?;
+            doc.get_object_mut(catalog_id)
+                .and_then(|o| o.as_dict_mut())
+                .map_err(|e| e.to_string())?
+                .set("AcroForm", Object::Dictionary(form));
+        }
+    }
+    Ok(())
+}
+
 /// Tooltip y banderas, que son iguales en todos los campos menos en el
 /// radio (donde van en el padre, que es el campo de verdad).
 fn pon_comunes(widget: &mut Dictionary, props: &PropsCampo, banderas: i64) {

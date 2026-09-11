@@ -205,7 +205,7 @@ pub fn duplicate_page(work_path: String, page_index: u16) -> Result<u16, String>
             drop(origen);
             let nuevo = doc.pages().len();
             save_and_close(doc, &work_path)?;
-            crate::anotaciones::repon_popups_en(&work_path)?;
+            crate::anotaciones::remata_importacion(&work_path)?;
             Ok(nuevo)
         })
     })
@@ -263,7 +263,7 @@ pub fn insert_pdf_at(
             drop(other);
             let nuevo = doc.pages().len();
             save_and_close(doc, &work_path)?;
-            crate::anotaciones::repon_popups_en(&work_path)?;
+            crate::anotaciones::remata_importacion(&work_path)?;
             Ok(nuevo)
         })
     })
@@ -814,6 +814,122 @@ pub fn add_bates(
 mod tests {
     use super::*;
     use crate::tests::crea_pdf;
+
+    /// Un PDF de una página con **un grupo de dos radios**, que es el
+    /// campo con `/Kids`: el hijo apunta al padre con `/Parent` y el padre
+    /// al hijo con `/Kids`, y ese ciclo es el que se come la pila de
+    /// `FPDF_ImportPages` (AC-096).
+    fn pdf_con_grupo_de_radios(dest: &std::path::Path) -> String {
+        crea_pdf(&["Con radios"], dest);
+        let work = dest.to_string_lossy().into_owned();
+        let campo = |opcion: &str, x: f32| crate::formularios2::CampoNuevo {
+            page_index: 0,
+            kind: "radio".into(),
+            rect: crate::Rect {
+                x,
+                y: 300.0,
+                w: 14.0,
+                h: 14.0,
+            },
+            name: opcion.into(),
+            group: Some("sexo".into()),
+            export_value: Some(opcion.into()),
+            options: None,
+            props: None,
+        };
+        crate::formularios2::create_form_fields(
+            work.clone(),
+            vec![campo("hombre", 60.0), campo("mujer", 120.0)],
+        )
+        .expect("los dos radios");
+        work
+    }
+
+    /// Los nombres de los campos de una página, tal como los ve la UI.
+    fn nombres_de_campos(path: &str, page_index: u16) -> Vec<String> {
+        crate::formularios::get_form_fields(path.to_string(), page_index)
+            .expect("campos")
+            .into_iter()
+            .map(|c| c.name)
+            .collect()
+    }
+
+    /// **AC-096 (crítico).** Importar una página que lleva un grupo de
+    /// botones de radio mataba el proceso entero con SIGSEGV: es AC-046
+    /// otra vez, con otro ciclo del grafo de anotaciones. Los cinco
+    /// comandos que importan de un PDF con formulario tienen que
+    /// **terminar** y dejar el grupo donde estaba.
+    #[test]
+    fn importar_una_pagina_con_un_grupo_de_radios_no_mata_el_proceso() {
+        let dir = std::env::temp_dir();
+        let con_radios = dir.join("ac096-radios.pdf");
+        let origen = pdf_con_grupo_de_radios(&con_radios);
+        assert_eq!(
+            nombres_de_campos(&origen, 0),
+            vec!["sexo".to_string(), "sexo".to_string()],
+            "los dos widgets son del mismo campo"
+        );
+
+        // merge_pdf: el grupo entra al final del documento de destino
+        let destino = dir.join("ac096-merge.pdf");
+        crea_pdf(&["Uno", "Dos"], &destino);
+        let work = destino.to_string_lossy().into_owned();
+        let total = crate::paginas::merge_pdf(work.clone(), origen.clone()).expect("merge_pdf");
+        assert_eq!(total, 3);
+        assert_eq!(nombres_de_campos(&work, 2), vec!["sexo"; 2], "merge_pdf");
+
+        // merge_many
+        let destino = dir.join("ac096-merge-many.pdf");
+        crea_pdf(&["Uno"], &destino);
+        let work = destino.to_string_lossy().into_owned();
+        merge_many(work.clone(), vec![origen.clone()], None).expect("merge_many");
+        assert_eq!(nombres_de_campos(&work, 1), vec!["sexo"; 2], "merge_many");
+
+        // insert_pdf_at
+        let destino = dir.join("ac096-insert.pdf");
+        crea_pdf(&["Uno", "Dos"], &destino);
+        let work = destino.to_string_lossy().into_owned();
+        insert_pdf_at(work.clone(), origen.clone(), 1, None).expect("insert_pdf_at");
+        assert_eq!(
+            nombres_de_campos(&work, 1),
+            vec!["sexo"; 2],
+            "insert_pdf_at"
+        );
+
+        // replace_pages
+        let destino = dir.join("ac096-replace.pdf");
+        crea_pdf(&["Uno", "Dos"], &destino);
+        let work = destino.to_string_lossy().into_owned();
+        replace_pages(work.clone(), vec![1], origen.clone(), None).expect("replace_pages");
+        assert_eq!(
+            nombres_de_campos(&work, 1),
+            vec!["sexo"; 2],
+            "replace_pages"
+        );
+
+        // duplicate_page: el origen se duplica a sí mismo, y la copia es
+        // otro grupo — el nombre choca con el que ya estaba y se renombra,
+        // que es lo que impide que marcar en una página marque en la otra
+        let copia = dir.join("ac096-duplicar.pdf");
+        let work = pdf_con_grupo_de_radios(&copia);
+        duplicate_page(work.clone(), 0).expect("duplicate_page");
+        assert_eq!(
+            nombres_de_campos(&work, 1),
+            vec!["sexo-2"; 2],
+            "duplicate_page: un solo campo para los dos widgets"
+        );
+
+        // y el grupo sigue siendo un grupo: marcar una opción desmarca a
+        // su hermana, que es lo único que distingue un grupo de dos
+        // casillas sueltas
+        crate::formularios::set_form_checked(work.clone(), 1, 1, true).expect("marcar");
+        let estados: Vec<bool> = crate::formularios::get_form_fields(work.clone(), 1)
+            .expect("campos")
+            .into_iter()
+            .map(|c| c.checked)
+            .collect();
+        assert_eq!(estados, vec![false, true], "una sola opción marcada");
+    }
 
     /// Tamaño de cada página tal como se ve.
     fn tamanos(path: &str) -> Vec<(f32, f32)> {
@@ -1795,7 +1911,7 @@ pub fn replace_pages(
                 return Err("Un documento no puede quedarse sin páginas".into());
             }
             save_and_close(doc, &work_path)?;
-            crate::anotaciones::repon_popups_en(&work_path)?;
+            crate::anotaciones::remata_importacion(&work_path)?;
             Ok(nuevo)
         })
     })
@@ -1913,7 +2029,7 @@ pub fn merge_many(work_path: String, others: Vec<String>, at: Option<u16>) -> Re
             }
             let nuevo = doc.pages().len();
             save_and_close(doc, &work_path)?;
-            crate::anotaciones::repon_popups_en(&work_path)?;
+            crate::anotaciones::remata_importacion(&work_path)?;
             Ok(nuevo)
         })
     })
