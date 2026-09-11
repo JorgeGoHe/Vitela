@@ -1897,11 +1897,26 @@ pub(crate) mod tests {
         .expect("escribir");
         let roto = roto_path.to_string_lossy().into_owned();
 
+        // un PDF cifrado con contraseña, pedido por su ficha sin abrirlo:
+        // «la contraseña no es correcta» acusa a quien no ha escrito ninguna
+        // (AC-107; `with_doc` ya traduce el error y la rama que lo
+        // reconocía por el código nunca se tomaba)
+        let cifrado_path = std::env::temp_dir().join("editor_pdf_test_errores_cifrado.pdf");
+        let cif = cifrado_path.to_string_lossy().into_owned();
+        seguridad::encrypt_pdf(b.clone(), Some(cif.clone()), "secreta".into(), None, None)
+            .expect("cifrar");
+        let ficha = documento::get_document_info(cif.clone()).unwrap_err();
+        assert!(
+            ficha.contains("protegido con contraseña") && !ficha.contains("no es correcta"),
+            "la ficha de un cifrado: {ficha}"
+        );
+
         let casos: Vec<(&str, String)> = vec![
             (
                 "abrir un fichero dañado",
                 open_pdf(d.clone(), None, None, None).unwrap_err(),
             ),
+            ("la ficha de un PDF cifrado sin abrirlo", ficha),
             (
                 "abrir un PDF cifrado para destinatarios con algo que no es una clave",
                 open_pdf(ps.clone(), None, Some(d.clone()), None).unwrap_err(),

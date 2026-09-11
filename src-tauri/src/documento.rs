@@ -1701,7 +1701,12 @@ pub fn get_document_info(path: String) -> Result<DocumentoInfo, String> {
             Ok((n, w, h, iguales))
         })
         .map_err(|e| {
-            if e.contains("PASSWORD_REQUIRED") || e.contains("PasswordError") {
+            // `with_doc` ya ha pasado el error por `mensaje_llano`, así que
+            // llega traducido: se reconoce también la frase (AC-107)
+            if e.contains("PASSWORD_REQUIRED")
+                || e.contains("PasswordError")
+                || e.contains("a contraseña no es correcta")
+            {
                 "El documento está protegido con contraseña: ábrelo primero para ver su ficha"
                     .to_string()
             } else {
