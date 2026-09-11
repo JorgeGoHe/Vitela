@@ -67,6 +67,21 @@ nuevas, arregla lo que estaba a medias y se somete a la regresión completa.
 - El Optimizer no contaba la imagen del fondo y enseñaba sus categorías en
   la jerga del motor.
 - Esc no cerraba el desplegable de reglas, guías y cuadrícula.
+- Añadir o insertar un PDF con un grupo de botones de radio hacía morir la
+  aplicación entera.
+- Extraer, dividir, unir o insertar páginas dejaba el formulario sin sus
+  campos, aunque el widget siguiera dibujado.
+- «Traer al frente» y «Enviar al fondo» de una imagen no se conservaban al
+  guardar, igual que la marca de agua puesta detrás del contenido.
+- Con dos documentos abiertos y cambios sin guardar en los dos, cerrar la
+  pestaña que no estaba en pantalla cerraba la otra y borraba su copia sin
+  preguntar.
+- Deshacer «Quitar la contraseña…» no devolvía la contraseña de un
+  documento abierto con ella; el siguiente Guardar escribía en claro.
+- El reflujo del texto partía por la mitad una palabra que no cabía en la
+  columna.
+- Cuatro errores frecuentes (certificado ilegible, imagen no reconocida,
+  anotación ya borrada, PDF dañado al verificar firmas) salían en inglés.
 
 ---
 

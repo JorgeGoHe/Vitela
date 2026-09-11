@@ -1133,7 +1133,13 @@ compila los instaladores a mano o al etiquetar `v*`.
     tamaño de página», otra operación. Y `TextBlock` gana `reescribible`:
     con `false`, corregir ese bloque **le cambia la letra**, porque su
     fuente no va dentro del documento y hay que sustituirla por la más
-    parecida. La tarjeta de edición lo dice antes, no después.
+    parecida. La tarjeta de edición lo dice antes, no después. **Ojo con
+    `es_estandar`** (de la que sale `reescribible`): en la build de Linux
+    la Helvetica interna de PDFium se anuncia como «Chrom Sans OTF», no
+    como «Arial», y sin reconocer ese nombre —como ya hacía
+    `normaliza_familia`— la función decía que hacía falta sustituir una
+    fuente que ya es una de las catorce estándar. Solo lo vio el CI: en
+    macOS la builtin se llama «Arial» y el test pasaba igual sin el caso.
   - **Higiene de documentación** (C-13): `Entrada::pendiente_ui` se va del
     árbol. Nadie lo ponía desde que `fn ep` desapareció en la integración
     del ciclo 9, y una marca que solo vivía dentro del backend solo la veía

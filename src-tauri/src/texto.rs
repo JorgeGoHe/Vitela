@@ -42,9 +42,24 @@ pub struct TextBlock {
 /// que se ve.
 fn es_estandar(familia: &str) -> bool {
     let f = familia.to_lowercase();
-    ["helvetica", "arial", "times", "courier", "symbol", "zapf"]
-        .iter()
-        .any(|n| f.contains(n))
+    // "chrom sans/serif/mono" son las internas de PDFium desde
+    // ~chromium/8000 (el mismo nombre que reconoce `normaliza_familia`):
+    // en la build de Linux la Helvetica builtin se anuncia así, y sin este
+    // caso `reescribible` decía que hacía falta sustituir una fuente que
+    // ya es una de las catorce
+    [
+        "helvetica",
+        "arial",
+        "times",
+        "courier",
+        "symbol",
+        "zapf",
+        "chrom sans",
+        "chrom serif",
+        "chrom mono",
+    ]
+    .iter()
+    .any(|n| f.contains(n))
 }
 
 /// Directorios de fuentes TTF del sistema, por plataforma.
