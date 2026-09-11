@@ -32,6 +32,15 @@ const ETIQUETA: Record<Diferencia["tipo"], string> = {
   quitado: "Quitado",
 };
 
+/** La página que nombra una diferencia. Lo que se añade se cuenta por la
+ *  hoja del documento nuevo y lo que se quita por la del viejo: es la hoja
+ *  donde el usuario puede ir a mirarlo. Una página que solo está en un lado
+ *  trae el otro en `null` y se usa el que haya. */
+function paginaDe(d: Diferencia): number {
+  const preferida = d.tipo === "añadido" ? d.pagina_b : d.pagina_a;
+  return (preferida ?? d.pagina_b ?? d.pagina_a ?? 0) + 1;
+}
+
 /** Una hoja rasterizada de uno de los dos documentos, con sus rectángulos
  *  de diferencia encima. */
 function Hoja({
@@ -41,6 +50,7 @@ function Hoja({
   color,
   resaltado,
   ancho,
+  vacio,
 }: {
   src: string | undefined;
   size: PageSize | undefined;
@@ -49,8 +59,16 @@ function Hoja({
   resaltado: boolean;
   /** Ancho útil del panel: la hoja se dibuja a esa medida. */
   ancho: number;
+  /** Qué decir cuando de este lado no hay hoja que enseñar. Un panel en
+   *  blanco sin explicación se lee como que la comparación ha fallado. */
+  vacio?: string;
 }) {
-  if (!src || !size) return <div className="comparar-hueco" />;
+  if (!src || !size)
+    return (
+      <div className="comparar-hueco">
+        {vacio && <span className="sign-empty">{vacio}</span>}
+      </div>
+    );
   const escala = ancho / size.width;
   return (
     <div
@@ -349,8 +367,7 @@ export default function Comparador({
               />
               <span className="comparar-fila-texto">
                 <span className="dato">
-                  {ETIQUETA[d.tipo]} · pág.{" "}
-                  {(d.pagina_a ?? d.pagina_b ?? 0) + 1}
+                  {ETIQUETA[d.tipo]} · pág. {paginaDe(d)}
                 </span>
                 <span className="comparar-frase">
                   {d.texto_b || d.texto_a || "(sin texto)"}
@@ -378,6 +395,11 @@ export default function Comparador({
             color={dif ? COLOR[dif.tipo] : "transparent"}
             resaltado
             ancho={ancho}
+            vacio={
+              dif && dif.pagina_a === null
+                ? `Esta página no está en ${nombreA}`
+                : undefined
+            }
           />
         </div>
         <div
@@ -393,6 +415,11 @@ export default function Comparador({
             color={dif ? COLOR[dif.tipo] : "transparent"}
             resaltado
             ancho={ancho}
+            vacio={
+              dif && dif.pagina_b === null
+                ? `Esta página no está en ${nombreB}`
+                : undefined
+            }
           />
         </div>
       </div>
