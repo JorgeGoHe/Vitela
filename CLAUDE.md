@@ -1883,7 +1883,8 @@ compila los instaladores a mano o al etiquetar `v*`.
     `zoom-ancho`, `pagina-una`, `pagina-continua`, `pagina-dos`,
     `pagina-dos-continua`, `girar-vista-derecha`, `girar-vista-izquierda`,
     `vista-atras`, `vista-adelante`, `panel-lateral`, `pantalla-completa`,
-    `modo-nocturno`, `leer-en-voz-alta` (⇧⌘Y, donde lo pone Acrobat),
+    `modo-nocturno`, `modo-lectura` (⇧⌘H),
+    `leer-en-voz-alta` (⇧⌘Y, donde lo pone Acrobat),
     `mostrar-reglas`, `mostrar-guias`, `mostrar-cuadricula` y
     `ajustar-cuadricula` (el «Mostrar u ocultar» de Acrobat).
   - Documento: `organizar-paginas`, `recortar-pagina`, `marca-de-agua`,

@@ -4830,6 +4830,7 @@ function App() {
     "panel-lateral": () => setSidebarVisible((v) => !v),
     "pantalla-completa": () => cambiaPantallaCompleta(!pantallaCompleta),
     "modo-nocturno": () => aplicaPrefs({ ...prefs, nocturno: !prefs.nocturno }),
+    "modo-lectura": () => cambiaModoLectura(!modoLectura),
     // «Ver ▸ Mostrar u ocultar»: el andamio, donde lo pone Acrobat
     "mostrar-reglas": () => {
       if (pageCount > 0) setReglas((v) => !v);
@@ -5282,6 +5283,29 @@ function App() {
                   else lectura.leer(pageIndex, true);
                 }}
                 leyendo={lectura.leyendo}
+                buscar={() => accionesMenu.buscar()}
+                buscarEnCarpeta={abrirBusquedaEnCarpeta}
+                // cada conmutador llama a la MISMA función que su id del
+                // menú del sistema y que su atajo: tres caminos que no se
+                // pueden separar porque son uno
+                ver={{
+                  reglas,
+                  alternarReglas: () => accionesMenu["mostrar-reglas"](),
+                  guias: guiasVisibles,
+                  alternarGuias: () => accionesMenu["mostrar-guias"](),
+                  cuadricula,
+                  alternarCuadricula: () =>
+                    accionesMenu["mostrar-cuadricula"](),
+                  ajustarCuadricula,
+                  alternarAjuste: () => accionesMenu["ajustar-cuadricula"](),
+                  nocturno: prefs.nocturno,
+                  alternarNocturno: () => accionesMenu["modo-nocturno"](),
+                  lectura: modoLectura,
+                  alternarLectura: () => accionesMenu["modo-lectura"](),
+                  pantallaCompleta,
+                  alternarPantallaCompleta: () =>
+                    accionesMenu["pantalla-completa"](),
+                }}
               />
             </>
           )}

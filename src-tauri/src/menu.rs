@@ -226,6 +226,14 @@ pub(crate) fn estructura() -> Vec<Grupo> {
                     false,
                 ),
                 e("modo-nocturno", "Modo nocturno del documento", None, false),
+                // el modo lectura tenía botón y atajo pero no barra: quien
+                // no pasara el ratón por la píldora no sabía que existía
+                e(
+                    "modo-lectura",
+                    "Modo lectura",
+                    Some("Shift+CmdOrCtrl+H"),
+                    true,
+                ),
                 sep(),
                 // «Ver ▸ Mostrar/Ocultar» de Acrobat (R54): reglas, guías
                 // y cuadrícula existían solo en el teclado, así que no las

@@ -564,6 +564,15 @@ textarea {
   padding-left: 16px;
 }
 
+/* el «✓» de un conmutador del menú (Reglas, Guías, Cuadrícula…). Reserva su
+   sitio esté puesto o no, para que las etiquetas no bailen al encenderlo */
+.menu-check {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  color: var(--accent);
+}
+
 /* ---------- banner de error ---------- */
 
 .banner-error {

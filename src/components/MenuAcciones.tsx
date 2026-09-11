@@ -10,6 +10,7 @@ function Entrada({
   texto,
   atajo,
   motivo,
+  activo,
   onSelect,
 }: {
   icon: string;
@@ -19,12 +20,17 @@ function Entrada({
    *  apagada y lo dice al pasar el ratón, como Acrobat: esconderla dejaría
    *  al usuario buscando una función que existe. */
   motivo?: string;
+  /** La entrada es un conmutador y está encendido. Se marca con el «✓» de
+   *  los menús del sistema: sin él, «Reglas» no dice si las va a poner o a
+   *  quitar. `undefined` es «esto no se enciende ni se apaga». */
+  activo?: boolean;
   onSelect: () => void;
 }) {
   return (
     <button
       className="btn"
-      role="menuitem"
+      role={activo === undefined ? "menuitem" : "menuitemcheckbox"}
+      aria-checked={activo === undefined ? undefined : activo}
       disabled={!!motivo}
       title={
         motivo ?? (atajo ? `${texto.replace(/…$/, "")} (${atajo})` : undefined)
@@ -33,15 +39,25 @@ function Entrada({
     >
       <Icon name={icon} size={14} />
       <span className="menu-texto">{texto}</span>
+      {activo !== undefined && (
+        <span className="menu-check" aria-hidden>
+          {activo && <Icon name="check" size={13} />}
+        </span>
+      )}
       {atajo && <span className="menu-atajo dato">{atajo}</span>}
     </button>
   );
 }
 
-/** Menú «Acciones» de la barra superior (Archivo, Documento, Seguridad,
- *  Insertar y Salida). Cada entrada cierra el menú antes de actuar; se
- *  recorre con ↑/↓, se activa con Enter y Esc lo cierra devolviendo el foco
- *  al botón. */
+/** Menú «Acciones» de la barra superior (Archivo, Buscar, Ver, Documento,
+ *  Seguridad, Insertar y Salida). Cada entrada cierra el menú antes de
+ *  actuar; se recorre con ↑/↓, se activa con Enter y Esc lo cierra
+ *  devolviendo el foco al botón.
+ *
+ *  Es el índice de la aplicación: **toda** entrada de aquí existe también
+ *  en la barra del sistema con la misma etiqueta, y un test lo comprueba
+ *  (`menu::el_menu_nativo_es_un_espejo_del_menu_de_la_app`). Lo que se
+ *  llama distinto en cada sitio va en su lista de excepciones, con motivo. */
 export default function MenuAcciones({
   recientes,
   abrirReciente,
@@ -92,6 +108,9 @@ export default function MenuAcciones({
   abrirComprimir,
   leerEnVozAlta,
   leyendo,
+  buscar,
+  buscarEnCarpeta,
+  ver,
 }: {
   /** Últimos ficheros abiertos, la misma lista que el estado vacío. */
   recientes: Reciente[];
@@ -169,6 +188,30 @@ export default function MenuAcciones({
   /** «Leer en voz alta»: empieza por la página que se está leyendo. */
   leerEnVozAlta: () => void;
   leyendo: boolean;
+  /** Lleva el foco al campo de búsqueda de la barra, igual que ⌘F. */
+  buscar: () => void;
+  /** «Buscar en una carpeta…»: no necesita documento abierto. */
+  buscarEnCarpeta: () => void;
+  /** El grupo «Ver»: los mismos conmutadores que el menú del sistema, con
+   *  su estado a la vista. Sin ellos aquí, reglas, guías, cuadrícula, modo
+   *  nocturno y modo lectura solo se encontraban pasando el ratón por la
+   *  píldora de navegación, y el menú dejaba de ser el índice de la app. */
+  ver: {
+    reglas: boolean;
+    alternarReglas: () => void;
+    guias: boolean;
+    alternarGuias: () => void;
+    cuadricula: boolean;
+    alternarCuadricula: () => void;
+    ajustarCuadricula: boolean;
+    alternarAjuste: () => void;
+    nocturno: boolean;
+    alternarNocturno: () => void;
+    lectura: boolean;
+    alternarLectura: () => void;
+    pantallaCompleta: boolean;
+    alternarPantallaCompleta: () => void;
+  };
 }) {
   const botonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -323,6 +366,75 @@ export default function MenuAcciones({
               texto="Preferencias…"
               atajo={`${MOD},`}
               onSelect={ejecutar(abrirPreferencias)}
+            />
+            <div className="menu-titulo">Buscar</div>
+            <Entrada
+              icon="search"
+              texto="Buscar…"
+              atajo={`${MOD}F`}
+              onSelect={ejecutar(buscar)}
+            />
+            <Entrada
+              icon="search"
+              texto="Buscar en una carpeta…"
+              atajo={`⇧${MOD}F`}
+              onSelect={ejecutar(buscarEnCarpeta)}
+            />
+            <div className="menu-titulo">Ver</div>
+            <Entrada
+              icon="ruler"
+              texto="Reglas"
+              atajo={`${MOD}R`}
+              activo={ver.reglas}
+              onSelect={ejecutar(ver.alternarReglas)}
+            />
+            <Entrada
+              icon="ruler"
+              texto="Guías"
+              atajo={`${MOD};`}
+              activo={ver.guias}
+              onSelect={ejecutar(ver.alternarGuias)}
+            />
+            <Entrada
+              icon="ruler"
+              texto="Cuadrícula"
+              atajo={`${MOD}U`}
+              activo={ver.cuadricula}
+              onSelect={ejecutar(ver.alternarCuadricula)}
+            />
+            <Entrada
+              icon="ruler"
+              texto="Ajustar a la cuadrícula"
+              atajo={`⇧${MOD}U`}
+              activo={ver.ajustarCuadricula}
+              onSelect={ejecutar(ver.alternarAjuste)}
+            />
+            <Entrada
+              icon="moon"
+              texto="Modo nocturno del documento"
+              atajo={`⇧${MOD}L`}
+              activo={ver.nocturno}
+              onSelect={ejecutar(ver.alternarNocturno)}
+            />
+            <Entrada
+              icon="libro"
+              texto="Modo lectura"
+              atajo={`⇧${MOD}H`}
+              activo={ver.lectura}
+              onSelect={ejecutar(ver.alternarLectura)}
+            />
+            <Entrada
+              icon="expand"
+              texto="Pantalla completa"
+              atajo={`${MOD}L`}
+              activo={ver.pantallaCompleta}
+              onSelect={ejecutar(ver.alternarPantallaCompleta)}
+            />
+            <Entrada
+              icon="note"
+              texto={leyendo ? "Dejar de leer en voz alta" : "Leer en voz alta"}
+              atajo={`⇧${MOD}Y`}
+              onSelect={ejecutar(leerEnVozAlta)}
             />
             <div className="menu-titulo">Documento</div>
             <Entrada
@@ -483,12 +595,6 @@ export default function MenuAcciones({
               icon="sticky"
               texto="Importar comentarios…"
               onSelect={ejecutar(importarComentarios)}
-            />
-            <Entrada
-              icon="note"
-              texto={leyendo ? "Dejar de leer en voz alta" : "Leer en voz alta"}
-              atajo={`⇧${MOD}Y`}
-              onSelect={ejecutar(leerEnVozAlta)}
             />
             <Entrada
               icon="shrink"
