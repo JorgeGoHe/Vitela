@@ -1300,6 +1300,18 @@ compila los instaladores a mano o al etiquetar `v*`.
     ha escrito ninguna: `busqueda::motivo_de_fila` reconoce el código de
     apertura y la frase que ya escribe `mensaje_llano`.
 
+  - **Orden 8b, «Quitar fondo» quita el fondo y solo el fondo**
+    (`paginas2.rs`): se llevaba por delante cualquier texto rotado o
+    traslúcido, o sea también la marca de agua puesta **encima** del
+    contenido, que no es el fondo y tiene su propia entrada de menú.
+    `quita_texto_de_fondo` solo cuenta los que van antes que el primer
+    objeto normal de la página, y sin nada que quitar `remove_background`
+    lo dice y no toca nada (el ensayo previo sigue devolviendo los
+    recuentos a cero). De paso, `add_watermark` con `detras` deja de
+    reordenar los objetos —que no sobrevive a guardar, como en AC-098— y
+    mueve al principio el flujo de contenido que PDFium acaba de añadir,
+    que es justo el de la marca.
+
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (cada uno con su envoltorio en camelCase):
     - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la

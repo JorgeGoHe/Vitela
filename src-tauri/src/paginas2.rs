@@ -550,11 +550,11 @@ pub fn add_watermark(
                 let r = giro.to_radians();
                 (r.cos(), r.sin())
             };
-            for i in paginas_pedidas(doc.pages().len(), &page_indices) {
+            let tocadas = paginas_pedidas(doc.pages().len(), &page_indices);
+            for i in tocadas.clone() {
                 let mut page = doc.pages().get(i).map_err(|e| e.to_string())?;
                 let page_w = page.width().value;
                 let page_h = page.height().value;
-                let habia = page.objects().len();
                 // ancho y alto del objeto sin girar, y su centro
                 let (w, h, cx, cy) = match &imagen {
                     Some(img) => {
@@ -611,36 +611,30 @@ pub fn add_watermark(
                             .map_err(|e| e.to_string())?;
                     }
                 }
-                if detras {
-                    manda_al_fondo(&mut page, habia)?;
-                }
                 page.regenerate_content().map_err(|e| e.to_string())?;
             }
             save_and_close(doc, &work_path)?;
+            if detras {
+                // la marca de agua se pinta **debajo** del contenido, y
+                // eso no se consigue reordenando los objetos de la página:
+                // `FPDF_GenerateContent` no reescribe el flujo en el orden
+                // nuevo (lo mismo que AC-098) y al guardar volvía delante.
+                // Lo que sí se puede mover es el flujo que PDFium acaba de
+                // añadir, que es el que lleva la marca
+                crate::cirugia_en_hilo(&work_path, move |doc| {
+                    let paginas: Vec<(u32, lopdf::ObjectId)> =
+                        doc.get_pages().into_iter().collect();
+                    for (numero, page_id) in paginas {
+                        if tocadas.contains(&((numero - 1) as u16)) {
+                            fondo::pon_el_ultimo_flujo_delante(doc, page_id);
+                        }
+                    }
+                    Ok(())
+                })?;
+            }
             Ok(())
         })
     })
-}
-
-/// Deja el **último** objeto de la página el primero, que es el que se
-/// pinta debajo de todo lo demás: `habia` es cuántos objetos tenía la
-/// página antes de añadirlo.
-///
-/// pdfium-render 0.8 no expone insertar por índice, así que se hace como en
-/// `reorder_image`: se pasan por detrás los `habia` objetos de antes, en su
-/// mismo orden. **Nunca se suelta un objeto sacado** —su `Drop` llama a
-/// `FPDFPageObj_Destroy` y PDFium casca—: `add_object` se lo lleva.
-fn manda_al_fondo(page: &mut PdfPage, habia: usize) -> Result<(), String> {
-    for _ in 0..habia {
-        let otro = page
-            .objects_mut()
-            .remove_object_at_index(0)
-            .map_err(crate::mensaje_llano)?;
-        page.objects_mut()
-            .add_object(otro)
-            .map_err(crate::mensaje_llano)?;
-    }
-    Ok(())
 }
 
 /// Encabezado y pie en todas las páginas, con tres huecos por zona
@@ -1243,6 +1237,76 @@ mod tests {
             .contains("Ninguna de esas páginas"));
         std::fs::remove_file(&destino).ok();
         std::fs::remove_file(&origen).ok();
+    }
+
+    /// **Orden 8b.** «Quitar fondo» quita el fondo y **solo** el fondo: la
+    /// marca de agua que va delante del contenido no es el fondo y tiene
+    /// su propia entrada de menú. Y si no hay fondo, se dice, en vez de
+    /// llevarse lo que más se le parezca.
+    #[test]
+    fn quitar_el_fondo_no_toca_la_marca_de_agua_de_delante() {
+        let pdf = std::env::temp_dir().join("paginas2-fondo-y-marca.pdf");
+        crea_pdf(&["Contenido uno"], &pdf);
+        let work = pdf.to_string_lossy().to_string();
+
+        // sin fondo no hay nada que quitar, y se dice
+        let aviso = remove_background(work.clone(), false).unwrap_err();
+        assert!(
+            aviso.contains("no tiene fondo") && aviso.contains("marca de agua"),
+            "el aviso tiene que decir qué pasa y por dónde se quita lo otro: {aviso}"
+        );
+
+        // una marca de agua DELANTE del contenido
+        add_watermark(
+            work.clone(),
+            "BORRADOR".into(),
+            48.0,
+            [200, 0, 0, 255],
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("marca de agua de delante");
+        // y otra DETRÁS, que es el fondo
+        add_watermark(
+            work.clone(),
+            "COPIA".into(),
+            48.0,
+            [0, 0, 200, 255],
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(true),
+        )
+        .expect("fondo de texto");
+
+        assert_eq!(
+            remove_background(work.clone(), true)
+                .expect("ensayo")
+                .textos,
+            1,
+            "solo la de detrás cuenta como fondo"
+        );
+        assert_eq!(
+            remove_background(work.clone(), false)
+                .expect("quitar el fondo")
+                .textos,
+            1
+        );
+        let texto = textos(&work).join(" ");
+        assert!(
+            texto.contains("BORRADOR"),
+            "la marca de agua de delante se queda: {texto}"
+        );
+        assert!(!texto.contains("COPIA"), "y el fondo se ha ido: {texto}");
+        std::fs::remove_file(&pdf).ok();
     }
 
     /// **El fondo, entero** (orden 1.4 del ciclo 9). Acrobat abre su
@@ -2313,6 +2377,51 @@ mod fondo {
     pub(super) const MARCA: &[u8] = b"Vitela";
     pub(super) const VALOR: &[u8] = b"Fondo";
 
+    /// Pone el **último** flujo de contenido de la página el primero.
+    /// PDFium añade un flujo nuevo con lo que acaba de escribir, así que
+    /// eso es exactamente la marca de agua que se acaba de poner; delante
+    /// del resto significa «debajo», que es lo que pide «detrás».
+    ///
+    /// Solo actúa si `/Contents` es un array de dos o más: con un flujo
+    /// único no hay nada que separar y mover lo que hay sería mover la
+    /// página entera.
+    pub(super) fn pon_el_ultimo_flujo_delante(doc: &mut LoDoc, page_id: ObjectId) -> bool {
+        // el `/Contents` puede ser el array o una referencia a él
+        let entrada = match doc
+            .get_object(page_id)
+            .and_then(|o| o.as_dict())
+            .and_then(|d| d.get(b"Contents"))
+        {
+            Ok(o) => o.clone(),
+            Err(_) => return false,
+        };
+        let (destino, arr) = match &entrada {
+            Object::Array(a) => (None, a.clone()),
+            Object::Reference(rid) => match doc.get_object(*rid).and_then(|o| o.as_array()) {
+                Ok(a) => (Some(*rid), a.clone()),
+                Err(_) => return false,
+            },
+            _ => return false,
+        };
+        if arr.len() < 2 {
+            return false;
+        }
+        let mut nuevo = arr;
+        let ultimo = nuevo.pop().unwrap_or(Object::Null);
+        nuevo.insert(0, ultimo);
+        match destino {
+            Some(rid) => doc
+                .get_object_mut(rid)
+                .map(|o| *o = Object::Array(nuevo))
+                .is_ok(),
+            None => doc
+                .get_object_mut(page_id)
+                .and_then(|o| o.as_dict_mut())
+                .map(|d| d.set("Contents", Object::Array(nuevo)))
+                .is_ok(),
+        }
+    }
+
     /// ¿Este objeto es un fondo puesto por Vitela?
     fn es_nuestro(doc: &LoDoc, o: &Object) -> bool {
         let dict = match o {
@@ -2696,6 +2805,81 @@ pub fn add_background(
     Ok(puestas.load(std::sync::atomic::Ordering::Relaxed))
 }
 
+/// **Orden 8b.** Los objetos de texto que están puestos **detrás del
+/// contenido**: la marca de agua de fondo. Se reconocen igual que en
+/// `remove_marginal_text` —rotados o traslúcidos— pero solo cuentan los
+/// que van **antes** que cualquier objeto normal de la página, que es
+/// donde los deja `add_watermark` con «detrás» (y donde los pone
+/// `manda_al_fondo`).
+///
+/// Sin esa condición, «Quitar fondo» se llevaba también la marca de agua
+/// que va **delante**, que no es el fondo y tiene su propia entrada de
+/// menú: quitar una cosa y que desaparezca otra es lo peor que puede
+/// hacer un botón.
+fn quita_texto_de_fondo(work_path: String, dry_run: bool) -> Result<u32, String> {
+    let cuerpo = move |work_path: String| {
+        on_pdfium_thread(move || {
+            let pdfium = pdfium()?;
+            let doc = pdfium
+                .load_pdf_from_file(&work_path, None)
+                .map_err(crate::mensaje_llano)?;
+            let mut total = 0u32;
+            for p in 0..doc.pages().len() {
+                let mut page = doc.pages().get(p).map_err(crate::mensaje_llano)?;
+                let mut caen: Vec<usize> = Vec::new();
+                {
+                    let objects = page.objects();
+                    for i in 0..objects.len() {
+                        let Ok(obj) = objects.get(i) else { continue };
+                        let marca = obj.as_text_object().is_some() && {
+                            let rotado = obj
+                                .matrix()
+                                .map(|m| m.b().abs() > 0.01 || m.c().abs() > 0.01)
+                                .unwrap_or(false);
+                            // add_watermark limita el alfa a 240
+                            let translucido =
+                                obj.fill_color().map(|c| c.alpha() < 250).unwrap_or(false);
+                            rotado || translucido
+                        };
+                        if marca {
+                            caen.push(i);
+                        } else {
+                            // el primer objeto normal cierra el fondo: lo
+                            // que venga detrás se pinta encima y no lo es
+                            break;
+                        }
+                    }
+                }
+                total += caen.len() as u32;
+                if !dry_run && !caen.is_empty() {
+                    for &i in caen.iter().rev() {
+                        let removed = page
+                            .objects_mut()
+                            .remove_object_at_index(i)
+                            .map_err(crate::mensaje_llano)?;
+                        // regla del proyecto: su Drop llama a
+                        // FPDFPageObj_Destroy y PDFium casca
+                        std::mem::forget(removed);
+                    }
+                    page.regenerate_content().map_err(crate::mensaje_llano)?;
+                }
+            }
+            if dry_run {
+                drop(doc);
+                crate::invalidate_doc_cache(&work_path);
+            } else {
+                save_and_close(doc, &work_path)?;
+            }
+            Ok(total)
+        })
+    };
+    if dry_run {
+        cuerpo(work_path).map_err(crate::mensaje_llano)
+    } else {
+        mutacion(work_path, cuerpo)
+    }
+}
+
 /// Quita el fondo que puso Vitela, sea color o imagen, de todas las
 /// páginas. Con `dry_run` solo cuenta, para que el diálogo pueda decir qué
 /// ha encontrado antes de tocar nada.
@@ -2709,7 +2893,7 @@ pub fn remove_background(work_path: String, dry_run: bool) -> Result<InformeFond
     // marca (`objetos`) y el que se puso como marca de agua detrás del
     // contenido, que es un objeto de texto y se reconoce por dónde y cómo
     // está (`textos`, el mismo criterio que `remove_marginal_text`)
-    let textos = remove_marginal_text(work_path.clone(), "watermark".into(), dry_run)?.textos;
+    let textos = quita_texto_de_fondo(work_path.clone(), dry_run)?;
     if dry_run {
         let objetos = on_pdfium_thread(move || {
             crate::with_lopdf(&work_path, |doc| {
@@ -2722,6 +2906,28 @@ pub fn remove_background(work_path: String, dry_run: bool) -> Result<InformeFond
         })
         .map_err(crate::mensaje_llano)?;
         return Ok(InformeFondo { objetos, textos });
+    }
+    // orden 8b: si no hay fondo, decirlo. Quitar «lo que más se le
+    // parezca» sería llevarse la marca de agua de delante, que tiene su
+    // propia entrada de menú
+    let hay = on_pdfium_thread({
+        let work_path = work_path.clone();
+        move || {
+            crate::with_lopdf(&work_path, |doc| {
+                Ok(doc
+                    .get_pages()
+                    .into_values()
+                    .any(|id| fondo::hay_en(doc, id)))
+            })
+        }
+    })
+    .map_err(crate::mensaje_llano)?;
+    if !hay && textos == 0 {
+        return Err(
+            "Este documento no tiene fondo que quitar; la marca de agua que va \
+                    delante del contenido se quita con «Quitar la marca de agua»"
+                .into(),
+        );
     }
     let quitados = std::sync::Arc::new(std::sync::atomic::AtomicU16::new(0));
     let contador = quitados.clone();
