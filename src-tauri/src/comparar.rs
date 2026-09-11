@@ -346,10 +346,14 @@ fn compara_pagina(a: &Pagina, b: &Pagina, i: u16, j: u16) -> Diferencia {
     }
 
     Diferencia {
-        tipo: if rects_a.is_empty() && rects_b.is_empty() {
-            "igual".into()
-        } else {
-            "cambiado".into()
+        // AC-100: lo que solo está en un lado no es un cambio. Con el
+        // panel de la izquierda vacío y el chip «Cambiado», lo que se lee
+        // es que algo se ha modificado y no se señala dónde
+        tipo: match (rects_a.is_empty(), rects_b.is_empty()) {
+            (true, true) => "igual".into(),
+            (true, false) => "añadido".into(),
+            (false, true) => "quitado".into(),
+            (false, false) => "cambiado".into(),
         },
         pagina_a: Some(i),
         pagina_b: Some(j),
@@ -441,6 +445,44 @@ mod tests {
         );
 
         for f in [&uno, &dos, &tres, &roja, &azul] {
+            std::fs::remove_file(f).ok();
+        }
+    }
+
+    /// **AC-100.** Lo que solo existe en un lado no es «cambiado»: si en
+    /// la página A no hay nada señalado y en la B sí, es que se ha
+    /// añadido —y al revés, quitado—. Con «cambiado», el panel izquierdo
+    /// se quedaba vacío sin explicar por qué.
+    #[test]
+    fn lo_que_solo_esta_en_un_lado_se_llama_anadido_o_quitado() {
+        let dir = std::env::temp_dir();
+        let foto = dir.join("comparar-lado-foto.png");
+        image::RgbaImage::from_pixel(30, 30, image::Rgba([200, 20, 20, 255]))
+            .save(&foto)
+            .expect("png");
+        let sin = dir.join("comparar-lado-sin.pdf");
+        let con = dir.join("comparar-lado-con.pdf");
+        crate::tests::crea_pdf(&["Igual"], &sin);
+        crate::tests::crea_pdf(&["Igual"], &con);
+        crate::imagenes::add_image(
+            con.to_string_lossy().into_owned(),
+            0,
+            foto.to_string_lossy().into_owned(),
+            100.0,
+            200.0,
+        )
+        .expect("la foto");
+        let a = sin.to_string_lossy().into_owned();
+        let b = con.to_string_lossy().into_owned();
+
+        let d = compare_pdf(a.clone(), b.clone()).expect("comparar");
+        assert_eq!(tipos(&d), vec!["añadido"], "{d:?}");
+        assert!(d[0].rects_a.is_empty(), "en A no hay nada que señalar");
+        let d = compare_pdf(b, a).expect("comparar al revés");
+        assert_eq!(tipos(&d), vec!["quitado"], "{d:?}");
+        assert!(d[0].rects_b.is_empty(), "en B no hay nada que señalar");
+
+        for f in [&sin, &con, &foto] {
             std::fs::remove_file(f).ok();
         }
     }

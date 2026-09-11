@@ -1283,6 +1283,12 @@ compila los instaladores a mano o al etiquetar `v*`.
     en la lista de casos del test, y `jerga` gana las palabras inglesas
     que delatan el `Display` de otra librería.
 
+  - **AC-100, comparar distingue los cuatro casos** (`comparar.rs`): una
+    página que solo tiene algo en uno de los dos lados se llama
+    `"añadido"` o `"quitado"` y no `"cambiado"`, que dejaba el panel de
+    enfrente vacío sin decir por qué. Los cuatro valores ya estaban
+    declarados en `api.ts` y la leyenda ya tenía sus colores.
+
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (cada uno con su envoltorio en camelCase):
     - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la
