@@ -422,7 +422,7 @@ pub fn extract_pages(
                     crate::mensaje_llano(format!("No se ha podido escribir {dest_path}: {e}"))
                 })?;
             }
-            crate::anotaciones::repon_popups_en(&dest_path)?;
+            crate::anotaciones::remata_importacion(&dest_path)?;
             if borrar {
                 borra_paginas(&work_path, &page_indices)?;
             }
@@ -485,7 +485,7 @@ pub fn extract_each_page(
                     ))
                 })?;
                 let escrito = destino.to_string_lossy().into_owned();
-                crate::anotaciones::repon_popups_en(&escrito)?;
+                crate::anotaciones::remata_importacion(&escrito)?;
                 escritos.push(escrito);
             }
             Ok::<Vec<String>, String>(escritos)

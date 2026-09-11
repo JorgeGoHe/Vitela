@@ -854,6 +854,175 @@ mod tests {
             .collect()
     }
 
+    /// Un formulario con los cinco tipos que sabe crear Vitela —texto,
+    /// casilla, grupo de radios (dos opciones), desplegable y lista—, cada
+    /// uno con su valor puesto.
+    fn pdf_con_formulario_completo(dest: &std::path::Path) -> String {
+        crea_pdf(&["Formulario", "Segunda"], dest);
+        let work = dest.to_string_lossy().into_owned();
+        let campo = |kind: &str,
+                     name: &str,
+                     y: f32,
+                     grupo: Option<&str>,
+                     opciones: Option<Vec<&str>>,
+                     defecto: &str| {
+            crate::formularios2::CampoNuevo {
+                page_index: 0,
+                kind: kind.into(),
+                rect: crate::Rect {
+                    x: 60.0,
+                    y,
+                    w: 120.0,
+                    h: 16.0,
+                },
+                name: name.into(),
+                group: grupo.map(str::to_string),
+                export_value: grupo.map(|_| name.to_string()),
+                options: opciones.map(|v| v.iter().map(|o| o.to_string()).collect()),
+                props: Some(crate::formularios2::PropsCampo {
+                    valor_defecto: Some(defecto.into()),
+                    ..Default::default()
+                }),
+            }
+        };
+        crate::formularios2::create_form_fields(
+            work.clone(),
+            vec![
+                campo("text", "nombre", 100.0, None, None, "Ada"),
+                campo("checkbox", "acepto", 140.0, None, None, "Yes"),
+                campo("radio", "hombre", 180.0, Some("sexo"), None, "mujer"),
+                campo("radio", "mujer", 220.0, Some("sexo"), None, "mujer"),
+                campo(
+                    "combo",
+                    "pais",
+                    260.0,
+                    None,
+                    Some(vec!["España", "Francia"]),
+                    "Francia",
+                ),
+                campo(
+                    "list",
+                    "color",
+                    300.0,
+                    None,
+                    Some(vec!["Rojo", "Azul"]),
+                    "Azul",
+                ),
+            ],
+        )
+        .expect("los cinco campos");
+        work
+    }
+
+    /// Nombre, valor y estado de cada campo de una página: lo que la UI
+    /// pinta y con lo que se rellena.
+    fn campos_de(path: &str, page_index: u16) -> Vec<(String, String, bool)> {
+        crate::formularios::get_form_fields(path.to_string(), page_index)
+            .expect("campos")
+            .into_iter()
+            .map(|c| (c.name, c.value, c.checked))
+            .collect()
+    }
+
+    /// **AC-104.** `FPDF_ImportPages` copia los `/Widget` de la página y no
+    /// copia el `/AcroForm` del catálogo: extraer, dividir, unir o
+    /// insertar dejaban el campo dibujado y muerto —el PDF ya no era un
+    /// formulario y `get_form_fields` devolvía la lista vacía—. Los nueve
+    /// caminos de importación lo reponen ahora con el mismo remate.
+    #[test]
+    fn ninguna_operacion_de_paginas_se_lleva_el_formulario() {
+        let dir = std::env::temp_dir();
+        let origen_pdf = dir.join("ac104-origen.pdf");
+        let origen = pdf_con_formulario_completo(&origen_pdf);
+        let esperado = campos_de(&origen, 0);
+        assert_eq!(
+            esperado.len(),
+            6,
+            "cinco campos, seis widgets: {esperado:?}"
+        );
+        let nombres: Vec<&str> = esperado.iter().map(|c| c.0.as_str()).collect();
+        assert_eq!(
+            nombres,
+            ["nombre", "acepto", "sexo", "sexo", "pais", "color"]
+        );
+
+        // 1. merge_pdf
+        let destino = dir.join("ac104-merge.pdf");
+        crea_pdf(&["Uno"], &destino);
+        let work = destino.to_string_lossy().into_owned();
+        crate::paginas::merge_pdf(work.clone(), origen.clone()).expect("merge_pdf");
+        assert_eq!(campos_de(&work, 1), esperado, "merge_pdf");
+
+        // 2. merge_many
+        let destino = dir.join("ac104-merge-many.pdf");
+        crea_pdf(&["Uno"], &destino);
+        let work = destino.to_string_lossy().into_owned();
+        merge_many(work.clone(), vec![origen.clone()], None).expect("merge_many");
+        assert_eq!(campos_de(&work, 1), esperado, "merge_many");
+
+        // 3. insert_pdf_at, solo la primera página del origen
+        let destino = dir.join("ac104-insert.pdf");
+        crea_pdf(&["Uno", "Dos"], &destino);
+        let work = destino.to_string_lossy().into_owned();
+        insert_pdf_at(work.clone(), origen.clone(), 1, Some(vec![0])).expect("insert_pdf_at");
+        assert_eq!(campos_de(&work, 1), esperado, "insert_pdf_at");
+
+        // 4. replace_pages
+        let destino = dir.join("ac104-replace.pdf");
+        crea_pdf(&["Uno", "Dos"], &destino);
+        let work = destino.to_string_lossy().into_owned();
+        replace_pages(work.clone(), vec![1], origen.clone(), Some(vec![0])).expect("replace_pages");
+        assert_eq!(campos_de(&work, 1), esperado, "replace_pages");
+
+        // 5. duplicate_page: la copia es otro formulario, con los nombres
+        // renombrados para no fundirse con los de la página original
+        let copia_pdf = dir.join("ac104-duplicar.pdf");
+        let work = pdf_con_formulario_completo(&copia_pdf);
+        duplicate_page(work.clone(), 0).expect("duplicate_page");
+        let renombrado: Vec<(String, String, bool)> = esperado
+            .iter()
+            .map(|(n, v, c)| (format!("{n}-2"), v.clone(), *c))
+            .collect();
+        assert_eq!(campos_de(&work, 1), renombrado, "duplicate_page");
+
+        // 6. move_page
+        let mover_pdf = dir.join("ac104-mover.pdf");
+        let work = pdf_con_formulario_completo(&mover_pdf);
+        crate::paginas::move_page(work.clone(), 0, 1).expect("move_page");
+        assert_eq!(campos_de(&work, 1), esperado, "move_page");
+
+        // 7. extract_pages
+        let extraido = dir.join("ac104-extraido.pdf");
+        let salida = extraido.to_string_lossy().into_owned();
+        crate::paginas::extract_pages(origen.clone(), vec![0], salida.clone(), None)
+            .expect("extract_pages");
+        assert_eq!(campos_de(&salida, 0), esperado, "extract_pages");
+
+        // 8. extract_each_page
+        let carpeta = dir.join("ac104-una-a-una");
+        std::fs::create_dir_all(&carpeta).expect("carpeta");
+        let escritos = crate::paginas::extract_each_page(
+            origen.clone(),
+            vec![0],
+            carpeta.to_string_lossy().into_owned(),
+            None,
+        )
+        .expect("extract_each_page");
+        assert_eq!(campos_de(&escritos[0], 0), esperado, "extract_each_page");
+
+        // 9. split_pdf
+        let carpeta = dir.join("ac104-partido");
+        std::fs::create_dir_all(&carpeta).expect("carpeta");
+        let partes = split_pdf(
+            origen.clone(),
+            carpeta.to_string_lossy().into_owned(),
+            "cada".into(),
+            Some(1),
+        )
+        .expect("split_pdf");
+        assert_eq!(campos_de(&partes[0], 0), esperado, "split_pdf");
+    }
+
     /// **AC-096 (crítico).** Importar una página que lleva un grupo de
     /// botones de radio mataba el proceso entero con SIGSEGV: es AC-046
     /// otra vez, con otro ciclo del grafo de anotaciones. Los cinco
@@ -1987,7 +2156,7 @@ pub fn split_pdf(
                 ))
             })?;
             let escrito = destino.to_string_lossy().into_owned();
-            crate::anotaciones::repon_popups_en(&escrito)?;
+            crate::anotaciones::remata_importacion(&escrito)?;
             escritos.push(escrito);
         }
         Ok(escritos)

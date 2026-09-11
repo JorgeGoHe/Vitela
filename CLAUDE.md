@@ -1223,6 +1223,16 @@ compila los instaladores a mano o al etiquetar `v*`.
     caben ahora en una sola pasada de lopdf,
     `anotaciones::remata_importacion`.
 
+  - **AC-104, el formulario sobrevive a las páginas**: extraer, dividir,
+    unir e insertar dejaban el `/Widget` dibujado y tiraban el `/AcroForm`,
+    así que el resultado ya no era un formulario: no se podía rellenar y
+    `get_form_fields` contestaba con la lista vacía. `remata_importacion`
+    va ahora en los nueve caminos —los mismos que enumera AC-046— y
+    sustituye al `repon_popups_en` que había en cada uno. Los cinco tipos que crea
+    Vitela llegan al otro lado con su nombre y su valor; duplicar una
+    página deja **otro** formulario, con los nombres renombrados, para que
+    marcar en una copia no marque en la otra.
+
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (cada uno con su envoltorio en camelCase):
     - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la

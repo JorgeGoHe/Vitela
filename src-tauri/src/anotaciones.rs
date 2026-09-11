@@ -311,12 +311,6 @@ pub(crate) fn repon_popups(doc: &mut lopdf::Document) -> Result<(), String> {
     Ok(())
 }
 
-/// [`repon_popups`] sobre un fichero: para el destino de una importación,
-/// que puede ser la copia de trabajo o un PDF recién escrito.
-pub(crate) fn repon_popups_en(path: &str) -> Result<(), String> {
-    crate::cirugia_en_hilo(path, repon_popups)
-}
-
 /// Lo que hay que rematar **después** de importar páginas, en una sola
 /// pasada de lopdf: reponer las ventanas de las notas (AC-046) y volver a
 /// montar el `/AcroForm` con los campos que llegan (AC-096 y AC-104). Los

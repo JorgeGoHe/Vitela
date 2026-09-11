@@ -658,7 +658,7 @@ fn cadena_de_padres(doc: &LoDoc, id: ObjectId) -> Vec<ObjectId> {
 /// recursivamente hasta comerse la pila — el proceso entero se iba con un
 /// SIGSEGV. Sin `/Parent` no hay ciclo, y el campo viaja igual porque
 /// ahora cabe en el propio widget; [`repon_acroform`] lo vuelve a montar
-/// en el destino, como `repon_popups_en` repone las ventanas.
+/// en el destino, como `repon_popups` repone las ventanas.
 ///
 /// Devuelve si ha tocado algo (si no, no hace falta copiar el fichero).
 pub(crate) fn aplana_campos(doc: &mut LoDoc) -> bool {
