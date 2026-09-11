@@ -1787,6 +1787,13 @@ export type FirmaInfo = {
    *  justo después de usarla. Opcional porque un backend anterior no lo
    *  trae, como `required` en los campos de formulario. */
   certifica?: NivelCertificacion | null;
+  /** LTV: si dentro del PDF viaja la prueba (OCSP) de que el certificado
+   *  seguía vigente cuando se firmó, y de cuándo es esa prueba (ISO 8601,
+   *  vacía si no hay). Son del documento, como `documento_intacto`, y se
+   *  leen del `/DSS` sin salir a la red. Opcionales: un backend anterior no
+   *  los trae. */
+  ltv_archivado?: boolean;
+  ltv_fecha?: string;
 };
 
 /** Comprueba las firmas de un PDF. Sin firmas, lista vacía. */

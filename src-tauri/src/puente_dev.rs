@@ -1658,7 +1658,10 @@ mod tests {
         let region = &yo[desde..hasta];
         let mut out = std::collections::BTreeMap::new();
         let mut i = 0;
-        while let Some(j) = region[i..].find("=> cmd!(") {
+        // `cmd!(` a secas, y no `=> cmd!(`: rustfmt parte los brazos largos en
+        // `=> {\n cmd!(…) \n}` y con el patrón entero el analizador leía 43
+        // brazos de 138 y se saltaba su propio guardia (G-01 del ciclo 10)
+        while let Some(j) = region[i..].find("cmd!(") {
             let j = i + j;
             // el nombre del comando es la cadena que va justo delante
             let antes = &region[..j];
@@ -1685,10 +1688,12 @@ mod tests {
                 .collect();
             out.insert(nombre, params);
         }
+        let brazos = region.matches("cmd!(").count();
         assert!(
-            out.len() > 50,
-            "la tabla del puente se ha leído a medias: {}",
-            out.len()
+            out.len() == brazos,
+            "la tabla del puente se ha leído a medias: {} de {} brazos",
+            out.len(),
+            brazos
         );
         out
     }

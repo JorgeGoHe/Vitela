@@ -18,7 +18,8 @@ function aunNoValido(f: FirmaInfo): boolean {
  *  certificado y la validez es del documento: son dos cosas distintas y por
  *  eso esta línea **no cambia el color de la tarjeta ni el de la banda** —
  *  mezclarlas es lo que hace incomprensible el aviso de Acrobat. Y nunca
- *  dice «válida»: no se consulta revocación, solo quién lo emitió. */
+ *  dice «válida»: al abrir no se consulta a nadie; si la firma lleva
+ *  archivada la prueba de vigencia (LTV), se dice aparte y con su fecha. */
 function quienResponde(f: FirmaInfo): string {
   const emisor = f.cert_issuer || "un emisor sin nombre";
   if (f.confianza === "raiz_conocida")
@@ -116,6 +117,14 @@ export default function PanelFirmasDoc({
             )}
             {f.reason && <span className="firma-linea">{f.reason}</span>}
             <span className="firma-linea">{quienResponde(f)}</span>
+            {/* la prueba de vigencia viaja dentro del PDF y se lee de ahí:
+                Vitela no llama a nadie al abrir un documento */}
+            {f.ltv_archivado && (
+              <span className="firma-linea">
+                Prueba de vigencia del certificado archivada en el documento
+                {f.ltv_fecha ? ` (${fechaLarga(f.ltv_fecha)})` : ""}
+              </span>
+            )}
             <span className="firma-linea">
               {f.expired
                 ? aunNoValido(f)

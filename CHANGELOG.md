@@ -7,8 +7,9 @@ y no en lo que se ha tocado por dentro. Lo más reciente, arriba.
 de paridad con Acrobat, y hasta el ciclo 7 no hubo una versión publicada por
 ciclo: `v0.1.0` y `v0.2.0` son las dos únicas que llegaron a salir y
 recogen todo lo anterior. Desde el ciclo 8 el número acompaña al ciclo —el
-0.3.0 se quedó sin publicar y el 0.4.0 cierra el ciclo 9—. Cada apartado de
-aquí abajo es un ciclo, tenga versión propia o no.
+0.3.0 y el 0.4.0 se quedaron sin publicar: el 0.4.0 cierra el ciclo 9 en el
+código, pero la primera versión que sale después de la 0.2.0 es la 0.5.0—.
+Cada apartado de aquí abajo es un ciclo, tenga versión propia o no.
 
 ---
 
@@ -22,7 +23,8 @@ nuevas, arregla lo que estaba a medias y se somete a la regresión completa.
 - Un PDF cifrado para unos destinatarios se abre con tu certificado y su
   clave privada (.p12 o PEM), con el mismo selector que firmar.
 - Al firmar con LTV se consulta si el certificado seguía vigente (OCSP) y la
-  prueba viaja dentro del PDF; al abrir se lee de ahí, sin salir a la red.
+  prueba viaja dentro del PDF; el panel de firmas dice que está archivada y
+  de cuándo es, leyéndola del documento y sin salir a la red.
 - Comparar mira también las imágenes, no solo el texto, y ocupa la ventana
   entera con las hojas al ancho de su panel, recorrible con el teclado.
 - Buscar en una carpeta tiene su entrada en el menú Editar (⇧⌘F), funciona
