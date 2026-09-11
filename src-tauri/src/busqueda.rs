@@ -440,7 +440,7 @@ pub(crate) fn busca_en_carpeta(
                 path: path.clone(),
                 nombre,
                 coincidencias: Vec::new(),
-                error: crate::mensaje_llano(e),
+                error: motivo_de_fila(&e),
             }),
         }
         // fuera del caché: el siguiente fichero no tiene por qué echar de
@@ -449,6 +449,27 @@ pub(crate) fn busca_en_carpeta(
     }
     progreso(total, total, "");
     Ok(out)
+}
+
+/// **AC-103.** Por qué no se ha podido mirar este fichero, en la lengua
+/// del usuario. `PASSWORD_REQUIRED` es el código con el que `open_pdf` le
+/// pide la contraseña a la interfaz, y `mensaje_llano` lo dejaba pasar
+/// hacia «La contraseña no es correcta»: la fila acusaba de equivocarse a
+/// quien no había escrito ninguna.
+fn motivo_de_fila(e: &str) -> String {
+    // llega de dos formas: el código con el que `open_pdf` le pide la
+    // contraseña a la interfaz, y la frase que `mensaje_llano` ya ha
+    // escrito por el `PasswordError` de PDFium al abrirlo aquí
+    if e.contains("PASSWORD_REQUIRED")
+        || e.contains("PasswordError")
+        || e.contains("a contraseña no es correcta")
+    {
+        return "Está protegido con contraseña".into();
+    }
+    if e.contains("CERT_KEY_REQUIRED") {
+        return "Está cifrado para unos destinatarios".into();
+    }
+    crate::mensaje_llano(e)
 }
 
 /// Busca en todos los PDF de una carpeta y devuelve una fila por fichero
@@ -522,6 +543,18 @@ mod tests_carpeta {
         // ni un PDF ni un fichero que se deje abrir como tal
         std::fs::write(raiz.join("notas.txt"), b"factura").unwrap();
         std::fs::write(raiz.join("roto.pdf"), b"esto no es un PDF").unwrap();
+        // y uno protegido con contraseña, que tampoco se puede mirar
+        let claro = raiz.join("antes-de-cifrar.tmp");
+        crea_pdf(&["La factura reservada"], &claro);
+        crate::seguridad::encrypt_pdf(
+            claro.to_string_lossy().into_owned(),
+            Some(raiz.join("protegido.pdf").to_string_lossy().into_owned()),
+            "hola1234".into(),
+            None,
+            None,
+        )
+        .expect("cifrar");
+        std::fs::remove_file(&claro).ok();
 
         let visto = std::sync::Mutex::new(Vec::new());
         let progreso = |hechos: u32, total: u32, fichero: &str| {
@@ -549,13 +582,22 @@ mod tests_carpeta {
         assert_eq!(con_coincidencias[0].nombre, "uno.pdf");
         assert_eq!(con_coincidencias[0].coincidencias.len(), 2);
         let ilegibles: Vec<&ResultadoFichero> = r.iter().filter(|g| !g.error.is_empty()).collect();
-        assert_eq!(ilegibles.len(), 1, "el PDF roto se cuenta aparte: {r:?}");
-        assert_eq!(ilegibles[0].nombre, "roto.pdf");
+        assert_eq!(ilegibles.len(), 2, "el roto y el protegido: {r:?}");
+        let roto = ilegibles
+            .iter()
+            .find(|g| g.nombre == "roto.pdf")
+            .expect("el PDF roto se cuenta aparte");
         assert!(
-            ilegibles[0].coincidencias.is_empty() && !ilegibles[0].error.is_empty(),
-            "y con su motivo en llano: {:?}",
-            ilegibles[0]
+            roto.coincidencias.is_empty() && !roto.error.is_empty(),
+            "y con su motivo en llano: {roto:?}"
         );
+        // **AC-103**: a nadie se le ha pedido una contraseña, así que la
+        // fila no puede decir que la contraseña no es correcta
+        let protegido = ilegibles
+            .iter()
+            .find(|g| g.nombre == "protegido.pdf")
+            .expect("el PDF protegido también sale");
+        assert_eq!(protegido.error, "Está protegido con contraseña");
         // el .txt ni se menciona
         assert!(!r.iter().any(|g| g.nombre.ends_with(".txt")));
         // y sin `recursivo` la subcarpeta no se mira
@@ -563,12 +605,12 @@ mod tests_carpeta {
 
         // el progreso llega por cada fichero y termina en total/total
         let visto = visto.into_inner().unwrap();
-        assert!(visto.len() >= 4, "progreso: {visto:?}");
-        assert_eq!(visto[0].1, 3, "tres PDF en la carpeta: {visto:?}");
+        assert!(visto.len() >= 5, "progreso: {visto:?}");
+        assert_eq!(visto[0].1, 4, "cuatro PDF en la carpeta: {visto:?}");
         let ultimo = visto.last().unwrap();
         assert_eq!(
             (ultimo.0, ultimo.1),
-            (3, 3),
+            (4, 4),
             "el último dice que ha acabado"
         );
 

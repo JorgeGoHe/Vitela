@@ -1294,6 +1294,12 @@ compila los instaladores a mano o al etiquetar `v*`.
     documento —el que mande la interfaz, o el que lleva dentro la copia de
     trabajo— en vez del temporal, reusando `comentarios::nombre_de_documento`.
 
+  - **AC-103**: la fila de un PDF que no se ha podido abrir en «Buscar en
+    una carpeta» dice «Está protegido con contraseña» (o «Está cifrado
+    para unos destinatarios») en vez de acusar de equivocarse a quien no
+    ha escrito ninguna: `busqueda::motivo_de_fila` reconoce el código de
+    apertura y la frase que ya escribe `mensaje_llano`.
+
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (cada uno con su envoltorio en camelCase):
     - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la
