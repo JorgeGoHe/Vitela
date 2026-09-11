@@ -704,7 +704,13 @@ export type TamanoImagenes = "a4" | "carta" | "imagen";
 /** Lo que ha salido de un lote de imágenes: cuántas páginas se han escrito
  *  y las rutas de las que no se han dejado leer, para poder decir «19 de
  *  20» con el nombre de la que falta en vez de tirar el lote entero. */
-export type InformeImagenes = { paginas: number; saltadas: string[] };
+export type InformeImagenes = {
+  paginas: number;
+  saltadas: string[];
+  /** En paralelo con `saltadas`: por qué no se pudo leer cada una, en llano
+   *  y en español. */
+  motivos: string[];
+};
 
 export function pdfFromImages(
   imagePaths: string[],
@@ -972,9 +978,17 @@ export type DocumentInfo = {
   /** Tamaño de la primera página, en puntos. */
   page_width: number;
   page_height: number;
+  /** Con `false`, el documento mezcla tamaños y la primera página no los
+   *  representa a todos. */
+  paginas_iguales: boolean;
   /** Si tiene AcroForm con campos. */
   formulario: boolean;
+  /** Cuántos campos de firma lleva. */
+  firmas: number;
   cifrado: boolean;
+  /** Todavía no está cifrado en el disco, pero lo estará al guardar: es la
+   *  otra mitad de `cifrado`, que cuenta las dos cosas igual. */
+  proteccion_pendiente: boolean;
   /** Qué deja hacer el `/P` del documento. */
   permisos: Permisos;
   fuentes: FuenteInfo[];
@@ -984,6 +998,9 @@ export type DocumentInfo = {
    *  vez de enseñar un hueco. */
   creado?: string;
   modificado?: string;
+  /** Con qué se hizo el PDF (el `/Producer`, y si no el `/Creator`): la
+   *  línea «Aplicación» de las propiedades de Acrobat. Vacía si no lo dice. */
+  aplicacion: string;
 };
 
 /** La ficha completa del documento abierto (solo lectura). Contesta a «¿por
@@ -1264,6 +1281,13 @@ export function flattenPdf(workPath: string): Promise<void> {
 
 export type RedactReport = { textos: number; imagenes: number };
 
+/** Lo que deja aplicar TODAS las marcas: lo mismo que una zona suelta, más
+ *  cuántas marcas se han aplicado. */
+export type InformeRedaccion = RedactReport & {
+  /** Cuántas marcas de redacción se han aplicado (o caerían, en el ensayo). */
+  zonas: number;
+};
+
 /* ---- redacción en dos fases ---- */
 
 /** Una zona marcada para censurar. Es una propuesta, no una censura: vive
@@ -1311,7 +1335,7 @@ export function unmarkAllRedactions(workPath: string): Promise<number> {
 export function applyRedactions(
   workPath: string,
   dryRun: boolean,
-): Promise<RedactReport> {
+): Promise<InformeRedaccion> {
   return invoke("apply_redactions", { workPath, dryRun });
 }
 
@@ -1512,6 +1536,8 @@ export type CompressReport = {
   antes: number;
   despues: number;
   imagenes: number;
+  /** Cuántos adjuntos se ha llevado la casilla «descartar adjuntos». */
+  adjuntos: number;
 };
 
 /** Una categoría de la auditoría de espacio: cuánto pesa y qué parte del
@@ -1587,6 +1613,10 @@ export type CampoPropuesto = {
   rect: { x: number; y: number; w: number; h: number };
   kind: TipoCampo;
   name: string;
+  /** El `/T` del grupo cuando `kind` es `"radio"`, vacío en los demás: un
+   *  radio sin grupo no se puede crear, y es el dato que hay que pasarle a
+   *  `createFormFields` al aceptar la propuesta. */
+  group: string;
   confianza: number;
 };
 
@@ -1762,6 +1792,10 @@ export type FirmaInfo = {
   documento_intacto: boolean;
   cert_subject: string;
   cert_issuer: string;
+  /** El DN completo del sujeto y del emisor; `cert_subject` y
+   *  `cert_issuer` son el nombre en llano que sale de ellos. */
+  cert_subject_dn: string;
+  cert_issuer_dn: string;
   /** Quién responde por el certificado, evaluado contra el almacén de
    *  certificados del sistema. **No se consulta revocación** (ni CRL ni
    *  OCSP), así que `raiz_conocida` quiere decir «emitido por una autoridad
@@ -1771,6 +1805,9 @@ export type FirmaInfo = {
   not_before: string;
   not_after: string;
   expired: boolean;
+  /** Por cuál de los dos extremos: el certificado no estaba caducado al
+   *  firmar, sino que todavía no había entrado en vigor. */
+  not_yet_valid: boolean;
   self_signed: boolean;
   /** Página del recuadro de la firma, si es visible. */
   page_index: number | null;
@@ -1979,6 +2016,9 @@ export type Sesion = {
   modificado: boolean;
   /** Cuándo se tomó el apunte, en ISO 8601. */
   cuando: string;
+  /** El nombre para enseñar en la banda, recalculado al leer: el del
+   *  fichero original y, si nunca tuvo, el de la copia de trabajo. */
+  name: string;
 };
 
 /** Apunta la sesión viva. La UI lo llama con un respiro de 10 s tras cada

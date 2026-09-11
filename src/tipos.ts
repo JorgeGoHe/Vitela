@@ -100,7 +100,11 @@ export type TextBlock = {
   w: number;
   h: number;
   font_size: number;
+  /** Familia normalizada (Helvetica, Times, Courier…); el estilo va aparte
+   *  en `negrita` y `cursiva`, porque normalizar el nombre se lo llevaba. */
   font_family: string;
+  negrita: boolean;
+  cursiva: boolean;
   /** Color del relleno del texto, tal como está en el content stream. Es lo
    *  que deja pintar del color real el swatch «A» («el que ya tenga») en vez
    *  de una letra gris con un tooltip. */
