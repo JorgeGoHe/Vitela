@@ -422,8 +422,16 @@ pub fn pdf_info(path: String) -> Result<PdfInfo, String> {
 /// ¿Trae el fichero un diccionario `/Encrypt`? Es lo único que se puede
 /// mirar cuando el documento no se deja parsear.
 pub(crate) fn trae_encrypt(path: &str) -> bool {
+    // **el nombre tiene que acabar ahí**: `/EncryptMetadata` es otra clave
+    // y vive dentro del propio diccionario de cifrado, que se queda
+    // huérfano en la copia de trabajo cuando se descifra. Con la
+    // comparación a secas, un documento ya en claro seguía diciendo que
+    // iba cifrado, y el candado de la barra no se apagaba nunca
+    let acaba = |b: u8| !b.is_ascii_alphanumeric() && !matches!(b, b'.' | b'-' | b'_');
     std::fs::read(path)
-        .map(|b| b.windows(8).any(|w| w == b"/Encrypt"))
+        .map(|b| {
+            b.windows(9).any(|w| &w[..8] == b"/Encrypt" && acaba(w[8])) || b.ends_with(b"/Encrypt")
+        })
         .unwrap_or(false)
 }
 

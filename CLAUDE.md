@@ -1241,7 +1241,12 @@ compila los instaladores a mano o al etiquetar `v*`.
     sobre «Quitar la contraseña…» la devuelve; antes el documento volvía
     sin ella y el siguiente Guardar escribía en claro sin preguntar. La
     interfaz deja de guardar la contraseña por su cuenta: `cifrado` y
-    `proteccion_pendiente` salen de `get_document_info`.
+    `proteccion_pendiente` salen de `get_document_info`. Para que esa
+    ficha diga la verdad, `Proteccion` lleva `de_apertura` —un documento
+    que venía protegido está protegido, no «se protegerá al guardar»— y
+    `trae_encrypt` exige que el nombre acabe ahí: casaba con el
+    `/EncryptMetadata` del diccionario de cifrado que se queda huérfano al
+    descifrar, así que el candado no se apagaba nunca.
 
   - **AC-098, el orden de una imagen se escribe en el flujo**
     (`imagenes.rs`): sacar el objeto y volver a añadirlo deja la lista de

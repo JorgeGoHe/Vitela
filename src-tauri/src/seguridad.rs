@@ -343,6 +343,11 @@ pub(crate) struct Proteccion {
     pub user: String,
     pub owner: Option<String>,
     pub permisos: Permisos,
+    /// La protección con la que el documento **venía** (se abrió con
+    /// contraseña), no la que se le acaba de poner con «Proteger». El
+    /// fichero del disco ya está cifrado, así que para quien mira el
+    /// candado esto no es «se protegerá al guardar»: es «protegido».
+    pub de_apertura: bool,
 }
 
 static PROTECCIONES: std::sync::LazyLock<
@@ -365,6 +370,7 @@ pub(crate) fn anota_proteccion(
             user,
             owner,
             permisos,
+            de_apertura: false,
         },
     );
 }
@@ -387,7 +393,11 @@ pub(crate) fn permisos_puestos(path: &str) -> crate::documento::SeguridadInfo {
     let puesta = proteccion_de(path);
     let permisos = puesta.as_ref().map(|p| p.permisos).unwrap_or_default();
     crate::documento::SeguridadInfo {
-        cifrado: crate::documento::trae_encrypt(path),
+        // la copia de trabajo nunca va cifrada, pero un documento que se
+        // abrió con contraseña sí lo está en el disco: para quien lo mira,
+        // «protegido» es una sola cosa
+        cifrado: crate::documento::trae_encrypt(path)
+            || puesta.as_ref().map(|p| p.de_apertura).unwrap_or(false),
         pendiente: puesta.is_some(),
         permisos,
     }
@@ -434,6 +444,9 @@ pub(crate) fn recuerda_proteccion_de_apertura(work_path: &str, original: &str, p
         None,
         permisos_del_fichero(original),
     );
+    if let Some(p) = protecciones().get_mut(work_path) {
+        p.de_apertura = true;
+    }
 }
 
 /// Olvida la protección de una copia de trabajo que se cierra.
@@ -1783,8 +1796,20 @@ mod tests {
         assert_eq!(puesta.user, "hola1234");
         assert!(!puesta.permisos.copiar, "los permisos son los del fichero");
 
+        // y es lo que ve la interfaz: un documento abierto con
+        // contraseña está protegido, no «se protegerá al guardar»
+        let ficha = crate::documento::get_document_info(work.clone()).expect("ficha");
+        assert!(ficha.cifrado && ficha.proteccion_pendiente);
+
         remove_encryption(work.clone()).expect("quitar la protección");
         assert!(proteccion_de(&work).is_none());
+        let ficha = crate::documento::get_document_info(work.clone()).expect("ficha");
+        assert!(
+            !ficha.cifrado && !ficha.proteccion_pendiente,
+            "cifrado={} pendiente={}",
+            ficha.cifrado,
+            ficha.proteccion_pendiente
+        );
         crate::historial::undo(work.clone()).expect("deshacer");
         let vuelta = proteccion_de(&work).expect("⌘Z devuelve la contraseña");
         assert_eq!(vuelta.user, "hola1234");
