@@ -749,18 +749,12 @@ pub(crate) fn parte_lineas(texto: &str, size: f32, ancho: f32) -> Vec<String> {
             if !linea.is_empty() {
                 salida.push(std::mem::take(&mut linea));
             }
-            // una palabra que no cabe entera se parte por letras
-            let mut trozo = String::new();
-            for c in palabra.chars() {
-                let mas = format!("{trozo}{c}");
-                if !trozo.is_empty() && ancho_helvetica(&mas, size) > ancho {
-                    salida.push(std::mem::take(&mut trozo));
-                    trozo.push(c);
-                } else {
-                    trozo = mas;
-                }
-            }
-            linea = trozo;
+            // AC-097: una palabra que no cabe se queda **entera** en su
+            // línea, desbordando. Partirla por letras dejaba «corregí» y
+            // «do ñ» donde el usuario había escrito «corregído», que es
+            // peor que una línea que se sale: ningún procesador de textos
+            // parte una palabra sin poner un guion
+            linea = palabra.to_string();
         }
         salida.push(linea);
     }
@@ -2809,17 +2803,24 @@ mod tests {
         std::fs::remove_file(&tmp).ok();
     }
 
-    /// Los saltos que escribe el usuario se respetan, y una palabra que no
-    /// cabe entera se parte por letras en vez de desbordar.
+    /// **AC-097.** Los saltos que escribe el usuario se respetan, y una
+    /// palabra que no cabe en la columna se queda **entera** en su línea:
+    /// ningún procesador de textos parte una palabra sin guion, y ver
+    /// «corregí / do» donde se escribió «corregído» es peor que ver una
+    /// línea que se sale.
     #[test]
-    fn el_reparto_de_lineas_respeta_los_saltos_y_parte_las_palabras_largas() {
+    fn el_reparto_de_lineas_respeta_los_saltos_y_no_parte_las_palabras() {
         let lineas = parte_lineas("Uno\nDos", 12.0, 300.0);
         assert_eq!(lineas, vec!["Uno".to_string(), "Dos".to_string()]);
-        let largas = parte_lineas("supercalifragilisticoespialidoso", 12.0, 60.0);
-        assert!(largas.len() > 2, "{largas:?}");
-        for l in &largas {
-            assert!(ancho_helvetica(l, 12.0) <= 60.0, "{l:?} desborda");
-        }
+        let larga = parte_lineas("supercalifragilisticoespialidoso", 12.0, 60.0);
+        assert_eq!(larga, vec!["supercalifragilisticoespialidoso".to_string()]);
+        // y lo que sí cabe se sigue repartiendo por palabras
+        let dos = parte_lineas("alfa beta gamma delta", 12.0, 60.0);
+        assert!(dos.len() > 1, "{dos:?}");
+        assert!(
+            dos.iter().all(|l| !l.contains("  ")),
+            "sin palabras partidas: {dos:?}"
+        );
     }
 
     fn render_rgba(path: &str) -> image::RgbaImage {

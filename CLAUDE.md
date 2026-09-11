@@ -1260,6 +1260,19 @@ compila los instaladores a mano o al etiquetar `v*`.
     del hilo de PDFium**: `invalidate_doc_cache` es de ese hilo, y llamarla
     desde fuera dejaba el documento viejo en el caché.
 
+  - **AC-097, el reflujo no parte palabras** (`anotaciones2::parte_lineas`,
+    `texto::refluye`): una palabra que no cabe se queda **entera** en su
+    línea, desbordando; partirla por letras dejaba «corregí» y «do ñ»
+    donde se había escrito «corregído», y ningún procesador de textos
+    parte una palabra sin poner un guion. Y un bloque de **una sola
+    línea** no tiene hermanos que marquen la columna, así que se reparte
+    con el papel que queda a su derecha —el mismo margen que hay a la
+    izquierda— en vez de con el ancho del texto viejo, con el que casi
+    cualquier añadido se salía. De paso, el flujo se regenera antes de
+    soltar la vista de la página con la que se reescribió: `set_text` sin
+    mover nada no la marca, y corregir una línea que se quedaba en su
+    sitio no llegaba a guardarse.
+
 - **La mitad de la UI del ciclo 5** (según el desarrollador de interfaz):
   - Comandos del ciclo 5 (cada uno con su envoltorio en camelCase):
     - `unmark_all_redactions(work_path)` → cuántas quita. **Lo llama ya la

@@ -787,6 +787,11 @@ impl Geo {
     }
 
     /// Tamaño de la página SIN rotar (el del espacio propio).
+    /// El borde izquierdo de la caja de la página (casi siempre 0).
+    pub(crate) fn izq(&self) -> f32 {
+        self.x0
+    }
+
     pub(crate) fn ancho(&self) -> f32 {
         self.w
     }

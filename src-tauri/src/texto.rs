@@ -641,7 +641,22 @@ fn refluye(
             .iter()
             .map(|l| crate::anotaciones2::ancho_helvetica(&l.texto, size))
             .fold(0.0f32, f32::max);
-        let ancho = (col_der - col_izq).max(medido).max(size * 2.0);
+        // AC-097: un bloque de una sola línea no tiene hermanos que
+        // marquen la columna, así que el ancho del texto viejo no puede
+        // ser el ancho del párrafo —casi cualquier añadido se saldría—.
+        // Sin hermanos se usa el papel que queda a la derecha, con el
+        // mismo margen que hay a la izquierda, que es lo que hace Acrobat
+        // cuando el bloque está solo
+        let ancho_util = if parrafo.len() == 1 {
+            let geo = crate::Geo::de_pagina(&page).propia();
+            (geo.ancho() - col_izq - (col_izq - geo.izq()).max(0.0)).max(size * 2.0)
+        } else {
+            0.0
+        };
+        let ancho = (col_der - col_izq)
+            .max(medido)
+            .max(ancho_util)
+            .max(size * 2.0);
         // el interlineado: el que se mide entre las líneas que ya hay, que
         // es el del párrafo. Si la UI pide uno, manda el suyo
         let interlineado_medido = match (line_height, parrafo.len() > 1) {
@@ -726,6 +741,12 @@ fn refluye(
                     .map_err(crate::mensaje_llano)?;
             }
         }
+        // el flujo se regenera **antes** de soltar esta vista de la
+        // página: `set_text` sin mover nada no la marca, y el
+        // `regenerate_content` de la vista de abajo escribía el contenido
+        // de antes — corregir una línea sin que cambiara su sitio no se
+        // guardaba (AC-097)
+        page.regenerate_content().map_err(crate::mensaje_llano)?;
         drop(page);
 
         // 2) las que sobran del texto nuevo: objetos nuevos debajo, con la
@@ -1768,6 +1789,87 @@ mod tests {
             .find(|b| b.text.contains(lineas[0]))
             .expect("la primera línea")
             .object_index
+    }
+
+    /// **AC-097.** Un bloque de una sola línea corta no tiene hermanos que
+    /// marquen la columna: el ancho del texto viejo no puede ser el ancho
+    /// del párrafo, o casi cualquier añadido se sale. Y una palabra que no
+    /// cabe se queda entera, como en cualquier procesador de textos.
+    #[test]
+    fn un_bloque_de_una_linea_refluye_al_ancho_de_la_pagina_sin_partir_palabras() {
+        let tmp = std::env::temp_dir().join("texto-reflujo-una-linea.pdf");
+        crea_pdf(&["Suelto"], &tmp);
+        let work = tmp.to_string_lossy().into_owned();
+        add_text_block(
+            work.clone(),
+            0,
+            60.0,
+            200.0,
+            "Uno alfa".into(),
+            12.0,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("la línea suelta");
+        let indice = get_text_blocks(work.clone(), 0)
+            .expect("bloques")
+            .into_iter()
+            .find(|b| b.text.contains("Uno alfa"))
+            .expect("la línea")
+            .object_index;
+
+        edit_text_block(
+            work.clone(),
+            0,
+            indice,
+            "Uno alfa corregído ñ".into(),
+            None,
+            None,
+            None,
+            None,
+            Some(true),
+        )
+        .expect("corregir con reflujo");
+        let bloques = get_text_blocks(work.clone(), 0).expect("bloques");
+        let textos: Vec<&str> = bloques.iter().map(|b| b.text.as_str()).collect();
+        assert!(
+            textos.contains(&"Uno alfa corregído ñ"),
+            "una línea corta cabe entera en el ancho de la página: {textos:?}"
+        );
+
+        // y una palabra más ancha que la columna no se parte por la mitad
+        let indice = bloques
+            .iter()
+            .find(|b| b.text.contains("corregído"))
+            .expect("la línea corregida")
+            .object_index;
+        edit_text_block(
+            work.clone(),
+            0,
+            indice,
+            "supercalifragilisticoespialidoso".into(),
+            None,
+            None,
+            None,
+            None,
+            Some(true),
+        )
+        .expect("corregir con una palabra larga");
+        let textos: Vec<String> = get_text_blocks(work.clone(), 0)
+            .expect("bloques")
+            .into_iter()
+            .map(|b| b.text)
+            .collect();
+        assert!(
+            textos
+                .iter()
+                .any(|t| t == "supercalifragilisticoespialidoso"),
+            "la palabra entera en una línea: {textos:?}"
+        );
+        std::fs::remove_file(&tmp).ok();
     }
 
     /// **H1 (a).** Cambiar una palabra corta por una larga en la primera
